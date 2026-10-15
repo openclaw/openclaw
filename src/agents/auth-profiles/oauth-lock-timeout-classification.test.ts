@@ -4,7 +4,10 @@
  * original file-lock cause is preserved.
  */
 import { describe, expect, it } from "vitest";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
+import {
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  type FileLockTimeoutError,
+} from "../../plugin-sdk/file-lock.js";
 import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,

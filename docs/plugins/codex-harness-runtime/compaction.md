@@ -13,12 +13,32 @@ Who owns compaction on a Codex turn, and what the OpenClaw transcript mirror kee
 
 When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
-transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
+transcript mirror. Effective Ultrafast turns cap native automatic compaction at
+260,000 total context tokens, preserving lower configured
+`model_auto_compact_token_limit` values. OpenClaw applies this limit through the
+native thread configuration before the turn; changing back to Fast or standard
+restores the configured native limit on the next turn. Other tiers retain their
+native compaction settings.
+
+An incognito thread has no persisted resume source, so its creation-time
+compaction settings cannot change in place. If a speed change requires a different
+limit, OpenClaw preserves the conversation and asks you to restore the previous
+speed or start a new incognito conversation. No turn is sent with mismatched settings.
+
+When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
-This host compaction does not itself replace or rewrite Codex's canonical
+This host compaction does not itself replace or rewrite Codex's
 native thread.
+
+If the context engine declines host compaction or leaves history oversized,
+OpenClaw continues with a bounded projection of recent whole turns. The native
+thread follows that projection so omitted history cannot remain in its context.
+A visible notice asks you to resend any essential earlier details; saved history
+is unchanged. The failure reason is logged at warning level. Failed attempts do
+not count as successful compaction, and suppressed retries still receive bounded
+context. System instructions and the current request remain intact.
 
 After host mirror compaction commits, OpenClaw may request
 `thread/compact/start` to synchronize an eligible native thread. This request
@@ -55,6 +75,12 @@ immediately after committing the new generation. Only the recorded predecessor
 under that session key can be adopted. Native tool catalogs, connection ownership,
 and supervision checks still apply before the resumed thread executes.
 
+A successful local rewind or branch switch is a context change. It invalidates
+the old native binding as part of the transcript mutation and releases its
+subscription before returning. The next Codex turn starts a fresh native thread
+with the selected OpenClaw history; erased turns cannot return through a native
+resume. Invalid cuts and rolled-back transcript mutations preserve the binding.
+
 When OpenClaw projects an existing session's continuity into a fresh Codex
 thread, it includes saved compaction and branch summaries, even when no
 earlier user messages remain. Context-engine projections preserve those
@@ -64,8 +90,8 @@ oversized summaries or older context can be truncated. This handoff does not
 change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
-projects tool-call names and ids, input shapes, and redacted tool-result
-content into the fresh Codex thread. It does not copy raw tool-call argument
+projects tool-call names and ids, input shapes, and tool-result content
+without secret masking into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight
@@ -79,6 +105,6 @@ entries Codex kept after compaction.
 Repeated completion notifications for the same compaction item count once and
 do not repeat completion hooks or active-plan restoration.
 
-Because Codex owns the canonical native thread, `tool_result_persist` does
+Because Codex owns the native thread, `tool_result_persist` does
 not rewrite Codex-native tool result records. It only applies when OpenClaw
 writes an OpenClaw-owned session transcript tool result.

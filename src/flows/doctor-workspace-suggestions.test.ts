@@ -1,46 +1,24 @@
-import { describe, expect, it } from "vitest";
-import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { createCoreHealthChecks, type CoreHealthCheckDeps } from "./doctor-core-checks.js";
+import { describe, expect, it, vi } from "vitest";
+import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import type { HealthCheck } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
 
-function createDeps(
-  collectWorkspaceSuggestionNotes: CoreHealthCheckDeps["collectWorkspaceSuggestionNotes"],
-): CoreHealthCheckDeps {
-  return {
-    async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
-      return [];
-    },
-    async collectSecurityWarnings() {
-      return [];
-    },
-    collectWorkspaceSuggestionNotes,
-    async collectRuntimeToolSchemaFindings() {
-      return [];
-    },
-    async collectProviderCatalogProjectionFindings() {
-      return [];
-    },
-    async collectLocalAudioAccelerationFindings() {
-      return [];
-    },
-    async collectGatewayHealthFindings() {
-      return [];
-    },
-    async collectGatewayDaemonFindings() {
-      return [];
-    },
-    async listGatewayCronJobs() {
-      return [];
-    },
-  };
-}
+const collectNotes = vi.hoisted(() =>
+  vi.fn<(workspaceDir: string) => Promise<readonly string[]>>(async () => []),
+);
+
+vi.mock("../commands/doctor-workspace-suggestions.js", () => ({
+  async *collectWorkspaceSuggestionNotes(workspaceDir: string) {
+    yield* await collectNotes(workspaceDir);
+  },
+}));
 
 function createWorkspaceSuggestionsCheck(
-  collectWorkspaceSuggestionNotes: CoreHealthCheckDeps["collectWorkspaceSuggestionNotes"],
+  collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>,
 ): HealthCheck {
-  const check = createCoreHealthChecks(createDeps(collectWorkspaceSuggestionNotes)).find(
+  collectNotes.mockImplementation(collectWorkspaceSuggestionNotes);
+  const check = createCoreHealthChecks().find(
     (candidate) => candidate.id === "core/doctor/workspace-suggestions",
   );
   if (!check || !("detect" in check)) {
@@ -63,7 +41,7 @@ describe("core/doctor/workspace-suggestions", () => {
       cfg: {
         agents: {
           entries: {
-            main: { default: true, workspace: "/tmp/main" },
+            main: { workspace: "/tmp/main" },
             secondary: { workspace: "/tmp/secondary" },
           },
         },
@@ -93,7 +71,7 @@ describe("core/doctor/workspace-suggestions", () => {
       cfg: {
         agents: {
           entries: {
-            main: { default: true, workspace: "/tmp/shared" },
+            main: { workspace: "/tmp/shared" },
             secondary: { workspace: "/tmp/shared" },
           },
         },

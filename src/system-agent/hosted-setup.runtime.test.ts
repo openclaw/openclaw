@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import { withCommandPluginMetadata } from "../commands/config-validation.js";
@@ -43,6 +44,61 @@ import {
 import { ChatWizardHost } from "./chat-wizard-host.js";
 
 describe("SystemAgentChatEngine runtime", () => {
+  it.each(["disposed", "completed"] as const)(
+    "retires retained channel write authority after hosted setup is %s",
+    async (ending) => {
+      let retainedOptions: SetupChannelsOptions | undefined;
+      const prepare = vi.fn(async () => {});
+      mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        hash: "channel-lifetime-hash",
+        config: {},
+        sourceConfig: {},
+      });
+      mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+        hostedConfigFiles.write(config),
+      );
+      mocks.setupChannels.mockImplementation(
+        async (
+          config: OpenClawConfig,
+          _runtime: unknown,
+          prompter: WizardPrompter,
+          options: SetupChannelsOptions,
+        ) => {
+          retainedOptions = options;
+          await options.beforePersistentEffect?.();
+          await prompter.text({ message: "Waiting for channel login" });
+          return config;
+        },
+      );
+      const host = new ChatWizardHost({
+        surface: "gateway",
+        beforePersistentApply: prepare,
+        dependencies: { appendAuditEntry: vi.fn(async () => "state/openclaw.sqlite") },
+      });
+      try {
+        expect((await host.startChannel("zalouser")).text).toContain("Waiting for channel login");
+        const assertCurrent = retainedOptions?.assertPersistentEffectCurrent;
+        if (!assertCurrent) {
+          throw new Error("Hosted channel setup did not retain its live owner assertion");
+        }
+        expect(assertCurrent).not.toThrow();
+        if (ending === "disposed") {
+          host.dispose();
+        } else {
+          expect((await host.resolveReply("continue")).configWritten).toBe(true);
+        }
+        expect(assertCurrent).toThrow();
+        const preparationCount = prepare.mock.calls.length;
+        await expect(retainedOptions?.beforePersistentEffect?.()).rejects.toThrow();
+        expect(prepare).toHaveBeenCalledTimes(preparationCount);
+      } finally {
+        host.dispose();
+      }
+    },
+  );
+
   it("hosts a channel setup wizard as chat turns", async () => {
     useTempStateDir();
     const wizardRuns: string[] = [];

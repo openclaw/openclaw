@@ -1,11 +1,54 @@
-// Slack type declarations define plugin contracts.
+import type { SlackCommandMiddlewareArgs } from "@slack/bolt";
+import type {
+  AppHomeOpenedEvent,
+  ChannelIDChangedEvent,
+  ChannelRenameEvent,
+  MemberJoinedChannelEvent,
+  MemberLeftChannelEvent,
+  MessageChangedEvent,
+  MessageDeletedEvent,
+  PinAddedEvent,
+  PinRemovedEvent,
+  ReactionAddedEvent,
+  ReactionRemovedEvent,
+} from "@slack/types";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginCommandReplyOptions } from "openclaw/plugin-sdk/plugin-command-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { SlackEventScope } from "./event-scope.js";
+
+export type SlackCommandInvocation = {
+  command: Pick<
+    SlackCommandMiddlewareArgs["command"],
+    "user_id" | "user_name" | "channel_id" | "channel_name"
+  > &
+    Partial<Pick<SlackCommandMiddlewareArgs["command"], "trigger_id">>;
+  threadTs?: string;
+  eventTs?: string;
+  builtInCommand?: "stop";
+  sessionTarget?: ResolvedAgentRoute;
+  onAdmitted?: () => boolean | void;
+  isSessionTargetCurrent?: () => boolean;
+  ack: SlackCommandMiddlewareArgs["ack"];
+  respond: (message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0]) => Promise<unknown>;
+  responseTransport?: "response-url" | "web-api";
+  body?: unknown;
+  eventScope?: SlackEventScope;
+  senderAuthentication?: "verified" | "asserted";
+  prompt: string;
+  commandArgs?: CommandArgs;
+  commandDefinition?: ChatCommandDefinition;
+  pluginCommandReplyOptions?: PluginCommandReplyOptions;
+};
 
 export type MonitorSlackOpts = {
+  scheduler: PluginServiceSchedulerV1;
   botToken?: string;
   appToken?: string;
   accountId?: string;
@@ -22,109 +65,39 @@ export type MonitorSlackOpts = {
   getStatus?: () => Record<string, unknown>;
 };
 
-export type SlackReactionEvent = {
-  type: "reaction_added" | "reaction_removed";
-  user?: string;
-  reaction?: string;
-  item?: {
-    type?: string;
-    channel?: string;
-    ts?: string;
-  };
-  item_user?: string;
-  event_ts?: string;
-};
+type LooseSlackEvent<Event extends { type: string }> = Event extends unknown
+  ? Pick<Event, "type"> & Partial<Omit<Event, "type">>
+  : never;
 
-export type SlackMemberChannelEvent = {
-  type: "member_joined_channel" | "member_left_channel";
-  user?: string;
-  channel?: string;
-  channel_type?: SlackMessageEvent["channel_type"];
-  event_ts?: string;
+export type SlackReactionEvent = LooseSlackEvent<ReactionAddedEvent | ReactionRemovedEvent>;
+export type SlackMemberChannelEvent = LooseSlackEvent<
+  MemberJoinedChannelEvent | MemberLeftChannelEvent
+>;
+export type SlackChannelRenamedEvent = Omit<LooseSlackEvent<ChannelRenameEvent>, "channel"> & {
+  channel?: Partial<ChannelRenameEvent["channel"]>;
 };
-
-export type SlackChannelCreatedEvent = {
-  type: "channel_created";
-  channel?: { id?: string; name?: string };
-  event_ts?: string;
-};
-
-export type SlackChannelRenamedEvent = {
-  type: "channel_rename";
-  channel?: { id?: string; name?: string; name_normalized?: string };
-  event_ts?: string;
-};
-
-export type SlackChannelIdChangedEvent = {
-  type: "channel_id_changed";
-  old_channel_id?: string;
-  new_channel_id?: string;
-  event_ts?: string;
-};
-
-export type SlackAppHomeOpenedEvent = {
-  type: "app_home_opened";
-  user?: string;
-  channel?: string;
-  tab?: "home" | "messages";
+export type SlackChannelIdChangedEvent = LooseSlackEvent<ChannelIDChangedEvent>;
+export type SlackAppHomeOpenedEvent = Omit<LooseSlackEvent<AppHomeOpenedEvent>, "context"> & {
   context?: SlackAppContext;
-  event_ts?: string;
 };
-
-export type SlackAppContextChangedEvent = {
-  type: "app_context_changed";
-  user?: string;
-  context?: SlackAppContext;
-  event_ts?: string;
-};
-
-export type SlackAgentSessionStoppedEvent = {
-  type: "agent_session_stopped";
-  channel: string;
-  thread_ts: string;
-  user: string;
-  event_ts: string;
-  streaming_message_ts: string[];
-};
-
-export type SlackAgentSessionTitleChangedEvent = {
-  type: "agent_session_title_changed";
-  channel: string;
-  thread_ts: string;
-  user: string;
-  title: string;
-  previous_title?: string;
-  team_id: string;
-  event_ts: string;
-};
-
-export type SlackPinEvent = {
-  type: "pin_added" | "pin_removed";
-  channel_id?: string;
-  user?: string;
-  item?: { type?: string; message?: { ts?: string } };
-  event_ts?: string;
-};
+export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<
   SlackMessageEvent,
   "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
 >;
 
-export type SlackMessageChangedEvent = {
-  type: "message";
-  subtype: "message_changed";
-  channel?: string;
+export type SlackMessageChangedEvent = Omit<
+  LooseSlackEvent<MessageChangedEvent>,
+  "message" | "previous_message"
+> & {
   message?: SlackMessageSubtypeMessage;
   previous_message?: SlackMessageSubtypeMessage;
-  event_ts?: string;
 };
 
-export type SlackMessageDeletedEvent = {
-  type: "message";
-  subtype: "message_deleted";
-  channel?: string;
-  deleted_ts?: string;
+export type SlackMessageDeletedEvent = Omit<
+  LooseSlackEvent<MessageDeletedEvent>,
+  "previous_message"
+> & {
   previous_message?: SlackMessageSubtypeMessage;
-  event_ts?: string;
 };

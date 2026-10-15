@@ -13,6 +13,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
+import { joinPresentSections } from "./src/app-server/developer-instruction-sections.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import {
@@ -20,15 +21,18 @@ import {
   type CodexDynamicToolSpec,
   type JsonObject,
 } from "./src/app-server/protocol.js";
+import { buildDeveloperInstructions } from "./src/app-server/thread-prompt.js";
 import {
-  buildDeveloperInstructions,
   buildThreadResumeParams,
   buildThreadStartParams,
+} from "./src/app-server/thread-requests.js";
+import {
+  buildCodexParentLocalInstructions,
   buildTurnStartParams,
-} from "./src/app-server/thread-lifecycle.js";
-import { buildCodexParentLocalInstructions } from "./src/app-server/turn-params.js";
+} from "./src/app-server/turn-params.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+export { createCodexDynamicToolBridge };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -41,12 +45,22 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
   return await createCodexSessionInitializationFixture(params);
 }
 
+// Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
+export const loadCodexSettledFinalizerTestFixture = () =>
+  import("./src/app-server/settled-turn-finalizer.test-support.js");
+
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
+export const loadCodexAbortTranscriptTestFixture = () =>
+  import("./src/app-server/transcript-abort.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;
-  threadStartParams: ReturnType<typeof buildThreadStartParams>;
-  threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
-  turnStartParams: ReturnType<typeof buildTurnStartParams>;
+  threadStartParams: Awaited<ReturnType<typeof buildThreadStartParams>>;
+  threadResumeParams: Awaited<ReturnType<typeof buildThreadResumeParams>>;
+  turnStartParams: Awaited<ReturnType<typeof buildTurnStartParams>>;
 };
 
 /** Resolves deterministic app-server options for prompt snapshot tests. */
@@ -61,7 +75,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
 }
 
 /** Builds thread/resume/turn prompt payload snapshots for a Codex harness attempt. */
-export function buildCodexHarnessPromptSnapshot(params: {
+export async function buildCodexHarnessPromptSnapshot(params: {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   threadId: string;
@@ -70,8 +84,8 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
   developerInstructionAdditions?: string;
-  turnScopedDeveloperInstructions?: string;
-}): CodexHarnessPromptSnapshot {
+  personaInstructions?: string;
+}): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
@@ -81,27 +95,26 @@ export function buildCodexHarnessPromptSnapshot(params: {
   return {
     developerInstructions,
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      personaInstructions: params.personaInstructions,
     }),
-    threadStartParams: buildThreadStartParams(params.attempt, {
+    threadStartParams: await buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions,
       config: params.config,
     }),
-    threadResumeParams: buildThreadResumeParams(params.attempt, {
+    threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
       developerInstructions,
       config: params.config,
     }),
-    turnStartParams: buildTurnStartParams(params.attempt, {
+    turnStartParams: await buildTurnStartParams(params.attempt, {
       threadId: params.threadId,
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       parentLocalEgress: true,
       messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "message",
@@ -114,10 +127,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       ),
     }),
   };
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 /** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */
@@ -135,3 +144,9 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   }).specs;
 }
 export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+export {
+  CODEX_NATIVE_TOOL_REQUIREMENTS,
+  CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+} from "./native-tool-policy.js";
+export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";

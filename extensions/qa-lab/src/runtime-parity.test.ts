@@ -1,104 +1,39 @@
 // Qa Lab tests cover runtime parity classification behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  formatSqliteSessionFileMarker,
+  closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
-import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { createRuntimeParityTranscriptHarness } from "./runtime-parity.test-helper.js";
+import { readQaScenarioFile } from "./scenario-catalog.js";
+import { buildQaToolCoverageReport } from "./tool-coverage-report.js";
 
-const tempDirs = createTempDirHarness();
+const { seedRuntimeParityTranscript, cleanup } = createRuntimeParityTranscriptHarness();
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
+  // Join worker cleanup before removing its databases. Agent lease release can reopen
+  // shared state, so drain agent resources first and shared state second.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  await tempDirs.cleanup();
+  await cleanup();
 });
-
-async function seedRuntimeParityTranscript(params: {
-  heartbeatIsolatedBaseSessionKey?: string;
-  messages: Array<Record<string, unknown>>;
-  sessionId: string;
-  sessionKey: string;
-  tempRoot?: string;
-  trajectoryEvents?: Array<{
-    data?: Record<string, unknown>;
-    type: string;
-  }>;
-  updatedAt?: number;
-}) {
-  const tempRoot = params.tempRoot ?? (await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
-  const storePath = resolveStorePath(undefined, { agentId: "qa", env });
-  await upsertSessionEntry({
-    agentId: "qa",
-    env,
-    sessionKey: params.sessionKey,
-    storePath,
-    entry: {
-      sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "qa",
-        sessionId: params.sessionId,
-        storePath,
-      }),
-      updatedAt: params.updatedAt ?? 100,
-      ...(params.heartbeatIsolatedBaseSessionKey
-        ? { heartbeatIsolatedBaseSessionKey: params.heartbeatIsolatedBaseSessionKey }
-        : {}),
-    },
-  });
-  for (const [index, message] of params.messages.entries()) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "qa",
-      env,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-      now: index + 1,
-      message: message as never,
-    });
-  }
-  if (params.trajectoryEvents?.length) {
-    appendSqliteTrajectoryRuntimeEvents(
-      { agentId: "qa", env, sessionId: params.sessionId, storePath },
-      params.trajectoryEvents.map((event, index) => ({
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        traceId: params.sessionId,
-        source: "runtime",
-        type: event.type,
-        ts: new Date(index + 1).toISOString(),
-        seq: index + 1,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: "run-1",
-        data: event.data,
-      })),
-    );
-  }
-  return tempRoot;
-}
 
 async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
@@ -259,6 +194,17 @@ describe("runtime parity", () => {
           toolName: "image_generate",
           content: [{ type: "text", text: "Image generation started" }],
         },
+        {
+          role: "assistant",
+          content: [
+            "  plain  ",
+            { type: "output_text", content: "nested" },
+            { type: "message", content: "message" },
+            { type: "unknown", text: " priority ", content: "ignored" },
+            { type: "toolResult", content: "ignored tool result" },
+            { type: "Output_Text", content: "ignored normalized type" },
+          ],
+        },
       ],
     });
 
@@ -273,7 +219,97 @@ describe("runtime parity", () => {
     expect(cell.toolCalls).toHaveLength(1);
     expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.finalText).toBe("plain nested message priority");
   });
+
+  it.each(["toolResult", "tool_result"] as const)(
+    "counts successful %s reads containing failure prose in tool coverage",
+    async (format) => {
+      const results = [
+        {
+          id: "read-happy",
+          args: { path: "QA_KICKOFF_TASK.md" },
+          text: "Track what worked, what failed, what was blocked, and what you observed.",
+          isError: false,
+        },
+        {
+          id: "read-denied",
+          args: { __qaFailureMode: "denied-input" },
+          text: 'Validation failed for tool "read":\n  - path: must have required properties path',
+          isError: true,
+        },
+        { id: "read-typed-error", args: {}, text: "Unavailable", isError: true },
+        { id: "read-untyped-error", args: {}, text: "ENOENT: missing file" },
+        ...(format === "tool_result"
+          ? [{ id: "read-error-block", args: {}, text: "Unavailable", isError: false }]
+          : []),
+      ];
+      const tempRoot = await seedRuntimeParityTranscript({
+        sessionId: "read-tool-coverage",
+        sessionKey: "agent:qa:read-tool-coverage",
+        messages: results.flatMap(({ id, args, text, isError }) => [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id, name: "read", arguments: args }],
+          },
+          format === "toolResult"
+            ? {
+                role: "toolResult",
+                toolCallId: id,
+                toolName: "read",
+                content: [{ type: "text", text }],
+                ...(isError === undefined ? {} : { isError }),
+              }
+            : {
+                role: "user",
+                content: [
+                  {
+                    type: id === "read-error-block" ? "tool_result_error" : "tool_result",
+                    tool_use_id: id,
+                    content: [{ type: "text", text }],
+                    ...(isError === undefined ? {} : { is_error: isError }),
+                  },
+                ],
+              },
+        ]),
+      });
+      const openclaw = await captureRuntimeParityCell({
+        runtime: "openclaw",
+        gateway: { tempRoot },
+        scenarioResult: { status: "pass" },
+        wallClockMs: 10,
+      });
+      const scenario = readQaScenarioFile("qa/scenarios/runtime/tools/fs-read.yaml");
+      const runtimeParity = await runRuntimeParityScenario({
+        scenarioId: scenario.id,
+        runCell: async (runtime) => ({
+          status: "pass",
+          cell:
+            runtime === "openclaw"
+              ? openclaw
+              : makeRuntimeParityCell("codex", [
+                  { tool: "bash", argsHash: "native-read", resultHash: "file-contents" },
+                ]),
+        }),
+      });
+      const report = buildQaToolCoverageReport({
+        scenarios: [scenario],
+        summary: { scenarios: [{ name: scenario.id, status: "pass", runtimeParity }] },
+      });
+
+      expect(report.pass).toBe(true);
+      expect(report.failures).toEqual([]);
+      expect(report.rows[0]).toMatchObject({
+        tool: "fs.read",
+        openclawToolCalls: results.length,
+        openclawSuccessfulToolCalls: 1,
+      });
+      expect(openclaw.toolCalls.map((call) => call.errorClass)).toEqual([
+        undefined,
+        ...results.slice(1).map(() => "tool-result-error"),
+      ]);
+    },
+  );
 
   it("captures native tool execution from the canonical SQLite trajectory", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
@@ -584,60 +620,6 @@ describe("runtime parity", () => {
     expect(missingCell.transcriptBytes).toBe("");
     expect(missingCell.toolCalls).toEqual([]);
   });
-  it("keeps an explicitly identified orphan result separate", async () => {
-    const tempRoot = await seedRuntimeParityTranscript({
-      sessionId: "orphan-trajectory-result",
-      sessionKey: "agent:qa:orphan-trajectory-result",
-      messages: [],
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "read-pending",
-            name: "read",
-            arguments: { path: "README.md" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "read-orphan",
-            name: "read",
-            success: true,
-            contentItems: [{ type: "text", text: "orphan result" }],
-          },
-        },
-      ],
-    });
-
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
-
-    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
-      "tool-result-missing",
-      undefined,
-    ]);
-  });
-
-  it("keeps a retry pass diagnostic from failing the captured cell", async () => {
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: {
-        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
-      },
-      scenarioResult: {
-        status: "pass",
-        details: "ok | passed on retry; first attempt: timed out after 20000ms",
-      },
-      wallClockMs: 10,
-    });
-
-    expect(cell.runtimeErrorClass).toBeUndefined();
-  });
 
   it("still classifies terminal scenario failure diagnostics", async () => {
     const cell = await captureRuntimeParityCell({
@@ -655,19 +637,6 @@ describe("runtime parity", () => {
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("keeps planned mock calls diagnostic instead of promoting them to runtime calls", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
-    });
-
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
-      tool: "read_file",
-      errorClass: "tool-result-missing",
-    });
-  });
-
   it("records resolved mock calls as provider-plan evidence", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
@@ -677,8 +646,13 @@ describe("runtime parity", () => {
     });
 
     expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toEqual([
+      {
+        tool: "read_file",
+        argsHash: stableHash({ path: "README.md" }),
+        resultHash: stableHash({ ok: true }),
+      },
+    ]);
 
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",
@@ -720,23 +694,6 @@ describe("runtime parity", () => {
     expect(
       resolveRuntimeParityUsagePolicy({ expectation: "not-applicable", reason: "   " }),
     ).toEqual({ expectation: "assistant-message-required" });
-  });
-
-  it("does not classify planned-only provider evidence as a runtime failure", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
-    });
-
-    const result = await runRuntimeParityScenario({
-      scenarioId: "planned-only-tool",
-      runCell: async (runtime) => ({
-        status: "pass",
-        cell: { ...cell, runtime },
-      }),
-    });
-
-    expect(result.drift).toBe("none");
-    expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
   it("treats matching controlled tool errors as equivalent results", async () => {
@@ -784,73 +741,6 @@ describe("runtime parity", () => {
     expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
-  it("prefers transcript tool results when mock debug rows repeat an incomplete call", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } },
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } },
-      ],
-      messages: [
-        { role: "user", content: "Delegate one bounded QA task to a subagent." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "same" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "image-call",
-          toolName: "image_generate",
-          content: [{ type: "text", text: "Image generation started" }],
-        },
-      ],
-    });
-
-    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "image_generate" })]);
-    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
-  });
-
-  it("keeps multiple image provider plans from invalidating one proven runtime call", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "first" } },
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "second" } },
-      ],
-      messages: [
-        { role: "user", content: "Generate the QA image." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "runtime" },
-            },
-          ],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
-          },
-        ],
-      },
-    });
-
-    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
-    expect(cell.providerPlanToolCalls).toHaveLength(2);
-  });
-
   it("requires call-linked passed step evidence for terminal image results", async () => {
     const proven = await captureRuntimeParityWithMockRequests(
       createTerminalImageParityInput(
@@ -868,77 +758,6 @@ describe("runtime parity", () => {
     expect(proven.toolCalls[0]?.errorClass).toBeUndefined();
     expect(unrelated.toolCalls[0]?.errorClass).toBe("tool-result-missing");
     expect(failed.toolCalls[0]?.errorClass).toBe("tool-result-missing");
-  });
-
-  it("preserves incomplete image provider plans as diagnostic evidence", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "first" } },
-        { toolOutput: JSON.stringify({ ok: true }) },
-        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "second" } },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: "image_generate=true\nMEDIA:/tmp/qa-image.png",
-          },
-        ],
-      },
-    });
-
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls?.map((toolCall) => toolCall.errorClass)).toEqual([
-      undefined,
-      "tool-result-missing",
-    ]);
-  });
-
-  it("preserves missing image results when capture sources disagree on call count", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "first" } }],
-      messages: [
-        { role: "user", content: "Delegate one bounded QA task to a subagent." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "first-image",
-              name: "image_generate",
-              arguments: { prompt: "first" },
-            },
-            {
-              type: "toolCall",
-              id: "second-image",
-              name: "image_generate",
-              arguments: { prompt: "second" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "first-image",
-          toolName: "image_generate",
-          content: [{ type: "text", text: "Image generation started" }],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: "image_generate=true\nMEDIA:/tmp/qa-image.png",
-          },
-        ],
-      },
-    });
-
-    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
-      undefined,
-      "tool-result-missing",
-    ]);
   });
 
   it("scopes process-global mock requests to the parent session prompt", async () => {

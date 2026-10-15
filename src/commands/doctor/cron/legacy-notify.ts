@@ -1,4 +1,5 @@
 // Legacy cron `notify: true` migration to explicit webhook/completion delivery.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -10,7 +11,6 @@ type LegacyNotifyMigrationOutcome = {
   warnings: string[];
 };
 
-/** Migrate legacy notify fallback flags into explicit delivery destinations when possible. */
 export function migrateLegacyNotifyFallback(params: {
   jobs: Array<Record<string, unknown>>;
   legacyWebhook?: string;
@@ -29,17 +29,13 @@ export function migrateLegacyNotifyFallback(params: {
 
     const jobName =
       normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
+    if (raw.notify !== true) {
       delete raw.notify;
       changed = true;
       continue;
     }
 
-    const delivery =
-      raw.delivery && typeof raw.delivery === "object" && !Array.isArray(raw.delivery)
-        ? (raw.delivery as Record<string, unknown>)
-        : null;
+    const delivery = asNullableRecord(raw.delivery);
     const mode = normalizeOptionalLowercaseString(delivery?.mode);
     const to = normalizeOptionalString(delivery?.to);
     const hasLegacyChatDelivery =
@@ -49,12 +45,7 @@ export function migrateLegacyNotifyFallback(params: {
         normalizeOptionalString(delivery.accountId) !== undefined ||
         "threadId" in delivery ||
         (to !== undefined && !normalizeHttpWebhookUrl(to)));
-    const completionDestination =
-      delivery?.completionDestination &&
-      typeof delivery.completionDestination === "object" &&
-      !Array.isArray(delivery.completionDestination)
-        ? (delivery.completionDestination as Record<string, unknown>)
-        : null;
+    const completionDestination = asNullableRecord(delivery?.completionDestination);
     const completionMode = normalizeOptionalLowercaseString(completionDestination?.mode);
     const completionTo = normalizeOptionalString(completionDestination?.to);
     const validWebhookTo = to ? normalizeHttpWebhookUrl(to) : undefined;
@@ -76,33 +67,27 @@ export function migrateLegacyNotifyFallback(params: {
       );
       continue;
     }
-    if (!legacyWebhook) {
-      // Without a configured target, the top-level marker cannot affect delivery.
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
+    if (
+      legacyWebhook &&
+      ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook")
+    ) {
       raw.delivery = {
         ...delivery,
         mode: "webhook",
         to: mode === "none" ? legacyWebhook : (validWebhookTo ?? legacyWebhook),
       };
-      delete raw.notify;
-      changed = true;
-      continue;
+    } else if (legacyWebhook) {
+      raw.delivery = {
+        ...delivery,
+        ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
+        completionDestination: {
+          ...completionDestination,
+          mode: "webhook",
+          to: legacyWebhook,
+        },
+      };
     }
-
-    raw.delivery = {
-      ...delivery,
-      ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
-      completionDestination: {
-        ...completionDestination,
-        mode: "webhook",
-        to: legacyWebhook,
-      },
-    };
+    // Without a configured target, the top-level marker cannot affect delivery.
     delete raw.notify;
     changed = true;
   }

@@ -4,8 +4,9 @@
  * command/args/env/cwd needed to spawn a stdio server.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
-import { toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
+import { toMcpEnvRecord } from "./mcp-config-shared.js";
 
 /** Normalized stdio MCP server launch config. */
 export type StdioMcpServerLaunchConfig = {
@@ -46,7 +47,7 @@ export function resolveStdioMcpServerLaunchConfig(
     ok: true,
     config: {
       command: raw.command,
-      args: toMcpStringArray(raw.args),
+      args: Array.isArray(raw.args) ? filterStringEntries(raw.args) : undefined,
       env: toMcpEnvRecord(raw.env, { onDroppedEntry: options?.onDroppedEnv }),
       cwd,
     },

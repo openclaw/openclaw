@@ -489,6 +489,7 @@ pub struct NodeInvocation {
     pub idempotency_key: Option<String>,
     pub session_key: Option<String>,
     received_params_bytes: Option<usize>,
+    received_params_json: Option<String>,
     received_at: Option<Instant>,
 }
 
@@ -538,8 +539,16 @@ impl NodeInvocation {
             idempotency_key: None,
             session_key: None,
             received_params_bytes: None,
+            received_params_json: None,
             received_at: None,
         }
+    }
+
+    /// Original Gateway parameter bytes, for native owners whose receipts distinguish
+    /// absent parameters and preserve the exact serialized invocation identity.
+    #[must_use]
+    pub fn received_params_json(&self) -> Option<&str> {
+        self.received_params_json.as_deref()
     }
 
     pub(crate) fn input_bytes(&self) -> Option<usize> {
@@ -619,6 +628,93 @@ pub enum ClientError {
 pub struct NodeClient;
 
 impl NodeClient {
+    /// Connect with an exact challenge-signed envelope supplied by a native credential owner.
+    /// This preserves product client metadata and platform-owned key storage; the Gateway
+    /// still authorizes the node and the runtime remains bound to the advertised commands.
+    ///
+    /// # Errors
+    /// Returns malformed native envelopes, rejected handshakes, or transport failures.
+    pub async fn connect_signed<F, Fut, E>(
+        config: GatewayClientConfig,
+        make_params: F,
+    ) -> Result<NodeSession, ClientError>
+    where
+        F: FnOnce(openclaw_gateway_client::ConnectChallenge) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+        E: std::fmt::Display + Send + Sync + 'static,
+    {
+        let mut commands = BTreeSet::new();
+        let commands_ref = &mut commands;
+        let mut offered_protocols = (0, 0);
+        let offered_protocols_ref = &mut offered_protocols;
+        let gateway = GatewayClient::connect(config, |challenge| async move {
+            let params = make_params(challenge)
+                .await
+                .map_err(|error| error.to_string())?;
+            if params["role"] != "node" || params["client"]["mode"] != "node" {
+                return Err("signed envelope must establish a node connection".to_owned());
+            }
+            let min = params["minProtocol"]
+                .as_u64()
+                .ok_or("missing minimum protocol")?;
+            let max = params["maxProtocol"]
+                .as_u64()
+                .ok_or("missing maximum protocol")?;
+            if min < 3 || max > 4 || min > max {
+                return Err("unsupported signed node protocol range".to_owned());
+            }
+            *offered_protocols_ref = (min, max);
+            // Gateway ConnectParams makes commands optional. Preserve the signed bytes
+            // while treating an omitted manifest as an empty capability surface.
+            let advertised = params
+                .get("commands")
+                .map(|value| value.as_array().ok_or("node commands must be an array"))
+                .transpose()?;
+            for command in advertised.into_iter().flatten() {
+                let command = command
+                    .as_str()
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name.len() <= 128
+                            && name.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                            })
+                    })
+                    .ok_or("node command names must use the shared ASCII grammar")?;
+                if !commands_ref.insert(command.to_owned()) {
+                    return Err("duplicate node command".to_owned());
+                }
+            }
+            Ok(params)
+        })
+        .await
+        .map_err(map_gateway_error)?;
+        let negotiated = gateway.hello()["protocol"].as_u64().unwrap_or(0);
+        if negotiated < offered_protocols.0 || negotiated > offered_protocols.1 {
+            gateway.close().await;
+            return Err(ClientError::InvalidFrame(
+                "hello protocol is outside the signed range".into(),
+            ));
+        }
+        let protocol = match gateway.hello()["protocol"].as_u64() {
+            Some(3) => NodeProtocolVersion::V3,
+            Some(4) => NodeProtocolVersion::V4,
+            _ => {
+                gateway.close().await;
+                return Err(ClientError::InvalidFrame(
+                    "unsupported node hello protocol".into(),
+                ));
+            }
+        };
+        Ok(NodeSession {
+            gateway,
+            activated: true,
+            advertised_commands: Arc::new(commands),
+            protocol,
+            runtime_marker: Arc::new(()),
+        })
+    }
+
     /// Connect a node profile using challenge-bound connect parameters.
     /// # Errors
     ///
@@ -729,6 +825,17 @@ pub struct NodeSession {
 }
 
 impl NodeSession {
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.advertised_commands.iter().map(String::as_str)
+    }
+
+    /// Await the matching WebSocket pong.
+    ///
+    /// # Errors
+    /// Returns timeout, transport, or closed-session failures.
+    pub async fn ping(&self) -> Result<(), ClientError> {
+        self.gateway.ping().await.map_err(map_gateway_error)
+    }
     pub(crate) fn runtime_scope(&self) -> (usize, std::sync::Weak<()>) {
         (
             Arc::as_ptr(&self.runtime_marker) as usize,
@@ -847,6 +954,21 @@ impl NodeSession {
     ) -> Result<Value, ClientError> {
         self.gateway
             .request(method, params)
+            .await
+            .map_err(map_gateway_error)
+    }
+
+    /// Send a request whose caller owns cancellation and any deadline.
+    /// # Errors
+    ///
+    /// Returns validation, Gateway, transport, or closed-session errors.
+    pub async fn request_until_cancelled(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, ClientError> {
+        self.gateway
+            .request_until_cancelled(method, params)
             .await
             .map_err(map_gateway_error)
     }
@@ -1003,6 +1125,7 @@ fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocati
         idempotency_key,
         session_key,
         received_params_bytes: payload.received_params_bytes,
+        received_params_json: payload.received_params_json,
         received_at: Some(received_at),
     })
 }
@@ -1013,6 +1136,7 @@ struct DecodedInvocation {
     command: String,
     params: Value,
     received_params_bytes: Option<usize>,
+    received_params_json: Option<String>,
     timeout_ms: Option<u64>,
     idempotency_key: Option<String>,
     session_key: Option<String>,
@@ -1020,7 +1144,6 @@ struct DecodedInvocation {
 
 fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     #[serde(rename_all = "camelCase")]
     struct Payload {
         id: String,
@@ -1038,15 +1161,22 @@ fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
         idempotency_key: Option<String>,
         #[serde(default)]
         session_key: Option<String>,
+        #[serde(default, flatten)]
+        extensions: BTreeMap<String, Value>,
     }
 
     let payload: Payload = serde_json::from_value(payload).map_err(|error| {
         ClientError::InvalidFrame(format!("invalid node.invoke.request: {error}"))
     })?;
-    let (params, received_params_bytes) = match payload.params_json {
+    if payload.extensions.contains_key("params") {
+        return Err(ClientError::InvalidFrame(
+            "invalid node.invoke.request: direct params are unsupported; use paramsJSON".into(),
+        ));
+    }
+    let (params, received_params_bytes) = match &payload.params_json {
         Some(value) => {
             let received_params_bytes = value.len();
-            let params = serde_json::from_str(&value).map_err(|error| {
+            let params = serde_json::from_str(value).map_err(|error| {
                 ClientError::InvalidFrame(format!("invalid invocation paramsJSON: {error}"))
             })?;
             (params, Some(received_params_bytes))
@@ -1059,6 +1189,7 @@ fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
         command: payload.command,
         params,
         received_params_bytes,
+        received_params_json: payload.params_json,
         timeout_ms: payload.timeout_ms,
         idempotency_key: payload.idempotency_key,
         session_key: payload.session_key,
@@ -1106,7 +1237,7 @@ mod tests {
             "/../../test/fixtures/node-invoke-lifecycle-contract.json"
         )))
         .expect("valid node invocation lifecycle fixture");
-        assert_eq!(fixture["version"], 1);
+        assert_eq!(fixture["version"], 3);
 
         let invocation = parse_invocation(fixture["request"]["canonical"].clone(), Instant::now())
             .expect("canonical invocation request");
@@ -1116,6 +1247,27 @@ mod tests {
         assert_eq!(invocation.timeout_ms, Some(0));
         assert_eq!(invocation.idempotency_key.as_deref(), Some("idem-1"));
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+        let extended_fixture = fixture["request"]["withExtensions"]
+            .as_object()
+            .expect("invocation request with extensions");
+        assert_eq!(extended_fixture.get("unexpected"), Some(&Value::Bool(true)));
+        let extended = parse_invocation(Value::Object(extended_fixture.clone()), Instant::now())
+            .expect("invocation request with extensions");
+        assert_eq!(extended.id, invocation.id);
+        assert_eq!(extended.node_id, invocation.node_id);
+        assert_eq!(extended.command, invocation.command);
+        assert_eq!(extended.params, invocation.params);
+        assert_eq!(extended.timeout_ms, invocation.timeout_ms);
+        assert_eq!(extended.idempotency_key, invocation.idempotency_key);
+        assert_eq!(extended.session_key, invocation.session_key);
+        assert!(
+            parse_invocation(fixture["request"]["legacyParams"].clone(), Instant::now()).is_err()
+        );
+        assert!(parse_invocation(
+            fixture["request"]["ambiguousParams"].clone(),
+            Instant::now(),
+        )
+        .is_err());
         assert!(parse_invocation(fixture["request"]["invalid"].clone(), Instant::now(),).is_err());
 
         let inputs = fixture["input"]["canonical"]
@@ -1158,6 +1310,16 @@ mod tests {
         )
         .expect("canonical failure result");
         assert_eq!(failure_params, failure.clone());
+
+        assert_eq!(
+            parse_invocation_cancel(fixture["cancel"]["canonical"].clone())
+                .expect("canonical invocation cancellation"),
+            NodeSessionEvent::InvocationCancelled {
+                invoke_id: "invoke-1".into(),
+                node_id: "node-1".into(),
+            }
+        );
+        assert!(parse_invocation_cancel(fixture["cancel"]["invalid"].clone()).is_err());
     }
 
     #[test]
@@ -1215,7 +1377,24 @@ mod tests {
 
         assert_eq!(invocation.params, Value::Null);
         assert_eq!(invocation.input_bytes(), Some(0));
+        assert_eq!(invocation.received_params_json(), None);
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+    }
+
+    #[test]
+    fn native_invocation_preserves_original_parameter_identity() {
+        for raw in ["null", "{ \"z\": 1, \"a\": 2 }"] {
+            let invocation = parse_invocation(
+                json!({"id":"native", "nodeId":"node", "command":"computer.act", "paramsJSON":raw}),
+                Instant::now(),
+            )
+            .unwrap();
+            assert_eq!(invocation.received_params_json(), Some(raw));
+            assert_eq!(
+                invocation.params,
+                serde_json::from_str::<Value>(raw).unwrap()
+            );
+        }
     }
 
     #[test]

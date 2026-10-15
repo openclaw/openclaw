@@ -1,6 +1,6 @@
 # Native Watch WebRTC
 
-This module exposes a small C ABI over pinned `str0m` 0.23.1. It does not open
+This module exposes a small C ABI over pinned `str0m` 0.24.0. It does not open
 sockets: `WatchRealtimeTransport` owns UDP through Network.framework, and
 `WatchRealtimeAudioIO` owns capture, native Opus conversion and playback.
 The Gateway owns provider credentials, tools and transcripts through
@@ -18,7 +18,7 @@ Install Rust with the official [rustup installer](https://rustup.rs/), then inst
 the exact toolchain used by the module:
 
 ```sh
-rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-10-02 --profile minimal --component rust-src
 ```
 
 The pinned nightly is required because Rust classifies `arm64_32` Watch and Intel
@@ -35,7 +35,10 @@ apps/shared/OpenClawWatchRTC/build.sh watchsimulator /tmp/watch-rtc-simulator ar
 ```
 
 Each command writes `libopenclaw_watch_rtc.a` and its Cargo build cache to the
-chosen output directory. A native macOS proof can use `macosx` with `arm64` or
+chosen output directory. CI can set `OPENCLAW_WATCH_RTC_CACHE_DIR` to reuse compiled slices across fresh
+Xcode builds. The phase checks source, compiler, SDK, target and build-setting
+fingerprints plus the archive checksum before reuse; a miss runs the locked Cargo
+build. The final archive is always written into the requested output directory. A native macOS proof can use `macosx` with `arm64` or
 `x86_64`; macOS execution does not verify Watch radio or background behavior.
 
 | SDK | Xcode architecture | Rust target |
@@ -62,7 +65,7 @@ transitive versions.
 Run the pinned native engine tests without opening network sockets:
 
 ```sh
-cargo +nightly-2026-09-05 test --locked --manifest-path apps/shared/OpenClawWatchRTC/Cargo.toml --lib -- --test-threads=1
+cargo +nightly-2026-10-02 test --locked --manifest-path apps/shared/OpenClawWatchRTC/Cargo.toml --lib -- --test-threads=1
 ```
 
 The iOS CI test phase runs these tests too. They exchange authenticated Opus

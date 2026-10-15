@@ -11,20 +11,9 @@ type ActivityEntry = {
 
 const activity = new Map<string, ActivityEntry>();
 
-function keyFor(channel: ChannelId, accountId: string) {
-  // Account ids are normalized before keying so omitted/blank ids share the default account slot.
-  return `${channel}:${accountId || "default"}`;
-}
-
-function ensureEntry(channel: ChannelId, accountId: string): ActivityEntry {
-  const key = keyFor(channel, accountId);
-  const existing = activity.get(key);
-  if (existing) {
-    return existing;
-  }
-  const created: ActivityEntry = { inboundAt: null, outboundAt: null };
-  activity.set(key, created);
-  return created;
+function keyFor(params: { channel: ChannelId; accountId?: string | null }): string {
+  const accountId = params.accountId?.trim() || "default";
+  return `${params.channel}:${accountId}`;
 }
 
 /** Records the latest inbound or outbound activity timestamp for a channel/account. */
@@ -35,8 +24,9 @@ export function recordChannelActivity(params: {
   at?: number;
 }) {
   const at = typeof params.at === "number" ? params.at : Date.now();
-  const accountId = params.accountId?.trim() || "default";
-  const entry = ensureEntry(params.channel, accountId);
+  const key = keyFor(params);
+  const entry = activity.get(key) ?? { inboundAt: null, outboundAt: null };
+  activity.set(key, entry);
   if (params.direction === "inbound") {
     entry.inboundAt = at;
   }
@@ -50,9 +40,8 @@ export function getChannelActivity(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): ActivityEntry {
-  const accountId = params.accountId?.trim() || "default";
   return (
-    activity.get(keyFor(params.channel, accountId)) ?? {
+    activity.get(keyFor(params)) ?? {
       inboundAt: null,
       outboundAt: null,
     }

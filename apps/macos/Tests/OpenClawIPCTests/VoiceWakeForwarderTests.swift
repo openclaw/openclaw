@@ -11,14 +11,14 @@ import Testing
         #expect(prefixed.hasSuffix("\n\nhello world"))
     }
 
-    @Test func `forward options defaults`() {
-        let opts = VoiceWakeForwarder.ForwardOptions()
+    @Test func `forward invocation defaults`() {
+        let opts = VoiceWakeForwarder.makeInvocation(transcript: "hello world")
         #expect(opts.sessionKey == "main")
         #expect(opts.thinking == nil)
-        #expect(opts.deliver == true)
+        #expect(opts.deliver == false)
         #expect(opts.to == nil)
         #expect(opts.channel == .webchat)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == false)
+        #expect(opts.message.hasSuffix("\n\nhello world"))
     }
 
     @Test func `selected forward options use session delivery context`() {
@@ -29,9 +29,10 @@ import Testing
             lastTo: "telegram:6812765697",
             deliveryContext: .init(channel: "telegram", to: "telegram:6812765697"))
 
-        let opts = VoiceWakeForwarder.forwardOptions(
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
             sessionKey: entry.key,
-            routeEntry: entry,
+            routeEntries: [entry],
             voiceWakeTrigger: "open claw")
 
         #expect(opts.sessionKey == "agent:main:telegram:group:6812765697")
@@ -39,26 +40,72 @@ import Testing
         #expect(opts.to == "telegram:6812765697")
         #expect(opts.voiceWakeTrigger == "open claw")
         #expect(opts.thinking == nil)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == true)
+        #expect(opts.deliver == true)
     }
 
     @Test func `selected forward options parse channel scoped session fallback`() {
-        let opts = VoiceWakeForwarder.forwardOptions(
-            sessionKey: "agent:main:discord:channel:123:456",
-            routeEntry: nil)
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: "agent:main:discord:channel:123:456")
 
         #expect(opts.channel == .discord)
         #expect(opts.to == "123:456")
-        #expect(opts.channel.shouldDeliver(opts.deliver) == true)
+        #expect(opts.deliver == true)
     }
 
     @Test func `selected forward options keep internal sessions on webchat`() {
-        let opts = VoiceWakeForwarder.forwardOptions(
-            sessionKey: "agent:main:work",
-            routeEntry: nil)
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: "agent:main:work")
 
         #expect(opts.channel == .webchat)
         #expect(opts.to == nil)
-        #expect(opts.channel.shouldDeliver(opts.deliver) == false)
+        #expect(opts.deliver == false)
+    }
+
+    @Test func `selected forward options do not alias another agents main route`() {
+        let entry = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:main:main",
+            channel: "telegram",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "telegram", to: "telegram:other-agent"))
+
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: "main",
+            routeEntries: [entry])
+
+        #expect(opts.sessionKey == "main")
+        #expect(opts.channel == .webchat)
+        #expect(opts.to == nil)
+        #expect(!opts.deliver)
+    }
+
+    @Test(arguments: ["main", "MAIN"])
+    func `selected forward options preserve opaque Signal group identity`(agent: String) {
+        let selectedKey = "agent:main:signal:group:AbC123="
+        let foreign = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:main:signal:group:abc123=",
+            channel: "signal",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "signal", to: "group:foreign"))
+        let selected = VoiceWakeForwarder.SessionRouteEntry(
+            key: "agent:\(agent):signal:group:AbC123=",
+            channel: "signal",
+            lastChannel: nil,
+            lastTo: nil,
+            deliveryContext: .init(channel: "signal", to: "group:selected"))
+
+        let opts = VoiceWakeForwarder.makeInvocation(
+            transcript: "hello world",
+            sessionKey: selectedKey,
+            routeEntries: [foreign, selected])
+
+        #expect(opts.sessionKey == selectedKey)
+        #expect(opts.channel == .signal)
+        #expect(opts.to == "group:selected")
+        #expect(opts.deliver)
     }
 }

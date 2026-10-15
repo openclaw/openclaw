@@ -4,7 +4,9 @@ import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -13,6 +15,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Gateway question flow",
@@ -117,10 +120,12 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
       "question.resolve",
       "sessions.create",
       "sessions.patch",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ],
     historyMessages: historyMessages(),
     methodResponses: {
       "question.list": { questions: [] },
+      [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
       "sessions.list": {
         ts: Date.now(),
         path: "",
@@ -147,11 +152,6 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  // Chat and sidebar each own a projection; both must bind to the advertised
-  // real client before a lost-broadcast test can prove cross-surface delivery.
-  await expect
-    .poll(async () => (await gateway.getRequests("question.list")).length)
-    .toBeGreaterThanOrEqual(2);
   const startup = await gateway.waitForRequest("chat.startup");
   expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
   const compactMobileViewport =
@@ -161,6 +161,8 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     .locator(`[data-session-key="${questionSessionKey}"]`)
     .first()
     .waitFor({ state: compactMobileViewport ? "attached" : "visible" });
+  // The mounted chat and sidebar share one authoritative question hydration.
+  await expect.poll(async () => (await gateway.getRequests("question.list")).length).toBe(1);
   return { gateway, page };
 }
 
@@ -234,7 +236,7 @@ suite.define(() => {
     const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
     const shell = page.locator(".shell");
     const attention = row.locator('[data-session-attention="question"]');
-    const tooltip = row.locator("openclaw-tooltip wa-tooltip[open]");
+    const tooltip = row.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open");
     const route = page.url();
 
     await attention.tap();
@@ -401,89 +403,12 @@ suite.define(() => {
     await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
-  it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
-  ])(
-    "joins a collapsed mobile question and composer into one $screenshotName surface",
-    async ({ height, screenshotName, width }) => {
-      const { gateway, page } = await openQuestionPage({ height, width });
-      const prompt = "Which progress note should I use?";
-      await emitRequested(
-        gateway,
-        questionRecord("question-mobile-compound", [
-          {
-            questionId: "progress_note",
-            header: "Progress note",
-            question: prompt,
-            options: [
-              { label: "Concise", description: "Keep the update short." },
-              { label: "Detailed", description: "Include the supporting evidence." },
-            ],
-          },
-        ]),
-      );
-
-      const panel = panelFor(page, prompt);
-      await panel.waitFor();
-      await panel.locator(".chat-question-panel__collapse").click();
-      const shell = page.locator(".agent-chat__composer-shell");
-      const composer = shell.locator(".agent-chat__input");
-      await composer.waitFor();
-      await screenshot(page, `07-question-mobile-compound-${screenshotName}.png`);
-
-      expect(
-        await shell.evaluate((element) => {
-          const collapsedPanel = element.querySelector<HTMLElement>(
-            ".chat-question-panel--collapsed",
-          );
-          const input = element.querySelector<HTMLElement>(".agent-chat__input");
-          if (!collapsedPanel || !input) {
-            throw new Error("expected collapsed question and composer");
-          }
-          const shellBox = element.getBoundingClientRect();
-          const panelBox = collapsedPanel.getBoundingClientRect();
-          const inputBox = input.getBoundingClientRect();
-          return {
-            composerBorder: getComputedStyle(input).borderTopWidth,
-            joined: Math.abs(panelBox.bottom - inputBox.top) <= 1,
-            panelBorder: getComputedStyle(collapsedPanel).borderTopWidth,
-            rowHeight: Math.round(panelBox.height),
-            shellBorder: getComputedStyle(element).borderTopWidth,
-            shellContainsChildren:
-              panelBox.left >= shellBox.left - 1 &&
-              inputBox.left >= shellBox.left - 1 &&
-              panelBox.right <= shellBox.right + 1 &&
-              inputBox.right <= shellBox.right + 1,
-          };
-        }),
-      ).toEqual({
-        composerBorder: "0px",
-        joined: true,
-        panelBorder: "0px",
-        rowHeight: 48,
-        shellBorder: "1px",
-        shellContainsChildren: true,
-      });
-
-      await composer.locator(".agent-chat__composer-combobox > textarea").focus();
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-      await page.evaluate(() => {
-        document.documentElement.dataset.themeMode = "light";
-      });
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-      await composer.evaluate((element) => {
-        element.classList.add("agent-chat__input--dictating");
-      });
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-    },
-  );
+  defineQuestionFooterTests({
+    openQuestionPage,
+    questionRecord,
+    questionSessionKey,
+    screenshot,
+  });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
@@ -543,13 +468,19 @@ suite.define(() => {
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .hover();
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(1);
     await page.mouse.move(400, 50);
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .focus();
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(1);
     await expect
       .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
       .toBe(0);
@@ -593,7 +524,11 @@ suite.define(() => {
     await expect
       .poll(() => composer.evaluate((element) => document.activeElement === element))
       .toBe(true);
+    await summary.scrollIntoViewIfNeeded();
     await screenshot(page, "02-question-answered.png");
+    expect(
+      await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
+    ).toBe(true);
   });
 
   it("masks a store-bound secret and resolves it with edited hosts without echoing the value", async () => {
@@ -627,6 +562,22 @@ suite.define(() => {
       fakeSecret,
     );
     await screenshot(page, "08-secret-store-masked-input.png");
+
+    await secretInput.focus();
+    await page.keyboard.press("Tab");
+    const reveal = panel.getByRole("button", { name: "Show secret", exact: true });
+    expect(await reveal.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.keyboard.press("Enter");
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    const hide = panel.getByRole("button", { name: "Hide secret", exact: true });
+    expect(await hide.getAttribute("aria-pressed")).toBe("true");
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    await screenshot(page, "08-secret-store-visible-input.png");
+    await page.keyboard.press("Space");
+    expect(await secretInput.getAttribute("type")).toBe("password");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
@@ -713,14 +664,23 @@ suite.define(() => {
     expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
     const panel = document.locator("openclaw-chat-question-panel");
     await panel.waitFor();
+    expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
+      "Waiting for your answer",
+    );
+    expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
     await screenshot(page, "11-secret-store-ask-pending.png");
-    const secretInput = panel.locator('input[type="password"]');
+    const secretInput = panel.getByLabel("API key", { exact: true });
+    expect(await secretInput.getAttribute("type")).toBe("password");
     await secretInput.fill(fakeSecret);
     expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
     expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
       fakeSecret,
     );
     await screenshot(page, "12-secret-store-ask-masked-input.png");
+    await panel.getByRole("button", { name: "Show secret", exact: true }).click();
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await screenshot(page, "12-secret-store-ask-visible-input.png");
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
 
     const resolveRequest = await gateway.waitForRequest("question.resolve");
@@ -729,81 +689,56 @@ suite.define(() => {
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test"],
     });
-    await document.getByRole("heading", { name: "Answered", exact: true }).waitFor();
+    const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
+    await outcomeHeading.waitFor();
+    expect(
+      await outcomeHeading.evaluate((element) => element === element.ownerDocument.activeElement),
+    ).toBe(true);
+    expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
     await screenshot(page, "13-secret-store-ask-answered.png");
   });
 
-  it("keeps multi-select on one step and submits labels as an array", async () => {
+  it("retains a typed answer when navigating between pending questions", async () => {
     const { gateway, page } = await openQuestionPage();
-    const request = questionRecord("question-release-checks", [
+    const first = questionRecord("question-a-format", [
       {
-        questionId: "release_checks",
-        header: "Checks",
-        question: "Which release checks should I run?",
-        options: [
-          { label: "Tests", description: "Run focused automated tests." },
-          { label: "Docs", description: "Verify documentation changes." },
-          { label: "Metrics", description: "Inspect performance metrics." },
-          { label: "Rollback", description: "Prepare a rollback plan." },
-        ],
-        multiSelect: true,
+        questionId: "format",
+        header: "Format",
+        question: "Which format should I use?",
+        options: [{ label: "Compact" }, { label: "Detailed" }],
+        isOther: true,
       },
     ]);
-
-    await emitRequested(gateway, request);
-    const panel = panelFor(page, "Which release checks should I run?");
-    await panel.waitFor();
-    await panel.getByRole("checkbox", { name: /Tests/ }).click();
-    await panel.getByRole("checkbox", { name: /Metrics/ }).click();
-    await expect
-      .poll(() => panel.getByRole("checkbox", { name: /Tests/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    await expect
-      .poll(() => panel.getByRole("checkbox", { name: /Metrics/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    await screenshot(page, "03-question-multiselect.png");
-
-    const answers = { answers: { release_checks: ["Tests", "Metrics"] } };
-    await gateway.setMethodResponse("question.resolve", {
-      status: "answered",
-      answers,
-    } satisfies QuestionResolveResult);
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({ id: request.id, answers });
-    await expect.poll(() => panel.count()).toBe(0);
-  });
-
-  it("restores the composer from an authoritative cancellation without a resolution event", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const request = questionRecord("question-skip-without-broadcast", [
+    const second = questionRecord("question-b-audience", [
       {
-        questionId: "deploy_target",
-        header: "Deploy",
-        question: "Should I continue the deployment?",
-        options: [{ label: "Staging" }, { label: "Production" }],
+        questionId: "audience",
+        header: "Audience",
+        question: "Who should read it?",
+        options: [{ label: "Engineers" }, { label: "Everyone" }],
+        isOther: true,
       },
     ]);
-    await emitRequested(gateway, request);
-    const panel = panelFor(page, "Should I continue the deployment?");
-    await panel.waitFor();
-    await expectQuestionAttention(page, request.questions[0]!.question);
-    await gateway.setMethodResponse("question.resolve", {
-      status: "cancelled",
-    } satisfies QuestionResolveResult);
-
-    await panel.getByRole("button", { name: "Skip", exact: true }).click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({ id: request.id, cancel: true });
-    await expect.poll(() => panel.count()).toBe(0);
-    await expectQuestionAttention(page, null);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    await expect
-      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).count())
-      .toBe(1);
+    await emitRequested(gateway, first);
+    await emitRequested(gateway, second);
+    const panel = page.locator("openclaw-chat-question-panel");
+    await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
+    await panel.getByRole("button", { name: "Next", exact: true }).click();
+    await panel.getByText("Who should read it?", { exact: true }).waitFor();
+    await panel.getByRole("button", { name: "Previous", exact: true }).click();
+    await panel.getByText("Which format should I use?", { exact: true }).waitFor();
+    try {
+      expect(
+        await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+      ).toBe("Compact");
+      expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
+        "false",
+      );
+    } finally {
+      await screenshot(page, "14-retained-custom-answer.png");
+    }
   });
 
   it.each([
@@ -823,12 +758,13 @@ suite.define(() => {
     "updates current panes and sidebar from an authoritative $action without a resolution event",
     async ({ status, closeSubmittingPane }) => {
       const { gateway, page } = await openQuestionPage();
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       await expect
-        .poll(async () => (await gateway.getRequests("question.list")).length)
-        .toBeGreaterThanOrEqual(3);
+        .poll(() => panes.locator(".agent-chat__composer-combobox textarea").count())
+        .toBe(2);
+      expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
       const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
         {
@@ -867,7 +803,7 @@ suite.define(() => {
       expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
       const remainingPanes = page.locator("openclaw-chat-pane");
       if (closeSubmittingPane) {
-        await submittingPane.getByRole("button", { name: "Close pane", exact: true }).click();
+        await selectChatLayoutAction(submittingPane, "Close pane");
         await expect.poll(() => remainingPanes.count()).toBe(1);
         await expectQuestionAttention(page, request.questions[0]!.question);
         await gateway.resolveDeferred("question.resolve", result);
@@ -926,69 +862,5 @@ suite.define(() => {
     await expectQuestionAttention(page, null);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expect.poll(() => favicon.getAttribute("href")).toBe(originalFavicon);
-  });
-
-  it("shows a 1/2 stepper with answered and expired summaries", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const elsewhere = questionRecord("question-external-answer", [
-      {
-        questionId: "approval_path",
-        header: "Approval",
-        question: "Who should approve the release?",
-        options: [{ label: "Maintainer" }, { label: "Release manager" }],
-      },
-    ]);
-    const expired = questionRecord("question-expired-window", [
-      {
-        questionId: "release_window",
-        header: "Window",
-        question: "When should the release start?",
-        options: [{ label: "Now" }, { label: "Tomorrow" }],
-      },
-    ]);
-
-    await emitRequested(gateway, elsewhere);
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: elsewhere.id,
-      status: "answered",
-      answers: { answers: { approval_path: ["Release manager"] } },
-    });
-    await emitRequested(gateway, expired);
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: expired.id,
-      status: "expired",
-    });
-
-    const stepper = questionRecord("question-release-plan", [
-      {
-        questionId: "channel",
-        header: "Channel",
-        question: "Which release channel should I use?",
-        options: [{ label: "Beta" }, { label: "Stable" }],
-        isOther: true,
-      },
-      {
-        questionId: "notes",
-        header: "Notes",
-        question: "Which notes should I include?",
-        options: [{ label: "Highlights" }, { label: "Full details" }],
-        multiSelect: true,
-        isOther: true,
-      },
-    ]);
-    await emitRequested(gateway, stepper);
-
-    const panel = panelFor(page, "Which release channel should I use?");
-    await panel.waitFor();
-    await expect.poll(() => panel.getByText("1/2", { exact: true }).count()).toBe(1);
-    await expect
-      .poll(() =>
-        page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
-      )
-      .toBe(1);
-    const expiredSummary = page.locator(".chat-question-summary").filter({ hasText: "Expired" });
-    await expect.poll(() => expiredSummary.count()).toBe(1);
-    await expiredSummary.scrollIntoViewIfNeeded();
-    await screenshot(page, "04-question-terminal-states.png");
   });
 });

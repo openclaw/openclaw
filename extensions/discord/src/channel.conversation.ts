@@ -1,4 +1,3 @@
-// Discord plugin module implements channel.conversation behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
@@ -73,24 +72,13 @@ function resolveDiscordConversationIdFromTargets(
       if (target?.normalized) {
         return target.normalized;
       }
-    } catch {
-      const mentionMatch = trimmed.match(/^<#(\d+)>$/);
-      if (mentionMatch?.[1]) {
-        return `channel:${mentionMatch[1]}`;
-      }
-      if (/^\d{6,}$/.test(trimmed)) {
-        return normalizeDiscordMessagingTarget(trimmed);
-      }
-    }
+    } catch {}
   }
   return undefined;
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
   const sessionKey = normalizeLowercaseStringOrEmpty(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
   const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }

@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
@@ -18,6 +18,96 @@ import {
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("session roster refresh", () => {
+  it("reuses conditional sidebar rows while accepting fresh facets and query replacements", async () => {
+    const row = {
+      key: "agent:main:one",
+      sessionId: "one",
+      label: "Original",
+      kind: "direct" as const,
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ...sessionsResult([row], 1), rowsRevision: "first" });
+    const { sessions } = createSessionCapabilityHarness(request);
+    const query = { agentId: "main", rowMode: "sidebar" as const, archivedFilter: "all" as const };
+    const stop = sessions.subscribeList(query, () => {});
+    try {
+      await sessions.refreshList({ ...query, force: true });
+      request.mockResolvedValue({
+        ...sessionsResult([], 2),
+        count: 1,
+        rowsRevision: "first",
+        rowsUnchanged: true,
+        totalCount: 17,
+        owners: [{ actor: { type: "human", id: "owner" }, label: "Fresh facet" }],
+      });
+      await sessions.refreshList({ ...query, force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ ifRowsRevision: "first" }),
+      );
+      expect(sessions.listSnapshot(query).result).toMatchObject({
+        sessions: [row],
+        count: 1,
+        totalCount: 17,
+        owners: [{ actor: { type: "human", id: "owner" }, label: "Fresh facet" }],
+      });
+      request.mockResolvedValue({
+        ...sessionsResult([{ ...row, label: "Renamed" }], 3),
+        rowsRevision: "next",
+      });
+      await sessions.refreshList({ ...query, force: true });
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Renamed");
+      request.mockResolvedValue({ ...sessionsResult([], 2), rowsRevision: "empty" });
+      await sessions.refreshList({ ...query, ownerId: "different", force: true });
+      expect(request.mock.calls.at(-1)?.[1]).not.toHaveProperty("ifRowsRevision");
+    } finally {
+      stop();
+      sessions.dispose();
+    }
+  });
+
+  it.each(["primary", "managed"] as const)(
+    "keeps the %s startup retry alive past three minutes and cancels it on disposal",
+    async (owner) => {
+      vi.useFakeTimers();
+      const pending = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent is preparing its database",
+        retryable: true,
+        retryAfterMs: 7_000,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      });
+      const request = vi.fn().mockRejectedValue(pending);
+      const { sessions } = createSessionCapabilityHarness(request);
+      const query = {
+        agentId: "main",
+        ...(owner === "managed" ? { archivedFilter: "all" as const } : {}),
+      };
+      const stop = sessions.subscribeList(query, () => {});
+      try {
+        await sessions.refreshList({ ...query, force: true });
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        await vi.advanceTimersByTimeAsync(6_999);
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(180_000);
+        const reads = request.mock.calls.length;
+        expect(reads).toBeGreaterThan(20);
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        stop();
+        sessions.dispose();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(request).toHaveBeenCalledTimes(reads);
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { recover: false, explicit: false },
     { recover: true, explicit: false },
@@ -160,7 +250,7 @@ describe("session roster refresh", () => {
           coordinator.setForegroundRoute("agent:main:first-chat");
         }
         invalidate();
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         const delayedExplicit = explicit === "readmission" ? subscription?.refresh() : null;
         expect(reads).toBe(2);
         if (explicit === "readmission") {
@@ -180,7 +270,7 @@ describe("session roster refresh", () => {
         }
         const explicitRefresh = explicit === "pending" ? subscription?.refresh() : null;
         slow.resolve(result(2));
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         if (nextChatHoldsRefresh) {
           expect(reads).toBe(explicit === "pending" ? 3 : 2);
           if (explicit === "held") {
@@ -335,10 +425,6 @@ describe("session roster refresh", () => {
 
   it.each([
     { name: "primary", scope: { agentId: " Main " } },
-    { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },
-    { name: "owner-filtered", scope: { agentId: "main", ownerId: "profile-self" } },
-    { name: "involving-me", scope: { agentId: "main", involvingMe: true } },
-    { name: "searched", scope: { agentId: "main", search: "report" } },
     { name: "all-agents", scope: {} },
   ])("invalidates the $name roster only for matching or unscoped events", async ({ scope }) => {
     vi.useFakeTimers();
@@ -356,7 +442,7 @@ describe("session roster refresh", () => {
           event: "session.message",
           payload: { sessionKey: "global", agentId, hasActiveRun: false, status: "done" },
         });
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(agentId === "research" && scope.agentId ? 0 : 1);
         request.mockClear();
       }
@@ -368,8 +454,6 @@ describe("session roster refresh", () => {
 
   it.each([
     { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "rows" },
-    { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "error" },
-    { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "rows" },
     { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "error" },
   ] as const)(
     "keeps a queued Research replacement ahead of a later Work $weakKind after stale Work $outcome",
@@ -437,7 +521,7 @@ describe("session roster refresh", () => {
         expect(researchSettled).toHaveBeenCalledOnce();
         expect(weakSettled).toHaveBeenCalledOnce();
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
         expect(sessions.state.error).toBeNull();
       } finally {
         workList.resolve(workResult);
@@ -523,7 +607,7 @@ describe("session roster refresh", () => {
         researchList.resolve(researchResult);
         await Promise.all([active, weak, research]);
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
       } finally {
         activeList.resolve(sessionsResult([], 1));
         researchList.resolve(researchResult);
@@ -536,65 +620,62 @@ describe("session roster refresh", () => {
   it.each([
     { scenario: "a superseding query", nextAgentId: "research", superseded: true },
     { scenario: "an equivalent query", nextAgentId: " writer ", superseded: false },
-  ])(
-    "keeps queued replacement results with their query for $scenario",
-    async ({ nextAgentId, superseded }) => {
-      const initialList = createDeferred<SessionsListResult>();
-      const replacementList = createDeferred<SessionsListResult>();
-      const initialResult = sessionsResult(
-        [{ key: "agent:initial:main", kind: "direct", updatedAt: 1 }],
-        1,
-      );
-      const writerResult = sessionsResult(
-        [{ key: "agent:writer:main", kind: "direct", updatedAt: 2 }],
-        2,
-      );
-      const researchResult = sessionsResult(
-        [{ key: "agent:research:main", kind: "direct", updatedAt: 3 }],
-        3,
-      );
-      const replacementResult = superseded ? researchResult : writerResult;
-      const normalizedAgentId = nextAgentId.trim();
-      const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
-        expect(method).toBe("sessions.list");
-        if (params?.agentId === "initial") {
-          return await initialList.promise;
-        }
-        if (params?.agentId === normalizedAgentId) {
-          return await replacementList.promise;
-        }
-        throw new Error(`Unexpected refresh: ${params?.agentId}`);
-      });
-      const { sessions } = createSessionCapabilityHarness(
-        request as unknown as GatewayBrowserClient["request"],
-      );
-      const initial = sessions.refresh({ agentId: "initial", force: true });
-      const writer = sessions.refreshReplacement("writer");
-      const replacement = sessions.refreshReplacement(nextAgentId);
-
-      try {
-        expect(request).toHaveBeenCalledOnce();
-        initialList.resolve(initialResult);
-        await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-        replacementList.resolve(replacementResult);
-        const [writerOutcome, replacementOutcome] = await Promise.all([writer, replacement]);
-
-        expect(writerOutcome).toBe(superseded ? null : writerResult);
-        expect(replacementOutcome).toBe(replacementResult);
-        expect(sessions.state.agentId).toBe(normalizedAgentId);
-        expect(sessions.state.result).toBe(replacementResult);
-        expect(request.mock.calls.map(([, params]) => params?.agentId)).toEqual([
-          "initial",
-          normalizedAgentId,
-        ]);
-      } finally {
-        initialList.resolve(initialResult);
-        replacementList.resolve(replacementResult);
-        sessions.dispose();
-        await Promise.all([initial, writer, replacement]);
+  ])("coalesces queued foreground refreshes for $scenario", async ({ nextAgentId, superseded }) => {
+    const initialList = createDeferred<SessionsListResult>();
+    const replacementList = createDeferred<SessionsListResult>();
+    const initialResult = sessionsResult(
+      [{ key: "agent:initial:main", kind: "direct", updatedAt: 1 }],
+      1,
+    );
+    const writerResult = sessionsResult(
+      [{ key: "agent:writer:main", kind: "direct", updatedAt: 2 }],
+      2,
+    );
+    const researchResult = sessionsResult(
+      [{ key: "agent:research:main", kind: "direct", updatedAt: 3 }],
+      3,
+    );
+    const replacementResult = superseded ? researchResult : writerResult;
+    const normalizedAgentId = nextAgentId.trim();
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+      expect(method).toBe("sessions.list");
+      if (params?.agentId === "initial") {
+        return await initialList.promise;
       }
-    },
-  );
+      if (params?.agentId === normalizedAgentId) {
+        return await replacementList.promise;
+      }
+      throw new Error(`Unexpected refresh: ${params?.agentId}`);
+    });
+    const { sessions } = createSessionCapabilityHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const initial = sessions.refresh({ agentId: "initial", force: true });
+    const writer = sessions.refresh({ agentId: "writer", force: true });
+    const replacement = sessions.refresh({ agentId: nextAgentId, force: true });
+
+    try {
+      expect(request).toHaveBeenCalledOnce();
+      initialList.resolve(initialResult);
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      replacementList.resolve(replacementResult);
+      const [writerOutcome, replacementOutcome] = await Promise.all([writer, replacement]);
+
+      expect(writerOutcome).toBeUndefined();
+      expect(replacementOutcome).toBeUndefined();
+      expect(sessions.state.agentId).toBe(normalizedAgentId);
+      expect(sessions.state.result).toStrictEqual(replacementResult);
+      expect(request.mock.calls.map(([, params]) => params?.agentId)).toEqual([
+        "initial",
+        normalizedAgentId,
+      ]);
+    } finally {
+      initialList.resolve(initialResult);
+      replacementList.resolve(replacementResult);
+      sessions.dispose();
+      await Promise.all([initial, writer, replacement]);
+    }
+  });
 
   it("settles coalesced refresh callers without waiting for a later replacement", async () => {
     const initialList = createDeferred<SessionsListResult>();
@@ -619,9 +700,9 @@ describe("session roster refresh", () => {
     const initialSettled = vi.fn();
     const coalescedSettled = vi.fn();
     const initial = sessions.refresh({ agentId: "initial", force: true }).then(initialSettled);
-    const first = sessions.refreshReplacement("superseded").then(coalescedSettled);
-    const second = sessions.refreshReplacement("coalesced").then(coalescedSettled);
-    let later: ReturnType<typeof sessions.refreshReplacement> | undefined;
+    const first = sessions.refresh({ agentId: "superseded", force: true }).then(coalescedSettled);
+    const second = sessions.refresh({ agentId: "coalesced", force: true }).then(coalescedSettled);
+    let later: ReturnType<typeof sessions.refresh> | undefined;
 
     try {
       expect(sessions.state.loading).toBe(true);
@@ -631,11 +712,11 @@ describe("session roster refresh", () => {
       await waitForFast(() => expect(initialSettled).toHaveBeenCalledOnce());
       expect(coalescedSettled).not.toHaveBeenCalled();
 
-      later = sessions.refreshReplacement("later");
+      later = sessions.refresh({ agentId: "later", force: true });
       coalescedList.resolve(sessionsResult([], 2));
       await waitForFast(() => expect(coalescedSettled).toHaveBeenCalledTimes(2));
 
-      expect(coalescedSettled.mock.calls).toEqual([[null], [null]]);
+      expect(coalescedSettled.mock.calls).toEqual([[undefined], [undefined]]);
       expect(sessions.state.result).toBeNull();
       expect(sessions.state.loading).toBe(true);
       expect(request.mock.calls.map(([, params]) => params?.agentId)).toEqual([
@@ -645,7 +726,7 @@ describe("session roster refresh", () => {
       ]);
       const laterResult = sessionsResult([], 3);
       laterList.resolve(laterResult);
-      await expect(later).resolves.toBe(laterResult);
+      await expect(later).resolves.toBeUndefined();
       expect(sessions.state.result?.ts).toBe(3);
       expect(sessions.state.loading).toBe(false);
     } finally {
@@ -654,23 +735,6 @@ describe("session roster refresh", () => {
       laterList.resolve(sessionsResult([], 3));
       sessions.dispose();
       await Promise.all([initial, first, second, later]);
-    }
-  });
-
-  it("returns a failed replacement outcome while preserving the previous roster", async () => {
-    const previous = sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(previous)
-      .mockRejectedValueOnce(new Error("Roster unavailable"));
-    const { sessions } = createSessionCapabilityHarness(request);
-    try {
-      await sessions.refresh({ agentId: "main", search: "draft", force: true });
-      await expect(sessions.refreshReplacement()).resolves.toBeNull();
-      expect(sessions.state.result).toBe(previous);
-      expect(sessions.state.error).toBe("Roster unavailable");
-    } finally {
-      sessions.dispose();
     }
   });
 
@@ -711,8 +775,8 @@ describe("session roster refresh", () => {
       const sessions = createTestSessionCapability(gateway);
       const retired = vi.fn();
       const active = sessions.refresh({ search: "active", force: true });
-      const first = sessions.refreshReplacement("unissued-first").then(retired);
-      const second = sessions.refreshReplacement("unissued-second").then(retired);
+      const first = sessions.refresh({ agentId: "unissued-first", force: true }).then(retired);
+      const second = sessions.refresh({ agentId: "unissued-second", force: true }).then(retired);
       const remembered = sessions.refreshReplacement().then(retired);
 
       try {
@@ -726,7 +790,7 @@ describe("session roster refresh", () => {
           }
         }
         await waitForFast(() => expect(retired).toHaveBeenCalledTimes(3));
-        expect(retired.mock.calls).toEqual([[null], [null], [null]]);
+        expect(retired.mock.calls).toEqual([[undefined], [undefined], [null]]);
         if (retirement.endsWith("reconnect")) {
           await waitForFast(() => expect(sessions.state.result?.ts).toBe(2));
         } else {

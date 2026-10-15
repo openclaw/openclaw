@@ -88,7 +88,7 @@ function hold(
           assertAllowed: params.run,
           revalidateAllowed: () => {},
         }).then((lease) => lease.release())
-      : runExclusiveSessionLifecycleMutation(params),
+      : runExclusiveSessionLifecycleMutation("patch", params),
   );
   return { entered: entered.promise, release: release.resolve, promise };
 }
@@ -107,14 +107,18 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await flushLogger();
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-  setLoggerOverride(null);
-  resetLogger();
-  fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    await flushLogger();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    // A failed leak assertion must still release this fixture's process-wide state.
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setLoggerOverride(null);
+    resetLogger();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
@@ -125,7 +129,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
   const releaseSecond = createDeferred();
   const order: string[] = [];
   const first = runWithDiagnosticTraceContext(traces.first, () =>
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("archive", {
       ...target,
       run: async () => {
         order.push("first");
@@ -136,7 +140,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
   );
   await firstStarted.promise;
   const second = runWithDiagnosticTraceContext(traces.second, () =>
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("delete", {
       ...target,
       run: async () => {
         order.push("second");
@@ -146,7 +150,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     }),
   );
   const waiter = runWithDiagnosticTraceContext(traces.waiter, () =>
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("patch", {
       ...target,
       run: async () => {
         order.push("waiter");
@@ -170,8 +174,13 @@ it("reports the current holder after turnover and preserves the waiter's trace a
       holderPhase: "run",
       holderObserved: true,
       waitMs: 1_000,
+      mutationKind: "patch",
+      holderMutationKind: "delete",
+      identityCount: 1,
     });
     expect(waiting[0]?.identityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(waiting[0]?.sessionScopeHash).toBe(waiting[0]?.identityHash);
+    expect(waiting[0]?.holderSessionScopeHash).toBe(waiting[0]?.sessionScopeHash);
     expect(JSON.stringify(waiting)).not.toContain(target.scope);
     expect(JSON.stringify(waiting)).not.toContain(target.identities[0]);
     expect(order).toEqual(["first", "second"]);
@@ -181,6 +190,21 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     await Promise.allSettled([first, second, waiter]);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
+  const completed = await records("slow session lifecycle operation");
+  expect(completed).toEqual([
+    expect.objectContaining({
+      mutationKind: "delete",
+      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      identityCount: 1,
+    }),
+    expect.objectContaining({
+      mutationKind: "patch",
+      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      identityCount: 1,
+    }),
+  ]);
+  expect(JSON.stringify(completed)).not.toContain(target.scope);
+  expect(JSON.stringify(completed)).not.toContain(target.identities[0]);
 });
 
 it("distinguishes mutation and lifecycle holders of the same normalized identity", async () => {
@@ -230,13 +254,13 @@ it.each([true, false])(
     const releaseOuter = createDeferred();
     setDiagnosticsEnabledForProcess(initiallyEnabled);
     const outer = runWithDiagnosticTraceContext(traces.first, () =>
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("archive", {
         ...target,
         run: async () => {
           outerStarted.resolve();
           await beginNested.promise;
           await runWithDiagnosticTraceContext(traces.second, () =>
-            runExclusiveSessionLifecycleMutation({
+            runExclusiveSessionLifecycleMutation("delete", {
               ...target,
               run: async () => {
                 nestedStarted.resolve();
@@ -284,7 +308,7 @@ it("measures prepare and finalize separately while successors wait for real fina
   const finalizeStarted = createDeferred();
   const releaseFinalize = createDeferred();
   const first = runWithDiagnosticTraceContext(traces.first, () =>
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("archive", {
       ...target,
       prepare: async () => {
         prepareStarted.resolve();
@@ -343,7 +367,7 @@ it("retains a partially acquired holder after caller cancellation until its call
   const controller = new AbortController();
   const cancelledRun = vi.fn(async () => {});
   const cancelled = runWithDiagnosticTraceContext(traces.second, () =>
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("delete", {
       scope,
       identities: ["a", "b"],
       signal: controller.signal,
@@ -372,7 +396,7 @@ it("retains a partially acquired holder after caller cancellation until its call
     await Promise.allSettled([blocker.promise, cancelled, waiter.promise]);
   }
   await expect(
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("patch", {
       scope,
       identities: ["a", "b"],
       run: async () => "next",
@@ -396,7 +420,7 @@ it("stops pending and terminal emissions when diagnostics are disabled without c
   expect(await records("session lifecycle queue waiting")).toEqual([]);
   expect(await records("slow session lifecycle operation")).toEqual([]);
   await expect(
-    runExclusiveSessionLifecycleMutation({
+    runExclusiveSessionLifecycleMutation("patch", {
       ...target,
       run: async () => "disabled-fast-path",
     }),
@@ -496,7 +520,7 @@ it("shares live holder observations across separately loaded module graphs", asy
   freshDiagnostics.setDiagnosticsEnabledForProcess(true);
   const waiterRan = vi.fn(async () => {});
   const waiter = runWithDiagnosticTraceContext(traces.waiter, () =>
-    second.runExclusiveSessionLifecycleMutation({ ...target, run: waiterRan }),
+    second.runExclusiveSessionLifecycleMutation("patch", { ...target, run: waiterRan }),
   );
   try {
     expect(second.runExclusiveSessionLifecycleMutation).not.toBe(
@@ -544,7 +568,7 @@ it("preserves operation errors and queue release when the native logging sink th
   const release = createDeferred();
   const operationError = new Error("original operation failure");
   const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
-  const first = lifecycle.runExclusiveSessionLifecycleMutation({
+  const first = lifecycle.runExclusiveSessionLifecycleMutation("delete", {
     ...target,
     run: async () => {
       started.resolve();
@@ -554,7 +578,7 @@ it("preserves operation errors and queue release when the native logging sink th
   });
   const firstOutcome = first.catch((error: unknown) => error);
   await started.promise;
-  const second = lifecycle.runExclusiveSessionLifecycleMutation({
+  const second = lifecycle.runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     run: async () => "next operation",
   });

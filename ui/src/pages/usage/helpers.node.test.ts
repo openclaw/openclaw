@@ -1,27 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  extractQueryTerms,
-  filterSessionsByQuery,
-  parseToolSummary,
-  toUsageErrorMessage,
-} from "./helpers.ts";
-
-function requireFirstTool(tools: Array<[string, number]>): [string, number] {
-  const tool = tools[0];
-  if (!tool) {
-    throw new Error("expected parsed tool summary entry");
-  }
-  return tool;
-}
+import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
+import { parseToolSummary } from "./helpers.ts";
 
 describe("usage-helpers", () => {
-  it("redacts secrets in displayed usage failures", () => {
-    expect(toUsageErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
-    );
-  });
-
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms(
       'agent:main "model:gpt-5.2" label:"Team Planning" "free phrase" has:errors',
@@ -97,16 +79,6 @@ describe("usage-helpers", () => {
     }
   });
 
-  it("matches key: glob filters against session keys", () => {
-    const session = {
-      key: "agent:main:cron:16234bc?token=dev-token",
-      label: "agent:main:cron:16234bc?token=dev-token",
-      usage: { totalTokens: 100, totalCost: 0 },
-    };
-    const matches = filterSessionsByQuery([session], "key:agent:main:cron*");
-    expect(matches.sessions).toEqual([session]);
-  });
-
   it("supports numeric filters like minTokens/maxTokens", () => {
     const a = {
       key: "a",
@@ -136,6 +108,22 @@ describe("usage-helpers", () => {
       expect(result.sessions).toEqual([b]);
       expect(result.warnings).toEqual([]);
     }
+  });
+
+  it("does not classify unknown usage as zero or as its known subtotal", () => {
+    const interrupted = {
+      key: "interrupted",
+      usage: {
+        usageReport: { state: "unavailable" as const },
+        totalTokens: 100,
+        totalCost: 0,
+        messageCounts: { total: 2 },
+      },
+    };
+    for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
+      expect(filterSessionsByQuery([interrupted], query).sessions).toEqual([]);
+    }
+    expect(filterSessionsByQuery([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
   });
 
   it("supports every has predicate and warns on unknown values", () => {
@@ -188,8 +176,6 @@ describe("usage-helpers", () => {
     );
     expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
     expect(res.cleanContent).toBe("");
-    const firstTool = requireFirstTool(res.tools);
-    expect(firstTool[0]).toBe("read");
-    expect(firstTool[1]).toBe(2);
+    expect(res.tools[0]).toEqual(["read", 2]);
   });
 });

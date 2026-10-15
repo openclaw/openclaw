@@ -1,4 +1,8 @@
 import process from "node:process";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -15,7 +19,6 @@ import {
   PI_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
 } from "./pi-session-catalog-shared.js";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_SEARCH_LENGTH = 500;
 
@@ -74,19 +77,6 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
   };
 }
 
-function isoTimestamp(
-  message: Record<string, unknown>,
-  entry: Record<string, unknown>,
-): string | undefined {
-  const value =
-    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
-  if (value === undefined) {
-    return undefined;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
   try {
     const text = JSON.stringify(value);
@@ -130,7 +120,9 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
   const message = entry.message;
   const role = message.role;
   const id = optionalPiString(entry.id, 256);
-  const timestamp = isoTimestamp(message, entry);
+  const timestamp = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp),
+  );
   const model = optionalPiString(message.model, 256);
   const provider = optionalPiString(message.provider, 256);
   const modelRef = provider && model ? `${provider}/${model}` : model;
@@ -208,10 +200,10 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
     const id = optionalPiString(entry.id, 256);
     const timestamp = optionalPiString(entry.timestamp, 128);
     const common = { ...(id ? { id } : {}), ...(timestamp ? { timestamp } : {}) };
-    if (entry.type === "compaction" && typeof entry.summary === "string") {
-      return [{ ...common, type: "other", text: entry.summary }];
-    }
-    if (entry.type === "branch_summary" && typeof entry.summary === "string") {
+    if (
+      (entry.type === "compaction" || entry.type === "branch_summary") &&
+      typeof entry.summary === "string"
+    ) {
       return [{ ...common, type: "other", text: entry.summary }];
     }
     if (entry.type === "custom_message" && entry.display === true) {

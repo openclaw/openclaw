@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isMissingPathError } from "../infra/errors.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 
@@ -31,10 +32,6 @@ type MemoryArtifactAddress = {
   storeKey: string;
 };
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir);
   let canonical = resolved;
@@ -60,7 +57,10 @@ export function normalizeMemoryArtifactRelativePath(relativePath: string): strin
   ) {
     return undefined;
   }
-  if (["MEMORY.md", "memory.md", "USER.md"].includes(normalized)) {
+  if (
+    ["MEMORY.md", "memory.md", "USER.md"].includes(normalized) ||
+    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(normalized)
+  ) {
     return normalized;
   }
   if (!normalized.startsWith("memory/") || !normalized.endsWith(".md")) {
@@ -80,11 +80,11 @@ function resolveAddress(params: {
   if (!relativePath) {
     return undefined;
   }
-  const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
+  const workspaceKey = sha256Hex(normalizeWorkspaceKey(params.workspaceDir));
   return {
     workspaceKey,
     relativePath,
-    storeKey: `${workspaceKey}:${sha256(relativePath)}`,
+    storeKey: `${workspaceKey}:${sha256Hex(relativePath)}`,
   };
 }
 
@@ -99,7 +99,7 @@ function openStore() {
 
 function normalizeStoredProvenance(
   value: StoredMemoryArtifactProvenance | undefined,
-  address: MemoryArtifactAddress,
+  address: Pick<MemoryArtifactAddress, "workspaceKey" | "relativePath">,
 ): StoredMemoryArtifactProvenance | undefined {
   if (
     value?.version !== 1 ||
@@ -142,40 +142,54 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   }
   const store = openStore();
   const reservationId = randomUUID();
+  const beforeHash = sha256Hex(params.contentBefore);
+  const afterHash = sha256Hex(params.contentAfter);
   let previous: StoredMemoryArtifactProvenance | undefined;
-  await store.update(address.storeKey, (current) => {
-    previous = normalizeStoredProvenance(current, address);
+  let observation = await store.observe(address.storeKey);
+  for (;;) {
+    previous = normalizeStoredProvenance(observation.value, address);
     const originClass =
       params.originClass === "agent" &&
-      (!previous ||
-        (previous.originClass === "agent" && previous.fileHash === sha256(params.contentBefore)))
+      (!previous || (previous.originClass === "agent" && previous.fileHash === beforeHash))
         ? "agent"
         : "untrusted";
-    return {
-      version: 1,
-      workspaceKey: address.workspaceKey,
-      relativePath: address.relativePath,
-      fileHash: sha256(params.contentAfter),
-      originClass,
-      observedAt: params.observedAt,
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      reservationId,
-    };
-  });
+    const result = await store.compareAndApply(address.storeKey, observation.comparison, {
+      operation: "update",
+      action: "set",
+      value: {
+        version: 1,
+        workspaceKey: address.workspaceKey,
+        relativePath: address.relativePath,
+        fileHash: afterHash,
+        originClass,
+        observedAt: params.observedAt,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        reservationId,
+      },
+    });
+    if (result.status !== "conflict") {
+      break;
+    }
+    observation = result.current;
+  }
 
   return async () => {
     const rollbackStore = openStore();
-    if (previous) {
-      await rollbackStore.update(address.storeKey, (current) =>
-        current?.reservationId === reservationId ? previous : undefined,
+    let current = await rollbackStore.observe(address.storeKey);
+    while (current.value?.reservationId === reservationId) {
+      const result = await rollbackStore.compareAndApply(
+        address.storeKey,
+        current.comparison,
+        previous
+          ? { operation: "update", action: "set", value: previous }
+          : { operation: "delete", action: "delete" },
       );
-      return;
+      if (result.status !== "conflict") {
+        return;
+      }
+      current = result.current;
     }
-    await rollbackStore.deleteIf(
-      address.storeKey,
-      (current) => current.reservationId === reservationId,
-    );
   };
 }
 
@@ -188,8 +202,19 @@ export async function clearMemoryArtifactProvenance(params: {
   if (!address) {
     return;
   }
-  const expectedHash = sha256(params.contentBefore);
-  await openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
+  const expectedHash = sha256Hex(params.contentBefore);
+  const store = openStore();
+  let observation = await store.observe(address.storeKey);
+  while (observation.value?.fileHash === expectedHash) {
+    const result = await store.compareAndApply(address.storeKey, observation.comparison, {
+      operation: "delete",
+      action: "delete",
+    });
+    if (result.status !== "conflict") {
+      return;
+    }
+    observation = result.current;
+  }
 }
 
 export async function readMemoryArtifactProvenance(params: {
@@ -207,17 +232,22 @@ export async function readMemoryArtifactProvenance(params: {
 export async function listMemoryArtifactProvenance(params: {
   workspaceDir: string;
 }): Promise<Array<{ relativePath: string; provenance: MemoryArtifactProvenance }>> {
-  const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
-  const prefix = `${workspaceKey}:`;
-  return (await openStore().entries())
-    .filter((entry) => entry.key.startsWith(prefix))
+  const workspaceKey = sha256Hex(normalizeWorkspaceKey(params.workspaceDir));
+  // The adjacent ASCII separators bound exactly this workspace's key prefix.
+  const entries = await openStore().entriesInKeyRange({
+    keyStartInclusive: `${workspaceKey}:`,
+    keyEndExclusive: `${workspaceKey};`,
+    limit: Number.MAX_SAFE_INTEGER,
+    order: "asc",
+  });
+  // Stable sorting preserves the store's key order when creation times tie.
+  return entries
+    .toSorted((left, right) => left.createdAt - right.createdAt)
     .flatMap((entry) => {
-      const address = {
+      const stored = normalizeStoredProvenance(entry.value, {
         workspaceKey,
         relativePath: entry.value.relativePath,
-        storeKey: entry.key,
-      };
-      const stored = normalizeStoredProvenance(entry.value, address);
+      });
       return stored
         ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];

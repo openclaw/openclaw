@@ -1,6 +1,6 @@
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSessionProjectionString as readNonemptyString } from "./session-projection-message-identity.js";
+import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
 
 export function readSessionMessageDisplayContent(message: unknown): {
   text: string;
@@ -33,6 +33,21 @@ export function readSessionMessageDisplayContent(message: unknown): {
   }
   const fallback = texts.length === 0 ? readNonemptyString(record?.text) : null;
   return { text: fallback ?? texts.join("\n"), hasNonText, usesFallbackText: fallback !== null };
+}
+
+/** Status notices remain visible but do not define the terminal reply they accompany. */
+export function projectSessionTerminalReplyMessage(message: unknown): unknown {
+  const record = readRecord(message);
+  if (!record || !Array.isArray(record.content)) {
+    return message;
+  }
+  const content = record.content.filter(
+    (block) => readRecord(block)?.openclawStatusNotice !== true,
+  );
+  if (content.length === record.content.length || content.length === 0) {
+    return message;
+  }
+  return { ...record, content, text: undefined };
 }
 
 /** Check whether a projected message has text or another displayable block. */

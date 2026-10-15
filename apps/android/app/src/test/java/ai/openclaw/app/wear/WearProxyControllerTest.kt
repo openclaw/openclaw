@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
@@ -25,6 +26,30 @@ import org.junit.Test
 
 class WearProxyControllerTest {
   private val json = Json
+
+  @Test
+  fun statusAndGatewayControlsProjectCurrentCompatibilityDiagnosis() =
+    runTest {
+      var connected = false
+      var problemCode: String? = "PROTOCOL_MISMATCH"
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> error("Status must not request the Gateway") },
+          isGatewayConnected = { connected },
+          gatewayStatusText = { "Versions differ" },
+          gatewayProblemCode = { problemCode },
+        )
+      for (method in listOf(WearRpcMethod.ProxyStatus, WearRpcMethod.GatewayConnect, WearRpcMethod.GatewayDisconnect)) {
+        val result = checkNotNull(controller.handle(request(method)).result).jsonObject
+        assertEquals("incompatible", result.getValue("failure").jsonPrimitive.content)
+      }
+      problemCode = null
+      val offline = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertEquals("gateway_offline", offline.getValue("failure").jsonPrimitive.content)
+      connected = true
+      val recovered = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertFalse("failure" in recovered)
+    }
 
   @Test
   fun statusDoesNotTouchGateway() =
@@ -191,8 +216,8 @@ class WearProxyControllerTest {
           selectedModelRef = { "openai/gpt-test" },
           agents = {
             listOf(
-              WearProxyAgent(id = "main", name = "Main", emoji = "*"),
-              WearProxyAgent(id = "ops", name = "Ops", emoji = null),
+              GatewayAgentSummary(id = "main", name = "Main", emoji = "*"),
+              GatewayAgentSummary(id = "ops", name = "Ops", emoji = null),
             )
           },
           selectGatewayAgent = { agentId ->
@@ -263,9 +288,9 @@ class WearProxyControllerTest {
           gatewayStatusText = { "Connected" },
           activeAgentId = { activeAgentId },
           agents = {
-            listOf(WearProxyAgent(id = " ", name = "Invalid", emoji = null)) +
+            listOf(GatewayAgentSummary(id = " ", name = "Invalid", emoji = null)) +
               (0..32).map { index ->
-                WearProxyAgent(id = "agent-$index", name = "Agent $index", emoji = null)
+                GatewayAgentSummary(id = "agent-$index", name = "Agent $index", emoji = null)
               }
           },
         )
@@ -1041,6 +1066,7 @@ class WearProxyControllerTest {
           .single()
           .jsonObject
       assertEquals("wear-history-run", message.getValue("idempotencyKey").jsonPrimitive.content)
+      assertEquals("9", message.getValue("timestamp").jsonPrimitive.content)
       val content =
         message
           .getValue("content")
@@ -1168,6 +1194,66 @@ class WearProxyControllerTest {
         .content
         .toBoolean(),
     )
+  }
+
+  @Test
+  fun anonymousFinalEmissionTimeDoesNotBecomeTranscriptIdentity() {
+    val payload =
+      checkNotNull(
+        projectWearChatEvent(
+          json.parseToJsonElement(
+            """{"runId":"run-1","sessionKey":"main","state":"final","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"timestamp":1791927975662}}""",
+          ),
+        ),
+      )
+
+    val message = payload.getValue("message").jsonObject
+    assertFalse("Anonymous final time is the broadcast time, not the stored reply identity", "timestamp" in message)
+    assertEquals("run-1", payload.getValue("runId").jsonPrimitive.content)
+    assertEquals(
+      "Done",
+      message
+        .getValue("content")
+        .jsonArray
+        .single()
+        .jsonObject
+        .getValue("text")
+        .jsonPrimitive.content,
+    )
+  }
+
+  @Test
+  fun identifiedFinalAndNonFinalMessageTimestampsRemainIntact() {
+    val variants = listOf("final" to "id", "final" to "entryId", "final" to "idempotencyKey", "delta" to null, "aborted" to null)
+    for ((state, identity) in variants) {
+      val payload =
+        checkNotNull(
+          projectWearChatEvent(
+            buildJsonObject {
+              put("runId", "run-1")
+              put("state", state)
+              put(
+                "message",
+                buildJsonObject {
+                  put("role", "assistant")
+                  put("content", "Done")
+                  put("timestamp", 7)
+                  identity?.let {
+                    if (it == "entryId") {
+                      put("__openclaw", buildJsonObject { put("id", "canonical-identity") })
+                    } else {
+                      put(it, "canonical-identity")
+                    }
+                  }
+                },
+              )
+            },
+          ),
+        )
+      val message = payload.getValue("message").jsonObject
+      assertEquals("$state/$identity retains its timestamp", "7", message.getValue("timestamp").jsonPrimitive.content)
+      identity?.let { assertEquals("canonical-identity", message.getValue(it).jsonPrimitive.content) }
+    }
   }
 
   @Test

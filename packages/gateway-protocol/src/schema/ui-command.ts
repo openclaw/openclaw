@@ -20,13 +20,40 @@ export const UiSidebarCommandSchema = closedObject({
   kind: Type.Literal("sidebar"),
   visible: Type.Boolean(),
 });
-export const UiPanelCommandSchema = closedObject({
+const UiPanelCommandFields = {
   kind: Type.Literal("panel"),
-  panel: Type.Union([Type.Literal("terminal"), Type.Literal("browser")]),
   open: Type.Boolean(),
   dock: Type.Optional(Type.Union([Type.Literal("bottom"), Type.Literal("right")])),
-  terminalSessionId: Type.Optional(NonEmptyString),
-});
+};
+export const UiPanelCommandSchema = Type.Union([
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("plugin"),
+    pluginId: NonEmptyString,
+    panelId: NonEmptyString,
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("terminal"),
+    terminalSessionId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({ ...UiPanelCommandFields, panel: Type.Literal("browser") }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("desktop"),
+    environmentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("portal"),
+    portalId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...UiPanelCommandFields,
+    panel: Type.Literal("portal"),
+    environmentId: NonEmptyString,
+  }),
+]);
 export const UiNavigateCommandSchema = closedObject({
   kind: Type.Literal("navigate"),
   sessionKey: NonEmptyString,
@@ -46,8 +73,42 @@ export const UiCommandParamsSchema = closedObject({
   command: UiCommandSchema,
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Server-assigned correlation for requester-browser presentation feedback. */
+  requestId: Type.Optional(NonEmptyString),
 });
 export type UiCommandParams = Static<typeof UiCommandParamsSchema>;
 
-export const UiCommandResultSchema = closedObject({ ok: Type.Boolean() });
+export const UiPortalPresentationSchema = closedObject({
+  portalId: Type.Optional(NonEmptyString),
+  status: Type.Union([
+    Type.Literal("blocked"),
+    Type.Literal("unverified"),
+    Type.Literal("new-tab-required"),
+  ]),
+  reason: Type.Union([
+    Type.Literal("remote-ingress-required"),
+    Type.Literal("network-unreachable"),
+    Type.Literal("new-tab-required"),
+    Type.Literal("network-reachable"),
+    Type.Literal("probe-blocked"),
+    Type.Literal("portal-unavailable"),
+    Type.Literal("access-required"),
+    Type.Literal("waiting-for-app"),
+    Type.Literal("client-timeout"),
+    Type.Literal("client-disconnected"),
+  ]),
+});
+export type UiPortalPresentation = Static<typeof UiPortalPresentationSchema>;
+
+export const UiCommandReportParamsSchema = closedObject({
+  requestId: NonEmptyString,
+  presentation: UiPortalPresentationSchema,
+});
+export type UiCommandReportParams = Static<typeof UiCommandReportParamsSchema>;
+
+export const UiCommandResultSchema = closedObject({
+  ok: Type.Boolean(),
+  delivery: Type.Optional(Type.Literal("dispatched")),
+  presentation: Type.Optional(UiPortalPresentationSchema),
+});
 export type UiCommandResult = Static<typeof UiCommandResultSchema>;

@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect } from "./auth.js";
@@ -7,9 +6,8 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
 import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { isLocalDirectRequest } from "./net.js";
+import { getHttpAuthUtilsModule } from "./server-http-modules.js";
 import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
-
-const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
 
 async function shouldIncludeGatewayProbeDetails(params: {
   req: IncomingMessage;
@@ -20,8 +18,7 @@ async function shouldIncludeGatewayProbeDetails(params: {
 }): Promise<boolean> {
   if (
     readPreparedGatewayIngressAttribution(params.req)?.kind === "direct-local" ||
-    (!readPreparedGatewayIngressAttribution(params.req) &&
-      isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback))
+    (!readPreparedGatewayIngressAttribution(params.req) && isLocalDirectRequest(params.req))
   ) {
     return true;
   }
@@ -87,9 +84,8 @@ export async function handleGatewayProbeRequest(
 
   let statusCode: number;
   let body: string;
-  if (status === "ready" && getReadiness) {
-    // Readiness details expose subsystem names, so only local direct or authenticated
-    // callers receive them; unauthenticated remote probes get the aggregate boolean.
+  if ((status === "ready" && getReadiness) || status === "startup") {
+    // Subsystem details belong only to local direct or authenticated callers.
     const includeDetails = await shouldIncludeGatewayProbeDetails({
       req,
       resolvedAuth,
@@ -97,37 +93,29 @@ export async function handleGatewayProbeRequest(
       allowRealIpFallback,
       rateLimiter,
     });
+    const readiness = status === "ready" ? getReadiness : undefined;
     try {
-      const result = getReadiness();
-      statusCode = result.ready ? 200 : 503;
-      body = JSON.stringify(includeDetails ? result : { ready: result.ready });
+      if (readiness) {
+        const result = readiness();
+        statusCode = result.ready ? 200 : 503;
+        body = JSON.stringify(includeDetails ? result : { ready: result.ready });
+      } else {
+        const result = getStartup?.() ?? { ok: true, status: "started", uptimeMs: 0 };
+        statusCode = result.ok ? 200 : 503;
+        body = startupProbeBody(result, includeDetails);
+      }
     } catch {
       statusCode = 503;
-      body = JSON.stringify(
-        includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
-      );
-    }
-  } else if (status === "startup") {
-    const includeDetails = await shouldIncludeGatewayProbeDetails({
-      req,
-      resolvedAuth,
-      trustedProxies,
-      allowRealIpFallback,
-      rateLimiter,
-    });
-    try {
-      const result = getStartup?.() ?? { ok: true, status: "started", uptimeMs: 0 };
-      statusCode = result.ok ? 200 : 503;
-      body = startupProbeBody(result, includeDetails);
-    } catch {
-      const result: StartupResult = {
-        ok: false,
-        status: "starting",
-        uptimeMs: 0,
-        pendingReason: "internal",
-      };
-      statusCode = 503;
-      body = startupProbeBody(result, includeDetails);
+      body = readiness
+        ? JSON.stringify(
+            includeDetails
+              ? { ready: false, failing: ["internal"], uptimeMs: 0 }
+              : { ready: false },
+          )
+        : startupProbeBody(
+            { ok: false, status: "starting", uptimeMs: 0, pendingReason: "internal" },
+            includeDetails,
+          );
     }
   } else {
     statusCode = 200;

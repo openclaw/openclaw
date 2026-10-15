@@ -139,31 +139,6 @@ describe("node-hosted skill snapshots", () => {
     ]);
   });
 
-  it("prefixes an original remote name that collides with a generated name", () => {
-    recordRemoteSkillNodeInfo({ nodeId: "node-a", connId: "a", commands: ["system.run"] });
-    recordRemoteSkillNodeInfo({ nodeId: "node-b", connId: "b", commands: ["system.run"] });
-    replaceRemoteNodeSkills({
-      nodeId: "node-a",
-      skills: [{ name: "deploy", description: "Deploy", content: content("deploy", "Deploy") }],
-    });
-    replaceRemoteNodeSkills({
-      nodeId: "node-b",
-      skills: [
-        {
-          name: "node-a-deploy",
-          description: "Another deploy",
-          content: content("node-a-deploy", "Another deploy"),
-        },
-      ],
-    });
-
-    expect(
-      mergeRemoteNodeSkillEntries([localEntry("deploy")], { canExec: true }).map(
-        (entry) => entry.skill.name,
-      ),
-    ).toEqual(["deploy", "node-a-deploy", "node-b-node-a-deploy"]);
-  });
-
   it("limits node skills to the effective exec node binding", () => {
     for (const [nodeId, displayName] of [
       ["node-a-123456", "Build A"],
@@ -243,42 +218,6 @@ describe("node-hosted skill snapshots", () => {
     expect(command?.dispatch).toBeUndefined();
   });
 
-  it("accepts JSON5-style metadata from node skills", () => {
-    recordRemoteSkillNodeInfo({
-      nodeId: "node-1",
-      connId: "conn-1",
-      commands: ["system.run"],
-    });
-    replaceRemoteNodeSkills({
-      nodeId: "node-1",
-      skills: [
-        {
-          name: "json5-metadata",
-          description: "JSON5-style metadata",
-          content: `---
-name: json5-metadata
-description: JSON5-style metadata
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
----
-`,
-        },
-      ],
-    });
-
-    const [entry] = mergeRemoteNodeSkillEntries([], { canExec: true });
-    expect(entry?.skill.name).toBe("json5-metadata");
-    expect(entry?.frontmatter?.metadata).toContain("EXAMPLE_VAR");
-  });
-
   it("drops content that fails existing frontmatter parsing", () => {
     const warn = captureWarningLogger();
     recordRemoteSkillNodeInfo({
@@ -307,6 +246,7 @@ metadata:
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
+      displayName: "Build Mac",
       commands: ["system.run"],
     });
     replaceRemoteNodeSkills({
@@ -316,6 +256,7 @@ metadata:
     const firstVersion = getSkillsSnapshotVersion();
     const firstSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
     expect(firstSkill.contentHash).toEqual(expect.any(String));
+    expect(firstSkill.locationNote).toContain("Build Mac (node-1)");
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

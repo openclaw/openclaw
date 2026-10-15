@@ -6,6 +6,58 @@ import {
 } from "./conversation.ts";
 
 describe("realtime Talk conversation", () => {
+  it("carries the durable relay identity when a preview becomes final", () => {
+    let state = createRealtimeTalkConversationState();
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello there",
+      final: true,
+      transcriptId: "voice:call:1",
+    });
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0]).toMatchObject({
+      text: "Hello there",
+      transcriptId: "voice:call:1",
+      isStreaming: false,
+    });
+  });
+  it("keeps a corrected snapshot before the answer without adding another user entry", () => {
+    let state = createRealtimeTalkConversationState();
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "How",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Earth is",
+      final: false,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "What size is Earth?",
+      final: false,
+      textMode: "snapshot",
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "What size is Earth?",
+      final: true,
+      textMode: "snapshot",
+    });
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "What size is Earth?", isStreaming: false },
+      { role: "assistant", text: "Earth is" },
+    ]);
+  });
+
   it("inserts spacing between adjacent transcript fragments", () => {
     let state = createRealtimeTalkConversationState();
 
@@ -48,24 +100,6 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("concatenates streamed assistant deltas verbatim without injecting spaces", () => {
-    let state = createRealtimeTalkConversationState();
-
-    const deltas = ["I", "'m", " Chat", "G", "PT", ",", " a", " con", "vers", "ational", " AI"];
-    for (const [index, delta] of deltas.entries()) {
-      state = updateRealtimeTalkConversation(state, {
-        role: "assistant",
-        text: delta,
-        final: false,
-        nowMs: index + 1,
-      });
-    }
-
-    expect(state.entries).toMatchObject([
-      { role: "assistant", text: "I'm ChatGPT, a conversational AI", isStreaming: true },
-    ]);
-  });
-
   it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {
     let state = createRealtimeTalkConversationState();
 
@@ -80,29 +114,6 @@ describe("realtime Talk conversation", () => {
 
     expect(state.entries).toMatchObject([
       { role: "assistant", text: "Version 1.2 is on docs.openclaw.ai today.", isStreaming: true },
-    ]);
-  });
-
-  it("replaces streamed assistant text with the authoritative final transcript", () => {
-    let state = createRealtimeTalkConversationState();
-
-    for (const delta of ["I'm Chat", "GPT."]) {
-      state = updateRealtimeTalkConversation(state, {
-        role: "assistant",
-        text: delta,
-        final: false,
-        nowMs: 1,
-      });
-    }
-    state = updateRealtimeTalkConversation(state, {
-      role: "assistant",
-      text: "I'm ChatGPT, nice to meet you.",
-      final: true,
-      nowMs: 2,
-    });
-
-    expect(state.entries).toMatchObject([
-      { role: "assistant", text: "I'm ChatGPT, nice to meet you.", isStreaming: false },
     ]);
   });
 

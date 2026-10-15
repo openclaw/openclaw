@@ -13,9 +13,13 @@ export async function appendSqliteSessionTranscriptEventForTest(
   await appendTranscriptEvent(params, params.event);
 }
 
+export { withSessionHistoryBudgetSweepsForTest } from "../config/sessions/session-history-budget.test-support.js";
+export { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+export { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
+export { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 export { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+export { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
 export {
-  appendSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeScope,
 } from "../trajectory/runtime-store.sqlite.js";
@@ -29,6 +33,12 @@ export {
 } from "../state/openclaw-agent-db.js";
 export {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+
+export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
+
+export { withNativeSessionMutationForTest } from "./test-helpers/native-session-mutation.js";

@@ -9,4 +9,8 @@ export type PrepareBundledPluginRuntime = (params: {
   repoRoot: string;
 }) => PreparedBundledPluginRuntime;
 
-export type WithDistArtifactOwnership = <T>(rootDir: string, run: () => Promise<T>) => Promise<T>;
+export type WithDistArtifactOwnership = <T>(
+  rootDir: string,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<T>;

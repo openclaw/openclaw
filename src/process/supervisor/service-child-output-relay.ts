@@ -3,7 +3,12 @@ import { createAwaitedDecodedOutput, onDecodedOutput } from "../decoded-output.j
 
 const PUSHED_OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 
-export function createOutputRelay(stream?: Readable, piped = false, onFailure?: () => void) {
+export function createOutputRelay(
+  stream?: Readable,
+  piped = false,
+  onFailure?: () => void,
+  onStreamFailure?: (error: Error) => void,
+) {
   const consumer = onFailure && stream ? createAwaitedDecodedOutput(stream, onFailure) : undefined;
   const listeners = new Set<(chunk: string) => void>();
   const rawListeners = new Set<(chunk: Buffer) => void>();
@@ -11,6 +16,12 @@ export function createOutputRelay(stream?: Readable, piped = false, onFailure?: 
   let pendingBytes = 0;
   let active = false;
   let ended = false;
+  let failed = false;
+  let unsubscribe: (() => void) | undefined;
+  const fail = (error: Error) => {
+    failed = true;
+    onStreamFailure?.(error);
+  };
   const deliver = (chunk: string | Buffer) => {
     if (typeof chunk === "string") {
       listeners.forEach((listener) => listener(chunk));
@@ -54,14 +65,21 @@ export function createOutputRelay(stream?: Readable, piped = false, onFailure?: 
   };
   if (stream) {
     if (!piped && !consumer) {
-      onDecodedOutput(stream, push, push);
+      unsubscribe = onDecodedOutput(stream, push, push);
     }
     stream.once("end", end);
-    stream.once("close", end);
+    // Only end proves EOF. Keep raw failures connected through final cleanup,
+    // independently of decoded subscription and awaited-consumer settlement.
+    stream.on("error", fail);
+    stream.once("close", () => {
+      if (!ended) {
+        fail(new Error("service child stream closed before EOF"));
+      }
+    });
   }
   return {
     get ended() {
-      return ended;
+      return ended && !failed;
     },
     push,
     end,
@@ -78,6 +96,7 @@ export function createOutputRelay(stream?: Readable, piped = false, onFailure?: 
     consume: consumer?.consume,
     drain: () => (consumer ? consumer.drain() : activate(false)),
     clear: () => {
+      unsubscribe?.();
       consumer?.close();
       listeners.clear();
       rawListeners.clear();

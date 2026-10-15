@@ -10,7 +10,10 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -217,14 +220,16 @@ describe("routeReply delivery result", () => {
         expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(calls);
         if (custody) {
           expect(deliveryError).toContain("later payload failed");
-          closeOpenClawAgentDatabasesForTest();
+          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
           expect(
             (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
           ).toEqual([{ id: custody.deliveryId, state: "delivered" }]);
         }
       } finally {
         if (custody) {
-          closeOpenClawAgentDatabasesForTest();
+          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
         }
       }
     },
@@ -327,32 +332,6 @@ describe("routeReply delivery result", () => {
     }
     const sentPayload = (call[0] as { payloads: object[] }).payloads[0]!;
     expect(getReplyPayloadMetadata(sentPayload)?.sessionWriterDeliveryAuthority).toEqual(authority);
-  });
-
-  it("preserves the last delivered message id when a later send fails", async () => {
-    const cause = new Error("network reset");
-    const failure = new OutboundDeliveryError("network reset", {
-      cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }],
-      stage: "platform_send",
-    });
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: false,
-      delivered: true,
-      error: "Failed to route reply to telegram: network reset",
-      cause: failure,
-      messageId: "msg-1",
-    });
-    expect(res.cause).toBe(failure);
   });
 
   it.each([

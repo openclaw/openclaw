@@ -1,4 +1,5 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -123,22 +124,24 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
     return undefined;
   }
   const tokens = markdownTokens(prose);
-  const paragraphs = tokens.flatMap((token, index) =>
-    token.type === "inline" &&
-    tokens[index - 1]?.type === "paragraph_open" &&
-    (name === "web_search" || tokens[index - 1]?.level === 0)
-      ? [inlineText(token.children ?? [])]
-      : [],
-  );
   // A page heading or navigation label is not a useful excerpt. Search snippets
   // may legitimately be short; page previews need a readable paragraph.
-  const text = paragraphs.find((paragraph) => paragraph.length >= (name === "web_fetch" ? 60 : 1));
-  if (!text) {
-    return undefined;
+  for (const [index, token] of tokens.entries()) {
+    if (
+      token.type !== "inline" ||
+      tokens[index - 1]?.type !== "paragraph_open" ||
+      (name === "web_fetch" && tokens[index - 1]?.level !== 0)
+    ) {
+      continue;
+    }
+    const text = inlineText(token.children ?? []);
+    if (text.length >= (name === "web_fetch" ? 60 : 1)) {
+      return text.length > MAX_EXCERPT_CHARS
+        ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
+        : text;
+    }
   }
-  return text.length > MAX_EXCERPT_CHARS
-    ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
-    : text;
+  return undefined;
 }
 
 function readPayload(card: ToolCard): Record<string, unknown> | null {
@@ -148,11 +151,7 @@ function readPayload(card: ToolCard): Record<string, unknown> | null {
   if (!card.outputText || card.outputText.length > 100_000) {
     return null;
   }
-  try {
-    return asNullableRecord(JSON.parse(card.outputText));
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(card.outputText) ?? null;
 }
 
 function readSourceCandidates(

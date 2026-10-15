@@ -19,10 +19,18 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../runtime/registry.js";
+import type {
+  AcpSessionControlBinding,
+  AcpSessionControlConstraint,
+  AcpSessionRuntimeLocator,
+} from "../runtime/session-meta-control.types.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
+  readAcpSessionEntryAsync,
+  prepareAcpSessionControlRead,
   upsertAcpSessionMeta,
+  upsertAcpSessionMetaForControl,
 } from "../runtime/session-meta.js";
 
 export type AcpSessionTarget = { agentId: string; sessionKey: string };
@@ -58,6 +66,8 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  /** Re-read caller-owned resume authority after preparation and return its synchronous initialization guard. */
+  revalidateResume?: () => Promise<() => void>;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
@@ -94,6 +104,9 @@ type AcpTurnLifecycleEvent = {
 
 /** Input for closing, resetting, or cleaning up an ACP session. */
 export type AcpCloseSessionInput = {
+  expectedControlBinding?: AcpSessionControlBinding;
+  /** Source authority for new backend effects, independent of accepted-write settlement. */
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
@@ -170,12 +183,21 @@ export type TurnLatencyStats = {
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   loadSessionEntry: typeof readAcpSessionEntry;
-  upsertSessionMeta: typeof upsertAcpSessionMeta;
+  loadSessionEntryAsync: (
+    params: Parameters<typeof readAcpSessionEntryAsync>[0],
+  ) => ReturnType<typeof readAcpSessionEntryAsync>;
+  prepareSessionControlRead: typeof prepareAcpSessionControlRead;
+  upsertSessionMeta: (
+    params: Parameters<typeof upsertAcpSessionMeta>[0],
+  ) => ReturnType<typeof upsertAcpSessionMeta>;
+  upsertSessionMetaForControl: typeof upsertAcpSessionMetaForControl;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
 
 export type WriteManagerSessionMeta = (params: {
+  acpControl?: AcpSessionControlConstraint;
+  expectedControlBinding?: AcpSessionControlBinding;
   assertCommitAllowed?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -184,24 +206,35 @@ export type WriteManagerSessionMeta = (params: {
     current: SessionAcpMeta | undefined,
     entry: SessionEntry | undefined,
   ) => SessionAcpMeta | null | undefined;
+  isCurrentActor?: () => boolean;
   failOnError?: boolean;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
 }) => Promise<SessionEntry | null>;
 
-export type ResolveManagerSession = (params: {
+export type ResolveManagerSessionAsync = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}) => AcpSessionResolution;
+  assertCurrent?: () => void;
+}) => Promise<AcpSessionResolution>;
 
 export type EnsureManagerRuntimeHandle = (params: {
+  assertMetadataCommitAllowed?: (expectedLocator: AcpSessionRuntimeLocator) => void;
+  readAcpControl?: () => AcpSessionControlConstraint | undefined;
+  assertActive?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   meta: SessionAcpMeta;
   selectedBackend?: string;
+  isCurrentActor?: () => boolean;
 }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
+
+export type RevalidateManagerSessionControl = (
+  phase?: "publication",
+) => void | AcpSessionControlConstraint | Promise<void | AcpSessionControlConstraint>;
 
 export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
   cfg: OpenClawConfig;
@@ -212,6 +245,9 @@ export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  isCurrentActor?: () => boolean;
+  assertCurrent?: () => void;
+  revalidateControl?: RevalidateManagerSessionControl;
 }) => Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
@@ -225,18 +261,24 @@ export type SetManagerSessionState = (params: {
   state: SessionAcpMeta["state"];
   lastError?: string;
   clearLastError?: boolean;
+  isCurrentActor?: () => boolean;
+  assertCurrent?: () => void;
+  acpControl?: AcpSessionControlConstraint;
 }) => Promise<void>;
 
 export type WithManagerSessionActor = <T>(
   target: AcpSessionTarget,
-  op: () => Promise<T>,
+  op: (isCurrentActor: () => boolean) => Promise<T>,
   signal?: AbortSignal,
 ) => Promise<T>;
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   loadSessionEntry: readAcpSessionEntry,
+  loadSessionEntryAsync: readAcpSessionEntryAsync,
+  prepareSessionControlRead: prepareAcpSessionControlRead,
   upsertSessionMeta: upsertAcpSessionMeta,
+  upsertSessionMetaForControl: upsertAcpSessionMetaForControl,
   getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,
 };

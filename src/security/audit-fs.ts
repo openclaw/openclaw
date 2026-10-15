@@ -1,4 +1,4 @@
-/** Filesystem permission audit facade backed by shared infra permission helpers. */
+/** Filesystem permission audit facade backed by fs-safe permission helpers. */
 export {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -6,4 +6,4 @@ export {
   safeStat,
   type PermissionCheck,
   type PermissionCheckOptions,
-} from "../infra/permissions.js";
+} from "@openclaw/fs-safe/permissions";

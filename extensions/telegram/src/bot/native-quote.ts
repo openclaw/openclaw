@@ -1,10 +1,9 @@
-// Telegram plugin module implements native quote behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { TelegramTextEntity } from "./body-helpers.js";
 
 const TELEGRAM_NATIVE_QUOTE_MAX_LENGTH = 1024;
 
-type TelegramNativeQuoteCandidate = {
+export type TelegramNativeQuoteCandidate = {
   text: string;
   position?: number;
   entities?: unknown[];
@@ -51,15 +50,8 @@ export function buildTelegramNativeQuoteCandidate(params: {
   if (!text.trim()) {
     return undefined;
   }
-  const candidate: TelegramNativeQuoteCandidate = {
-    text,
-    position: 0,
-  };
   const entities = sliceTelegramEntitiesForQuote(params.entities, text.length);
-  if (entities) {
-    candidate.entities = entities;
-  }
-  return candidate;
+  return { text, position: 0, ...(entities ? { entities } : {}) };
 }
 
 export function addTelegramNativeQuoteCandidate(
@@ -75,4 +67,38 @@ export function addTelegramNativeQuoteCandidate(
     return;
   }
   target[key] = candidate;
+}
+
+type TelegramReplyQuoteForSend = {
+  messageId?: number;
+  text?: string;
+  position?: number;
+  entities?: unknown[];
+};
+
+export function resolveReplyQuoteForSend(params: {
+  replyToId?: number;
+  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
+  replyQuoteMessageId?: number;
+  replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
+}): TelegramReplyQuoteForSend {
+  if (params.replyToId != null) {
+    const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
+    if (mapped?.text) {
+      return {
+        messageId: params.replyToId,
+        text: mapped.text,
+        ...(typeof mapped.position === "number" ? { position: mapped.position } : {}),
+        ...(mapped.entities ? { entities: mapped.entities } : {}),
+      };
+    }
+  }
+  return {
+    ...(params.replyQuoteMessageId != null ? { messageId: params.replyQuoteMessageId } : {}),
+    ...(params.replyQuoteText != null ? { text: params.replyQuoteText } : {}),
+    ...(params.replyQuotePosition != null ? { position: params.replyQuotePosition } : {}),
+    ...(params.replyQuoteEntities != null ? { entities: params.replyQuoteEntities } : {}),
+  };
 }

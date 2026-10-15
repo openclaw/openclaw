@@ -35,16 +35,6 @@ export function resolveHeartbeatConfig(
   return defaults || overrides ? { ...defaults, ...overrides } : undefined;
 }
 
-function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
-  if (!heartbeat) {
-    return undefined;
-  }
-  const next = { ...heartbeat };
-  delete next.to;
-  delete next.accountId;
-  return next;
-}
-
 export function resolveHeartbeatForWake(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -57,9 +47,11 @@ export function resolveHeartbeatForWake(params: {
   const heartbeat = params.requestedHeartbeat
     ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
     : configuredHeartbeat;
-  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
-    ? omitExplicitHeartbeatDestination(heartbeat)
-    : heartbeat;
+  if (heartbeat && params.source === "cron" && params.requestedHeartbeat?.target === "last") {
+    delete heartbeat.to;
+    delete heartbeat.accountId;
+  }
+  return heartbeat;
 }
 
 /** Resolve the cadence owned by the effective heartbeat configuration. */
@@ -110,33 +102,31 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
   return Math.max(1, Math.min(DEFAULT_HEARTBEAT_TIMEOUT_SECONDS, Math.ceil(intervalMs / 1000)));
 }
 
+export function resolveHeartbeatAgentIds(cfg: OpenClawConfig): string[] {
+  const explicitAgents = listAgentEntries(cfg).filter((entry) => entry.heartbeat);
+  if (explicitAgents.length > 0) {
+    return explicitAgents.map((entry) => normalizeAgentId(entry.id)).filter(Boolean);
+  }
+  const configuredAgentId = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
+  if (configuredAgentId) {
+    return [normalizeAgentId(configuredAgentId)];
+  }
+  if (cfg.agents?.defaults?.heartbeat) {
+    return listAgentIds(cfg);
+  }
+  const agentId = tryResolveAmbientHeartbeatAgentId(cfg);
+  return agentId ? [agentId] : [];
+}
+
 export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
-  return withAgentRosterFactsBatch(cfg, () => {
-    const explicitAgents = listAgentEntries(cfg).filter((entry) => entry.heartbeat);
-    if (explicitAgents.length > 0) {
-      return explicitAgents
-        .map((entry) => {
-          const agentId = normalizeAgentId(entry.id);
-          return { agentId, heartbeat: resolveHeartbeatConfig(cfg, agentId) };
-        })
-        .filter((agent) => agent.agentId);
-    }
-    const configuredAgentId = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
-    if (configuredAgentId) {
-      const agentId = normalizeAgentId(configuredAgentId);
-      return [{ agentId, heartbeat: resolveHeartbeatConfig(cfg, agentId) }];
-    }
-    if (cfg.agents?.defaults?.heartbeat) {
-      return listAgentIds(cfg).map((agentId) => ({
-        agentId,
-        heartbeat: resolveHeartbeatConfig(cfg, agentId),
-      }));
-    }
-    const agentId = tryResolveAmbientHeartbeatAgentId(cfg);
-    return agentId ? [{ agentId, heartbeat: resolveHeartbeatConfig(cfg, agentId) }] : [];
-  });
+  return withAgentRosterFactsBatch(cfg, () =>
+    resolveHeartbeatAgentIds(cfg).map((agentId) => ({
+      agentId,
+      heartbeat: resolveHeartbeatConfig(cfg, agentId),
+    })),
+  );
 }
 
 export function isHeartbeatOwnerUnresolved(cfg: OpenClawConfig): boolean {
-  return listAgentIds(cfg).length > 1 && resolveHeartbeatAgents(cfg).length === 0;
+  return listAgentIds(cfg).length > 1 && resolveHeartbeatAgentIds(cfg).length === 0;
 }

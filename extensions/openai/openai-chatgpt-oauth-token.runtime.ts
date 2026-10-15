@@ -5,13 +5,17 @@ import {
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   isRecord,
   normalizeBoundedOptionalString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createOpenAIAuthorizationCodeForm,
+  withOpenAIOAuthResponse,
+} from "./openai-oauth-http.runtime.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -154,61 +158,64 @@ function formatTokenRequestError(
   );
 }
 
-async function postTokenForm(
+async function requestOpenAIToken(
   body: URLSearchParams,
+  operation: "exchange" | "refresh",
   options: TokenRequestOptions = {},
-): Promise<Response> {
+  existingRefreshToken?: string,
+): Promise<TokenResult> {
   const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  throwIfOAuthLoginAborted(options.signal);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: TOKEN_URL,
-    // Match device-code login's operator proxy policy. The guard keeps direct DNS
-    // pinning when no proxy applies; the exact-host policy also permits fake-IP DNS.
-    mode: "trusted_env_proxy",
-    policy: OAUTH_TOKEN_SSRF_POLICY,
-    init: {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    },
-    timeoutMs,
-    signal: options.signal,
-    beforeRequest: options.assertCurrent,
-    auditContext: "openai-chatgpt-oauth-token",
-  });
   try {
-    const responseBody = await readResponseWithLimit(
-      response,
-      OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES,
+    throwIfOAuthLoginAborted(options.signal);
+    const { response: tokenResponse, text } = await withOpenAIOAuthResponse(
       {
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(
-            `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-          ),
+        url: TOKEN_URL,
+        // Keep direct DNS pinning without a proxy; the exact-host policy permits fake-IP DNS.
+        mode: "trusted_env_proxy",
+        policy: OAUTH_TOKEN_SSRF_POLICY,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        },
+        timeoutMs,
+        signal: options.signal,
+        beforeRequest: options.assertCurrent,
+        auditContext: "openai-chatgpt-oauth-token",
+      },
+      async (response) => {
+        const bytes = await readResponseWithLimit(response, OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES, {
+          onOverflow: ({ size, maxBytes }) =>
+            new Error(
+              `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+            ),
+        });
+        return { response, text: new TextDecoder().decode(bytes) };
       },
     );
-    return new Response(new Uint8Array(responseBody), {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-  } finally {
-    await release();
+    return readOpenAITokenResponse(tokenResponse, text, operation, existingRefreshToken);
+  } catch (error) {
+    return {
+      type: "failed",
+      operation,
+      ...(options.signal?.aborted ? { cancelled: true } : {}),
+      summary: formatTokenRequestError(operation, error, timeoutMs, options.signal),
+    };
   }
 }
 
-async function readOpenAITokenResponse(
+function readOpenAITokenResponse(
   response: Response,
+  text: string,
   operation: "exchange" | "refresh",
   existingRefreshToken?: string,
-): Promise<TokenResult> {
+): TokenResult {
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
     return buildTokenResponseFailure({ response, operation, text });
   }
   let json: TokenResponseJson;
   try {
-    json = (await response.json()) as TokenResponseJson;
+    json = JSON.parse(text) as TokenResponseJson;
   } catch {
     return {
       type: "failed",
@@ -246,51 +253,25 @@ export async function exchangeOpenAIAuthorizationCode(
   redirectUri: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  let response: Response;
-  try {
-    response = await postTokenForm(
-      new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: CLIENT_ID,
-        code,
-        code_verifier: verifier,
-        redirect_uri: redirectUri,
-      }),
-      { ...options, timeoutMs },
-    );
-  } catch (error) {
-    return {
-      type: "failed",
-      operation: "exchange",
-      ...(options.signal?.aborted ? { cancelled: true } : {}),
-      summary: formatTokenRequestError("exchange", error, timeoutMs, options.signal),
-    };
-  }
-  return await readOpenAITokenResponse(response, "exchange");
+  return await requestOpenAIToken(
+    createOpenAIAuthorizationCodeForm({ clientId: CLIENT_ID, code, verifier, redirectUri }),
+    "exchange",
+    options,
+  );
 }
 
 export async function refreshOpenAIAccessToken(
   refreshToken: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  try {
-    const response = await postTokenForm(
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-      { ...options, timeoutMs },
-    );
-    return await readOpenAITokenResponse(response, "refresh", refreshToken);
-  } catch (error) {
-    return {
-      type: "failed",
-      operation: "refresh",
-      ...(options.signal?.aborted ? { cancelled: true } : {}),
-      summary: formatTokenRequestError("refresh", error, timeoutMs, options.signal),
-    };
-  }
+  return await requestOpenAIToken(
+    new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+    }),
+    "refresh",
+    options,
+    refreshToken,
+  );
 }

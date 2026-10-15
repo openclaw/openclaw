@@ -258,33 +258,6 @@ describe("resolveSubagentCompletionOrigin", () => {
       spawnMode: "session" as const,
     })),
     {
-      name: "resolves bound completion delivery from the requester session, not the child session",
-      bindings: [
-        {
-          channel: "discord",
-          accountId: "bot-alpha",
-          targetSessionKey: "agent:worker:subagent:child",
-          targetKind: "subagent" as const,
-          conversationId: "child-window",
-        },
-        {
-          channel: "discord",
-          accountId: "acct-1",
-          targetSessionKey: "agent:main:main",
-          targetKind: "session" as const,
-          conversationId: "parent-main",
-        },
-      ],
-      childSessionKey: "agent:worker:subagent:child",
-      requesterOrigin: {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "channel:parent-main",
-      },
-      expected: { channel: "discord", accountId: "acct-1", to: "channel:parent-main" },
-      spawnMode: "session" as const,
-    },
-    {
       name: "prefers requester binding when child and requester share the same channel and accountId",
       bindings: [
         {
@@ -447,7 +420,6 @@ describe("completion delivery route fallback", () => {
     to: "channel:requester-room",
     threadId: "requester-thread",
   };
-  const retargetedOrigin = { channel: "slack", accountId: "acct-1", to: "channel:bound-room" };
   const topicOrigin = {
     channel: "telegram",
     accountId: "bot-1",
@@ -502,18 +474,13 @@ describe("completion delivery route fallback", () => {
         scenario,
       ),
     ),
-    ...["same", "different-port", "shorter"].map((destination) => {
+    ...["same", "different-port"].map((destination) => {
       const opaqueOrigin = {
         channel: "matrix",
         to: "room:!example:topic:100",
         threadId: "$reply",
       };
-      const to =
-        destination === "same"
-          ? opaqueOrigin.to
-          : destination === "shorter"
-            ? "room:!example"
-            : "room:!example:topic:101";
+      const to = destination === "same" ? opaqueOrigin.to : "room:!example:topic:101";
       return {
         name: `an opaque Matrix room with ${destination} identity`,
         requesterSessionOrigin: opaqueOrigin,
@@ -550,16 +517,6 @@ describe("completion delivery route fallback", () => {
       expectedChatType: "direct",
     },
     {
-      name: "a retargeted completion override",
-      completionDirectOrigin: retargetedOrigin,
-      expected: retargetedOrigin,
-    },
-    {
-      name: "a retargeted direct origin",
-      directOrigin: retargetedOrigin,
-      expected: retargetedOrigin,
-    },
-    {
       name: "a partial completion origin",
       completionDirectOrigin: { channel: "slack" },
       expected: requesterSessionOrigin,
@@ -568,16 +525,6 @@ describe("completion delivery route fallback", () => {
       name: "a to-only completion origin for the same target",
       completionDirectOrigin: { to: requesterSessionOrigin.to },
       expected: requesterSessionOrigin,
-    },
-    {
-      name: "a to-only completion origin for a different target",
-      completionDirectOrigin: { to: retargetedOrigin.to },
-      expected: retargetedOrigin,
-    },
-    {
-      name: "an explicit completion thread",
-      completionDirectOrigin: { ...retargetedOrigin, threadId: "bound-thread" },
-      expected: { ...retargetedOrigin, threadId: "bound-thread" },
     },
   ])(
     "uses $name for completion and generated-media delivery",

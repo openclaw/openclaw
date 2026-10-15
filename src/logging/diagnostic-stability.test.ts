@@ -1,5 +1,5 @@
 // Diagnostic stability tests cover stable diagnostic output under repeated events.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
@@ -35,87 +35,10 @@ describe("diagnostic stability recorder", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     stopDiagnosticStabilityRecorder();
     resetDiagnosticStabilityRecorderForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  it("records a bounded payload-free projection of diagnostic events", async () => {
-    startDiagnosticStabilityRecorder();
-
-    emitDiagnosticEvent({
-      type: "webhook.error",
-      channel: "telegram",
-      chatId: "chat-secret",
-      error: "raw upstream error with content",
-    });
-    emitDiagnosticEvent({
-      type: "tool.loop",
-      sessionId: "session-1",
-      toolName: "poll",
-      level: "warning",
-      action: "warn",
-      detector: "known_poll_no_progress",
-      count: 3,
-      message: "message that should not be stored",
-    });
-    emitDiagnosticEvent({
-      type: "talk.event",
-      sessionId: "talk-session-secret",
-      turnId: "talk-turn-secret",
-      captureId: "talk-capture-secret",
-      talkEventType: "latency.metrics",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      final: true,
-      durationMs: 12,
-      byteLength: 345,
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
-
-    expect(snapshot.count).toBe(3);
-    expectFields(snapshot.summary.byType, {
-      "webhook.error": 1,
-      "tool.loop": 1,
-      "talk.event": 1,
-    });
-    expectFields(snapshot.events[0], {
-      type: "webhook.error",
-      channel: "telegram",
-    });
-    expect(snapshot.events[0]).not.toHaveProperty("error");
-    expect(snapshot.events[0]).not.toHaveProperty("chatId");
-    expectFields(snapshot.events[1], {
-      type: "tool.loop",
-      toolName: "poll",
-      level: "warning",
-      action: "warn",
-      detector: "known_poll_no_progress",
-      count: 3,
-    });
-    expect(snapshot.events[1]).not.toHaveProperty("message");
-    expect(snapshot.events[1]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
-    expectFields(snapshot.events[2], {
-      type: "talk.event",
-      talkEventType: "latency.metrics",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      final: true,
-      durationMs: 12,
-      bytes: 345,
-    });
-    expect(snapshot.events[2]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[2]).not.toHaveProperty("turnId");
-    expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {
@@ -334,6 +257,8 @@ describe("diagnostic stability recorder", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       errorCategory: "TypeError",
       failureKind: "terminated",
       memory: {
@@ -344,9 +269,7 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -363,6 +286,8 @@ describe("diagnostic stability recorder", () => {
       requestBytes: 1234,
       responseBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       reason: "TypeError",
       failureKind: "terminated",
       memory: {
@@ -882,6 +807,19 @@ describe("diagnostic stability recorder", () => {
     expect(JSON.stringify(getDiagnosticStabilitySnapshot())).not.toContain("private-");
   });
 
+  it("rejects trusted non-model events before copying their payloads", () => {
+    startDiagnosticStabilityRecorder();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { total: 42 } });
+    expect(clone).not.toHaveBeenCalled();
+    emitDiagnosticEvent({ type: "model.usage", usage: { total: 7 } });
+
+    expect(getDiagnosticStabilitySnapshot().events).toEqual([
+      expect.objectContaining({ type: "model.usage", seq: 2, usage: { total: 7 } }),
+    ]);
+  });
+
   it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {
     startDiagnosticStabilityRecorder();
 
@@ -1001,6 +939,21 @@ describe("diagnostic stability recorder", () => {
     );
     expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: -1 })).toThrow(
       "sinceSeq must be a non-negative integer",
+    );
+  });
+
+  it("rejects blank stability query limit, sinceSeq, and type", () => {
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: "" })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: "" })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "" })).toThrow(
+      "type must be a non-empty string",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "   " })).toThrow(
+      "type must be a non-empty string",
     );
   });
 

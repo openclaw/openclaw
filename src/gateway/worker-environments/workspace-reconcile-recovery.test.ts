@@ -6,21 +6,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import {
-  applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   changedPaths,
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
+import { applyWorkspace, gitInit, manifestFor } from "./workspace-recovery.test-support.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,86 +33,9 @@ async function temporaryDirectory(name: string): Promise<string> {
   return tempDirs.make(`openclaw-${name}-`);
 }
 
-async function gitInit(root: string): Promise<void> {
-  const result = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
-    timeoutMs: 10_000,
-  });
-  expect(result.code).toBe(0);
-}
-
-async function manifestFor(root: string): Promise<WorkerWorkspaceManifest> {
-  const entries: WorkerWorkspaceManifestEntry[] = [];
-  const directories: string[] = [];
-  const walk = async (relativeDirectory: string) => {
-    for (const name of (await fs.readdir(path.join(root, relativeDirectory))).toSorted()) {
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      const absolute = path.join(root, relative);
-      const stats = await fs.lstat(absolute);
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        directories.push(relative);
-        await walk(relative);
-      } else if (stats.isSymbolicLink()) {
-        entries.push({
-          path: relative,
-          type: "symlink",
-          mode: 0o777,
-          target: await fs.readlink(absolute),
-        });
-      } else {
-        const content = await fs.readFile(absolute);
-        entries.push({
-          path: relative,
-          type: "file",
-          mode: (stats.mode & 0o111) === 0 ? 0o644 : 0o755,
-          size: content.length,
-          sha256: createHash("sha256").update(content).digest("hex"),
-        });
-      }
-    }
-  };
-  await walk("");
-  return { version: 1, baseCommit: null, entries, directories };
-}
-
 function encodeManifest(value: unknown) {
   const raw = JSON.stringify(value);
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
-}
-
-async function applyWorkspace(params: {
-  root: string;
-  stagingRoot: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void;
-  commit?: (manifestRef: string) => void;
-  abort?: () => void;
-}) {
-  let pending: WorkerWorkspaceReconciliationJournal | undefined;
-  return await applyStagedWorkerWorkspace({
-    ...params,
-    baseManifestRef: `sha256:${"a".repeat(64)}`,
-    currentManifestRef: `sha256:${"b".repeat(64)}`,
-    acceptance: { kind: "reconcile" },
-    journal: {
-      load: () => pending,
-      begin: (journal) => {
-        pending = journal;
-        params.begin?.(journal);
-      },
-      commit: (manifestRef) => {
-        params.commit?.(manifestRef);
-        pending = undefined;
-      },
-      abort: () => {
-        params.abort?.();
-        pending = undefined;
-      },
-    },
-  });
 }
 
 describe("worker workspace reconciliation recovery", () => {
@@ -202,101 +125,6 @@ describe("worker workspace reconciliation recovery", () => {
         size: MAX_RECONCILIATION_FILE_BYTES + 1,
       }),
     ]);
-  });
-
-  it("records an unrelated oversized local file while applying other worker changes", async () => {
-    const local = await temporaryDirectory("workspace-oversized-local-only");
-    const staged = await temporaryDirectory("workspace-oversized-local-only-staged");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    await fs.writeFile(path.join(staged, "result.txt"), "worker\n");
-    const base = await manifestFor(local);
-    const oversizedPath = path.join(local, "local-only.bin");
-    await fs.writeFile(oversizedPath, "");
-    await fs.truncate(oversizedPath, MAX_RECONCILIATION_FILE_BYTES + 1);
-
-    const applied = await applyWorkspace({
-      root: local,
-      stagingRoot: staged,
-      base,
-      current: await manifestFor(staged),
-    });
-
-    expect(applied.conflictPaths).toEqual([]);
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("worker\n");
-    await expect(fs.stat(oversizedPath)).resolves.toMatchObject({
-      size: MAX_RECONCILIATION_FILE_BYTES + 1,
-    });
-    expect(applied.manifest.entries.map((entry) => entry.path)).toEqual([
-      "local-only.bin",
-      "result.txt",
-    ]);
-  });
-
-  it("allows a remote file to replace a base directory containing only derived entries", async () => {
-    const local = await temporaryDirectory("workspace-derived-directory-replacement");
-    const staged = await temporaryDirectory("workspace-derived-directory-replacement-staged");
-    await gitInit(local);
-    await fs.mkdir(path.join(local, "src", "pkg", "__pycache__"), { recursive: true });
-    await fs.mkdir(path.join(local, "src", "empty"));
-    await fs.writeFile(path.join(local, "src", "pkg", "__pycache__", "old.pyc"), "local cache");
-    const rawBase = await manifestFor(local);
-    const encodedBase = encodeManifest({
-      version: rawBase.version,
-      baseCommit: rawBase.baseCommit,
-      entries: [
-        ...(rawBase.directories ?? []).map((entryPath) => ({
-          path: entryPath,
-          type: "directory",
-          mode: 0o700,
-        })),
-        ...rawBase.entries,
-      ].toSorted((left, right) => left.path.localeCompare(right.path)),
-    });
-    const base = parseWorkerWorkspaceManifest(encodedBase.raw, encodedBase.ref);
-    await fs.writeFile(path.join(staged, "src"), "replacement");
-    const current = await manifestFor(staged);
-
-    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
-  });
-
-  it("keeps a current empty directory represented when it gains derived residue", async () => {
-    const local = await temporaryDirectory("workspace-current-directory-derived-residue");
-    const staged = await temporaryDirectory("workspace-current-directory-derived-residue-staged");
-    await fs.mkdir(path.join(local, "cache-holder"));
-    await fs.mkdir(path.join(staged, "cache-holder"));
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    await fs.writeFile(path.join(staged, "result.txt"), "worker\n");
-    const base = await manifestFor(local);
-    const current = await manifestFor(staged);
-    await fs.mkdir(path.join(local, "cache-holder", "__pycache__"));
-    await fs.writeFile(path.join(local, "cache-holder", "__pycache__", "module.pyc"), "derived");
-
-    const applied = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(applied.conflictPaths).toEqual([]);
-    expect(applied.manifest.directories).toContain("cache-holder");
-    await expect(
-      fs.readFile(path.join(local, "cache-holder", "__pycache__", "module.pyc"), "utf8"),
-    ).resolves.toBe("derived");
-  });
-
-  it("allows a remote file to replace a base directory with a new cache-only subtree", async () => {
-    const local = await temporaryDirectory("workspace-new-derived-subtree-replacement");
-    const staged = await temporaryDirectory("workspace-new-derived-subtree-replacement-staged");
-    await gitInit(local);
-    await fs.mkdir(path.join(local, "src"));
-    await fs.writeFile(path.join(local, "src", "old.txt"), "base");
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(local, "src", "tmp", "__pycache__"), { recursive: true });
-    await fs.writeFile(path.join(local, "src", "tmp", "__pycache__", "old.pyc"), "local cache");
-    await fs.writeFile(path.join(staged, "src"), "replacement");
-    const current = await manifestFor(staged);
-
-    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
   });
 
   it("allows a remote file to replace a new cache-only directory", async () => {
@@ -399,25 +227,6 @@ describe("worker workspace reconciliation recovery", () => {
     ).resolves.toBe("outside cache");
   });
 
-  it("materializes descendants when replacing a base file with a directory", async () => {
-    const local = await temporaryDirectory("workspace-file-directory-replacement");
-    const staged = await temporaryDirectory("workspace-file-directory-replacement-staged");
-    await gitInit(local);
-    await fs.writeFile(path.join(local, "entry"), "base file");
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(staged, "entry"));
-    await fs.writeFile(path.join(staged, "entry", "nested.txt"), "worker");
-    const current = await manifestFor(staged);
-
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(result.conflictPaths).toEqual([]);
-    expect((await fs.lstat(path.join(local, "entry"))).isDirectory()).toBe(true);
-    await expect(fs.readFile(path.join(local, "entry", "nested.txt"), "utf8")).resolves.toBe(
-      "worker",
-    );
-  });
-
   it("does not follow a local-only symlink ancestor omitted from older manifests", async () => {
     const local = await temporaryDirectory("workspace-local-only-symlink-ancestor");
     const staged = await temporaryDirectory("workspace-local-only-symlink-ancestor-staged");
@@ -440,84 +249,6 @@ describe("worker workspace reconciliation recovery", () => {
     expect((await fs.lstat(path.join(local, "link"))).isSymbolicLink()).toBe(true);
     await expect(fs.readFile(path.join(outside, "worker.txt"), "utf8")).resolves.toBe(
       "outside local",
-    );
-  });
-
-  it("keeps a local descendant when both sides replace a base file with a directory", async () => {
-    const local = await temporaryDirectory("workspace-file-to-directory-conflict");
-    const staged = await temporaryDirectory("workspace-file-to-directory-conflict-staged");
-    await gitInit(local);
-    await fs.writeFile(path.join(local, "entry"), "base file");
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(staged, "entry"));
-    await fs.writeFile(path.join(staged, "entry", "nested.txt"), "worker");
-    const current = await manifestFor(staged);
-    await fs.rm(path.join(local, "entry"));
-    await fs.mkdir(path.join(local, "entry"));
-    await fs.writeFile(path.join(local, "entry", "nested.txt"), "local");
-
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(result.conflictPaths).toEqual(["entry/nested.txt"]);
-    await expect(fs.readFile(path.join(local, "entry", "nested.txt"), "utf8")).resolves.toBe(
-      "local",
-    );
-  });
-
-  it("accepts a convergent directory-to-file replacement without reading old descendants", async () => {
-    const local = await temporaryDirectory("workspace-directory-to-file-noop");
-    const staged = await temporaryDirectory("workspace-directory-to-file-noop-staged");
-    await gitInit(local);
-    await fs.mkdir(path.join(local, "entry"));
-    await fs.writeFile(path.join(local, "entry", "nested.txt"), "base");
-    const base = await manifestFor(local);
-    await fs.writeFile(path.join(staged, "entry"), "same replacement");
-    const current = await manifestFor(staged);
-    await fs.rm(path.join(local, "entry"), { recursive: true });
-    await fs.writeFile(path.join(local, "entry"), "same replacement");
-
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(result.conflictPaths).toEqual([]);
-    await expect(fs.readFile(path.join(local, "entry"), "utf8")).resolves.toBe("same replacement");
-  });
-
-  it("keeps a locally replaced unchanged ancestor when the worker adds a child", async () => {
-    const local = await temporaryDirectory("workspace-unchanged-ancestor-conflict");
-    const staged = await temporaryDirectory("workspace-unchanged-ancestor-conflict-staged");
-    await gitInit(local);
-    await Promise.all([fs.mkdir(path.join(local, "entry")), fs.mkdir(path.join(staged, "entry"))]);
-    const base = await manifestFor(local);
-    await fs.writeFile(path.join(staged, "entry", "new.txt"), "worker");
-    const current = await manifestFor(staged);
-    await fs.rm(path.join(local, "entry"), { recursive: true });
-    await fs.writeFile(path.join(local, "entry"), "local replacement");
-
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(result.conflictPaths).toEqual(["entry"]);
-    await expect(fs.readFile(path.join(local, "entry"), "utf8")).resolves.toBe("local replacement");
-  });
-
-  it("merges independent children added under the same new directory", async () => {
-    const local = await temporaryDirectory("workspace-independent-directory-additions");
-    const staged = await temporaryDirectory("workspace-independent-directory-additions-staged");
-    await gitInit(local);
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(staged, "entry"));
-    await fs.writeFile(path.join(staged, "entry", "cloud.txt"), "worker");
-    const current = await manifestFor(staged);
-    await fs.mkdir(path.join(local, "entry"));
-    await fs.writeFile(path.join(local, "entry", "local.txt"), "local");
-
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(result.conflictPaths).toEqual([]);
-    await expect(fs.readFile(path.join(local, "entry", "cloud.txt"), "utf8")).resolves.toBe(
-      "worker",
-    );
-    await expect(fs.readFile(path.join(local, "entry", "local.txt"), "utf8")).resolves.toBe(
-      "local",
     );
   });
 
@@ -665,6 +396,21 @@ describe("worker workspace reconciliation recovery", () => {
     } satisfies WorkerWorkspaceReconciliationJournal;
     await fs.mkdir(path.join(local, "__pycache__"));
     await fs.writeFile(path.join(local, "__pycache__/file.pyc"), "local cache");
+
+    await expect(
+      recoverWorkerWorkspaceReconciliation({
+        root: local,
+        journal: {
+          ...legacyJournal,
+          baseEntries: legacyJournal.baseEntries.map((entry) =>
+            entry.path === ":literal.ts" && entry.type === "file"
+              ? { ...entry, sha256: "0".repeat(64) }
+              : entry,
+          ),
+        },
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("remote literal");
 
     await recoverWorkerWorkspaceReconciliation({ root: local, journal: legacyJournal });
 
@@ -874,7 +620,7 @@ describe("worker workspace reconciliation recovery", () => {
   });
 
   it("counts only changed payload bytes and includes UTF-8 symlink targets", () => {
-    const entries: WorkerWorkspaceManifestEntry[] = Array.from({ length: 4 }, (_, index) => ({
+    const entries: WorkerWorkspaceManifestEntry[] = Array.from({ length: 12 }, (_, index) => ({
       path: `file-${index}`,
       type: "file",
       mode: 0o644,
@@ -893,76 +639,36 @@ describe("worker workspace reconciliation recovery", () => {
       ...current,
       entries: [...entries, { path: "link", type: "symlink", mode: 0o777, target: "a" }],
     };
-    const lastFile = entries[3]!;
+    const lastIndex = entries.length - 1;
+    const lastFile = entries[lastIndex]!;
     if (lastFile.type === "file") {
-      extra.entries[3] = { ...lastFile, size: lastFile.size - 1 };
+      extra.entries[lastIndex] = { ...lastFile, size: lastFile.size - 1 };
     }
     expect(workerWorkspaceTransferPaths(extra, empty)).toEqual([
-      "file-0",
-      "file-1",
-      "file-2",
-      "file-3",
+      ...entries.map((entry) => entry.path),
       "link",
     ]);
-    extra.entries[4] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
+    extra.entries[entries.length] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
     expect(() => workerWorkspaceTransferPaths(extra, empty)).toThrow(
       "staged result exceeds its byte limit",
     );
-    expect(workerWorkspaceTransferPaths(extra, current)).toEqual(["file-3", "link"]);
+    expect(workerWorkspaceTransferPaths(extra, current)).toEqual([lastFile.path, "link"]);
   });
 
-  it("counts serialized reconciliation records at the exact transfer boundary", () => {
-    const entries = (count: number, hash: string) =>
-      Array.from({ length: count }, (_, index) => ({
-        path: `entry-${index.toString().padStart(5, "0")}`,
-        type: "file" as const,
-        mode: 0o644,
-        size: 1,
-        sha256: hash.repeat(64),
-      }));
-    const manifest = (values: WorkerWorkspaceManifestEntry[]): WorkerWorkspaceManifest => ({
+  it("accepts a directory replacement spanning two complete supported inventories", () => {
+    const manifest = (prefix: string): WorkerWorkspaceManifest => ({
       version: 1,
       baseCommit: null,
-      entries: values,
-    });
-    const modificationBoundary = MAX_RECONCILIATION_ENTRIES / 2;
-    const base = manifest(entries(modificationBoundary, "a"));
-    const current = manifest(entries(modificationBoundary, "b"));
-    expect(workerWorkspaceTransferPaths(current, base)).toHaveLength(modificationBoundary);
-
-    const overBase = manifest(entries(modificationBoundary + 1, "a"));
-    const overCurrent = manifest(entries(modificationBoundary + 1, "b"));
-    expect(() => workerWorkspaceTransferPaths(overCurrent, overBase)).toThrow(
-      `exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-
-    const additions = manifest(entries(MAX_RECONCILIATION_ENTRIES, "c"));
-    const empty = manifest([]);
-    expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
-    expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
-    expect(() =>
-      workerWorkspaceTransferPaths(empty, manifest(entries(MAX_RECONCILIATION_ENTRIES + 1, "c"))),
-    ).toThrow("entry limit");
-    const replacedPath = base.entries.at(-1)!.path;
-    const directoryReplacement = {
-      ...current,
-      entries: current.entries.slice(0, -1),
-      directories: [replacedPath],
-    };
-    expect(workerWorkspaceTransferPaths(directoryReplacement, base)).toHaveLength(
-      modificationBoundary - 1,
-    );
-    expect(() =>
-      workerWorkspaceTransferPaths(
-        {
-          ...directoryReplacement,
-          entries: [
-            ...directoryReplacement.entries,
-            { ...current.entries[0]!, path: `${replacedPath}/child` },
-          ],
-        },
-        base,
+      entries: [],
+      directories: Array.from(
+        { length: MAX_WORKSPACE_INVENTORY_ENTRIES },
+        (_, index) => `${prefix}-${index.toString().padStart(6, "0")}`,
       ),
-    ).toThrow("entry limit");
+    });
+    const base = manifest("removed");
+    const current = manifest("added");
+
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([]);
+    expect(changedPaths(base, current).size).toBe(2 * MAX_WORKSPACE_INVENTORY_ENTRIES);
   });
 });

@@ -1,7 +1,7 @@
 import { isPlainObject } from "../utils.js";
 
 export function isKnownPollToolCall(toolName: string, params: unknown): boolean {
-  if (toolName === "command_status") {
+  if (toolName === "command_status" || toolName === "wait") {
     return true;
   }
   if (toolName !== "process" || !isPlainObject(params)) {

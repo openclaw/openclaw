@@ -28,15 +28,17 @@ vi.mock("./dangerous-config-flags.js", () => ({
     collectEnabledInsecureOrDangerousFlagsMock(config),
 }));
 
+// mock-isolation: Audit fixtures control setup fallback without loading real channel accounts.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: (...args: unknown[]) =>
+  listReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) =>
     (listReadOnlyChannelPluginsForConfigMock as (...params: unknown[]) => unknown)(...args),
 }));
 
+// mock-isolation: Audit fixtures control channel presence without inspecting persisted plugin state.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: (...args: unknown[]) =>
+  hasConfiguredChannelsForReadOnlyScopeAsync: async (...args: unknown[]) =>
     (hasConfiguredChannelsForReadOnlyScopeMock as (...params: unknown[]) => unknown)(...args),
-  resolveConfiguredChannelPluginIds: () => [],
+  resolveConfiguredChannelPluginIdsAsync: async () => [],
 }));
 
 vi.mock("./audit-channel.collect.runtime.js", () => ({
@@ -54,7 +56,6 @@ vi.mock("./audit.nondeep.runtime.js", () => ({
   collectHooksHardeningFindings: collectNoFindings,
   collectLikelyMultiUserSetupFindings: collectNoFindings,
   collectMinimalProfileOverrideFindings: collectNoFindings,
-  collectModelHygieneFindings: collectNoFindings,
   collectNodeDangerousAllowCommandFindings: collectNoFindings,
   collectNodeDenyCommandPatternFindings: collectNoFindings,
   collectSandboxDangerousConfigFindings: collectNoFindings,
@@ -97,7 +98,7 @@ describe("security audit channel read-only setup fallback", () => {
       },
     } satisfies ChannelPlugin;
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { dmScope: "main" },
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;

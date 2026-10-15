@@ -82,7 +82,7 @@ suite.define(() => {
           .locator(".new-session-page__environment-heading")
           .allTextContents()
           .then((headings) => headings.map((heading) => heading.replace(/\s+/g, " ").trim())),
-      ).toEqual(["Your devices", "Cloud"]);
+      ).toEqual(["Your devices", "Hosted workspaces", "Cloud"]);
       const auto = destinations.locator('[data-value="auto-device"]');
       expect(await auto.getAttribute("aria-pressed")).toBe("false");
       expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
@@ -164,7 +164,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page.locator(`[data-value="${value}"]`).click();
       await page.locator(".new-session-page__message").fill("run on the paired device");
-      expect(await page.locator('wa-dropdown-item[value="start-terminal"]').count()).toBe(0);
+      expect(await page.locator('[data-value="start-terminal"]').count()).toBe(0);
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -287,9 +287,7 @@ suite.define(() => {
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
           {
-            surface: page.locator(
-              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
-            ),
+            surface: page.locator(".oc-popover.new-session-page__where-popover"),
             content: [selectedDevice, automaticDevice],
           },
         );
@@ -431,9 +429,10 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
+        // Pending remote isolation is not a provisional Local checkout selection.
         await expect
           .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
-          .toBe("true");
+          .toBe("false");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
@@ -454,6 +453,9 @@ suite.define(() => {
         await expect.poll(() => where.getAttribute(attribute)).toBe(value);
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
+        await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+          params: { worktree: true },
+        });
         await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
           params: { key: sessionKey, agentId: "main", ...target },
         });

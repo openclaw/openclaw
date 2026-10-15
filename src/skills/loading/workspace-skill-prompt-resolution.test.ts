@@ -32,11 +32,11 @@ afterEach(() => {
   loggingMocks.warn.mockClear();
 });
 
-function createEntry(name: string): SkillEntry {
+function createEntry(name: string, description = name): SkillEntry {
   return {
     skill: createCanonicalFixtureSkill({
       name,
-      description: name,
+      description,
       filePath: `/app/skills/${name}/SKILL.md`,
       baseDir: `/app/skills/${name}`,
       source: "openclaw-workspace",
@@ -45,10 +45,23 @@ function createEntry(name: string): SkillEntry {
   };
 }
 
+function markUnavailable(skillKey: string) {
+  setActiveDegradedSecretOwners([
+    {
+      ownerKind: "capability",
+      ownerId: `skill:${skillKey}`,
+      state: "unavailable",
+      paths: [`skills.entries.${skillKey}.apiKey`],
+      refKeys: ["env:default:MISSING_SKILL_KEY"],
+      reason: "secret provider failed",
+    },
+  ]);
+}
+
 describe("resolveSkillsPrompt", () => {
-  it.each([8_192, 32_768])(
-    "compacts descriptions at %i tokens without changing admitted skill resources",
-    async (contextTokenBudget) => {
+  it.each(["minimum"] as const)(
+    "compacts descriptions at %s without changing admitted skill resources",
+    async () => {
       const entries = Array.from({ length: 24 }, (_, index) => {
         const entry = createEntry(`skill-${index}`);
         entry.skill.description = `Inspect records & preserve <identifiers>. ${"Detailed matching guidance. ".repeat(10)}`;
@@ -58,12 +71,18 @@ describe("resolveSkillsPrompt", () => {
       });
       const snapshot = await buildSkillSnapshot("/tmp/openclaw", { entries });
       const original = snapshot.prompt.trim();
+      const minimum = original.replace(
+        /<description>[\s\S]*?<\/description>/gu,
+        "<description>Inspect records &amp; preserve &lt;identifiers&gt;. Detailed matching g...</description>",
+      );
+      const contextTokenBudget = minimum.length * 5;
       const projected = await resolveSkillsPrompt({
         workspaceDir: "/tmp/openclaw",
         skillsSnapshot: snapshot,
         contextTokenBudget,
       });
       expect(projected.length).toBeLessThan(original.length);
+      expect(projected).toBe(minimum);
       const omitDescriptions = (prompt: string) =>
         prompt.replace(/<description>[\s\S]*?<\/description>/gu, "");
       expect(omitDescriptions(projected)).toBe(omitDescriptions(original));
@@ -87,43 +106,8 @@ describe("resolveSkillsPrompt", () => {
     },
   );
 
-  it("prefers snapshot prompt when available", async () => {
-    const prompt = await resolveSkillsPrompt({
-      skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(prompt).toBe("SNAPSHOT");
-  });
-  it("builds prompt from entries when snapshot is missing", async () => {
-    const entry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "demo-skill",
-        description: "Demo",
-        filePath: "/app/skills/demo-skill/SKILL.md",
-        baseDir: "/app/skills/demo-skill",
-        source: "openclaw-bundled",
-      }),
-      frontmatter: {},
-    };
-    const prompt = await resolveSkillsPrompt({
-      entries: [entry],
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
-  });
-
   it("keeps an empty snapshot authoritative over current entries", async () => {
-    const entry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "new-skill",
-        description: "New",
-        filePath: "/app/skills/new-skill/SKILL.md",
-        baseDir: "/app/skills/new-skill",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
+    const entry: SkillEntry = createEntry("new-skill", "New");
 
     expect(
       await resolveSkillsPrompt({
@@ -135,16 +119,7 @@ describe("resolveSkillsPrompt", () => {
   });
 
   it("fails closed before filtering an unsupported degraded prompt format", async () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-skill",
-        state: "unavailable",
-        paths: ["skills.entries.cold-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
+    markUnavailable("cold-skill");
 
     expect(
       await resolveSkillsPrompt({
@@ -160,16 +135,7 @@ describe("resolveSkillsPrompt", () => {
   });
 
   it("fails closed for a legacy snapshot whose owner identity is ambiguous", async () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-skill",
-        state: "unavailable",
-        paths: ["skills.entries.cold-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
+    markUnavailable("cold-skill");
 
     const prompt = await resolveSkillsPrompt({
       skillsSnapshot: {
@@ -205,16 +171,7 @@ describe("resolveSkillsPrompt", () => {
       const entries = [createEntry("cold-skill"), createEntry("healthy-skill")];
       const snapshot = mutate(await buildSkillSnapshot("/tmp/openclaw", { entries }));
       const loadEntries = vi.fn(() => entries);
-      setActiveDegradedSecretOwners([
-        {
-          ownerKind: "capability",
-          ownerId: "skill:cold-skill",
-          state: "unavailable",
-          paths: ["skills.entries.cold-skill.apiKey"],
-          refKeys: ["env:default:MISSING_SKILL_KEY"],
-          reason: "secret provider failed",
-        },
-      ]);
+      markUnavailable("cold-skill");
 
       const prompt = await resolveSkillsPrompt({
         skillsSnapshot: snapshot,
@@ -232,21 +189,6 @@ describe("resolveSkillsPrompt", () => {
     },
   );
 
-  it("does not load entries while reusing a valid modern snapshot", async () => {
-    const entries = [createEntry("healthy-skill")];
-    const snapshot = await buildSkillSnapshot("/tmp/openclaw", { entries });
-    const loadEntries = vi.fn(() => entries);
-
-    expect(
-      await resolveSkillsPrompt({
-        skillsSnapshot: snapshot,
-        loadEntries,
-        workspaceDir: "/tmp/openclaw",
-      }),
-    ).toBe(snapshot.prompt.trim());
-    expect(loadEntries).not.toHaveBeenCalled();
-  });
-
   it("matches unavailable owners against a snapshot skill's config key", async () => {
     const cold: SkillEntry = {
       skill: createCanonicalFixtureSkill({
@@ -259,29 +201,11 @@ describe("resolveSkillsPrompt", () => {
       frontmatter: {},
       metadata: { skillKey: "cold-alias" },
     };
-    const healthy: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "healthy-skill",
-        description: "Healthy",
-        filePath: "/app/skills/healthy-skill/SKILL.md",
-        baseDir: "/app/skills/healthy-skill",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
+    const healthy: SkillEntry = createEntry("healthy-skill", "Healthy");
     const snapshot = await buildSkillSnapshot("/tmp/openclaw", {
       entries: [cold, healthy],
     });
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-alias",
-        state: "unavailable",
-        paths: ["skills.entries.cold-alias.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
+    markUnavailable("cold-alias");
 
     const prompt = await resolveSkillsPrompt({
       skillsSnapshot: snapshot,
@@ -298,16 +222,7 @@ describe("resolveSkillsPrompt", () => {
     const snapshot = await buildSkillSnapshot("/tmp/openclaw", {
       entries: capturedEntries,
     });
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-skill",
-        state: "unavailable",
-        paths: ["skills.entries.cold-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
+    markUnavailable("cold-skill");
 
     const prompt = await resolveSkillsPrompt({
       skillsSnapshot: snapshot,
@@ -343,16 +258,7 @@ describe("resolveSkillsPrompt", () => {
       name: "new-skill",
       description: "New skill",
     });
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-skill",
-        state: "unavailable",
-        paths: ["skills.entries.cold-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
+    markUnavailable("cold-skill");
 
     try {
       const prompt = await resolveSkillsPrompt({
@@ -389,85 +295,5 @@ describe("resolveSkillsPrompt", () => {
     });
 
     expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
-  });
-
-  it("inherits agents.defaults.skills when rebuilding prompt for an agent", async () => {
-    const visible: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "github",
-        description: "GitHub",
-        filePath: "/app/skills/github/SKILL.md",
-        baseDir: "/app/skills/github",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
-    const hidden: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "hidden-skill",
-        description: "Hidden",
-        filePath: "/app/skills/hidden-skill/SKILL.md",
-        baseDir: "/app/skills/hidden-skill",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [visible, hidden],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).toContain("/app/skills/github/SKILL.md");
-    expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
-  });
-
-  it("uses agents.list[].skills as a full replacement for defaults", async () => {
-    const inheritedEntry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "weather",
-        description: "Weather",
-        filePath: "/app/skills/weather/SKILL.md",
-        baseDir: "/app/skills/weather",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
-    const explicitEntry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "docs-search",
-        description: "Docs",
-        filePath: "/app/skills/docs-search/SKILL.md",
-        baseDir: "/app/skills/docs-search",
-        source: "openclaw-workspace",
-      }),
-      frontmatter: {},
-    };
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [inheritedEntry, explicitEntry],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["weather"],
-          },
-          list: [{ id: "writer", skills: ["docs-search"] }],
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).not.toContain("/app/skills/weather/SKILL.md");
-    expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
   });
 });

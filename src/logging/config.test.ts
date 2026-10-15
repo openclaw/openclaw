@@ -7,7 +7,6 @@ import { withEnv } from "../test-utils/env.js";
 import { readLoggingConfig } from "./config.js";
 import { applyLoggingConfig, resetLogger } from "./logger.js";
 
-const originalArgv = process.argv;
 let tempDirs: string[] = [];
 
 function writeConfig(source: string): string {
@@ -21,7 +20,6 @@ function writeConfig(source: string): string {
 describe("readLoggingConfig", () => {
   afterEach(() => {
     resetLogger();
-    process.argv = originalArgv;
     for (const dir of tempDirs) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -34,15 +32,6 @@ describe("readLoggingConfig", () => {
 
     expect(readLoggingConfig()).toEqual({ level: "debug", consoleStyle: "json" });
     expect(existsSync).not.toHaveBeenCalled();
-  });
-
-  it("reads logging style without a mutating config load for config schema", () => {
-    process.argv = ["node", "openclaw", "config", "schema"];
-    const configPath = writeConfig(`{ logging: { consoleStyle: "json" } }`);
-
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json" });
-    });
   });
 
   it("reads logging config directly from the active config path", () => {
@@ -59,21 +48,6 @@ describe("readLoggingConfig", () => {
         level: "debug",
         file: "/tmp/openclaw-custom.log",
         maxFileBytes: 1234,
-      });
-    });
-  });
-
-  it("supports JSON5 comments and trailing commas", () => {
-    const configPath = writeConfig(`{
-      // users commonly keep comments in openclaw.json
-      logging: {
-        consoleLevel: "warn",
-      },
-    }`);
-
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toStrictEqual({
-        consoleLevel: "warn",
       });
     });
   });

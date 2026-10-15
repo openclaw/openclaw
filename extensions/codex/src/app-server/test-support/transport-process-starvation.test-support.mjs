@@ -55,6 +55,9 @@ if (fixtureProcfs) {
 const fixtureOpen = fixtureFs.openSync;
 const fixtureFiles = new Map(${JSON.stringify([...mapped])});
 fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? file, ...args);
+const fixtureReaddir = fixtureFs.readdirSync;
+fixtureFs.readdirSync = (file, ...args) => file === "/proc"
+  ? [${JSON.stringify(String(process.pid))}] : fixtureReaddir(file, ...args);
 `;
       const injectedArgs = args.slice();
       injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
@@ -65,9 +68,9 @@ fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? fi
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   syncBuiltinESMExports();
 }
-const own = (await readCodexAppServerProcessSnapshot(Date.now() + 10_000, [process.pid])).find(
-  (row) => row.pid === process.pid,
-);
+const own = (
+  await readCodexAppServerProcessSnapshot(performance.now() + 10_000, [process.pid])
+).find((row) => row.pid === process.pid);
 if (!own) {
   throw new Error("The observer identity is unavailable.");
 }
@@ -77,12 +80,22 @@ const fd = openSync(fifo, "r+");
 let release;
 try {
   // One blocking read occupies the isolated process's only filesystem worker.
+  const heldAt = performance.now();
   const held = promisify(read)(fd, Buffer.alloc(1), 0, 1, null);
+  const filesystemWorkerReleaseDeadlineMs = 10_500;
+  let blockedFilesystemWorkerMs;
+  const releaseWorker = () => {
+    if (blockedFilesystemWorkerMs !== undefined) {
+      return;
+    }
+    writeSync(fd, Buffer.from("x"));
+    blockedFilesystemWorkerMs = performance.now() - heldAt;
+  };
   const directStart = performance.now();
   readFileSync(`/proc/${process.pid}/stat`);
   const directReadMs = performance.now() - directStart;
   const started = performance.now();
-  const deadline = Date.now() + 10_000;
+  const deadline = performance.now() + 10_000;
   let eventLoopDelayMs;
   const responsive = new Promise((resolve) => {
     setTimeout(() => {
@@ -90,13 +103,18 @@ try {
       resolve();
     }, 100);
   });
-  release = setTimeout(() => writeSync(fd, Buffer.from("x")), 10_500);
+  release = setTimeout(releaseWorker, filesystemWorkerReleaseDeadlineMs);
   const outcomes = await Promise.allSettled([
     readCodexAppServerProcessSnapshot(deadline, [process.pid]),
     readCodexAppServerProcessCommand(own, deadline),
+    readCodexAppServerProcessSnapshot(deadline),
   ]);
   const inspectionMs = performance.now() - started;
-  await Promise.all([held, responsive]);
+  const filesystemWorkerHeldAtInspection = blockedFilesystemWorkerMs === undefined;
+  await responsive;
+  clearTimeout(release);
+  releaseWorker();
+  await held;
   console.log(
     JSON.stringify(
       {
@@ -107,12 +125,14 @@ try {
           .update(readFileSync(new URL("../transport-process-snapshot.ts", import.meta.url)))
           .digest("hex"),
         startupDeadlineMs: 10_000,
-        blockedFilesystemWorkerMs: 10_500,
+        filesystemWorkerReleaseDeadlineMs,
+        blockedFilesystemWorkerMs,
+        filesystemWorkerHeldAtInspection,
         directReadMs,
         eventLoopDelayMs,
         inspectionMs,
         outcomes: outcomes.map((outcome, index) => {
-          const operation = index === 0 ? "selected-identity" : "selected-command";
+          const operation = ["selected-identity", "selected-command", "full-snapshot"][index];
           if (outcome.status === "rejected") {
             return {
               operation,
@@ -121,7 +141,7 @@ try {
               reason: outcome.reason?.reason,
             };
           }
-          return index === 0
+          return index !== 1
             ? {
                 operation,
                 status: "fulfilled",

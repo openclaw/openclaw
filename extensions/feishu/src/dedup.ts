@@ -9,15 +9,7 @@ type FeishuDedupeLog = (...args: unknown[]) => void;
 
 export type FeishuMessageProcessingClaim = ChannelReplayClaimHandle;
 
-type FeishuMessageClaim =
-  | { kind: "claimed"; handle: FeishuMessageProcessingClaim }
-  | { kind: "duplicate" }
-  | { kind: "inflight"; pending: Promise<boolean> }
-  | { kind: "invalid" };
-
-function dedupeKey(messageId: string | undefined | null): string {
-  return messageId?.trim() ?? "";
-}
+type FeishuMessageClaim = Awaited<ReturnType<typeof feishuDedupeState.guard.claim>>;
 
 function dedupeOptions(namespace: string | undefined, log: FeishuDedupeLog | undefined) {
   return {
@@ -44,11 +36,10 @@ export async function claimUnprocessedFeishuMessage(params: {
   namespace?: string;
   log?: FeishuDedupeLog;
 }): Promise<FeishuMessageClaim> {
-  const claim = await feishuDedupeState.guard.claim(
+  return await feishuDedupeState.guard.claim(
     params.messageId,
     dedupeOptions(params.namespace, params.log),
   );
-  return claim;
 }
 
 /**
@@ -62,7 +53,7 @@ export async function finalizeFeishuMessageProcessing(params: {
   log?: FeishuDedupeLog;
   processingClaim?: FeishuMessageProcessingClaim;
 }): Promise<boolean> {
-  const key = dedupeKey(params.messageId);
+  const key = params.messageId?.trim();
   if (!key) {
     return false;
   }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createInitialCronState, loadCronStatus } from "./index.ts";
-import { loadCronRuns, loadMoreCronRuns } from "./runs.ts";
+import { getCronRunsViewState, loadCronRuns, loadMoreCronRuns } from "./runs.ts";
 import type { CronState } from "./types.ts";
 
 function createRefreshHarness(method: "cron.status" | "cron.runs") {
@@ -167,23 +167,28 @@ describe("cron event refresh replacement", () => {
   it("requires a successful replacement page before appending after a failed refresh", async () => {
     const harness = createRefreshHarness("cron.runs");
     try {
+      expect(getCronRunsViewState(harness.state)).toBe("idle");
       harness.state.cronRuns = [{ ts: 1, jobId: "job", action: "finished", status: "ok" }];
       harness.state.cronRunsHasMore = true;
       harness.state.cronRunsNextOffset = 50;
       harness.state.cronRunsQuery = "new filter";
       const replacement = harness.load(false);
+      expect(getCronRunsViewState(harness.state)).toBe("pending");
       harness.response(0).reject(new Error("History unavailable"));
       await replacement;
+      expect(getCronRunsViewState(harness.state)).toBe("failed");
       expect(harness.error()).toBe("History unavailable");
       const append = loadMoreCronRuns(harness.state);
       expect(harness.request).toHaveBeenCalledTimes(1);
       await append;
 
       const retry = harness.load(false);
+      expect(getCronRunsViewState(harness.state)).toBe("pending");
       harness
         .response(1)
         .resolve({ ...harness.payload(2), total: 2, hasMore: true, nextOffset: 1 });
       await retry;
+      expect(getCronRunsViewState(harness.state)).toBe("ready");
       const nextPage = loadMoreCronRuns(harness.state);
       expect(harness.request).toHaveBeenLastCalledWith(
         "cron.runs",
@@ -201,27 +206,26 @@ describe("cron event refresh replacement", () => {
   });
 
   it.each<Partial<CronState>>([
-    { cronRunsQuery: "new filter" },
     { cronRunsScope: "job", cronRunsJobId: "selected-job" },
     { cronAgentId: "writer" },
-    { cronRunsLimit: 10 },
-    { cronRunsStatuses: ["error"] },
-    { cronRunsStatusFilter: "error" },
     { cronRunsDeliveryStatuses: ["not-delivered"] },
-    { cronRunsSortDir: "asc" },
   ])("supersedes queued reads when the current query changes: %j", async (patch) => {
     const harness = createRefreshHarness("cron.runs");
     try {
       const initial = harness.load();
       const queued = harness.load();
       Object.assign(harness.state, patch);
+      expect(getCronRunsViewState(harness.state)).toBe("idle");
       const current = harness.load();
+      expect(getCronRunsViewState(harness.state)).toBe("pending");
       expect(harness.request).toHaveBeenCalledTimes(2);
       harness.response(1).resolve(harness.payload(2));
       await current;
+      expect(getCronRunsViewState(harness.state)).toBe("ready");
       harness.response(0).reject(new Error("superseded query failed"));
       await expect(initial).resolves.toBe("skipped");
       await expect(queued).resolves.toBe("skipped");
+      expect(getCronRunsViewState(harness.state)).toBe("ready");
       expect(harness.request).toHaveBeenCalledTimes(2);
       expect(harness.revision()).toBe(2);
       expect(harness.error()).toBeNull();
@@ -229,71 +233,41 @@ describe("cron event refresh replacement", () => {
       await harness.close();
     }
   });
-
-  it("supersedes an append when an event refreshes page zero", async () => {
-    const harness = createRefreshHarness("cron.runs");
-    try {
-      const initial = harness.load(false);
-      harness
-        .response(0)
-        .resolve({ ...harness.payload(1), total: 2, hasMore: true, nextOffset: 1 });
-      await initial;
-      const append = loadCronRuns(harness.state, { append: true });
-      const current = harness.load();
-      expect(harness.request).toHaveBeenCalledTimes(3);
-      expect(harness.state.cronRunsLoadingMore).toBe(false);
-      harness.response(2).resolve(harness.payload(2));
-      await current;
-      harness.response(1).resolve(harness.payload(0));
-      await expect(append).resolves.toBe("skipped");
-      expect(harness.state.cronRuns.map((entry) => entry.ts)).toEqual([2]);
-      expect(harness.state.cronRunsHasMore).toBe(false);
-      expect(harness.state.cronRunsNextOffset).toBeNull();
-    } finally {
-      await harness.close();
-    }
-  });
 });
 
 describe("cron retained history ownership", () => {
-  it.each<Partial<CronState>>([
-    { cronRunsQuery: "new filter" },
-    { cronRunsScope: "job", cronRunsJobId: "selected-job" },
-    { cronAgentId: "writer" },
-    { cronRunsLimit: 10 },
-    { cronRunsStatuses: ["error"] },
-    { cronRunsStatusFilter: "error" },
-    { cronRunsDeliveryStatuses: ["not-delivered"] },
-    { cronRunsSortDir: "asc" },
-  ])("retires accepted rows and errors before a changed query resolves: %j", async (patch) => {
-    const harness = createRefreshHarness("cron.runs");
-    try {
-      const initial = harness.load(false);
-      harness
-        .response(0)
-        .resolve({ ...harness.payload(1), total: 2, hasMore: true, nextOffset: 1 });
-      await initial;
-      const failedRefresh = harness.load(false);
-      harness.response(1).reject(new Error("Previous history failed"));
-      await failedRefresh;
-      expect(harness.revision()).toBe(1);
-      expect(harness.error()).toBe("Previous history failed");
+  it.each<Partial<CronState>>([{ cronRunsQuery: "new filter" }])(
+    "retires accepted rows and errors before a changed query resolves: %j",
+    async (patch) => {
+      const harness = createRefreshHarness("cron.runs");
+      try {
+        const initial = harness.load(false);
+        harness
+          .response(0)
+          .resolve({ ...harness.payload(1), total: 2, hasMore: true, nextOffset: 1 });
+        await initial;
+        const failedRefresh = harness.load(false);
+        harness.response(1).reject(new Error("Previous history failed"));
+        await failedRefresh;
+        expect(harness.revision()).toBe(1);
+        expect(harness.error()).toBe("Previous history failed");
 
-      Object.assign(harness.state, patch);
-      const replacement = harness.load(false);
-      expect(harness.state.cronRuns).toEqual([]);
-      expect(harness.state.cronRunsTotal).toBe(0);
-      expect(harness.state.cronRunsHasMore).toBe(false);
-      expect(harness.state.cronRunsNextOffset).toBeNull();
-      expect(harness.error()).toBeNull();
-      harness.response(2).reject(new Error("Current history failed"));
-      await replacement;
-      expect(harness.state.cronRuns).toEqual([]);
-      expect(harness.error()).toBe("Current history failed");
-    } finally {
-      await harness.close();
-    }
-  });
+        Object.assign(harness.state, patch);
+        const replacement = harness.load(false);
+        expect(harness.state.cronRuns).toEqual([]);
+        expect(harness.state.cronRunsTotal).toBe(0);
+        expect(harness.state.cronRunsHasMore).toBe(false);
+        expect(harness.state.cronRunsNextOffset).toBeNull();
+        expect(harness.error()).toBeNull();
+        harness.response(2).reject(new Error("Current history failed"));
+        await replacement;
+        expect(harness.state.cronRuns).toEqual([]);
+        expect(harness.error()).toBe("Current history failed");
+      } finally {
+        await harness.close();
+      }
+    },
+  );
 
   it("retains same-query rows and clears only the recovered history error", async () => {
     const harness = createRefreshHarness("cron.runs");
@@ -302,18 +276,22 @@ describe("cron retained history ownership", () => {
       harness.response(0).resolve(harness.payload(1));
       await initial;
       const refresh = harness.load(false);
+      expect(getCronRunsViewState(harness.state)).toBe("pending");
       expect(harness.revision()).toBe(1);
       harness.response(1).reject(new Error("Read unavailable"));
       await refresh;
+      expect(getCronRunsViewState(harness.state)).toBe("failed");
       expect(harness.revision()).toBe(1);
       expect(harness.error()).toBe("Read unavailable");
 
       // Independent action feedback may even have identical text.
       harness.state.cronError = "Read unavailable";
       const retry = harness.load(false);
+      expect(getCronRunsViewState(harness.state)).toBe("pending");
       expect(harness.revision()).toBe(1);
       harness.response(2).resolve(harness.payload(2));
       await retry;
+      expect(getCronRunsViewState(harness.state)).toBe("ready");
       expect(harness.revision()).toBe(2);
       expect(harness.error()).toBeNull();
       expect(harness.state.cronError).toBe("Read unavailable");

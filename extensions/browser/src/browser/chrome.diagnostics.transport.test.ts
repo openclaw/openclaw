@@ -122,15 +122,21 @@ describe("Chrome CDP diagnostic transport", () => {
     const fixture = await startCdpFixture({ hold: "command" });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const probing = diagnoseChromeCdp(fixture.url, 1_000, 1_000);
+      const onDiagnostic = vi.fn();
+      const probing = chrome.isChromeCdpReady(fixture.url, 1_000, 1_000, undefined, {
+        onDiagnostic,
+      });
       await fixture.reached.command.promise;
       await vi.advanceTimersByTimeAsync(1_100);
 
-      await expect(probing).resolves.toMatchObject({
-        ok: false,
-        code: "websocket_health_command_timeout",
-        wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
-      });
+      await expect(probing).resolves.toBe(false);
+      expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ok: false,
+          code: "websocket_health_command_timeout",
+          wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
+        }),
+      );
       await fixture.disconnected.command.promise;
     } finally {
       await fixture.close();
@@ -219,6 +225,7 @@ describe("Chrome CDP diagnostic transport", () => {
     const context = createBrowserRouteContext({ getState: () => state });
     try {
       const probing = context
+        .forProfile()
         .isHttpReachable(60_000, controller.signal)
         .catch((error: unknown) => error);
       await fixture.reached.http.promise;

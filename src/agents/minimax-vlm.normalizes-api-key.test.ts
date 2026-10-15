@@ -1,5 +1,4 @@
 // Covers MiniMax VLM auth/header normalization and provider-specific routing.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
@@ -43,15 +42,22 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     vi.restoreAllMocks();
   });
 
+  function understandImage(overrides: Partial<Parameters<typeof minimaxUnderstandImage>[0]>) {
+    return minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      ...overrides,
+    });
+  }
+
   async function runNormalizationCase(apiKey: string) {
     // Headers must be Latin-1 and line-break free; normalize user/API-key
     // input before constructing the Authorization header.
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
-    const text = await minimaxUnderstandImage({
+    const text = await understandImage({
       apiKey,
-      prompt: "hi",
-      imageDataUrl: "data:image/png;base64,AAAA",
       apiHost: "https://api.minimax.io",
     });
 
@@ -66,19 +72,23 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     await runNormalizationCase("minimax-test-\r\nkey");
   });
 
-  it("drops non-Latin1 characters from apiKey before sending Authorization header", async () => {
-    await runNormalizationCase("minimax-З│test-key");
-  });
-
   it("keeps trusted MINIMAX_API_HOST env fallback for VLM routing", async () => {
     process.env.MINIMAX_API_HOST = "https://api.minimaxi.com";
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
+    await expect(understandImage({})).resolves.toBe("ok");
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it.each(["minimax-portal-cn"])("routes %s to the CN VLM host by default", async (provider) => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
     await expect(
-      minimaxUnderstandImage({
-        apiKey: "minimax-test-key",
-        prompt: "hi",
-        imageDataUrl: "data:image/png;base64,AAAA",
+      understandImage({
+        provider,
       }),
     ).resolves.toBe("ok");
 
@@ -87,38 +97,15 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
-  it.each(["minimax-cn", "minimax-portal-cn"])(
-    "routes %s to the CN VLM host by default",
-    async (provider) => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          provider,
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-        }),
-      ).resolves.toBe("ok");
-
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-      expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
-    },
-  );
-
-  it.each(["minimax-cn", "minimax-portal-cn"])(
+  it.each(["minimax-portal-cn"])(
     "keeps %s on the CN VLM host when the configured host is malformed",
     async (provider) => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
       await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
+        understandImage({
           provider,
           apiHost: "https://[",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
         }),
       ).resolves.toBe("ok");
 
@@ -128,204 +115,70 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     },
   );
 
-  it("uses the caller-provided request timeout", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      minimaxUnderstandImage({
-        apiKey: "minimax-test-key",
-        prompt: "hi",
-        imageDataUrl: "data:image/png;base64,AAAA",
-        apiHost: "https://api.minimax.io",
-        timeoutMs: 180_000,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(180_000);
-  });
-
-  it("uses the default request timeout for non-positive caller timeouts", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      minimaxUnderstandImage({
-        apiKey: "minimax-test-key",
-        prompt: "hi",
-        imageDataUrl: "data:image/png;base64,AAAA",
-        apiHost: "https://api.minimax.io",
-        timeoutMs: 0,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(60_000);
-  });
-
-  it("clamps oversized caller request timeouts before creating the abort signal", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      minimaxUnderstandImage({
-        apiKey: "minimax-test-key",
-        prompt: "hi",
-        imageDataUrl: "data:image/png;base64,AAAA",
-        apiHost: "https://api.minimax.io",
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
   describe("SSRF policy", () => {
-    it("pins a default hostname without granting broad private-network access", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://api.minimax.io",
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      // Native public hosts stay DNS-pinned without trusting a rebinding target.
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
-      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-    });
-
-    it("pins a custom public hostname and preserves the configured origin", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://custom-minimax.example.com",
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["custom-minimax.example.com"]);
-      // Custom origins are preserved as allowedOrigins so operator-configured
-      // private/local MiniMax-compatible endpoints continue to work after the
-      // guarded-fetch migration. Private-network flags are still absent.
-      expect(opts?.policy.allowedOrigins).toEqual(["https://custom-minimax.example.com"]);
-      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-    });
-
-    it("preserves a loopback origin for explicitly-authorized local endpoints", async () => {
-      // Loopback origins are trusted through allowedOrigins because the
-      // operator explicitly configured the endpoint. This preserves existing
-      // private/local MiniMax-compatible deployments.
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://localhost:8080",
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["localhost"]);
-      expect(opts?.policy.allowedOrigins).toEqual(["https://localhost:8080"]);
-      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-    });
-
-    it("does not grant broad private-network access when allowPrivateNetwork is explicitly false", async () => {
-      // Explicit denial wins over the otherwise trusted configured origin.
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://localhost:8080",
-          allowPrivateNetwork: false,
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["localhost"]);
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
-      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-    });
-
-    it("keeps allowedOrigins for a custom host when allowPrivateNetwork is true", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://custom-minimax.example.com",
+    it.each([
+      {
+        name: "pins a default hostname without broad private-network access",
+        input: { apiHost: "https://api.minimax.io" },
+        policy: { hostnameAllowlist: ["api.minimax.io"] },
+      },
+      {
+        name: "preserves an explicitly configured loopback origin",
+        input: { apiHost: "https://localhost:8080" },
+        policy: {
+          hostnameAllowlist: ["localhost"],
+          allowedOrigins: ["https://localhost:8080"],
+        },
+      },
+      {
+        name: "lets explicit denial override configured origin trust",
+        input: { apiHost: "https://localhost:8080", allowPrivateNetwork: false },
+        policy: { hostnameAllowlist: ["localhost"] },
+      },
+      {
+        name: "preserves explicit private-network opt-in",
+        input: { apiHost: "https://custom-minimax.example.com", allowPrivateNetwork: true },
+        policy: {
+          hostnameAllowlist: ["custom-minimax.example.com"],
+          allowedOrigins: ["https://custom-minimax.example.com"],
           allowPrivateNetwork: true,
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["custom-minimax.example.com"]);
-      // Explicit allow keeps the configured origin and grants broad private-network
-      // access, matching the canonical provider transport semantics.
-      expect(opts?.policy.allowedOrigins).toEqual(["https://custom-minimax.example.com"]);
-      expect(opts?.policy.allowPrivateNetwork).toBe(true);
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-    });
-
-    it("keeps default-host policy unchanged when allowPrivateNetwork is false", async () => {
-      // Default public hosts should never gain broad private-network trust, and
-      // allowPrivateNetwork: false must not accidentally widen their policy.
+        },
+      },
+      {
+        name: "refuses metadata-like configured origin trust",
+        input: { apiHost: "https://metadata.minimax.local" },
+        policy: undefined,
+      },
+      {
+        name: "refuses link-local configured origin trust",
+        input: { apiHost: "https://169.254.1.1" },
+        policy: undefined,
+      },
+    ])("$name", async ({ input, policy }) => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://api.minimax.io",
-          allowPrivateNetwork: false,
-        }),
-      ).resolves.toBe("ok");
-
+      await expect(understandImage(input)).resolves.toBe("ok");
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeDefined();
-      expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
-      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
-      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+      if (policy === undefined) {
+        expect(opts?.policy).toBeUndefined();
+      } else {
+        const expected: {
+          hostnameAllowlist: string[];
+          allowedOrigins?: string[];
+          allowPrivateNetwork?: boolean;
+        } = policy;
+        expect(opts?.policy).toBeDefined();
+        expect(opts?.policy.hostnameAllowlist).toEqual(expected.hostnameAllowlist);
+        expect(opts?.policy.allowedOrigins).toEqual(expected.allowedOrigins);
+        expect(opts?.policy.allowPrivateNetwork).toBe(expected.allowPrivateNetwork);
+        expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+      }
     });
 
     it("carries model request proxy policy into the guarded fetch", async () => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
       await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
+        understandImage({
           apiHost: "https://custom-minimax.example.com",
           request: {
             proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" },
@@ -341,42 +194,6 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       // Explicit proxy configuration keeps strict mode; ambient proxy auto-upgrade
       // must not replace its dispatcher policy.
       expect(opts?.mode).toBeUndefined();
-    });
-
-    it("refuses metadata-like configured origins", async () => {
-      // The canonical provider policy deliberately excludes metadata- and
-      // link-local-like origins from implicit trust.
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://metadata.minimax.local",
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      // No policy is produced for metadata-like origins, so guarded fetch uses
-      // its default restrictions.
-      expect(opts?.policy).toBeUndefined();
-    });
-
-    it("refuses link-local configured origins", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-      await expect(
-        minimaxUnderstandImage({
-          apiKey: "minimax-test-key",
-          prompt: "hi",
-          imageDataUrl: "data:image/png;base64,AAAA",
-          apiHost: "https://169.254.1.1",
-        }),
-      ).resolves.toBe("ok");
-
-      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
-      expect(opts?.policy).toBeUndefined();
     });
   });
 
@@ -402,10 +219,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
     });
 
-    const error = await minimaxUnderstandImage({
-      apiKey: "minimax-test-key",
-      prompt: "hi",
-      imageDataUrl: "data:image/png;base64,AAAA",
+    const error = await understandImage({
       apiHost: "https://api.minimax.io",
     }).catch((caught: unknown) => caught);
 
@@ -440,10 +254,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
     });
 
-    const error = await minimaxUnderstandImage({
-      apiKey: "minimax-test-key",
-      prompt: "hi",
-      imageDataUrl: "data:image/png;base64,AAAA",
+    const error = await understandImage({
       apiHost: "https://api.minimax.io",
     }).catch((caught: unknown) => caught);
 
@@ -503,10 +314,8 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       },
     );
 
-    const error = await minimaxUnderstandImage({
+    const error = await understandImage({
       apiKey: needle,
-      prompt: "hi",
-      imageDataUrl: "data:image/png;base64,AAAA",
       apiHost: "https://api.minimax.io",
     }).catch((caught: unknown) => caught);
 

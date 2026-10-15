@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
 export type SignalInboundEntry = {
-  /** Admission, buffered dispatch, and retries share this receipt-time snapshot. */
+  /** Admission and buffered dispatch share this receipt-time snapshot. */
   cfg: OpenClawConfig;
   senderName: string;
   senderDisplay: string;
@@ -40,7 +40,6 @@ export type SignalInboundEntry = {
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
   channelIngress?: readonly ResolvedChannelMessageIngress[];
-  boundChannelIngress?: readonly ResolvedChannelMessageIngress[];
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
@@ -91,7 +90,7 @@ function isSignalActiveRunControlText(text: string): boolean {
   if (isAbortRequestText(text)) {
     return true;
   }
-  const normalizedBody = normalizeCommandBody(text.trim());
+  const normalizedBody = normalizeCommandBody(text);
   const alias = maybeResolveTextAlias(normalizedBody);
   if (!alias) {
     return false;

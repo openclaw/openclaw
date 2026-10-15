@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { normalizeLegacyCredentialFields } from "../../agents/auth-profiles/legacy-flat-credential.js";
 import {
   readLegacyMigrationReceipt,
   readLegacyMigrationReceiptFromDatabase,
@@ -26,6 +27,8 @@ const receiptSchema = z.object({
             databasePath: z.string(),
             beforeSha256: z.string().nullable(),
             afterSha256: z.string(),
+            beforeCanonicalFieldsSha256: z.string().optional(),
+            afterCanonicalFieldsSha256: z.string().optional(),
           }),
         )
         .min(1),
@@ -51,12 +54,15 @@ export function recordAuthAliasMigration(params: {
   stores: readonly (AuthAliasStoreSnapshot & { migratedStore: unknown })[];
   env: NodeJS.ProcessEnv;
   importedProfileIds?: ReadonlySet<string>;
+  normalizeCredentialFields?: boolean;
   sources?: readonly { path: string; sha256: string }[];
 }): string | undefined {
   const previousReceipt = readLegacyMigrationReceipt(SOURCE_KEY, params.env);
-  if (previousReceipt && params.importedProfileIds) {
-    const previous = receiptSchema.parse(JSON.parse(previousReceipt.reportJson));
-    for (const { from } of previous.mappings) {
+  const previousMappings = previousReceipt
+    ? receiptSchema.parse(JSON.parse(previousReceipt.reportJson)).mappings
+    : [];
+  if (params.importedProfileIds) {
+    for (const { from } of previousMappings) {
       if (params.importedProfileIds.has(from) && !params.profileIdMap.has(from)) {
         throw new Error(
           `Recorded auth account ${from} could not be verified; its import source was preserved.`,
@@ -70,11 +76,27 @@ export function recordAuthAliasMigration(params: {
       continue;
     }
     const credentials = params.stores.flatMap(({ databasePath, store, migratedStore }) => {
-      const before = profiles(store)[from];
+      const sourceProfiles = profiles(store);
+      const before = sourceProfiles[from];
       const after = profiles(migratedStore)[to];
+      const current = before ?? sourceProfiles[to];
+      const historical = previousMappings
+        .filter((entry) => entry.from === from && entry.to === to)
+        .flatMap((entry) => entry.credentials)
+        .find(
+          (expected) =>
+            expected.databasePath === databasePath &&
+            current !== undefined &&
+            (before === undefined
+              ? [expected.afterSha256, expected.afterCanonicalFieldsSha256]
+              : [expected.beforeSha256, expected.beforeCanonicalFieldsSha256]
+            ).includes(digest(current)),
+        );
       if (
         after === undefined ||
-        (before === undefined && !(params.importedProfileIds?.has(from) && params.sources?.length))
+        (before === undefined &&
+          !historical &&
+          !(params.importedProfileIds?.has(from) && params.sources?.length))
       ) {
         return [];
       }
@@ -88,6 +110,23 @@ export function recordAuthAliasMigration(params: {
         throw new Error(
           `Legacy auth input conflicts with the existing account ${from}; its source was preserved.`,
         );
+      }
+      if (historical) {
+        if (
+          before === undefined &&
+          (!isRecord(current) || digest(normalizeLegacyCredentialFields(current)) !== digest(after))
+        ) {
+          throw new Error(
+            `Recorded auth account ${from} changed during migration; its source was preserved.`,
+          );
+        }
+        return [
+          {
+            ...historical,
+            ...(before !== undefined ? { beforeCanonicalFieldsSha256: digest(before) } : {}),
+            afterCanonicalFieldsSha256: digest(after),
+          },
+        ];
       }
       return [
         {
@@ -106,21 +145,56 @@ export function recordAuthAliasMigration(params: {
       });
     }
   }
-  if (mappings.length === 0) {
-    return readLegacyMigrationReceipt(SOURCE_KEY, params.env)?.sourceSha256 ?? undefined;
+  if (mappings.length === 0 && (!previousReceipt || !params.normalizeCredentialFields)) {
+    return previousReceipt?.sourceSha256 ?? undefined;
   }
   return runOpenClawStateWriteTransaction(
     ({ db, path }) => {
       const prior = readLegacyMigrationReceiptFromDatabase(db, SOURCE_KEY);
       const previous = prior ? receiptSchema.parse(JSON.parse(prior.reportJson)).mappings : [];
       // A concurrent or interrupted plan must not replace an earlier committed mapping.
-      const records = new Map(previous.map((entry) => [digest(entry), entry]));
+      const records = new Map<string, AliasReceipt["mappings"][number]>(
+        params.normalizeCredentialFields ? [] : previous.map((entry) => [digest(entry), entry]),
+      );
+      // Preserve each owner's exact preimage and its field-only normalization.
+      // Independent owner commits may settle on either side of this conversion.
+      for (const entry of params.normalizeCredentialFields ? previous : []) {
+        const normalized = structuredClone(entry);
+        for (const expected of normalized.credentials) {
+          const store = params.stores.find(
+            (candidate) => candidate.databasePath === expected.databasePath,
+          );
+          if (!store) {
+            continue;
+          }
+          const before = profiles(store.store);
+          const after = profiles(store.migratedStore);
+          for (const [id, hashKey, canonicalHashKey] of [
+            [entry.from, "beforeSha256", "beforeCanonicalFieldsSha256"],
+            [entry.to, "afterSha256", "afterCanonicalFieldsSha256"],
+          ] as const) {
+            const value = before[id];
+            if (
+              isRecord(value) &&
+              after[id] !== undefined &&
+              [expected[hashKey], expected[canonicalHashKey]].includes(digest(value)) &&
+              digest(normalizeLegacyCredentialFields(value)) === digest(after[id])
+            ) {
+              expected[canonicalHashKey] = digest(after[id]);
+            }
+          }
+        }
+        records.set(digest(normalized), normalized);
+      }
       for (const entry of mappings) {
         records.set(digest(entry), entry);
       }
       const report: AliasReceipt = { format: SOURCE_KEY, mappings: [...records.values()] };
       const reportJson = JSON.stringify(report);
       const sourceSha256 = digest(report);
+      if (prior?.sourceSha256 === sourceSha256 && prior.reportJson === reportJson) {
+        return sourceSha256;
+      }
       recordLegacyMigrationReceipt(db, {
         sourceKey: SOURCE_KEY,
         migrationKind: "auth-profile-sqlite-alias-map",
@@ -181,6 +255,7 @@ export function recoverAuthAliasMigration(params: {
     const sourcePaths = mapping.sources?.map((source) => source.path) ?? [];
     const archived =
       sourcePaths.length > 0 && sourcePaths.every((source) => !fs.existsSync(source));
+    let matched: boolean;
     if (archived) {
       // The import owner validates archived bytes, refreshed OAuth identity and ambiguity.
       const archive = params.archivedMappings?.get(mapping.from);
@@ -197,59 +272,60 @@ export function recoverAuthAliasMigration(params: {
           )
           .map((origin) => origin.databasePath),
       );
-      if (
+      matched =
         archive?.profileId === mapping.to &&
         verifiedStores.size > 0 &&
         [...stores].every(
           ([databasePath, entries]) =>
             entries[mapping.from] === undefined &&
             (entries[mapping.to] === undefined || verifiedStores.has(databasePath)),
-        )
-      ) {
-        const targets = matches.get(mapping.from) ?? new Set<string>();
-        targets.add(mapping.to);
-        matches.set(mapping.from, targets);
-      }
-      continue;
-    }
-    const matched =
-      mapping.credentials.every((expected) => {
-        const entries = stores.get(expected.databasePath);
-        if (!entries) {
-          return false;
-        }
-        const before = entries[mapping.from];
-        const after = entries[mapping.to];
-        return (
-          (before !== undefined &&
-            after === undefined &&
-            digest(before) === expected.beforeSha256) ||
-          (before === undefined && after !== undefined && digest(after) === expected.afterSha256) ||
-          (before === undefined &&
-            after === undefined &&
-            expected.beforeSha256 === null &&
-            mapping.sources !== undefined &&
-            mapping.sources.length > 0 &&
-            mapping.sources.every((source) => {
-              try {
-                return (
-                  createHash("sha256").update(fs.readFileSync(source.path)).digest("hex") ===
-                  source.sha256
-                );
-              } catch (error) {
-                if (isRecord(error) && error.code === "ENOENT") {
-                  return false;
-                }
-                throw error;
-              }
-            }))
         );
-      }) &&
-      [...stores].every(
-        ([databasePath, entries]) =>
-          mapping.credentials.some((entry) => entry.databasePath === databasePath) ||
-          (entries[mapping.from] === undefined && entries[mapping.to] === undefined),
-      );
+    } else {
+      matched =
+        mapping.credentials.every((expected) => {
+          const entries = stores.get(expected.databasePath);
+          if (!entries) {
+            return false;
+          }
+          const before = entries[mapping.from];
+          const after = entries[mapping.to];
+          return (
+            (before !== undefined &&
+              after === undefined &&
+              [expected.beforeSha256, expected.beforeCanonicalFieldsSha256].includes(
+                digest(before),
+              )) ||
+            (before === undefined &&
+              after !== undefined &&
+              [expected.afterSha256, expected.afterCanonicalFieldsSha256].includes(
+                digest(after),
+              )) ||
+            (before === undefined &&
+              after === undefined &&
+              expected.beforeSha256 === null &&
+              mapping.sources !== undefined &&
+              mapping.sources.length > 0 &&
+              mapping.sources.every((source) => {
+                try {
+                  return (
+                    createHash("sha256").update(fs.readFileSync(source.path)).digest("hex") ===
+                    source.sha256
+                  );
+                } catch (error) {
+                  if (isRecord(error) && error.code === "ENOENT") {
+                    return false;
+                  }
+                  throw error;
+                }
+              }))
+          );
+        }) &&
+        [...stores].every(
+          ([databasePath, entries]) =>
+            mapping.credentials.some((entry) => entry.databasePath === databasePath) ||
+            (entries[mapping.from] === undefined && entries[mapping.to] === undefined),
+        );
+    }
     if (matched) {
       const targets = matches.get(mapping.from) ?? new Set<string>();
       targets.add(mapping.to);

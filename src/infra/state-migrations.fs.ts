@@ -1,5 +1,6 @@
 // Filesystem primitives used by legacy state migration code.
 import fs from "node:fs";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 /** Minimal session-store entry shape needed by state migration ordering and repair logic. */
@@ -17,27 +18,12 @@ export function safeReadDir(dir: string): fs.Dirent[] {
   }
 }
 
-/** Returns whether a path exists and resolves to a directory. */
 export function existsDir(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
+  return safeStatSync(dir)?.isDirectory() ?? false;
 }
 
-/** Creates a directory tree for migration targets. */
-export function ensureMigrationDir(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-/** Returns whether a path exists and resolves to a regular file. */
 export function migrationFileExists(p: string): boolean {
-  try {
-    return fs.existsSync(p) && fs.statSync(p).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(p)?.isFile() ?? false;
 }
 
 /** Reads a session store from disk, accepting JSON first and JSON5 as legacy/operator input. */

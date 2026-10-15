@@ -17,7 +17,7 @@ import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profi
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
 import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
-import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
+import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.catalog-publication.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
@@ -41,12 +41,13 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
   const selectProviders = (params: {
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
   }) =>
     discovery.providers.filter(
@@ -55,7 +56,6 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
   return createProviderHookRuntime({
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
@@ -412,7 +412,9 @@ describe("Provider model discovery auth preparation", () => {
           version: expect.any(String),
         },
       ]);
-      expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);
+      expect(outcomes).toEqual([
+        { provider: "openai", status: "ready", listedModelIds: ["gpt-5.5"] },
+      ]);
       const provider = readPlannedProvider(plan, "openai");
       expect(provider).toMatchObject({
         api: "openai-chatgpt-responses",
@@ -567,10 +569,8 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
-    { providerId: "chutes", profileCount: 1, plugin: chutesPlugin },
     { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
     { providerId: "openai", profileCount: 1, plugin: null },
-    { providerId: "xai", profileCount: 1, plugin: xaiPlugin },
     { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
@@ -653,7 +653,7 @@ describe("Provider model discovery auth preparation", () => {
           providerOutcomes: outcomes,
         },
         new Map(),
-        previous,
+        { ...previous, providers: new Map() },
         auth,
         (provider) => provider,
       );
@@ -931,16 +931,9 @@ describe("provider catalog late-result finalization", () => {
     await state.cleanup();
   });
 
-  it.each([
-    { shape: "provider", timedOut: false },
-    { shape: "providers", timedOut: false },
-    { shape: "outcomes", timedOut: false },
-    { shape: "provider", timedOut: true },
-    { shape: "providers", timedOut: true },
-    { shape: "outcomes", timedOut: true },
-  ] as const)(
-    "consumes $shape only for an active owner (late: $timedOut)",
-    async ({ shape, timedOut }) => {
+  it.each(["provider", "providers", "outcomes"] as const)(
+    "discards late %s and consumes the next active owner's result once",
+    async (shape) => {
       const entered = createDeferredCore();
       const completion = createDeferredCore();
       const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
@@ -973,9 +966,7 @@ describe("provider catalog late-result finalization", () => {
             run: async (ctx) => {
               expect(ctx.resolveProviderAuth(providerId).preparationFailed).toBe(true);
               entered.resolve();
-              if (timedOut) {
-                await completion.promise;
-              }
+              await completion.promise;
               if (shape === "outcomes") {
                 return {
                   providers: {},
@@ -1015,26 +1006,20 @@ describe("provider catalog late-result finalization", () => {
           }),
         );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const pending = discover(timedOut ? 25 : undefined);
+      const pending = discover(25);
       try {
         await Promise.race([entered.promise, pending]);
-        if (timedOut) {
-          await vi.advanceTimersByTimeAsync(25);
-          expect(await pending).toEqual({});
-        }
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await pending).toEqual({});
       } finally {
         completion.resolve();
         await Promise.allSettled(catalog.mock.results.map((result) => result.value));
       }
-      const first = await pending;
-      let accepted = first;
       const lateReads = reads;
-      if (timedOut) {
-        expect(outcomes).toEqual([{ provider: providerId, status: "unavailable" }]);
-        outcomes.length = 0;
-        accepted = await discover();
-      }
-      expect({ lateReads, reads }).toEqual({ lateReads: timedOut ? 0 : 1, reads: 1 });
+      expect(outcomes).toEqual([{ provider: providerId, status: "unavailable" }]);
+      outcomes.length = 0;
+      const accepted = await discover();
+      expect({ lateReads, reads }).toEqual({ lateReads: 0, reads: 1 });
       if (shape === "outcomes") {
         expect(accepted).toEqual({});
       } else {

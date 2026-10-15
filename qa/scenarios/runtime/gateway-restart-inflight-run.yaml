@@ -39,7 +39,7 @@ scenario:
     - The interrupted work reconstructs automatically under a host-owned restart-safe policy, hides the non-replay-safe probe, and emits its marker exactly once without a resend notice or manual follow-up.
   docsRefs:
     - docs/gateway/configuration.md
-    - docs/automation/tasks.md
+    - docs/concepts/session.md
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-lab/src/suite-runtime-agent-process.ts
@@ -123,11 +123,11 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker, pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}` }).then((summary) => summary.hasPendingCodeModeWait ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 25
               - assert:
-                  expr: "(checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)"
+                  expr: checkpointTranscript.hasPendingCodeModeWait
                   message:
                     expr: "`checkpoint ${checkpoint} wait was not pending before restart: ${JSON.stringify(checkpointTranscript)}`"
               - set: checkpointRequests
@@ -254,6 +254,7 @@ flow:
           args:
             - ref: env
             - ref: sessionKey
+            - includeCodeModeControl: true
         - set: settledRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)) : []"

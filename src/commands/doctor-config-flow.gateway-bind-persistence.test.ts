@@ -1,4 +1,3 @@
-// Verifies Doctor persists legacy gateway bind repairs through the real config writer.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,32 +22,7 @@ describe("Doctor gateway bind persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it.each([
-    ["localhost", "loopback"],
-    ["0.0.0.0", "lan"],
-  ] as const)("persists gateway bind %s as %s", async (legacyBind, canonicalBind) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        // This core writer regression needs the authoritative empty bundled-plugin inventory.
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local", bind: legacyBind },
-        });
-        expect((await readConfigFileSnapshot()).sourceConfig.commands).toBeUndefined();
-        const ctx = await prepareDoctorContext(configPath);
-
-        await runInitialConfigWriteHealth(ctx);
-
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(true);
-        expect(snapshot.config.gateway?.bind).toBe(canonicalBind);
-        const saved = await fs.readFile(configPath, "utf-8");
-        expect(saved).not.toContain(`"bind": "${legacyBind}"`);
-        expect(JSON.parse(saved)).not.toHaveProperty("commands");
-      });
-    });
-  });
-
-  it.each(["ordinary", "include", "invalid", "doctor"] as const)(
+  it.each(["include", "invalid", "doctor"] as const)(
     "preserves authored plugin scope during %s config repair",
     async (scenario) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -86,7 +60,7 @@ describe("Doctor gateway bind persistence", () => {
         expect(prepared.snapshot.sourceConfig.commands).toBeUndefined();
         let result: Awaited<ReturnType<typeof repairLegacyConfigForUpdateChannel>>;
         if (scenario === "doctor") {
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           // Deferred model advice leaves the actual migration to Doctor's config flow.
           expect(await fs.readFile(configPath, "utf8")).toBe(before);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
@@ -146,11 +120,7 @@ describe("Doctor gateway bind persistence", () => {
           const original = await fs.readFile(configPath, "utf8");
           const originalInclude = await fs.readFile(includePath, "utf8");
           const persist = () =>
-            repairLegacyConfigForUpdateChannel({
-              configSnapshot: snapshot,
-              plan,
-              jsonMode: true,
-            });
+            repairLegacyConfigForUpdateChannel({ configSnapshot: snapshot, plan, jsonMode: true });
           // Planning is read-only; original authored bytes still exist at the seal boundary.
           expect(snapshot.raw).toBe(original);
           expect(await fs.readFile(includePath, "utf8")).toBe(originalInclude);

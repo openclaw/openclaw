@@ -1,13 +1,45 @@
 /** Exact parent-owned paused-task binding for explicit model-tool resume admission. */
+import { resolveSubagentChildAuthority } from "../agents/subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   resolveSubagentController,
 } from "../agents/subagents/registry/subagent-control-scope.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TrustedSubagentResume } from "./in-process-subagent-resume.js";
 import type { GatewayContextResolver, TrustedAgentToolCaller } from "./server-methods/types.js";
+
+/** Select task continuation from recorded ownership; admission still binds and revalidates it. */
+export function shouldResumeParentSubagent(params: {
+  cfg: OpenClawConfig;
+  caller: TrustedAgentToolCaller;
+  childSessionKey: string;
+}): boolean {
+  const entry = getLatestLiveSubagentRunByChildSessionKey(
+    params.childSessionKey,
+    (candidate) => candidate.pauseReason === "sessions_yield",
+  );
+  if (!entry || entry.expectsCompletionMessage !== true) {
+    return false;
+  }
+  const controllerStorePath = entry.controllerSessionKey?.trim()
+    ? entry.controllerStorePath
+    : entry.requesterStorePath;
+  if (controllerStorePath === undefined) {
+    return false;
+  }
+  const controller = resolveSubagentController({
+    cfg: params.cfg,
+    agentId: params.caller.agentId,
+    agentSessionKey: params.caller.sessionKey,
+  });
+  return (
+    controller.controlScope === "children" &&
+    ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) === undefined
+  );
+}
 
 // Control ownership comes from the registry, not the child's key shape or message provenance.
 function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller, key: string) {
@@ -24,15 +56,17 @@ function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller,
     key,
     (candidate) => candidate.pauseReason === "sessions_yield",
   );
+  const authority = entry && resolveSubagentChildAuthority(entry);
   if (
     !entry ||
+    authority?.status === "mismatch" ||
     typeof entry.execution.endedAt !== "number" ||
     entry.killIntent ||
     entry.killReconciliation ||
     entry.terminalOwner ||
     entry.suppressAnnounceReason ||
     entry.cleanupCompletedAt !== undefined ||
-    entry.execution.suppressSessionEffects
+    (entry.execution.suppressSessionEffects && authority?.status !== "legacy-unverified")
   ) {
     throw new Error(
       "Task resume requires a currently paused native child; inspect subagents first.",
@@ -56,15 +90,27 @@ export function bindParentSubagentResume(params: {
   caller: TrustedAgentToolCaller;
   childSessionKey: string;
   childSessionId: string;
+  childLifecycleRevision?: string;
 }): TrustedSubagentResume {
   if (!params.childSessionId) {
     throw new Error("Task resume requires an existing child session.");
   }
   const entry = requirePausedChild(params.cfg, params.caller, params.childSessionKey);
+  if (
+    resolveSubagentChildAuthority(entry, {
+      sessionId: params.childSessionId,
+      lifecycleRevision: params.childLifecycleRevision,
+    }).status === "mismatch"
+  ) {
+    throw new Error(
+      "Paused child session incarnation changed or is unresolved; inspect subagents again.",
+    );
+  }
   return Object.freeze({
     caller: params.caller,
     childSessionKey: params.childSessionKey,
     childSessionId: params.childSessionId,
+    childLifecycleRevision: params.childLifecycleRevision,
     previousRunId: entry.runId,
     taskRunId: entry.taskRunId ?? entry.runId,
     generation: entry.generation,
@@ -78,12 +124,18 @@ export function assertParentSubagentResumeCurrent(params: {
   resume: TrustedSubagentResume;
   sessionKey: string | undefined;
   sessionId: string;
+  sessionLifecycleRevision?: string;
 }): SubagentRunRecord {
   const { resume } = params;
   const entry = requirePausedChild(params.cfg, resume.caller, resume.childSessionKey);
   if (
     params.sessionKey !== resume.childSessionKey ||
     params.sessionId !== resume.childSessionId ||
+    params.sessionLifecycleRevision !== resume.childLifecycleRevision ||
+    resolveSubagentChildAuthority(entry, {
+      sessionId: resume.childSessionId,
+      lifecycleRevision: resume.childLifecycleRevision,
+    }).status === "mismatch" ||
     entry.runId !== resume.previousRunId ||
     (entry.taskRunId ?? entry.runId) !== resume.taskRunId ||
     entry.generation !== resume.generation ||
@@ -115,7 +167,7 @@ export function assertParentSubagentResumeSuccessorCurrent(
   }
 }
 
-/** Loads the existing replacement owner before admission's final synchronous transfer. */
+/** Loads the replacement owner; final admission awaits its durable ownership transfer. */
 export async function prepareParentSubagentResume(params: {
   cfg: OpenClawConfig;
   resume: TrustedSubagentResume;
@@ -123,23 +175,33 @@ export async function prepareParentSubagentResume(params: {
   getSessionId: () => string;
   runId: string;
   task: string;
-  assertAdmissionCurrent: () => void;
+  assertAdmissionCurrent: () => SessionEntry | undefined;
+  onAdopted?: (entry: SubagentRunRecord) => void;
   gatewayContextResolver?: GatewayContextResolver;
-}): Promise<() => string> {
+}): Promise<() => Promise<string>> {
   const runtime = await import("../agents/subagents/registry/subagent-registry.js");
-  return () => {
-    params.assertAdmissionCurrent();
+  return async () => {
+    const sessionEntry = params.assertAdmissionCurrent();
     const expected = assertParentSubagentResumeCurrent({
       ...params,
       sessionId: params.getSessionId(),
+      sessionLifecycleRevision: sessionEntry?.lifecycleRevision,
     });
-    // No await separates revalidation from the registry's atomic task/flow replacement.
-    const adopted = runtime.adoptPausedSubagentRunForFollowUp({
+    const adopted = await runtime.adoptPausedSubagentRunForFollowUp({
       childSessionKey: params.resume.childSessionKey,
       runId: params.runId,
       task: params.task,
       expected,
+      onPublished: params.onAdopted,
       gatewayContextResolver: params.gatewayContextResolver,
+      assertCurrent: () => {
+        const currentSessionEntry = params.assertAdmissionCurrent();
+        assertParentSubagentResumeCurrent({
+          ...params,
+          sessionId: params.getSessionId(),
+          sessionLifecycleRevision: currentSessionEntry?.lifecycleRevision,
+        });
+      },
     });
     if (!adopted) {
       throw new Error("Paused task replacement was rejected; no continuation was started.");

@@ -13,21 +13,29 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fileLocks from "../infra/file-lock.js";
+import * as sqliteQueries from "../infra/kysely-sync.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
+  resolveAuthProfileDatabasePath,
+} from "./auth-profiles/sqlite.js";
+import { removePersistedPluginModelCatalogCredentials } from "./plugin-model-catalog-credentials.js";
+import * as pluginModelCatalogExecution from "./plugin-model-catalog-execution.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
   migrateLegacyPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  repairPersistedPluginModelCatalogs,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
-
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
 
 const tempDirs: string[] = [];
 
@@ -76,7 +84,8 @@ function readCatalogCacheRow(
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   for (const agentDir of tempDirs.splice(0)) {
     rmSync(agentDir, { recursive: true, force: true });
@@ -84,11 +93,11 @@ afterEach(() => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
-  it("reads only named catalog rows without running migration or repair", () => {
+  it("reads only named catalog rows without running migration or repair", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
     const anthropic = catalogContents("anthropic");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: zai,
@@ -99,20 +108,166 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "legacy"), { recursive: true });
     writeFileSync(legacyPath, catalogContents("legacy"), "utf8");
 
-    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["zai"])).toEqual([
-      { pluginId: "zai", contents: zai },
-    ]);
+    const reads = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["missing", "zai", "zai"])).toEqual(
+        [{ pluginId: "zai", contents: zai }],
+      );
+      const materializedRows = reads.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.rows : [],
+      );
+      expect(materializedRows).toContainEqual({ key: "zai", value_json: zai });
+      expect(materializedRows).not.toContainEqual({ key: "anthropic", value_json: anthropic });
+      reads.mockClear();
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, [])).toEqual([]);
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
     ]);
     expect(existsSync(legacyPath)).toBe(true);
+
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      const insert = database.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+      );
+      insert.run("plugin-model-catalog-v1", "λ🦞", "unicode catalog bytes");
+      insert.run("plugin-model-catalog-v1", "\uFFFD", "replacement catalog bytes");
+      insert.run("plugin-model-catalog-v1", "null", null);
+    } finally {
+      database.close();
+    }
+    for (const { ids, expected } of [
+      {
+        ids: ["zai", "anthropic", "zai", "missing"],
+        expected: [
+          { pluginId: "anthropic", contents: anthropic },
+          { pluginId: "zai", contents: zai },
+        ],
+      },
+      { ids: ["missing", "null"], expected: [] },
+      { ids: ["λ🦞"], expected: [{ pluginId: "λ🦞", contents: "unicode catalog bytes" }] },
+      {
+        ids: ["\uFFFD"],
+        expected: [{ pluginId: "\uFFFD", contents: "replacement catalog bytes" }],
+      },
+      { ids: ["\uD800"], expected: [] },
+      { ids: ["\uDC00"], expected: [] },
+    ]) {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ids)).toEqual(expected);
+    }
   });
 
-  it("removes generated model rows whose API semantics cannot be derived", () => {
+  it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {
+    const agentDir = createAgentDir();
+    const relativePath = encodePluginModelCatalogRelativePath("zai");
+    const unrelated = catalogContents("zai", "unrelated-provider-test-key");
+    const removedKey = "removed-provider-test-key";
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: unrelated },
+    });
+    const candidate = {
+      agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+      databasePath: resolveAuthProfileDatabasePath(agentDir),
+    };
+    const removal = { candidates: [candidate], credentials: new Set([removedKey]) };
+    const before = readCatalogCacheRow(agentDir, "zai");
+    const worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
+    try {
+      await removePersistedPluginModelCatalogCredentials(removal);
+      expect(worker.mock.calls.length).toBe(0);
+      expect(readCatalogCacheRow(agentDir, "zai")).toEqual(before);
+
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
+      });
+      worker.mockClear();
+      await removePersistedPluginModelCatalogCredentials(removal);
+      expect(worker.mock.calls.length).toBe(1);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents: catalogContents("zai") },
+      ]);
+    } finally {
+      worker.mockRestore();
+    }
+  });
+
+  it("waits for an uncommitted catalog publication before skipping a clean catalog", async () => {
+    const agentDir = createAgentDir();
+    const removedKey = "synthetic-uncommitted-credential";
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: catalogContents("zai"),
+      },
+    });
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    const database = new DatabaseSync(databasePath);
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const waiting = createDeferredCore();
+    const publishing = pluginModelCatalogExecution.withPluginModelCatalogPublicationLocks(
+      [databasePath],
+      async () => {
+        // Model a writer that validated auth before logout but has not committed its catalog.
+        database.exec("BEGIN IMMEDIATE");
+        try {
+          database
+            .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
+            .run(catalogContents("zai", removedKey), "plugin-model-catalog-v1", "zai");
+          started.resolve();
+          await finish.promise;
+          database.exec("COMMIT");
+        } finally {
+          if (database.isTransaction) {
+            database.exec("ROLLBACK");
+          }
+        }
+      },
+    );
+    await started.promise;
+    const lock = fileLocks.withFileLock;
+    const locking = vi
+      .spyOn(fileLocks, "withFileLock")
+      .mockImplementation((pathname, options, run) => {
+        waiting.resolve();
+        return lock(pathname, options, run);
+      });
+    const removing = removePersistedPluginModelCatalogCredentials({
+      candidates: [{ agentId: resolveAuthProfileDatabaseOwnerId(agentDir), databasePath }],
+      credentials: new Set([removedKey]),
+    });
+    try {
+      expect(
+        await Promise.race([
+          waiting.promise.then(() => "waiting"),
+          removing.then(() => "completed"),
+        ]),
+      ).toBe("waiting");
+      finish.resolve();
+      await publishing;
+      await removing;
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents: catalogContents("zai") },
+      ]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([publishing, removing]);
+      locking.mockRestore();
+      database.close();
+    }
+  });
+
+  it("removes generated model rows whose API semantics cannot be derived", async () => {
     const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("nvidia");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [relativePath]: JSON.stringify({
@@ -131,7 +286,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       },
     });
 
-    const persisted = listPersistedPluginModelCatalogs(agentDir);
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     expect(persisted).toHaveLength(1);
     const catalog = JSON.parse(persisted[0]?.contents ?? "{}") as {
       providers?: {
@@ -145,11 +300,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(catalog.providers?.nvidia).not.toHaveProperty("api");
   });
 
-  it("repairs malformed persisted catalogs once without touching valid siblings", () => {
+  it("leaves malformed persisted catalogs and valid sibling timestamps unchanged", async () => {
     const agentDir = createAgentDir();
     const validNvidia = catalogContents("nvidia", "NVIDIA_API_KEY");
     const validZai = catalogContents("zai", "ZAI_API_KEY");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("nvidia")]: validNvidia,
@@ -177,41 +332,32 @@ describe("SQLite-backed plugin model catalogs", () => {
       database.close();
     }
 
-    const firstLoad = listPersistedPluginModelCatalogs(agentDir);
-    const repairedNvidia = JSON.parse(
-      firstLoad.find((catalog) => catalog.pluginId === "nvidia")?.contents ?? "{}",
-    ) as {
-      providers?: { nvidia?: { api?: string; apiKey?: string; models?: unknown[] } };
-    };
-    expect(repairedNvidia.providers?.nvidia).toMatchObject({
-      apiKey: "NVIDIA_API_KEY",
-      models: [],
-    });
-    expect(repairedNvidia.providers?.nvidia).not.toHaveProperty("api");
-    expect(firstLoad.find((catalog) => catalog.pluginId === "zai")?.contents).toBe(validZai);
-
-    const repairedRow = readCatalogCacheRow(agentDir, "nvidia");
-    expect(repairedRow.updated_at).not.toBe(42);
-    const secondLoad = listPersistedPluginModelCatalogs(agentDir);
-    expect(secondLoad).toEqual(firstLoad);
-    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual(repairedRow);
+    const before = readCatalogCacheRow(agentDir, "nvidia");
+    const sibling = readCatalogCacheRow(agentDir, "zai");
+    for (let read = 0; read < 2; read += 1) {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "nvidia", contents: malformedNvidia },
+        { pluginId: "zai", contents: validZai },
+      ]);
+      expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual(before);
+      expect(readCatalogCacheRow(agentDir, "zai")).toEqual(sibling);
+    }
   });
 
-  it("re-reads a concurrent refresh that wins the repair compare-and-set", () => {
+  it("does not overwrite a provider refresh when repair uses an older catalog snapshot", async () => {
     const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("nvidia");
-    const refreshed = catalogContents("nvidia", "concurrently-refreshed-provider-test-key");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
-      pluginCatalogWrites: { [relativePath]: refreshed },
+      pluginCatalogWrites: { [relativePath]: catalogContents("nvidia", "old-provider-test-key") },
     });
     const malformed = JSON.stringify({
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
       providers: {
         nvidia: {
-          baseUrl: "https://integrate.api.nvidia.com/v1",
-          apiKey: "NVIDIA_API_KEY",
-          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+          baseUrl: "https://nvidia.example/v1",
+          apiKey: "old-provider-test-key",
+          models: [{ id: "missing-api" }],
         },
       },
     });
@@ -222,58 +368,53 @@ describe("SQLite-backed plugin model catalogs", () => {
           "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
         )
         .run(malformed, "plugin-model-catalog-v1", "nvidia");
-      database.exec("CREATE TABLE catalog_repair_refresh (value_json TEXT NOT NULL)");
-      database.prepare("INSERT INTO catalog_repair_refresh (value_json) VALUES (?)").run(refreshed);
-      database.exec(`
-        CREATE TRIGGER refresh_catalog_before_repair
-        BEFORE UPDATE OF value_json ON cache_entries
-        WHEN OLD.scope = 'plugin-model-catalog-v1'
-          AND OLD.key = 'nvidia'
-          AND NEW.value_json != (SELECT value_json FROM catalog_repair_refresh)
-        BEGIN
-          UPDATE cache_entries
-          SET value_json = (SELECT value_json FROM catalog_repair_refresh), updated_at = 99
-          WHERE scope = OLD.scope AND key = OLD.key;
-          SELECT RAISE(IGNORE);
-        END
-      `);
     } finally {
       database.close();
     }
+    const oldSnapshot = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    const refreshed = catalogContents("nvidia", "refreshed-provider-test-key");
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: refreshed },
+    });
+    const refreshedRow = readCatalogCacheRow(agentDir, "nvidia");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(repairPersistedPluginModelCatalogs({ agentDir, catalogs: oldSnapshot })).toEqual([]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "nvidia", contents: refreshed },
     ]);
-    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual({
-      value_json: refreshed,
-      updated_at: 99,
-    });
+    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual(refreshedRow);
   });
 
   it("does not create an agent database for a read-only cache miss", () => {
     const agentDir = createAgentDir();
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
   });
 
-  it("does not create agent state when an empty catalog is already current", () => {
+  it("does not create agent state when an empty catalog is already current", async () => {
     const agentDir = createAgentDir();
 
-    expect(replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: {} })).toBe(false);
+    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: {} })).toBe(
+      false,
+    );
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
   });
 
-  it("automatically migrates a released catalog before the first SQLite read", () => {
+  it("imports a released catalog only through explicit migration", () => {
     const agentDir = createAgentDir();
     const contents = catalogContents("zai", "released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
     expect(existsSync(sourcePath)).toBe(false);
   });
@@ -285,7 +426,10 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
     const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"), {
       readOnly: true,
     });
@@ -300,49 +444,14 @@ describe("SQLite-backed plugin model catalogs", () => {
     }
   });
 
-  it("retires an orphaned recovery credential after an interrupted migration", () => {
-    const agentDir = createAgentDir();
-    const contents = catalogContents("zai", "interrupted-released-provider-test-key");
-    replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("zai")]: contents,
-      },
-    });
-    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
-    try {
-      database
-        .prepare(
-          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
-        )
-        .run("plugin-model-catalog-migration-v1", "zai", contents, Date.now());
-    } finally {
-      database.close();
-    }
-
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
-    const verified = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"), {
-      readOnly: true,
-    });
-    try {
-      expect(
-        verified
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
-          .all("plugin-model-catalog-migration-v1"),
-      ).toEqual([]);
-    } finally {
-      verified.close();
-    }
-  });
-
-  it("protects migration recovery credentials when a plugin directory cannot be inspected", () => {
+  it("protects migration recovery credentials when a plugin directory cannot be inspected", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
     const agentDir = createAgentDir();
     const contents = catalogContents("zai", "protected-released-provider-test-key");
     const pluginDir = join(agentDir, "plugins", "zai");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: contents,
@@ -384,19 +493,24 @@ describe("SQLite-backed plugin model catalogs", () => {
       chmodSync(pluginDir, 0o700);
     }
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
   });
 
   it("detects a released catalog that appears after an earlier empty scan", () => {
     const agentDir = createAgentDir();
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
 
     const contents = catalogContents("zai", "late-released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
     expect(existsSync(sourcePath)).toBe(false);
   });
 
@@ -407,7 +521,8 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(zaiPath, zai, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: zai },
     ]);
 
@@ -416,7 +531,8 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "anthropic"), { recursive: true });
     writeFileSync(anthropicPath, anthropic, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
     ]);
@@ -432,24 +548,26 @@ describe("SQLite-backed plugin model catalogs", () => {
     const later = catalogContents("zai", "later-released-provider-test-key");
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(sourcePath, original, "utf8");
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: original },
     ]);
 
     writeFileSync(sourcePath, later, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: later },
     ]);
     expect(existsSync(sourcePath)).toBe(false);
   });
 
-  it("preserves released credentials and unrelated regenerated SQLite catalogs", () => {
+  it("preserves released credentials and unrelated regenerated SQLite catalogs", async () => {
     const agentDir = createAgentDir();
     const regenerated = catalogContents("zai", "regenerated-provider-test-key");
     const released = catalogContents("zai", "released-provider-test-key");
     const unrelated = catalogContents("anthropic", "unrelated-provider-test-key");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: regenerated,
@@ -466,14 +584,14 @@ describe("SQLite-backed plugin model catalogs", () => {
         expectedContents: new Map([["zai", released]]),
       }),
     ).toEqual({ detected: 1, migrated: 1, warnings: [] });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: unrelated },
       { pluginId: "zai", contents: released },
     ]);
     expect(existsSync(sourcePath)).toBe(false);
   });
 
-  it("recovers a released sidecar that appears after a catalog replacement was planned", () => {
+  it("recovers a released sidecar that appears after a catalog replacement was planned", async () => {
     const agentDir = createAgentDir();
     const released = catalogContents("zai", "released-provider-test-key");
     const preplanned = catalogContents("zai", "preplanned-provider-test-key");
@@ -481,7 +599,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, released, "utf8");
 
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: preplanned,
@@ -489,7 +607,8 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
 
     expect(existsSync(sourcePath)).toBe(true);
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: released },
     ]);
     expect(existsSync(sourcePath)).toBe(false);
@@ -512,13 +631,15 @@ describe("SQLite-backed plugin model catalogs", () => {
       migrated: 0,
       warnings: [],
     });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
   });
 
-  it("accepts a sidecar already migrated and removed by another process", () => {
+  it("accepts a sidecar already migrated and removed by another process", async () => {
     const agentDir = createAgentDir();
     const contents = catalogContents("zai", "concurrently-migrated-provider-test-key");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: contents,
@@ -531,10 +652,12 @@ describe("SQLite-backed plugin model catalogs", () => {
         expectedContents: new Map([["zai", contents]]),
       }),
     ).toEqual({ detected: 0, migrated: 0, warnings: [] });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
   });
 
-  it("keeps committed catalogs available when a released sidecar cannot be removed", () => {
+  it("keeps committed catalogs available when a released sidecar cannot be removed", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
@@ -552,17 +675,19 @@ describe("SQLite-backed plugin model catalogs", () => {
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
       });
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents },
+      ]);
       expect(existsSync(sourcePath)).toBe(true);
 
       const refreshed = catalogContents("zai", "refreshed-provider-test-key");
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("zai")]: refreshed,
         },
       });
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         { pluginId: "zai", contents: refreshed },
       ]);
       expect(existsSync(sourcePath)).toBe(true);
@@ -571,7 +696,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     }
   });
 
-  it("never deletes retained migrated credentials after a newer catalog replaces them", () => {
+  it("never deletes retained migrated credentials after a newer catalog replaces them", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
@@ -590,7 +715,7 @@ describe("SQLite-backed plugin model catalogs", () => {
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
       });
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("zai")]: refreshed,
@@ -606,7 +731,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       warnings: [expect.stringContaining("Left superseded legacy provider catalog in place")],
     });
     expect(existsSync(sourcePath)).toBe(true);
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
     expect(existsSync(sourcePath)).toBe(true);
@@ -633,30 +758,42 @@ describe("SQLite-backed plugin model catalogs", () => {
       warnings: [expect.stringContaining("Left changed legacy provider catalog in place")],
     });
     expect(readFileSync(sourcePath, "utf8")).toBe(refreshed);
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
     expect(existsSync(sourcePath)).toBe(false);
   });
 
-  it("never publishes a stale scan after another process removes the legacy source", () => {
+  it("never publishes a stale scan after another process removes the legacy source", async () => {
     const agentDir = createAgentDir();
     const original = catalogContents("zai", "stale-released-provider-test-key");
     const refreshed = catalogContents("zai", "current-regenerated-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, original, "utf8");
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: original,
+      },
+    });
+    await closeOpenClawAgentDatabasesAsync(agentDir);
 
     expect(
       migrateLegacyPluginModelCatalogs({
         agentDir,
         beforeLegacyCatalogClaim: (pathname) => {
-          replacePersistedPluginModelCatalogs({
-            agentDir,
-            pluginCatalogWrites: {
-              [encodePluginModelCatalogRelativePath("zai")]: refreshed,
-            },
-          });
+          // Doctor's claim hook is synchronous; model the other process's committed refresh.
+          const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+          try {
+            database
+              .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
+              .run(refreshed, "plugin-model-catalog-v1", "zai");
+          } finally {
+            database.close();
+          }
           unlinkSync(pathname);
         },
       }),
@@ -669,12 +806,12 @@ describe("SQLite-backed plugin model catalogs", () => {
         ),
       ],
     });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
   });
 
-  it("blocks preparation until another process commits its claimed provider catalog", () => {
+  it("retains an in-flight migration claim until a later explicit repair", () => {
     const agentDir = createAgentDir();
     const contents = catalogContents("zai", "in-flight-released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
@@ -700,7 +837,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
     expect(existsSync(claimPath)).toBe(true);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
     expect(existsSync(claimPath)).toBe(false);
   });
 
@@ -732,7 +873,9 @@ describe("SQLite-backed plugin model catalogs", () => {
       chmodSync(claimPath, 0o600);
     }
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
   });
@@ -745,7 +888,10 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(claimPath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+    migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
     expect(existsSync(claimPath)).toBe(false);
   });
 
@@ -765,7 +911,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       migrated: 2,
       warnings: [],
     });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
     expect(existsSync(claimPath)).toBe(false);
@@ -791,13 +937,13 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
   });
 
-  it("does not let an unreadable sidecar hide other committed provider catalogs", () => {
+  it("does not let an unreadable sidecar hide other committed provider catalogs", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
     const agentDir = createAgentDir();
     const anthropic = catalogContents("anthropic", "available-anthropic-provider-test-key");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
@@ -815,11 +961,7 @@ describe("SQLite-backed plugin model catalogs", () => {
         migrated: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],
       });
-      expect(loadPersistedPluginModelCatalogs(agentDir)).toEqual({
-        catalogs: [{ pluginId: "anthropic", contents: anthropic }],
-        warnings: [expect.stringContaining("Could not read legacy provider catalog")],
-      });
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         { pluginId: "anthropic", contents: anthropic },
       ]);
     } finally {
@@ -834,18 +976,18 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(existsSync(sourcePath)).toBe(true);
   });
 
-  it("persists provider-owned catalogs in deterministic SQLite order", () => {
+  it("persists provider-owned catalogs in deterministic SQLite order", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
     const anthropic = catalogContents("anthropic");
 
     expect(
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("zai")]: zai,
@@ -854,7 +996,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       }),
     ).toBe(true);
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
     ]);
@@ -862,7 +1004,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
   });
 
-  it("recognizes unchanged payloads and atomically removes stale provider rows", () => {
+  it("recognizes unchanged payloads and atomically removes stale provider rows", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
     const anthropic = catalogContents("anthropic");
@@ -871,40 +1013,42 @@ describe("SQLite-backed plugin model catalogs", () => {
       [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
     };
 
-    expect(replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(true);
-    expect(replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
+    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
+      true,
+    );
+    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
       false,
     );
     expect(
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
           [encodePluginModelCatalogRelativePath("zai")]: zai,
         },
       }),
     ).toBe(true);
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: zai },
     ]);
   });
 
-  it("rejects invalid planning keys without deleting the committed catalog", () => {
+  it("rejects invalid planning keys without deleting the committed catalog", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("zai")]: zai,
       },
     });
 
-    expect(() =>
+    await expect(
       replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: { "../catalog.json": catalogContents("anthropic") },
       }),
-    ).toThrow("Invalid generated plugin model catalog key: ../catalog.json");
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+    ).rejects.toThrow("Invalid generated plugin model catalog key: ../catalog.json");
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents: zai },
     ]);
   });

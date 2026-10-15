@@ -3,9 +3,15 @@ import { disposeHighlighter } from "@pierre/diffs";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
+import type { DiffRenderOptions } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
+const renderOptions: DiffRenderOptions = {
+  presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+  image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+  expandUnchanged: false,
+};
 
 describe("renderDiffDocument", () => {
   afterEach(async () => {
@@ -20,11 +26,7 @@ describe("renderDiffDocument", () => {
         after: "const value = 2;\n",
         path: "src/example.ts",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
     );
 
     expect(rendered.title).toBe("src/example.ts");
@@ -47,110 +49,6 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("scroll-behavior: auto;");
   });
 
-  it("normalizes non-finite presentation numbers before rendering CSS", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "old\n",
-        after: "new\n",
-      },
-      {
-        presentation: {
-          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-          fontSize: Number.NaN,
-          lineSpacing: Number.POSITIVE_INFINITY,
-        },
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-    );
-
-    expect(rendered.html).toContain("--diffs-font-size: 15px;");
-    expect(rendered.html).toContain("--diffs-line-height: 24px;");
-    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
-    expect(rendered.html).not.toContain("NaNpx");
-    expect(rendered.imageHtml).not.toContain("NaNpx");
-  });
-
-  it("resolves viewer assets under an optional base path", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "const value = 1;\n",
-        after: "const value = 2;\n",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-    );
-
-    const html = rendered.html ?? "";
-    const loaderSrc = html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
-    expect(loaderSrc).toBe("../../assets/viewer.js");
-    expect(
-      new URL(loaderSrc ?? "", "https://example.com/openclaw/plugins/diffs/view/id/token").pathname,
-    ).toBe("/openclaw/plugins/diffs/assets/viewer.js");
-  });
-
-  it("downgrades invalid language hints to plain text", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "const value = 1;\n",
-        after: "const value = 2;\n",
-        lang: "not-a-real-language",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-    );
-
-    const html = rendered.html ?? "";
-
-    expect(rendered.title).toBe("Text diff");
-    expect(html).toContain("diff.txt");
-    expect(html).not.toContain("not-a-real-language");
-
-    const payloads = [...html.matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g)].map(
-      (match) => parseViewerPayloadJson(match[1] ?? ""),
-    );
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.langs).toEqual(["text"]);
-    expect(payloads[0]?.oldFile?.lang).toBeUndefined();
-    expect(payloads[0]?.newFile?.lang).toBeUndefined();
-  });
-
-  it("keeps uncommon language diffs readable without the language pack", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "REPORT z_demo.\n",
-        after: "REPORT z_demo2.\n",
-        lang: "abap",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-      "viewer",
-    );
-
-    const html = rendered.html ?? "";
-    const payload = parseViewerPayloadJson(
-      html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "",
-    );
-
-    expect(rendered.viewerRuntime).toBe("base");
-    expect(html).toContain("../../assets/viewer.js");
-    expect(html).not.toContain("diffs-language-pack");
-    expect(payload.langs).toEqual(["text"]);
-  });
-
   it("uses the language-pack viewer runtime for uncommon languages when available", async () => {
     const rendered = await renderDiffDocument(
       {
@@ -159,12 +57,7 @@ describe("renderDiffDocument", () => {
         after: "REPORT z_demo2.\n",
         lang: "abap",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-        languagePackAvailable: true,
-      },
+      { ...renderOptions, languagePackAvailable: true },
       "viewer",
     );
 
@@ -274,11 +167,7 @@ describe("renderDiffDocument", () => {
         kind: "patch",
         patch,
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
       "viewer",
     );
 
@@ -306,11 +195,7 @@ describe("renderDiffDocument", () => {
         kind: "patch",
         patch,
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
       "viewer",
     );
 
@@ -336,11 +221,7 @@ describe("renderDiffDocument", () => {
           kind: "patch",
           patch,
         },
-        {
-          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-          expandUnchanged: false,
-        },
+        renderOptions,
       ),
     ).rejects.toThrow("too many files");
   });

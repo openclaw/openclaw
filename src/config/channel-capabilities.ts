@@ -1,4 +1,3 @@
-// Normalizes channel capability metadata from config and plugin manifests.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -22,7 +21,6 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   return normalized.length > 0 ? normalized : undefined;
 }
 
-/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;

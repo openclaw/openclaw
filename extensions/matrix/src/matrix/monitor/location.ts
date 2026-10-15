@@ -1,11 +1,14 @@
-// Matrix plugin module implements location behavior.
+import {
+  formatLocationText,
+  toLocationContext,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { LocationMessageEventContent } from "../sdk.js";
-import { formatLocationText, toLocationContext, type NormalizedLocation } from "./runtime-api.js";
 import { EventType } from "./types.js";
 
 export type MatrixLocationPayload = {
@@ -28,14 +31,10 @@ function decodeGeoUriParamValue(value: string): string {
 }
 
 function parseGeoUri(value: string): GeoUriParams | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
+  if (!value.toLowerCase().startsWith("geo:")) {
     return null;
   }
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("geo:")) {
-    return null;
-  }
-  const payload = trimmed.slice(4);
+  const payload = value.slice(4);
   const [coordsPart, ...paramParts] = payload.split(";");
   if (!coordsPart) {
     return null;

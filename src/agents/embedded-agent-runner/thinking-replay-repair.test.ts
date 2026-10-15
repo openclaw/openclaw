@@ -31,7 +31,7 @@ function branchAssistantContents(sessionManager: SessionManager): unknown[] {
 }
 
 describe("repairRejectedThinkingReplayInSessionManager", () => {
-  it("strips thinking blocks from active-branch assistant messages and preserves visible content", () => {
+  it("strips thinking blocks from active-branch assistant messages and preserves visible content", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
     sessionManager.appendMessage(
@@ -48,7 +48,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
       asAppendMessage({ role: "user", content: "second", timestamp: 3 }),
     );
 
-    const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
+    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
     expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
@@ -61,7 +61,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     ]);
   });
 
-  it("keeps thinking-only assistant turns as omitted-reasoning placeholders", () => {
+  it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
     sessionManager.appendMessage(
@@ -72,7 +72,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
       }),
     );
 
-    const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
+    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
     expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
     expect(branchAssistantContents(sessionManager)).toEqual([
@@ -80,7 +80,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     ]);
   });
 
-  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", () => {
+  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
     sessionManager.appendMessage(
@@ -98,7 +98,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     );
     sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("follow-up answer", 4)));
 
-    const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
+    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
     expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
@@ -113,13 +113,13 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     ]);
   });
 
-  it("does not rewrite sessions without active-branch thinking blocks", () => {
+  it("does not rewrite sessions without active-branch thinking blocks", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
     sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("visible answer", 2)));
 
     const beforeLeafId = sessionManager.getLeafId();
-    const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
+    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
     expect(result).toMatchObject({
       repaired: false,
@@ -131,7 +131,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 });
 
 describe("repairRejectedCompactionReplayInSessionManager", () => {
-  it("rewrites from the checkpoint identity that supplied the rejected request", () => {
+  it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
     for (const [data, id, timestamp] of [
@@ -161,7 +161,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
     }
 
     expect(
-      repairRejectedCompactionReplayInSessionManager({
+      await repairRejectedCompactionReplayInSessionManager({
         sessionManager,
         checkpoint: { data: "rejected-ciphertext", id: "cmp_rejected" },
       }),

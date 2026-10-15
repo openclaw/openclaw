@@ -1,220 +1,132 @@
-// Format Docs tests cover the docs formatter helper process spawning.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  chunkFilesForCommand,
-  docsFiles,
-  formatDocs,
-  resolveOxfmtInvocation,
-  runOxfmt,
-} from "../../scripts/format-docs.mts";
-import {
-  checkMintlifyAccordionIndentation,
-  repairMintlifyAccordionIndentation,
-} from "../../scripts/lib/mintlify-accordion.mjs";
-import { outputTail } from "../../scripts/lib/output-tail.mts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatDocs } from "../../scripts/format-docs.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: vi.fn(),
+}));
 
 const { createTempDir } = createScriptTestHarness();
 
-function writeDocsFixture(root: string): void {
-  fs.mkdirSync(path.join(root, "docs"), { recursive: true });
-  fs.writeFileSync(path.join(root, "README.md"), "# OpenClaw\n", "utf8");
-  fs.writeFileSync(path.join(root, "docs", "guide.mdx"), "# Guide\n", "utf8");
+afterEach(() => {
+  vi.mocked(spawnSync).mockReset();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+function commandResult(stdout = "", stderr = "", status = 0): SpawnSyncReturns<string> {
+  return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
+}
+
+function writeDocsFixture(root: string, files = ["README.md", "docs/guide.mdx"]): void {
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), "# Guide\n", "utf8");
+  }
+}
+
+function mockFormatter(
+  files: string[],
+  run: (command: string, args: readonly string[]) => SpawnSyncReturns<string> = () =>
+    commandResult(),
+) {
+  const calls: Array<{ command: string; args: readonly string[] }> = [];
+  vi.mocked(spawnSync).mockImplementation((command, args = []) => {
+    if (command === "git") {
+      return args[0] === "ls-files" ? commandResult(files.join("\n")) : commandResult("", "", 1);
+    }
+    calls.push({ command, args });
+    return run(command, args);
+  });
+  return calls;
 }
 
 describe("format-docs", () => {
-  it.each([
-    ["backtick fence", "```md", null, "```"],
-    ["tilde fence", "~~~md", null, "~~~"],
-    ["shorter nested fence", "````md", "```json", "````"],
-    ["different fence marker", "```md", "~~~", "```"],
-    ["suffixed closing marker", "~~~md", "~~~json", "~~~"],
-    ["nonbreaking-space suffix", "```md", "```\u00a0", "```"],
-    ["longer closing marker", "~~~md", null, "~~~~~\t"],
-    ["unclosed fence", "```md", null, null],
-  ])("preserves examples in a %s while repairing real components", (_label, open, inner, close) => {
-    const literal = [open, inner, "<Note>", "- literal item", "  </Note>", close]
-      .filter((line) => line !== null)
-      .join("\n");
-    const component =
-      "<Note>\n- real item\n  </Note>\n\n  <ParamField>\n  field body\n  </ParamField>";
-    const repairedComponent =
-      "<Note>\n- real item\n\n</Note>\n\n<ParamField>\n  field body\n</ParamField>";
-    const source = `${component}\n\n${literal}\n${close ? `\n${component}\n` : ""}`;
-    const expected = `${repairedComponent}\n\n${literal}\n${close ? `\n${repairedComponent}\n` : ""}`;
-
-    const repaired = repairMintlifyAccordionIndentation(source);
-
-    expect(repaired).toBe(expected);
-    expect(checkMintlifyAccordionIndentation(literal)).toEqual([]);
-    expect(checkMintlifyAccordionIndentation(repaired)).toEqual([]);
-    expect(repairMintlifyAccordionIndentation(repaired)).toBe(repaired);
-  });
-
   it("wraps the Windows oxfmt.cmd shim through cmd.exe", () => {
-    const invocation = resolveOxfmtInvocation(["--write", "docs\\guide.mdx"], {
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      existsSync: (candidate: string) => candidate.endsWith("oxfmt.cmd"),
-      platform: "win32",
-      repoRoot: "C:\\repo",
-    });
+    const root = createTempDir("openclaw-format-docs-windows-");
+    writeDocsFixture(root);
+    const shim = path.join(root, "node_modules", ".bin", "oxfmt.cmd");
+    fs.mkdirSync(path.dirname(shim), { recursive: true });
+    fs.writeFileSync(shim, "@echo off\n");
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    const calls = mockFormatter(["README.md", "docs/guide.mdx"]);
 
-    expect(invocation.command).toBe("C:\\Windows\\System32\\cmd.exe");
-    expect(invocation.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(invocation.args[3]).toContain("oxfmt.cmd");
-    expect(invocation.args[3]).toContain("--write");
-    expect(invocation.args[3]).toContain("docs\\guide.mdx");
-    expect(invocation.shell).toBe(false);
-    expect(invocation.windowsVerbatimArguments).toBe(true);
+    formatDocs({ root });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(calls[0]?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(calls[0]?.args[3]).toContain("oxfmt.cmd");
+    expect(calls[0]?.args[3]).toContain("--write");
+    expect(calls[0]?.args[3]).toContain("docs/guide.mdx");
+    expect(spawnSync).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ shell: false, windowsVerbatimArguments: true }),
+    );
   });
 
-  it("batches oxfmt invocations when docs exceed the command line budget", () => {
+  it("batches oxfmt invocations without losing docs that exceed the command line budget", () => {
     const root = createTempDir("openclaw-format-docs-batch-");
-    const calls: Array<{ args: string[]; command: string }> = [];
+    const files = Array.from({ length: 150 }, (_, index) => `docs/${index}-${"a".repeat(180)}.md`);
+    writeDocsFixture(root, files);
+    const calls = mockFormatter(files);
 
-    runOxfmt(
-      ["docs/one.md", "docs/two.md", "docs/three.md"],
-      {
-        maxCommandLineBytes: 1,
-        repoRoot: root,
-      },
-      {
-        existsSync: () => false,
-        spawnSync: (command: string, args: string[]) => {
-          calls.push({ args, command });
-          return { status: 0, stderr: "", stdout: "" };
-        },
-      },
-    );
+    formatDocs({ root });
 
-    expect(calls).toHaveLength(3);
+    expect(calls.length).toBeGreaterThan(1);
     expect(calls.every((call) => call.command === process.execPath)).toBe(true);
-    expect(calls.map((call) => call.args.at(-1))).toEqual([
-      "docs/one.md",
-      "docs/two.md",
-      "docs/three.md",
-    ]);
+    expect(calls.flatMap((call) => call.args.slice(5))).toEqual(files);
   });
 
   it("reports git and oxfmt spawn diagnostics", () => {
     const root = createTempDir("openclaw-format-docs-failures-");
+    writeDocsFixture(root);
+    vi.mocked(spawnSync).mockReturnValue(commandResult("", "fatal: not a git repository", 128));
+    expect(() => formatDocs({ root })).toThrow(
+      /git ls-files failed:[\s\S]*exit status: 128[\s\S]*fatal: not a git repository/u,
+    );
 
-    expect(() =>
-      docsFiles(root, {
-        spawnSync: () => ({
-          status: 128,
-          stderr: "fatal: not a git repository",
-          stdout: "",
-        }),
-      }),
-    ).toThrow(/git ls-files failed:[\s\S]*exit status: 128[\s\S]*fatal: not a git repository/u);
-
-    expect(() =>
-      runOxfmt(
-        ["README.md"],
-        { repoRoot: root },
-        {
-          existsSync: () => false,
-          spawnSync: () => ({
-            status: 1,
-            stderr: "formatter stderr",
-            stdout: "formatter stdout",
-          }),
-        },
-      ),
-    ).toThrow(
+    mockFormatter(["README.md"], () => commandResult("formatter stdout", "formatter stderr", 1));
+    expect(() => formatDocs({ root })).toThrow(
       /oxfmt failed:[\s\S]*command:[\s\S]*exit status: 1[\s\S]*formatter stderr[\s\S]*formatter stdout/u,
     );
   });
 
-  it("keeps real formatter failure tails UTF-8 safe", () => {
+  it("keeps real formatter failure tails UTF-8 safe", async () => {
+    const { spawnSync: realSpawnSync } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const root = createTempDir("openclaw-format-docs-utf8-tail-");
-    let message = "";
+    writeDocsFixture(root);
+    mockFormatter(["README.md"], () =>
+      realSpawnSync(
+        process.execPath,
+        ["-e", 'process.stderr.write("你好" + "x".repeat(16_380)); process.exitCode = 1'],
+        { encoding: "utf8", maxBuffer: 1024 * 1024, shell: false, timeout: 5_000 },
+      ),
+    );
 
-    try {
-      runOxfmt(
-        ["README.md"],
-        { repoRoot: root },
-        {
-          existsSync: () => false,
-          spawnSync: () =>
-            spawnSync(
-              process.execPath,
-              ["-e", 'process.stderr.write("你好" + "x".repeat(16_380)); process.exitCode = 1'],
-              { encoding: "utf8", maxBuffer: 1024 * 1024, shell: false, timeout: 5_000 },
-            ),
-        },
-      );
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-
-    expect(message).toMatch(/oxfmt failed:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x/u);
-    expect(message).not.toContain("�");
+    expect(() => formatDocs({ root })).toThrow(
+      /oxfmt failed:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x/u,
+    );
   });
 
   it("uses repository paths in write mode and temporary paths in check mode", () => {
     const root = createTempDir("openclaw-format-docs-mode-");
     writeDocsFixture(root);
-    const oxfmtFileArgs: string[][] = [];
+    const calls = mockFormatter(["README.md", "docs/guide.mdx"]);
 
-    const runCommandSync = (command: string, args: string[]) => {
-      if (command === "git") {
-        return {
-          status: 0,
-          stderr: "",
-          stdout: "README.md\ndocs/guide.mdx\n",
-        };
-      }
-      oxfmtFileArgs.push(args.slice(-2));
-      return { status: 0, stderr: "", stdout: "" };
-    };
+    expect(formatDocs({ root })).toEqual({ changed: [], fileCount: 2 });
+    expect(formatDocs({ root, check: true })).toEqual({ changed: [], fileCount: 2 });
 
-    expect(
-      formatDocs(
-        {
-          check: false,
-          repoRoot: root,
-          root,
-        },
-        {
-          existsSync: fs.existsSync,
-          spawnSync: runCommandSync,
-        },
-      ),
-    ).toEqual({ changed: [], fileCount: 2 });
-
-    expect(
-      formatDocs(
-        {
-          check: true,
-          repoRoot: root,
-          root,
-        },
-        {
-          existsSync: fs.existsSync,
-          spawnSync: runCommandSync,
-        },
-      ),
-    ).toEqual({ changed: [], fileCount: 2 });
-
-    expect(oxfmtFileArgs[0]).toEqual(["README.md", "docs/guide.mdx"]);
-    expect(oxfmtFileArgs[1]?.every((filePath) => path.isAbsolute(filePath))).toBe(true);
-    expect(oxfmtFileArgs[1]?.every((filePath) => filePath.startsWith(root))).toBe(false);
-  });
-
-  it("keeps single oversized docs in their own command chunk", () => {
-    expect(chunkFilesForCommand(["docs/very-long-name.md"], ["--write"], 1)).toEqual([
-      ["docs/very-long-name.md"],
-    ]);
-  });
-});
-
-describe("outputTail UTF-8 safety", () => {
-  it("passes through output that fits within the tail budget", () => {
-    expect(outputTail("hello world", 16 * 1024)).toBe("hello world");
+    expect(calls[0]?.args.slice(-2)).toEqual(["README.md", "docs/guide.mdx"]);
+    const temporaryFiles = calls[1]?.args.slice(-2);
+    expect(temporaryFiles?.every((file) => path.isAbsolute(file))).toBe(true);
+    expect(temporaryFiles?.every((file) => file.startsWith(root))).toBe(false);
   });
 });

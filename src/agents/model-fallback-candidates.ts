@@ -6,6 +6,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasUtilityModelSeparationMigrationMarker } from "../config/utility-model-separation-migration.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -17,12 +18,15 @@ import {
 } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
 } from "./configured-provider-model.js";
+import { resolveContextTokensForModelFromCache } from "./context-resolution.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { extractObservedOverflowTokenCount } from "./embedded-agent-helpers/context-overflow-observation.js";
+import { isFailoverError } from "./failover/error.js";
 import type {
   ModelCandidate,
   ModelFallbackCandidate,
@@ -43,12 +47,53 @@ import {
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
+import { readUtilityModelSetting } from "./utility-model-setting.js";
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
 const fallbackContextIds = new WeakMap<object, number>();
 let nextFallbackContextId = 0;
 const log = createSubsystemLogger("model-selection");
+
+/** Prefer known headroom without dropping operator-selected models with incomplete metadata. */
+export function preferContextFitFallbackCandidates(params: {
+  candidates: ModelFallbackCandidate[];
+  failedIndex: number;
+  error: unknown;
+  cfg: OpenClawConfig | undefined;
+}): ModelFallbackCandidate[] {
+  if (
+    !isFailoverError(params.error) ||
+    params.error.reason !== "context_overflow" ||
+    params.error.requestSizeCeiling
+  ) {
+    return params.candidates;
+  }
+  const failedCandidate = params.candidates[params.failedIndex];
+  if (!failedCandidate) {
+    return params.candidates;
+  }
+  const contextTokens = (candidate: ModelCandidate) =>
+    resolveContextTokensForModelFromCache({
+      cfg: params.cfg,
+      ...candidate,
+      allowUnscopedModelLookup: false,
+    });
+  const failedTokens = contextTokens(failedCandidate);
+  // Without provider counts, a larger window is a preference, not a guarantee of fit.
+  const requiredTokens =
+    extractObservedOverflowTokenCount(params.error.rawError ?? params.error.message) ??
+    (failedTokens === undefined ? undefined : failedTokens + 1);
+  if (requiredTokens === undefined) {
+    return params.candidates;
+  }
+  const remaining = params.candidates
+    .slice(params.failedIndex + 1)
+    .map((candidate) => ({ candidate, fits: (contextTokens(candidate) ?? 0) >= requiredTokens }))
+    .toSorted((left, right) => Number(right.fits) - Number(left.fits))
+    .map(({ candidate }) => candidate);
+  return [...params.candidates.slice(0, params.failedIndex + 1), ...remaining];
+}
 
 type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   cfg: OpenClawConfig | undefined;
@@ -214,7 +259,7 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const cacheKey = JSON.stringify({
     agentId: params.agentId,
-    agentModel: agentConfig?.model,
+    agentModel: resolveAgentModelConfigForRuntime(agentConfig),
     agentModels: agentConfig?.models,
     provider: params.provider,
     model: params.model,
@@ -223,6 +268,8 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     fallbacksOverride: params.fallbacksOverride,
     agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
     agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
+    utilityModel: params.cfg ? readUtilityModelSetting(params.cfg, params.agentId) : undefined,
+    utilityModelSeparation: hasUtilityModelSeparationMigrationMarker(params.cfg),
     modelProviders: resolveFallbackCandidateModelProviderCacheParts(params.cfg),
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.cfg,

@@ -1,6 +1,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import "../components/sidebar-update-card.ts";
+import "../components/sidebar-attention.tsx";
+import "../components/sidebar-update-card.tsx";
 import "../styles.css";
 import { renderFloatingUpdateCard } from "./navigation-surface.ts";
 
@@ -29,18 +30,11 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
     await useDesktopViewport();
     render(
       html`
-        <div class="shell shell--nav-collapsed" style="animation: none">
+        <div
+          class="shell shell--navigation-rail shell--nav-collapsed"
+          style="animation: none; --shell-nav-rail-width: 52px"
+        >
           <div class="shell-chrome-controls">
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
-              type="button"
-              aria-label="Expand navigation"
-            ></button>
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-              type="button"
-              aria-label="New session"
-            ></button>
             <button
               class="shell-chrome-controls__button shell-chrome-controls__search"
               type="button"
@@ -52,9 +46,6 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
               navigationSurfaceHidden: true,
               mobileNavLayout: false,
               onboarding: false,
-              updateAvailable: null,
-              updateBusy: false,
-              onUpdate: () => undefined,
               refreshRequired: true,
               onRefresh: async () => false,
             })}
@@ -67,13 +58,19 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
     const refreshCardHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-sidebar-update-card");
+    const attentionHost = document.querySelector<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-sidebar-attention");
+    await attentionHost?.updateComplete;
+    expect(attentionHost).not.toBeNull();
+    expect(attentionHost?.querySelector(".sidebar-issues-button")).toBeNull();
     await refreshCardHost?.updateComplete;
     const refreshCard = refreshCardHost?.querySelector<HTMLElement>(".sidebar-update-card");
     const buttons = Array.from(
       document.querySelectorAll<HTMLElement>(".shell-chrome-controls__button"),
     );
     expect(refreshCard).not.toBeNull();
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(1);
 
     const cardBounds = refreshCard!.getBoundingClientRect();
     const buttonBounds = buttons.map((button) => button.getBoundingClientRect());

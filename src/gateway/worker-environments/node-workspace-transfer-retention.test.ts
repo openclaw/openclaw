@@ -13,8 +13,12 @@ import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.tes
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
@@ -72,15 +76,7 @@ it.each([
     const sessionId = "input-session";
     const ownerEpoch = 1;
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch, sessionId, expiresAtMs: Date.now() + 60_000 },
-        environment: {
-          ownerEpoch,
-          attachedSessionIds: [sessionId],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner(sessionId, ownerEpoch, Date.now() + 60_000),
       temporaryRoot: path.join(root, "transfers"),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
@@ -90,12 +86,21 @@ it.each([
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       runWorkspaceCommand: (command) =>
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-input-test",
             environmentId,
@@ -106,13 +111,21 @@ it.each([
           { url: server.gatewayUrl },
         ),
     });
+    let initiatingTurnCurrent = true;
     try {
       const synced = await actions.syncWorkspace({
+        authorize: () => {
+          if (!initiatingTurnCurrent) {
+            throw new Error("initiating turn closed");
+          }
+        },
         source: { kind: "local", path: localPath },
         sessionId,
         generation: ownerEpoch,
       });
       expect(synced.mode).toBe(mode === "plain" ? "plain" : "git");
+      initiatingTurnCurrent = false;
+      expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
       for (const relative of ownership.ownedFiles) {
         await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
@@ -157,15 +170,15 @@ it.each([
               kind: "local",
               path: localPath,
               journal: {
-                load: () => pending,
-                begin: (next) => {
+                load: async () => pending,
+                begin: async (next) => {
                   pending = next;
                 },
-                commit: (accepted) => {
+                commit: async (accepted) => {
                   baseManifestRef = accepted;
                   pending = undefined;
                 },
-                abort: () => {
+                abort: async () => {
                   pending = undefined;
                 },
               },
@@ -370,6 +383,8 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   await requireGit(localPath, ["init", "--quiet"]);
   await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
   await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
+  const sourceOrigin = "git://127.0.0.1:19418/origin.git";
+  await requireGit(localPath, ["remote", "add", "origin", sourceOrigin]);
   await requireGit(localPath, ["add", "."]);
   await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
   const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
@@ -379,15 +394,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   const ownerEpoch = 1;
   const createService = () =>
     createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch, sessionId },
-        environment: {
-          ownerEpoch,
-          attachedSessionIds: [sessionId],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner(sessionId, ownerEpoch),
       temporaryRoot: path.join(root, "transfers"),
     });
   let service = createService();
@@ -401,6 +408,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       restoredWorkspace,
@@ -408,6 +416,14 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-restart-test",
             environmentId,
@@ -419,12 +435,32 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         ),
     });
   try {
-    const synced = await createActions().syncWorkspace({
+    const actions = createActions();
+    const synced = await actions.syncWorkspace({
       source: { kind: "local", path: localPath },
       sessionId,
       generation: ownerEpoch,
     });
     const remote = synced.remoteWorkspaceDir;
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(sourceOrigin);
+    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
+    const nodeOrigin = "git://127.0.0.1:19418/node-owned.git";
+    await requireGit(remote, ["remote", "set-url", "origin", nodeOrigin]);
+    await createNodeWorkerWorkspaceFallback(actions.runWorkspaceCommand).finalizeSync(
+      { localPath, sessionId, generation: ownerEpoch },
+      synced,
+    );
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
+    await fs.writeFile(path.join(remote, "worker-commit.txt"), "node commit content\n");
+    await requireGit(remote, ["add", "worker-commit.txt"]);
+    await requireGit(remote, ["commit", "--quiet", "-m", "node-owned history"]);
+    const nodeCommit = (await requireGit(remote, ["rev-parse", "HEAD"])).trim();
+    const nodeBranch = (await requireGit(remote, ["branch", "--show-current"])).trim();
+    await requireGit(remote, ["pack-refs", "--all"]);
+    await fs.rm(path.join(remote, ".git", "shallow"));
+    await requireGit(remote, ["checkout", "--quiet", "--detach"]);
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
       await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
     }
@@ -455,18 +491,19 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         kind: "local" as const,
         path: localPath,
         journal: {
-          load: () => pending,
-          begin: (next: WorkerWorkspaceReconciliationJournal) => {
+          load: async () => pending,
+          begin: async (next: WorkerWorkspaceReconciliationJournal) => {
             pending = next;
           },
-          commit: (ref: string) => {
+          commit: async (ref: string) => {
             accepted = ref;
             pending = undefined;
           },
-          abort: () => {
+          abort: async () => {
             pending = undefined;
           },
         },
+        stagedResult: { ref: workerWorkspaceResultRef("restored-workspace"), record: () => {} },
       },
     };
     const quiescence = await restored.quiesceWorkspace(remote);
@@ -492,7 +529,23 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       );
     }
     expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
-    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(baseCommit);
+    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(nodeCommit);
+    expect((await requireGit(remote, ["rev-parse", `refs/heads/${nodeBranch}`])).trim()).toBe(
+      nodeCommit,
+    );
+    expect((await requireGit(remote, ["rev-parse", "--is-shallow-repository"])).trim()).toBe(
+      "false",
+    );
+    expect((await requireGit(remote, ["branch", "--show-current"])).trim()).toBe("");
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
+    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
+    for (const workspace of [localPath, remote]) {
+      expect(await fs.readFile(path.join(workspace, "worker-commit.txt"), "utf8")).toBe(
+        "node commit content\n",
+      );
+    }
     owner.abort();
     await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
       "Node workspace transfer context is unavailable",

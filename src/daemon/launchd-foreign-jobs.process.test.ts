@@ -24,6 +24,7 @@ vi.mock("../config/paths.js", async (original) => ({
 }));
 vi.mock("../commands/doctor-service-repair-policy.js", () => ({
   resolveServiceRepairPolicy: () => "auto",
+  isServiceRepairDeferred: () => false,
   shouldManageGatewayService: async () => true,
 }));
 vi.mock("./restart-storm.js", () => ({

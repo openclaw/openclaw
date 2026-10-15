@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   readStableSqliteFileGeneration,
@@ -28,8 +29,17 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
+  because?: string;
+  integrityGateReason?:
+    | "revoked"
+    | "stale-lease-full"
+    | "process-death"
+    | "dirty-receipt"
+    | "no-proof"
+    | "lease-class";
+  integrityGateMode?: "full" | "deferred";
   integrityGateMs?: number;
-  integrityGateOutcome?: "healthy" | "failed" | "cached";
+  integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
   integrityCheckSyncMs?: number;
   integrityOutsideCheckMs?: number;
   integrityWorkerCheckMs?: number;
@@ -49,6 +59,7 @@ export function* sqliteIntegrityCheckSteps(
   const check: SqliteIntegrityCheck = { database, databaseLabel };
   if (diagnostics) {
     check.timing = {};
+    diagnostics.integrityGateMode = "full";
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -100,16 +111,22 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 }
 
 /** Run the same admission steps synchronously when the caller cannot yield. */
-export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+export function runSqliteIntegrityOperationSync<T>(
+  operation: SqliteIntegrityOperation<T>,
+  beforeResume?: () => void,
+): T {
+  beforeResume?.();
   let step = operation.next();
   while (!step.done) {
+    let failure: { error: unknown } | undefined;
     try {
       runSqliteIntegrityCheckSync(step.value);
     } catch (error) {
-      step = operation.throw(error);
-      continue;
+      failure = { error };
     }
-    step = operation.next();
+    // A blocking check can outlive its caller; both success and failure resume schema work.
+    beforeResume?.();
+    step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;
 }
@@ -123,7 +140,7 @@ export type SqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; generation: SqliteFileGeneration; terminal: true }
   | { status: "healthy"; generation: SqliteFileGeneration };
 
-type SqliteCheckPragma = "integrity_check";
+type SqliteCheckPragma = "integrity_check" | "quick_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
@@ -133,6 +150,9 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
+// Released pre-v19 databases can reach updater-ledger admission with this exact
+// orphan relation. Keep classification separate from permission: only the
+// update admission or fenced v19 migration owner may accept this typed refusal.
 export class SqliteRepairableForeignKeyError extends Error {
   readonly repair: Readonly<{
     kind: "task-delivery-orphans";
@@ -143,7 +163,7 @@ export class SqliteRepairableForeignKeyError extends Error {
 
   constructor(databaseLabel: string, orphanCount: number) {
     super(
-      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to preserve and repair these rows before retrying.`,
+      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to migrate this legacy state before retrying.`,
     );
     this.name = "SqliteRepairableForeignKeyError";
     this.repair = {
@@ -172,23 +192,14 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
+  check: SqliteCheckPragma = "integrity_check",
 ): SqliteIntegrityChecks {
-  const integrityCheck = runSqliteCheck(database, databaseLabel, "integrity_check");
+  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
-  return { integrityCheck };
-}
-
-/** Run integrity checks and preserve whether a failure proves persistent damage. */
-function confirmSqliteIntegrity(
-  database: DatabaseSync,
-  databaseLabel: string,
-): UnboundSqliteIntegrityConfirmation {
-  try {
-    assertSqliteIntegrity(database, databaseLabel);
-    return { status: "healthy" };
-  } catch (error) {
-    return failedSqliteIntegrityConfirmation(error);
+  if (check === "integrity_check") {
+    recordSqliteDatabaseIntegrity(database);
   }
+  return { integrityCheck };
 }
 
 /** Reconfirm an advisory failure against the database currently at a closed path. */
@@ -198,14 +209,9 @@ export function confirmSqliteFileIntegrity(
 ): SqliteIntegrityConfirmation {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let initial: SqliteFileGeneration;
-    try {
-      initial = readStableSqliteFileGeneration(pathname);
-    } catch (error) {
-      return unboundSqliteIntegrityFailure(error);
-    }
-
     let database: DatabaseSync;
     try {
+      initial = readStableSqliteFileGeneration(pathname);
       database = openNodeSqliteDatabase(pathname, { readOnly: true });
     } catch (error) {
       // A failed SQLite open exposes no descriptor identity. Path snapshots
@@ -213,17 +219,13 @@ export function confirmSqliteFileIntegrity(
       return unboundSqliteIntegrityFailure(error);
     }
 
-    let opened: SqliteFileGeneration;
+    let opened: SqliteFileGeneration | undefined;
     try {
       opened = readStableSqliteFileGeneration(pathname);
     } catch {
-      const closeError = closeSqliteDatabase(database);
-      if (closeError) {
-        return unboundSqliteIntegrityFailure(closeError);
-      }
-      continue;
+      // A missing generation follows the same native cleanup as a changed one.
     }
-    if (!sameSqliteFileGeneration(initial, opened)) {
+    if (!opened || !sameSqliteFileGeneration(initial, opened)) {
       const closeError = closeSqliteDatabase(database);
       if (closeError) {
         return unboundSqliteIntegrityFailure(closeError);
@@ -231,7 +233,13 @@ export function confirmSqliteFileIntegrity(
       continue;
     }
 
-    let confirmation = confirmSqliteIntegrity(database, databaseLabel);
+    let confirmation: UnboundSqliteIntegrityConfirmation;
+    try {
+      assertSqliteIntegrity(database, databaseLabel);
+      confirmation = { status: "healthy" };
+    } catch (error) {
+      confirmation = failedSqliteIntegrityConfirmation(error);
+    }
     const closeError = closeSqliteDatabase(database);
     if (closeError && confirmation.status === "healthy") {
       confirmation = failedSqliteIntegrityConfirmation(closeError);
@@ -246,24 +254,16 @@ export function confirmSqliteFileIntegrity(
     if (!sameSqliteFileGeneration(opened, final)) {
       continue;
     }
-    return bindSqliteIntegrityConfirmation(confirmation, final);
+    if (confirmation.status === "healthy") {
+      return { status: "healthy", generation: final };
+    }
+    return confirmation.terminal
+      ? { ...confirmation, generation: final, terminal: true }
+      : { ...confirmation, terminal: false };
   }
   return unboundSqliteIntegrityFailure(
     new Error(`SQLite file generation did not stabilize during confirmation: ${pathname}`),
   );
-}
-
-function bindSqliteIntegrityConfirmation(
-  confirmation: UnboundSqliteIntegrityConfirmation,
-  generation: SqliteFileGeneration,
-): SqliteIntegrityConfirmation {
-  if (confirmation.status === "healthy") {
-    return { status: "healthy", generation };
-  }
-  if (confirmation.terminal) {
-    return { ...confirmation, generation, terminal: true };
-  }
-  return { ...confirmation, terminal: false };
 }
 
 function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegrityConfirmation {
@@ -389,7 +389,12 @@ function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | u
 }
 
 function createSqliteIntegrityError(message: string, cause?: unknown): Error {
-  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  const error =
+    cause === undefined
+      ? new Error(
+          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
+        )
+      : new Error(message, { cause });
   error.name = "SqliteIntegrityError";
   return error;
 }

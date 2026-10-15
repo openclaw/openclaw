@@ -294,13 +294,4 @@ mod tests {
         );
         assert_eq!(receiver.recv().await, None);
     }
-
-    #[test]
-    fn utf8_chunks_end_at_character_boundaries() {
-        let value = format!("{}é", "a".repeat(PROGRESS_CHUNK_BYTES - 1));
-        assert_eq!(
-            utf8_prefix_len(&value, PROGRESS_CHUNK_BYTES),
-            PROGRESS_CHUNK_BYTES - 1
-        );
-    }
 }

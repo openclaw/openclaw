@@ -17,15 +17,19 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # id-token proves this repository, event, branch, and run to ClawSweeper's
+    # direct queue intake. The job never checks out or executes pull request code.
+    permissions:
+      contents: read
+      id-token: write
     if: >-
-      ${{
+      ${{ (
+        (github.event.action != 'edited' ||
+          (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
+          !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
@@ -39,8 +43,19 @@ jobs:
             (github.actor_id == '257215752' || github.actor_id == '264559031')
           )
         )
-      }}
+      ) }}
+    # Admission runs before job concurrency, so an empty metadata edit cannot
+    # cancel a useful dispatch. Other changes retain the receiver's policy.
+    # Each event kind owns its lane, as in the receiver's reference dispatcher:
+    # pull_request_target and review runs leave check runs on the PR head, and
+    # GitHub keeps counting a cancelled one there (UNSTABLE), so a comment or
+    # review must never cancel a PR event. Review activity runs are independent
+    # observations and never share a group; comments serialize per comment.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}-{2}', github.repository, github.event_name, (github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') && github.run_id || github.event.comment.id || github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
+      MAINTAINER_REVIEW_REQUIRED: ${{ (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association || github.event.issue.author_association) || (contains(github.event.pull_request.labels.*.name, 'maintainer') || contains(github.event.issue.labels.*.name, 'maintainer'))) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:autofix') || contains(github.event.issue.labels.*.name, 'clawsweeper:autofix')) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:automerge') || contains(github.event.issue.labels.*.name, 'clawsweeper:automerge')) }}
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
       SUPERSEDES_IN_PROGRESS: ${{ (github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review') && 'true' || 'false' }}
@@ -96,6 +111,10 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
+          if [[ "$COMMENT_BODY" == *"<!-- clawsweeper-maintainer-opt-in:"* ]]; then
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|autoclose|auto([[:space:]]+|-)?merge)\b' <<< "$COMMENT_BODY"; then
             echo "is_command=true" >> "$GITHUB_OUTPUT"
           else
@@ -123,12 +142,16 @@ jobs:
         id: pr_ack_token
         if: >-
           ${{
-            github.event_name == 'pull_request_target' &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' &&
             (
-              github.event.action == 'ready_for_review' ||
-              (github.event.action == 'opened' && github.event.pull_request.draft == false)
-            ) &&
-            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+              (github.event_name == 'pull_request_target' && env.MAINTAINER_REVIEW_REQUIRED != 'true' &&
+                (github.event.action == 'ready_for_review' ||
+                  (github.event.action == 'opened' && github.event.pull_request.draft == false))) ||
+              (env.MAINTAINER_REVIEW_REQUIRED == 'true' &&
+                (github.event_name == 'issues' || github.event_name == 'pull_request_target') &&
+                (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
+                github.event.pull_request.draft != true)
+            )
           }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -139,9 +162,51 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
 
+      - name: Explain maintainer review opt-in
+        if: >-
+          ${{
+            env.MAINTAINER_REVIEW_REQUIRED == 'true' &&
+            (github.event_name == 'issues' || github.event_name == 'pull_request_target') &&
+            (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
+            github.event.pull_request.draft != true &&
+            github.event.issue.locked != true && github.event.pull_request.locked != true &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+          }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.pr_ack_token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          SOURCE_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then exit 0; fi
+          for ((page = 1; page <= 10; page++)); do
+            comments="$(gh api "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments?per_page=100&page=$page")"
+            jq -e 'type == "array"' <<< "$comments" >/dev/null
+            if jq -e --arg suffix " item=$ITEM_NUMBER -->" '
+              any(.[];
+                ((.user.login // "" | ascii_downcase) as $login |
+                  ["clawsweeper", "clawsweeper[bot]", "openclaw-clawsweeper[bot]"] | index($login)) and
+                ((.body // "") | contains("clawsweeper-maintainer-opt-in:")) and
+                ((.body // "") | contains($suffix)))' <<< "$comments" >/dev/null; then
+              exit 0
+            fi
+            if [ "$(jq length <<< "$comments")" -lt 100 ]; then
+              reminder="$(printf '%s\n' \
+                "<!-- clawsweeper-maintainer-opt-in:$SOURCE_ACTION item=$ITEM_NUMBER -->" \
+                'ClawSweeper reviews are opt-in for maintainers. If a review is required, finish the work and validation first, then comment `@clawsweeper review`. Please avoid repeated requests while a review is queued or running; agents should not request reviews automatically.')"
+              payload="$(jq -nc --arg body "$reminder" '{body:$body}')"
+              gh api "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments" --method POST --input - <<< "$payload"
+              exit 0
+            fi
+          done
+          echo "::notice::Maintainer reminder lookup reached its page limit; leaving comments untouched."
+
       - name: Acknowledge received pull request
         if: >-
           ${{
+            env.MAINTAINER_REVIEW_REQUIRED != 'true' &&
             github.event_name == 'pull_request_target' &&
             (
               github.event.action == 'ready_for_review' ||
@@ -285,8 +350,15 @@ jobs:
             echo "::warning::Skipping GitHub activity dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
 
-      - name: Dispatch exact ClawSweeper review
+      - name: Setup supported Node runtime
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Dispatch exact ClawSweeper review
+        if: ${{ env.MAINTAINER_REVIEW_REQUIRED != 'true' && (github.event_name == 'issues' || github.event_name == 'pull_request_target') }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}
@@ -295,6 +367,7 @@ jobs:
           ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
           SOURCE_EVENT: ${{ github.event_name }}
           SOURCE_ACTION: ${{ github.event.action }}
+          TARGET_DISPATCH_URL: https://clawsweeper.openclaw.ai/github/target-dispatch
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::notice::Skipping ClawSweeper dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
@@ -347,6 +420,36 @@ jobs:
             --arg ingress_fingerprint "$ingress_fingerprint" \
             --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
             '{event_type:"clawsweeper_item",client_payload:({target_repo:$target_repo,target_branch:$target_branch,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress} + (if $ingress_fingerprint != "" then {ingress_route:"target_dispatcher",ingress_fingerprint:$ingress_fingerprint} else {} end))}')"
+          # Direct queue intake costs no ClawSweeper Actions relay run. Any failure
+          # falls back to the repository_dispatch relay below, so no event is lost.
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] &&
+            [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] &&
+            oidc_token="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              --get --data-urlencode "audience=$TARGET_DISPATCH_URL" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er '.value | strings | select(length > 0)')" &&
+            # jq 1.6 exits 0 on empty input, and the step runs without pipefail.
+            [ -n "$oidc_token" ]; then
+            echo "::add-mask::$oidc_token"
+            direct_body="$RUNNER_TEMP/clawsweeper-direct-intake.json"
+            # Only a 2xx answer means the queue took the item; --fail would also
+            # accept a 3xx and drop the event without reaching the relay.
+            if direct_status="$(jq -c '.client_payload' <<< "$payload" |
+              curl --silent --show-error --connect-timeout 5 --max-time 20 \
+                --request POST \
+                --header "authorization: Bearer $oidc_token" \
+                --header "content-type: application/json" \
+                --data-binary @- \
+                --output "$direct_body" \
+                --write-out '%{http_code}' \
+                "$TARGET_DISPATCH_URL")" &&
+              [[ "$direct_status" == 2[0-9][0-9] ]]; then
+              echo "Queued ClawSweeper review directly: $(jq -c . "$direct_body" 2>/dev/null || echo '{}')"
+              exit 0
+            fi
+            echo "Direct ClawSweeper queue intake answered HTTP ${direct_status:-none}."
+          fi
+          echo "::notice::Direct ClawSweeper queue intake was unavailable; dispatching through repository_dispatch."
           if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then

@@ -1,0 +1,33 @@
+.new-session-attachment-panel {
+  display: flex;
+  flex: 0 1 40%;
+  flex-direction: column;
+  min-width: 280px;
+  max-width: 480px;
+  min-height: 0;
+  overflow: hidden;
+  border-inline-start: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.new-session-attachment-panel > openclaw-chat-detail-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  openclaw-new-session-page:has(> .new-session-attachment-panel) {
+    flex-direction: column;
+  }
+
+  .new-session-attachment-panel {
+    flex: 1 1 50%;
+    min-width: 0;
+    max-width: none;
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--border);
+  }
+}

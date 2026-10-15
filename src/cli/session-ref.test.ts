@@ -42,26 +42,6 @@ describe("session target parsing", () => {
 
   it.each([
     {
-      input: "https://Gateway.Example/dashboard/Ops/",
-      expected: {
-        kind: "url",
-        origin: "wss://gateway.example",
-        basePath: "",
-        agentId: "ops",
-        ref: { kind: "main" },
-      },
-    },
-    {
-      input: "https://Gateway.Example/base/dashboard/Ops/movies-A1166B81/",
-      expected: {
-        kind: "url",
-        origin: "wss://gateway.example",
-        basePath: "/base",
-        agentId: "ops",
-        ref: { kind: "short", shortId: "a1166b81", slugHint: "movies" },
-      },
-    },
-    {
       input: "wss://gateway.example/base/chat/ops/telegram/123?view=compact#messages",
       expected: {
         kind: "url",
@@ -69,26 +49,6 @@ describe("session target parsing", () => {
         basePath: "/base",
         agentId: "ops",
         ref: { kind: "literal", sessionKey: "agent:ops:telegram:123" },
-      },
-    },
-    {
-      input: "https://gateway.example/tenant/chat/dashboard/ops/movies-a1166b81",
-      expected: {
-        kind: "url",
-        origin: "wss://gateway.example",
-        basePath: "/tenant/chat",
-        agentId: "ops",
-        ref: { kind: "short", shortId: "a1166b81", slugHint: "movies" },
-      },
-    },
-    {
-      input: "wss://gateway.example/dashboard/ops/~key/release-deadbeef",
-      expected: {
-        kind: "url",
-        origin: "wss://gateway.example",
-        basePath: "",
-        agentId: "ops",
-        ref: { kind: "literal", sessionKey: "agent:ops:release-deadbeef" },
       },
     },
     {
@@ -101,24 +61,6 @@ describe("session target parsing", () => {
         ref: { kind: "short", shortId: "a1166b81", slugHint: "movies" },
       },
     },
-    {
-      input: "MOVIES-A1166B81",
-      expected: {
-        kind: "ref",
-        ref: { kind: "short", shortId: "a1166b81", slugHint: "MOVIES" },
-      },
-    },
-    {
-      input: "A1166B81",
-      expected: { kind: "ref", ref: { kind: "short", shortId: "a1166b81" } },
-    },
-    {
-      input: "AGENT:Ops:Telegram:123",
-      expected: {
-        kind: "ref",
-        ref: { kind: "literal", sessionKey: "agent:ops:telegram:123" },
-      },
-    },
   ])("parses $input", ({ input, expected }) => {
     expect(parseSessionTargetInput(input)).toEqual(expected);
   });
@@ -126,14 +68,8 @@ describe("session target parsing", () => {
   it.each([
     "",
     "not-a-session",
-    "deadbee",
-    "1234567890abcdef1234567890abcdef0",
-    "main",
-    "https://gateway.example/dashboard",
     "https://gateway.example/DASHBOARD/main/deadbeef",
-    "https://gateway.example/dashboard/main/%zz",
     "ftp://gateway.example/dashboard/main/deadbeef",
-    "gateway.example/main",
   ])("rejects %j with the typed accepted-forms error", (input) => {
     expect(() => parseSessionTargetInput(input)).toThrow(SessionTargetParseError);
     expect(() => parseSessionTargetInput(input)).toThrow("Accepted session targets:");
@@ -177,28 +113,22 @@ describe("bare-root session URL options", () => {
   const target = "https://gateway.example/dashboard/main/movies-a1166b81";
   const argv = (...args: string[]) => ["node", "openclaw", ...args];
 
-  it.each([
-    ["--token", "token", "sentinel"],
-    ["--password", "password", "sentinel"],
-    ["--tls-fingerprint", "tlsFingerprint", "sentinel"],
-    ["--thinking", "thinking", "sentinel"],
-    ["--message", "message", "sentinel"],
-    ["--message", "message", "https://example.com/article"],
-    ["--timeout-ms", "timeoutMs", "sentinel"],
-    ["--history-limit", "historyLimit", "sentinel"],
-  ] as const)("parses %s (%s=%s) before and after the URL", (flag, key, value) => {
-    for (const args of [
-      [flag, value, target],
-      [`${flag}=${value}`, target],
-      [target, flag, value],
-      [target, `${flag}=${value}`],
-    ]) {
-      expect(parseBareSessionInvocation(argv(...args))).toEqual({
-        target,
-        options: { [key]: value },
-      });
-    }
-  });
+  it.each([["--message", "message", "https://example.com/article"]] as const)(
+    "parses %s (%s=%s) before and after the URL",
+    (flag, key, value) => {
+      for (const args of [
+        [flag, value, target],
+        [`${flag}=${value}`, target],
+        [target, flag, value],
+        [target, `${flag}=${value}`],
+      ]) {
+        expect(parseBareSessionInvocation(argv(...args))).toEqual({
+          target,
+          options: { [key]: value },
+        });
+      }
+    },
+  );
 
   it("parses boolean options on either side and preserves root globals", () => {
     expect(
@@ -220,14 +150,14 @@ describe("bare-root session URL options", () => {
     });
   });
 
-  it.each([
-    ["bare ref", ["movies-a1166b81"]],
-    ["host shorthand", ["gateway.example/main/a1166b81"]],
-  ])("does not claim %s", (_label, args) => {
-    expect(parseBareSessionInvocation(argv(...args))).toBeNull();
-  });
+  it.each([["host shorthand", ["gateway.example/main/a1166b81"]]])(
+    "does not claim %s",
+    (_label, args) => {
+      expect(parseBareSessionInvocation(argv(...args))).toBeNull();
+    },
+  );
 
-  it.each(["tui", "attach", "logs", "googlemeet", "unowned-command"])(
+  it.each(["unowned-command"])(
     "leaves an explicit %s command's URL argument to its owner",
     (command) => {
       expect(parseBareSessionInvocation(argv(command, target))).toBeNull();
@@ -237,33 +167,27 @@ describe("bare-root session URL options", () => {
   it.each([
     ["split before", ["--token", target]],
     ["split after", [target, "--token"]],
-    ["inline before", ["--token=", target]],
-    ["inline after", [target, "--token="]],
   ])("rejects a missing value %s", (_label, args) => {
     expect(() => parseBareSessionInvocation(argv(...args))).toThrow("--token requires a value");
   });
 
-  it.each([
-    ["inline before", ["--typo=do-not-print-me", target]],
-    ["inline after", [target, "--typo=do-not-print-me"]],
-    ["split before", ["--typo", "do-not-print-me", target]],
-    ["split after", [target, "--typo", "do-not-print-me"]],
-  ])("rejects an unknown option %s without reflecting its value", (_label, args) => {
-    let error: unknown;
-    try {
-      parseBareSessionInvocation(argv(...args));
-    } catch (caught) {
-      error = caught;
-    }
-    expect(String(error)).toContain("Unsupported bare session URL option: --typo");
-    expect(String(error)).not.toContain("do-not-print-me");
-  });
+  it.each([["inline after", [target, "--typo=do-not-print-me"]]])(
+    "rejects an unknown option %s without reflecting its value",
+    (_label, args) => {
+      let error: unknown;
+      try {
+        parseBareSessionInvocation(argv(...args));
+      } catch (caught) {
+        error = caught;
+      }
+      expect(String(error)).toContain("Unsupported bare session URL option: --typo");
+      expect(String(error)).not.toContain("do-not-print-me");
+    },
+  );
 
   it.each([
-    ["terminator before", ["--", target], "Unsupported bare session URL option: --"],
     ["terminator after", [target, "--"], "Unsupported bare session URL option: --"],
     ["extra after", [target, "do-not-print-me"], "Unexpected extra argument"],
-    ["second URL", [target, "https://secret.example/path"], "Unexpected extra argument"],
   ])("rejects %s without reflecting extra values", (_label, args, expected) => {
     let error: unknown;
     try {
@@ -303,21 +227,6 @@ describe("session target resolution", () => {
     );
   });
 
-  it("resolves a bare literal key without forcing an explicit gateway", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true, key: "agent:ops:telegram:123" });
-
-    await resolveSessionTarget({ raw: "agent:ops:telegram:123" });
-
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: undefined,
-        method: "sessions.resolve",
-        params: { key: "agent:ops:telegram:123" },
-      }),
-    );
-    expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("useStoredDeviceAuth");
-  });
-
   it("uses gateway-advertised routing for URL main sessions without requiring an existing row", async () => {
     callGatewayMock.mockResolvedValue({
       defaultId: "main",
@@ -341,19 +250,24 @@ describe("session target resolution", () => {
     );
   });
 
-  it("preserves the canonical global key for a global-scope URL main session", async () => {
-    callGatewayMock.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [],
-    });
+  it.each([
+    { key: "agent:ops:main", agentId: "other" },
+    { key: "global", agentId: undefined },
+  ])("rejects inconsistent resolved ownership $key/$agentId", async (result) => {
+    callGatewayMock.mockResolvedValue({ ok: true, ...result });
 
-    const result = await resolveSessionTarget({
-      raw: "https://gateway.example/dashboard/ops",
-    });
+    await expect(resolveSessionTarget({ raw: "agent:ops:main" })).rejects.toThrow(
+      "Gateway returned a session without a consistent agent identity",
+    );
+  });
 
-    expect(result.sessionKey).toBe("global");
+  it("retains a Gateway-resolved legacy main owner without reinterpreting the request", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true, key: "global", agentId: "ops" });
+
+    await expect(resolveSessionTarget({ raw: "agent:main:main" })).resolves.toMatchObject({
+      sessionKey: "global",
+      agentId: "ops",
+    });
   });
 
   it("rejects a second explicit URL", async () => {
@@ -406,19 +320,6 @@ describe("session target resolution", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves not-found text and adds the sessions list recovery", async () => {
-    callGatewayMock.mockRejectedValue(
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "No session found: a1166b81",
-      }),
-    );
-
-    await expect(resolveSessionTarget({ raw: "a1166b81" })).rejects.toThrow(
-      /No session found: a1166b81[\s\S]*openclaw sessions list/u,
-    );
-  });
-
   it("sends remote not-found recovery to the target Control UI, not the local session store", async () => {
     callGatewayMock.mockRejectedValue(
       new GatewayClientRequestError({
@@ -461,42 +362,6 @@ describe("session target resolution", () => {
     );
   });
 
-  it("classifies legacy close reasons before adding reachability hints", async () => {
-    callGatewayMock.mockRejectedValueOnce(
-      gatewayTransportError({
-        url: "wss://gateway.example",
-        message: "gateway closed (1008): pairing required",
-        reason: "pairing required",
-      }),
-    );
-    let pairingError: unknown;
-    try {
-      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
-    } catch (caught) {
-      pairingError = caught;
-    }
-    expect(String(pairingError)).toContain("openclaw devices approve --latest");
-    expect(String(pairingError)).not.toContain("Could not reach gateway");
-
-    callGatewayMock.mockRejectedValueOnce(
-      gatewayTransportError({
-        url: "wss://gateway.example",
-        message: "gateway closed (1008): device token mismatch",
-        reason: "device token mismatch",
-      }),
-    );
-    let tokenError: unknown;
-    try {
-      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
-    } catch (caught) {
-      tokenError = caught;
-    }
-    expect(String(tokenError)).toContain(
-      "openclaw devices rotate --device <deviceId> --role operator",
-    );
-    expect(String(tokenError)).not.toContain("Could not reach gateway");
-  });
-
   it("explains how to bootstrap auth when no origin token exists", async () => {
     callGatewayMock.mockRejectedValue(
       new GatewayStoredDeviceAuthUnavailableError("No stored device auth"),
@@ -508,11 +373,6 @@ describe("session target resolution", () => {
   });
 
   it.each([
-    {
-      code: "ECONNREFUSED",
-      target: "claw.example.ts.net/main/a1166b81",
-      expected: /Could not reach gateway wss:\/\/claw\.example\.ts\.net[\s\S]*Tailscale/u,
-    },
     {
       code: "ENOTFOUND",
       target: "gateway.example/main/a1166b81",

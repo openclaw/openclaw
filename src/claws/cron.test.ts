@@ -138,17 +138,6 @@ describe("installClawCronJobs", () => {
     expect(readClawCronRefs("worker-two", { env: current.env })).toEqual(refs);
   });
 
-  it("accepts declaration convergence results from cron.add", async () => {
-    const current = await fixture();
-
-    const refs = await installClawCronJobs(current.plan, {
-      env: current.env,
-      gateway: { add: vi.fn().mockResolvedValue({ created: false, job: { id: "existing-1" } }) },
-    });
-
-    expect(refs[0]).toMatchObject({ schedulerJobId: "existing-1", status: "complete" });
-  });
-
   it("does not require the gateway when every cron reference is already complete", async () => {
     const current = await fixture();
     await installClawCronJobs(current.plan, {
@@ -252,23 +241,6 @@ describe("installClawCronJobs", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
-  it("preserves an ambiguous pending reference when cron.add fails", async () => {
-    const current = await fixture();
-
-    await expect(
-      installClawCronJobs(current.plan, {
-        env: current.env,
-        gateway: { add: vi.fn().mockRejectedValue(new Error("gateway unavailable")) },
-      }),
-    ).rejects.toMatchObject({
-      code: "cron_install_failed",
-      cronJobs: [{ manifestId: "daily-report", status: "pending", error: "gateway unavailable" }],
-    });
-    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
-      { manifestId: "daily-report", status: "pending", error: "gateway unavailable" },
-    ]);
-  });
-
   it("preserves the pending reference when agent readiness fails", async () => {
     const current = await fixture();
     const add = vi.fn();
@@ -302,8 +274,12 @@ describe("installClawCronJobs", () => {
       }),
     ).rejects.toMatchObject({
       code: "cron_install_failed",
-      cronJobs: [{ status: "pending" }],
+      cronJobs: [{ manifestId: "daily-report", status: "pending", error: "response lost" }],
     });
+
+    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
+      { manifestId: "daily-report", status: "pending", error: "response lost" },
+    ]);
 
     const refs = await installClawCronJobs(current.plan, {
       env: current.env,

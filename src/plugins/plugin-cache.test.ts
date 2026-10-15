@@ -1,15 +1,23 @@
+import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import {
+  checkPluginCacheEntry,
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
   readPluginCacheFile,
@@ -21,21 +29,223 @@ import {
   getPluginCacheSource,
   getProcessPluginCache,
   invalidatePluginCacheMetadata,
+  retainPluginCache,
+  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getPluginLoaderCacheState,
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "./registry-lifecycle.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["success", "plugin failure", "module failure", "host failure"] as const)(
+  "keeps adopted instance custody through physical disposal (%s)",
+  async (outcome) => {
+    const originalCache = createPluginCache();
+    const successorCache = createPluginCache();
+    const record = createPluginRecord({ id: "cache-custody" });
+    const original = createEmptyPluginRegistry();
+    original.plugins.push(record);
+    const successor = { ...createEmptyPluginRegistry(), plugins: [record] };
+    const instance = new PluginInstance(record.id, { record, registry: original });
+    const callback = instance.wrap(() => "adopted");
+    markPluginRegistryActive(original);
+    getPluginLoaderCacheState(originalCache).set("original", original);
+    markPluginRegistryActive(successor);
+    getPluginLoaderCacheState(successorCache).set("successor", successor);
+
+    await retirePluginCache(originalCache);
+    expect(originalCache.instances.size).toBe(0);
+    expect(callback()).toBe("adopted");
+    expect(successorCache.instances.has(instance)).toBe(true);
+
+    const failure = new Error(outcome);
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    if (outcome === "plugin failure") {
+      instance.lifecycle.onDispose(() => {
+        throw failure;
+      });
+    }
+    instance.onModuleDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      if (outcome === "module failure") {
+        throw failure;
+      }
+    });
+    markPluginRegistryRetired(successor);
+    const disposal = instance.dispose(
+      outcome === "host failure"
+        ? () => {
+            throw failure;
+          }
+        : undefined,
+    );
+    void disposal.catch(() => {});
+    try {
+      await entered.promise;
+      expect(successorCache.instances.has(instance)).toBe(true);
+      finish.resolve();
+      if (outcome === "host failure") {
+        await expect(disposal).rejects.toBe(failure);
+      } else {
+        await expect(disposal).resolves.toEqual({
+          errors: outcome === "success" ? [] : [failure],
+        });
+      }
+      expect(successorCache.instances.has(instance)).toBe(outcome !== "success");
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([disposal, retirePluginCache(successorCache)]);
+    }
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
 });
 
+function createWindowsRootAliasFixture(
+  prefix: string,
+  relativePath = "plugin.js",
+  contents = "export default {};\n",
+) {
+  const parent = fs.realpathSync(tempDirs.make(prefix));
+  const root = path.join(parent, "canonical-root");
+  const alias = path.join(parent, "root-alias");
+  const source = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, contents);
+  fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  return { parent, root, alias, source };
+}
+
+function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
+  const parent = fs.realpathSync(tempDirs.make(prefix));
+  const trustedContainer = path.join(parent, "trusted");
+  const replacementContainer = path.join(parent, "replacement");
+  const trustedRoot = path.join(trustedContainer, "plugin");
+  const replacementRoot = path.join(replacementContainer, "plugin");
+  const trustedAlias = path.join(parent, "trusted-alias");
+  const observedParent = path.join(parent, "observed-parent");
+  fs.mkdirSync(trustedRoot, { recursive: true });
+  fs.mkdirSync(replacementRoot, { recursive: true });
+  fs.writeFileSync(path.join(trustedRoot, basename), "trusted\n");
+  fs.writeFileSync(path.join(replacementRoot, basename), "replacement\n");
+  fs.symlinkSync(trustedRoot, trustedAlias, process.platform === "win32" ? "junction" : "dir");
+  fs.symlinkSync(
+    trustedContainer,
+    observedParent,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+  const observedRoot = path.join(observedParent, "plugin");
+  const originalRealpath = fs.realpathSync;
+  vi.spyOn(fs, "realpathSync").mockImplementation(((filePath, options) => {
+    if (filePath === observedRoot) {
+      fs.unlinkSync(observedParent);
+      fs.symlinkSync(
+        replacementContainer,
+        observedParent,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    return originalRealpath(filePath, options as never);
+  }) as typeof fs.realpathSync);
+  return {
+    trustedAlias,
+    observedPath: path.join(observedRoot, basename),
+    openSync: vi.spyOn(fs, "openSync"),
+  };
+}
+
 describe("plugin package facts", () => {
+  it.skipIf(process.platform === "win32")(
+    "reuses checked entry canonical paths until metadata invalidation",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-checked-realpath-"));
+      const source = path.join(root, "index.js");
+      fs.writeFileSync(source, "export default {};\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: root,
+            relativePath: "index.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, path: source, exists: true });
+        nativeRealpath.mockClear();
+        expect(pluginCacheRealpathSync(source)).toBe(source);
+        expect(pluginCacheRealpathSync(source, true)).toBe(source);
+        expect(nativeRealpath).not.toHaveBeenCalled();
+
+        fs.unlinkSync(source);
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(source, true)).toBeNull();
+        expect(pluginCacheRealpathSync(source)).toBeNull();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "shares metadata ancestors without trusting them at the file-open boundary",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-metadata-ancestors-"));
+      const icons = path.join(root, "assets");
+      const firstSource = path.join(icons, "0.svg");
+      const outside = fs.realpathSync(tempDirs.make("plugin-metadata-outside-"));
+      fs.mkdirSync(icons);
+      const sources = Array.from({ length: 8 }, (_, i) => path.join(icons, `${i}.svg`));
+      for (const source of sources) {
+        fs.writeFileSync(source, "<svg/>\n");
+      }
+      fs.writeFileSync(path.join(outside, "0.svg"), "outside\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const realpath = vi.spyOn(fs, "realpathSync");
+      const lstat = vi.spyOn(fs, "lstatSync");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        for (const source of sources) {
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(lstat.mock.calls.filter(([filePath]) => filePath === source)).toHaveLength(1);
+        }
+        // A common ancestor needs filesystem resolution; each sibling must not walk it again.
+        expect(realpath.mock.calls.length + nativeRealpath.mock.calls.length).toBeLessThanOrEqual(
+          1,
+        );
+
+        fs.renameSync(icons, path.join(root, "previous-assets"));
+        fs.symlinkSync(outside, icons, "dir");
+        expect(pluginCacheRealpathSync(firstSource)).toBe(firstSource);
+        expect(
+          readPluginCacheFile({
+            rootDir: root,
+            relativePath: "assets/0.svg",
+            rejectHardlinks: true,
+          }).ok,
+        ).toBe(false);
+
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(firstSource)).toBe(path.join(outside, "0.svg"));
+      });
+    },
+  );
+
   it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
     const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
     const packageDir = path.join(root, "package");
@@ -53,11 +263,26 @@ describe("plugin package facts", () => {
       path.relative(process.cwd(), packageDir),
       ...(process.platform === "win32" ? [packageDir.toUpperCase()] : []),
     ];
+    const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
     for (const targetPath of paths) {
       const expected = fs.realpathSync(targetPath);
-      withPluginCache(createPluginCache(), () => {
-        expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
-      });
+      const nativeExpected = fs.realpathSync.native(targetPath);
+      for (const nativeFirst of [false, true]) {
+        nativeRealpath.mockClear();
+        const cache = createPluginCache();
+        withPluginCache(cache, () => {
+          if (nativeFirst) {
+            expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          }
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(1);
+          invalidatePluginCacheMetadata(cache);
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(2);
+        });
+      }
     }
   });
 
@@ -74,30 +299,133 @@ describe("plugin package facts", () => {
     });
   });
 
-  it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
-    const root = tempDirs.make("plugin-lease-parent-");
-    const filePath = path.join(root, "catalog.json");
-    fs.writeFileSync(filePath, '{"name":"before-install"}');
-    await using cache = createPluginCache();
-    const instance = new PluginInstance("setup-owner");
-    cache.instances.add(instance);
-    const afterWrite = instance.wrap(() => "post-write usable");
-    await withPluginCache(cache, async () => {
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "before-install" },
+  it("rejects a retargeted observed root during plugin cache entry check", () => {
+    const { trustedAlias, observedPath, openSync } = createRetargetedWindowsRootFixture(
+      "plugin-cache-alias-race-",
+      "package.json",
+    );
+    const relativePath = path.relative(trustedAlias, observedPath);
+
+    const result = withPluginCache(createPluginCache(), () =>
+      checkPluginCacheEntry({
+        rootDir: trustedAlias,
+        relativePath,
+        rejectHardlinks: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "validation",
+      error: { code: "path-mismatch" },
+    });
+    expect(openSync).not.toHaveBeenCalled();
+  });
+  it("reads an aliased Windows plugin root through the descriptor boundary", () => {
+    const { parent, root, alias, source } = createWindowsRootAliasFixture(
+      "plugin-identity-read-",
+      path.join("nested", "plugin.js"),
+    );
+    const external = path.join(parent, "external.js");
+    fs.writeFileSync(external, "external\n");
+    fs.symlinkSync(external, path.join(root, "external-link.js"));
+    expect(isPathInside(alias, source)).toBe(true);
+    expect(isPathInside(alias, external)).toBe(false);
+    const opened = openPluginRootFileSync({
+      rootPath: alias,
+      filePath: source,
+      rejectHardlinks: false,
+    });
+    expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      expect(opened.path).toBe(source);
+      fs.closeSync(opened.fd);
+    }
+
+    withPluginCache(createPluginCache(), () => {
+      const file = readPluginCacheFile({
+        rootDir: alias,
+        // Mirror short-root/long-child records produced by Windows discovery.
+        relativePath: path.relative(alias, source),
+        rejectHardlinks: false,
       });
-      await withPluginLifecycleLease({ path: path.join(root, "state.sqlite") }, async () => {
-        fs.writeFileSync(filePath, '{"name":"after-install"}');
-        clearPluginMetadataLifecycleCaches();
-      });
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "after-install" },
-      });
-      expect(afterWrite()).toBe("post-write usable");
+      expect(file.ok && file.contents.toString("utf8")).toBe("export default {};\n");
+      expect(
+        readPluginCacheFile({
+          rootDir: alias,
+          relativePath: "external-link.js",
+          rejectHardlinks: false,
+        }).ok,
+      ).toBe(false);
     });
   });
+
+  it.each(["junction", "short root"] as const)(
+    "checks a Windows entry with an admitted %s alias",
+    (kind) => {
+      const { root, alias } = createWindowsRootAliasFixture("plugin-root-alias-entry-");
+      withPluginCache(createPluginCache(), () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: kind === "junction" ? alias : root,
+            rootRealPath: kind === "junction" ? root : alias,
+            relativePath: "plugin.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, exists: true });
+      });
+    },
+  );
+
+  it.each(["regular", "symlink"] as const)(
+    "reuses the provider catalog source resolved from a %s file",
+    (kind) => {
+      const dir = fs.realpathSync(tempDirs.make("plugin-provider-source-"));
+      const providerDiscoverySource = path.join(dir, "provider-discovery.js");
+      fs.writeFileSync(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "cached-provider",
+          providers: ["cached-provider"],
+          providerCatalogEntry: "./provider-discovery.js",
+          configSchema: { type: "object" },
+        }),
+      );
+      if (kind === "symlink") {
+        const target = path.join(dir, "catalog.js");
+        fs.writeFileSync(target, "export default {};\n", "utf8");
+        fs.symlinkSync(target, providerDiscoverySource);
+      } else {
+        fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
+      }
+      const realpathSpy = vi.spyOn(fs, "realpathSync");
+      const lstatSpy = vi.spyOn(fs, "lstatSync");
+
+      withPluginCache(createPluginCache(), () => {
+        let firstReadCounts: number[] | undefined;
+        for (let build = 0; build < 2; build += 1) {
+          const registry = loadPluginManifestRegistryCore({
+            installRecords: {},
+            candidates: [
+              {
+                idHint: "cached-provider",
+                rootDir: dir,
+                source: path.join(dir, "index.js"),
+                origin: "bundled",
+              },
+            ],
+          });
+          expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
+          const readCounts = [realpathSpy, lstatSpy].map(
+            (spy) =>
+              spy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource).length,
+          );
+          firstReadCounts ??= readCounts;
+          expect(readCounts).toEqual(firstReadCounts);
+        }
+      });
+    },
+  );
 
   it.each(["regular", "boundary"] as const)(
     "shares missing %s files across reader policies until the owner changes",
@@ -400,4 +728,83 @@ describe("plugin package facts", () => {
       });
     },
   );
+});
+
+it.each([false, true])(
+  "owns cache cleanup when retirement runs in a closed request scope (borrowed: %s)",
+  async (borrowed) => {
+    const requester = new AsyncWorkScope();
+    const cache = createPluginCache();
+    const instance = new PluginInstance("closed-cache-borrower");
+    cache.instances.add(instance);
+    const cleaned = vi.fn();
+    instance.lifecycle.onDispose(() => trackAsyncWork(cleaned));
+    const release = borrowed ? retainPluginCache(cache) : undefined;
+    const run = requester.run(() => AsyncLocalStorage.snapshot());
+    await requester.drain();
+    try {
+      const retirement = run(() => retirePluginCache(cache));
+      void retirement.catch(() => {});
+      run(() => release?.());
+      await expect(retirement).resolves.toMatchObject({ failures: [] });
+      expect(cleaned).toHaveBeenCalledOnce();
+      await expect(requester.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+    } finally {
+      release?.();
+      await instance.dispose();
+    }
+  },
+);
+
+it("retires a cache released by a borrower captured before package replacement", async () => {
+  const requester = new AsyncWorkScope();
+  const cache = createPluginCache();
+  const instance = new PluginInstance("released-cache-borrower");
+  cache.instances.add(instance);
+  retainPluginCache(cache);
+  const retainers = resolveGlobalSingleton(
+    Symbol.for("openclaw.pluginCacheRetainers"),
+    () =>
+      new WeakMap<
+        object,
+        {
+          references: Set<object>;
+          settled: { resolve: () => void };
+        }
+      >(),
+  );
+  const retained = retainers.get(cache);
+  assert(retained);
+  const reference = retained.references.values().next().value;
+  assert(reference);
+  // v2026.9.5 release closures only publish this fact; their code survives replacement.
+  const release = () => {
+    if (retained.references.delete(reference) && retained.references.size === 0) {
+      retained.settled.resolve();
+    }
+  };
+  const finish = createDeferredCore();
+  const cleaned = vi.fn();
+  let cleaning = false;
+  instance.lifecycle.onDispose(async () => {
+    cleaning = true;
+    await finish.promise;
+    cleaned();
+  });
+  const { retirement } = await requester.track(() => ({ retirement: retirePluginCache(cache) }));
+  void retirement.catch(() => {});
+  await requester.drain();
+  try {
+    release();
+    await nextTurn();
+    expect(cleaning).toBe(true);
+    expect(cleaned).not.toHaveBeenCalled();
+    finish.resolve();
+    await expect(retirement).resolves.toMatchObject({ failures: [] });
+    expect(cleaned).toHaveBeenCalledOnce();
+  } finally {
+    release();
+    finish.resolve();
+    await retirement.catch(() => {});
+  }
 });

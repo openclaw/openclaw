@@ -119,14 +119,36 @@ function defaultRelayResponse(method: string, supportsBargeIn?: boolean) {
     : {};
 }
 
-function createClient(supportsBargeIn?: boolean): RealtimeTalkTransportContext["client"] {
+function createClient(
+  supportsBargeIn?: boolean,
+  supportsDetach = false,
+  requestImplementation: (method: string) => Promise<unknown> = async (method) =>
+    defaultRelayResponse(method, supportsBargeIn),
+): RealtimeTalkTransportContext["client"] {
   return {
+    hello: { features: { capabilities: supportsDetach ? ["talk-session-close-disposition"] : [] } },
     addEventListener: vi.fn((listener: GatewayListener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     }),
-    request: vi.fn(async (method: string) => defaultRelayResponse(method, supportsBargeIn)),
+    request: vi.fn(requestImplementation),
   } as unknown as RealtimeTalkTransportContext["client"];
+}
+
+function createConsultClient(supportsDetach = false) {
+  const client = createClient(undefined, supportsDetach);
+  vi.mocked(client["request"]).mockImplementation(async (method) => {
+    if (method === "talk.client.toolCall") {
+      return {
+        runId: "run-1",
+        idempotencyKey: "run-1",
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+      };
+    }
+    return defaultRelayResponse(method);
+  });
+  return client;
 }
 
 async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
@@ -159,6 +181,17 @@ function emitTalkEvent(payload: unknown): void {
     }
   }
   emitGatewayFrame({ event: "talk.event", payload: eventPayload });
+}
+
+function emitConsultAndWait(client: RealtimeTalkTransportContext["client"]) {
+  emitTalkEvent({
+    relaySessionId: "relay-1",
+    type: "toolCall",
+    callId: "call-1",
+    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    args: { question: "status?" },
+  });
+  return waitForFast(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
 }
 
 function pumpMicrophone(samples: Float32Array): void {
@@ -211,6 +244,130 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     inputSinks.length = 0;
     createdSources.length = 0;
   });
+
+  it.each([true, false])("closes explicit Stop with abort (supported=%s)", async (supported) => {
+    const client = createConsultClient(supported);
+    const transport = await createTransport({ client });
+    await startTransport(transport);
+    await emitConsultAndWait(client);
+    await transport.stop();
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+    expect(requestCallsFor(client, "talk.session.close")).toEqual([
+      [
+        "talk.session.close",
+        { sessionId: "relay-1", ...(supported ? { disposition: "abort" } : {}) },
+        { timeoutMs: 8_000 },
+      ],
+    ]);
+  });
+
+  it.each([true, false])(
+    "detaches on append timeout before status cleanup (supported=%s)",
+    async (supported) => {
+      const onStatus = vi.fn();
+      const append = createDeferred();
+      const failed = createDeferred();
+      const client = createConsultClient(supported);
+      const request = vi.mocked(client["request"]).getMockImplementation()!;
+      vi.mocked(client["request"]).mockImplementation((method, params, options) =>
+        method === "talk.session.appendAudio" ? append.promise : request(method, params, options),
+      );
+      const transport = await createTransport({ client, callbacks: { onStatus } });
+      await startTransport(transport);
+      await emitConsultAndWait(client);
+      onStatus.mockImplementation(() => {
+        void transport.stop();
+        failed.resolve();
+      });
+      pumpMicrophone(new Float32Array(4096));
+      append.reject(new Error("Request timed out: talk.session.appendAudio"));
+      await failed.promise;
+      await transport.stop();
+      expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+      expect(onStatus).toHaveBeenCalledWith("error", "Request timed out: talk.session.appendAudio");
+      expect(requestCallsFor(client, "talk.session.close")).toEqual([
+        [
+          "talk.session.close",
+          { sessionId: "relay-1", ...(supported ? { disposition: "detach" } : {}) },
+          { timeoutMs: 8_000 },
+        ],
+      ]);
+    },
+  );
+
+  it("detaches when audio playback throws", async () => {
+    const client = createConsultClient(true);
+    const onStatus = vi.fn();
+    const transport = await createTransport({ client, callbacks: { onStatus } });
+    await startTransport(transport);
+    await emitConsultAndWait(client);
+    const failedPlayback = vi
+      .spyOn(MockAudioContext.prototype, "createBufferSource")
+      .mockImplementationOnce(() => {
+        throw new Error("Playback failed");
+      });
+    try {
+      expect(() =>
+        emitTalkEvent({ relaySessionId: "relay-1", type: "audio", audioBase64: "AAAA" }),
+      ).toThrow("Playback failed");
+      expect(onStatus).toHaveBeenCalledWith("error", "Playback failed");
+      expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+      expect(requestCallsFor(client, "talk.session.close")).toEqual([
+        [
+          "talk.session.close",
+          { sessionId: "relay-1", disposition: "detach" },
+          { timeoutMs: 8_000 },
+        ],
+      ]);
+    } finally {
+      failedPlayback.mockRestore();
+      await transport.stop();
+    }
+  });
+
+  it.each([false, true])(
+    "reconnects only the failed detach connection (replaced=%s)",
+    async (replaced) => {
+      const closing = createDeferred();
+      const closeStarted = createDeferred();
+      const forceReconnect = vi.fn();
+      const client = createClient(undefined, true, async (method) => {
+        if (method === "talk.session.submitToolResult") {
+          throw new Error("Submission failed");
+        }
+        if (method === "talk.session.close") {
+          closeStarted.resolve();
+          return closing.promise;
+        }
+        if (method === "talk.client.toolCall") {
+          return {
+            runId: "run-1",
+            idempotencyKey: "run-1",
+            agentId: "main",
+            agentSessionKey: "agent:main:main",
+          };
+        }
+        return defaultRelayResponse(method);
+      });
+      Object.assign(client, { forceReconnect });
+      const transport = await createTransport({ client });
+      await startTransport(transport);
+      await emitConsultAndWait(client);
+      emitGatewayFrame({
+        event: "chat",
+        payload: { runId: "run-1", state: "final", message: { text: "Final answer" } },
+      });
+      await closeStarted.promise;
+      if (replaced) {
+        Object.assign(client, { hello: {} });
+      }
+      closing.reject(new Error("Close failed"));
+      await expect(transport.stop()).rejects.toThrow("Close failed");
+      expect(forceReconnect.mock.calls).toEqual(replaced ? [] : [["Talk detach close failed"]]);
+      expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+      expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+    },
+  );
 
   it("closes relay resources on microphone loss even when status delivery throws", async () => {
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });
@@ -288,13 +445,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockClear();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "transcript",
+    const committedTranscript = {
       role: "assistant",
       text: "not committed yet",
+      transcriptId: "voice:relay-1:1",
+      textMode: "snapshot",
       final: true,
-    });
+    } as const;
+    emitTalkEvent({ relaySessionId: "relay-1", type: "transcript", ...committedTranscript });
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "toolCall",
@@ -310,11 +468,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.activate();
 
     expect(onStatus).toHaveBeenCalledWith("listening");
-    expect(onTranscript).toHaveBeenCalledWith({
-      role: "assistant",
-      text: "not committed yet",
-      final: true,
-    });
+    expect(onTranscript).toHaveBeenCalledWith(committedTranscript);
     await waitForFast(() =>
       expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
     );
@@ -341,7 +495,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     const startup = transport.start();
     expect(requestCallsFor(client, "talk.catalog")).toEqual([
-      ["talk.catalog", { provider: "openai", model: "gpt-live-1" }, expect.any(Object)],
+      [
+        "talk.catalog",
+        { sessionKey: "main", provider: "openai", model: "gpt-live-1" },
+        expect.any(Object),
+      ],
     ]);
     void transport.stop();
     resolveCatalog(defaultRelayResponse("talk.catalog", false));
@@ -508,7 +666,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = await createTransport({ client });
 
     await startTransport(transport);
-    for (let index = 0; index < 321; index += 1) {
+    for (let index = 0; index < 4_097; index += 1) {
       emitTalkEvent({
         relaySessionId: "relay-1",
         type: "audio",
@@ -528,7 +686,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         ],
       ]),
     );
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
     expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
 
     emitTalkEvent({
@@ -536,7 +694,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: "AAAA",
     });
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
 
     emitTalkEvent({ relaySessionId: "relay-1", type: "clear" });
     emitTalkEvent({
@@ -544,7 +702,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: "AAAA",
     });
-    expect(createdSources).toHaveLength(321);
+    expect(createdSources).toHaveLength(4_097);
     expect(createdSources.at(-1)?.start).toHaveBeenCalledOnce();
 
     void transport.stop();
@@ -558,7 +716,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "audio",
-      audioBase64: zeroPcmBase64(24000 * 11),
+      audioBase64: zeroPcmBase64(24000 * 61),
     });
 
     await waitForFast(() =>
@@ -652,61 +810,46 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
-  it("fails visibly when stalled microphone appends reach the ownership cap", async () => {
-    const onStatus = vi.fn();
+  it("reports dropped microphone frames and recovery without ending the call", async () => {
+    const onInputNotice = vi.fn();
     const client = createClient();
-    let activeAppends = 0;
-    let peakActiveAppends = 0;
-    const appendSignals: AbortSignal[] = [];
-    vi.mocked(client["request"]).mockImplementation((method, _params, options) => {
-      if (method !== "talk.session.appendAudio") {
-        return Promise.resolve(defaultRelayResponse(method));
-      }
-      const signal = options?.signal;
-      if (!signal) {
-        return Promise.reject(new Error("missing append abort signal"));
-      }
-      appendSignals.push(signal);
-      activeAppends += 1;
-      peakActiveAppends = Math.max(peakActiveAppends, activeAppends);
-      return new Promise((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            activeAppends -= 1;
-            reject(new Error("append aborted"));
-          },
-          { once: true },
-        );
-      });
-    });
-    const transport = await createTransport({ callbacks: { onStatus }, client });
-
+    const resolvers: Array<() => void> = [];
+    vi.mocked(client["request"]).mockImplementation((method) =>
+      method === "talk.session.appendAudio"
+        ? new Promise<unknown>((resolve) => {
+            resolvers.push(() => resolve({}));
+          })
+        : Promise.resolve(defaultRelayResponse(method)),
+    );
+    const transport = await createTransport({ callbacks: { onInputNotice }, client });
     await startTransport(transport);
+    // 4096 samples at 24 kHz is ~171 ms; a 3 s budget admits 17 in-flight frames.
     const samples = new Float32Array(4096);
-    for (let index = 0; index < 10_000; index += 1) {
+    for (let index = 0; index < 40; index += 1) {
       pumpMicrophone(samples);
     }
 
-    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
-    expect(appendCalls).toHaveLength(4);
-    expect(peakActiveAppends).toBe(4);
-    expect(new Set(appendSignals).size).toBe(1);
+    expect(requestCallsFor(client, "talk.session.appendAudio")).toHaveLength(17);
+    expect(onInputNotice).toHaveBeenCalledWith(
+      "Realtime Talk audio input fell behind; repeat the last part",
+    );
     expect(
-      appendCalls.every(
-        (call) => call[2]?.signal === appendSignals[0] && call[2]?.timeoutMs === 8_000,
+      onInputNotice.mock.calls.filter(
+        ([detail]) => detail === "Realtime Talk audio input fell behind; repeat the last part",
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
 
-    await Promise.resolve();
-
-    expect(activeAppends).toBe(0);
-    expect(appendSignals.every((signal) => signal.aborted)).toBe(true);
-    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    expect(onStatus).toHaveBeenCalledWith("error", "Realtime Talk audio input fell behind");
-
+    for (const resolve of resolvers.splice(0)) {
+      resolve();
+    }
+    for (let tick = 0; tick < 4; tick += 1) {
+      await Promise.resolve();
+    }
+    expect(onInputNotice).toHaveBeenCalledWith("Microphone input recovered; repeat the last part");
+    pumpMicrophone(samples);
+    expect(requestCallsFor(client, "talk.session.appendAudio")).toHaveLength(18);
     void transport.stop();
-    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
   it("preserves accepted microphone frame order", async () => {
@@ -786,12 +929,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(1);
     expect(closeCalls[0]?.[1]).toEqual({ sessionId: "relay-1" });
@@ -812,12 +951,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime relay closed");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(0);
@@ -957,18 +1092,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("treats aborted consult chat events as cancellation", async () => {
     const onStatus = vi.fn();
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
@@ -1032,16 +1156,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
     emitGatewayFrame({
       event: "chat",
       payload: {
@@ -1066,9 +1181,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     void transport.stop();
   });
 
-  it("surfaces rejected provider tool-result submission without an unhandled rejection", async () => {
+  it("detaches after rejected provider tool-result submission and keeps the visible error", async () => {
     const onStatus = vi.fn();
-    const client = createClient();
+    const client = createClient(undefined, true);
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return {
@@ -1086,16 +1201,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
     emitGatewayFrame({
       event: "chat",
       payload: {
@@ -1111,22 +1217,15 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onStatus).toHaveBeenLastCalledWith("error", "Provider rejected the tool result");
     expect(onStatus).not.toHaveBeenCalledWith("listening");
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1);
-    void transport.stop();
+    await transport.stop();
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+    expect(requestCallsFor(client, "talk.session.close")).toEqual([
+      ["talk.session.close", { sessionId: "relay-1", disposition: "detach" }, { timeoutMs: 8_000 }],
+    ]);
   });
 
   it("submits an interim working result for forced consult tool calls", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
@@ -1157,18 +1256,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("releases delayed final tool results when playback is cleared normally", async () => {
     vi.useFakeTimers();
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
@@ -1177,16 +1265,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: zeroPcmBase64(24000),
     });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -1207,18 +1286,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("releases delayed final tool results on unkeyed provider barge-in clears", async () => {
     vi.useFakeTimers();
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
@@ -1227,16 +1295,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: zeroPcmBase64(24000),
     });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -1324,16 +1383,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: zeroPcmBase64(24000),
     });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
 
     pumpMicrophone(speech);
     pumpMicrophone(speech);
@@ -1457,16 +1507,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         type: "audio",
         audioBase64: zeroPcmBase64(24000),
       });
-      emitTalkEvent({
-        relaySessionId: "relay-1",
-        type: "toolCall",
-        callId: "call-1",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: { question: "status?" },
-      });
-      await waitForFast(() =>
-        expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-      );
+      await emitConsultAndWait(client);
       emitGatewayFrame({
         event: "chat",
         payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -1522,16 +1563,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         type: "audio",
         audioBase64: zeroPcmBase64(24000),
       });
-      emitTalkEvent({
-        relaySessionId: "relay-1",
-        type: "toolCall",
-        callId: "call-1",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: { question: "status?" },
-      });
-      await waitForFast(() =>
-        expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-      );
+      await emitConsultAndWait(client);
       emitGatewayFrame({
         event: "chat",
         payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -1554,10 +1586,10 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     },
   );
 
-  it("closes without releasing delayed results when playback cancellation fails", async () => {
+  it("detaches an accepted consult when playback cancellation fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const client = createClient();
+    const client = createClient(undefined, true);
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return {
@@ -1582,60 +1614,26 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: zeroPcmBase64(24000),
     });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
-    emitGatewayFrame({
-      event: "chat",
-      payload: { runId: "run-1", state: "final", message: { text: "ready" } },
-    });
-    await Promise.resolve();
-
+    await emitConsultAndWait(client);
     pumpMicrophone(speech);
     pumpMicrophone(speech);
     pumpMicrophone(speech);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
     expect(requestCallsFor(client, "talk.session.close")).toEqual([
-      ["talk.session.close", { sessionId: "relay-1" }, { timeoutMs: 8_000 }],
+      ["talk.session.close", { sessionId: "relay-1", disposition: "detach" }, { timeoutMs: 8_000 }],
     ]);
     expect(onStatus).toHaveBeenCalledWith("error", "cancel failed");
   });
 
   it("treats server relay tool results as terminal for active consult calls", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
 
     emitTalkEvent({
       relaySessionId: "relay-1",
@@ -1669,43 +1667,17 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "run-1",
-      }),
-    );
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
     void transport.stop();
   });
 
-  it("aborts an active consult and suppresses its late result after provider cancellation", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+  it("leaves provider cancellation to the Gateway and suppresses its late result", async () => {
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
 
     emitTalkEvent({
       relaySessionId: "relay-1",
@@ -1713,13 +1685,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       callId: "call-1",
     });
 
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "run-1",
-      }),
-    );
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
@@ -1775,31 +1741,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it("submits a provider cancel result when a relay consult aborts without a server result", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+    const client = createConsultClient();
     const transport = await createTransport({ client });
 
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
-    );
+    await emitConsultAndWait(client);
 
     emitGatewayFrame({
       event: "chat",
@@ -1822,71 +1768,22 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     void transport.stop();
   });
 
-  it("aborts in-flight consults when the relay transport stops", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
-      if (method === "chat.abort") {
-        expect(params).toEqual({ sessionKey: "agent:main:main", agentId: "main", runId: "run-1" });
-        return { ok: true, aborted: true };
-      }
-      if (method === "talk.client.toolCall") {
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
-      }
-      return defaultRelayResponse(method);
-    });
+  it("stops local consult waiting without accepting a late result or duplicating cancellation", async () => {
+    const client = createConsultClient(true);
     const transport = await createTransport({ client });
-
     await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "toolCall",
-      callId: "call-1",
-      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      args: { question: "status?" },
-    });
-    await waitForFast(() => {
-      const toolCall = requestCallsFor(client, "talk.client.toolCall")[0];
-      const params = toolCall?.[1] as
-        | {
-            args?: unknown;
-            callId?: string;
-            name?: string;
-            relaySessionId?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(params?.sessionKey).toBe("main");
-      expect(params?.callId).toBe("call-1");
-      expect(params?.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
-      expect(params?.args).toEqual({ question: "status?" });
-      expect(params?.relaySessionId).toBe("relay-1");
-    });
-
-    void transport.stop();
-    await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "run-1",
-      }),
-    );
+    await emitConsultAndWait(client);
+    await transport.stop();
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+    expect(requestCallsFor(client, "talk.session.close")).toEqual([
+      ["talk.session.close", { sessionId: "relay-1", disposition: "abort" }, { timeoutMs: 8_000 }],
+    ]);
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
     });
-    expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
-      sessionId: "relay-1",
-      callId: "call-1",
-      result: {
-        status: "cancelled",
-        message: "Cancelled the active OpenClaw run.",
-      },
-    });
+    await Promise.resolve();
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

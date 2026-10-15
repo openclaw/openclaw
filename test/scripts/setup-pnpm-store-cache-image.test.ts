@@ -3,53 +3,52 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs",
   "utf8",
 );
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "pnpm-image-"));
-  roots.push(root);
+function fixture(platform = "linux", version = "12.3.4") {
+  const root = tempDirs.make("pnpm-image-");
   const image = join(root, "image");
   const runnerTemp = join(root, "runner");
   const stage = join(root, "stage");
-  for (const directory of [image, runnerTemp, stage]) {
+  const storeDir = join(root, "store");
+  for (const directory of [image, runnerTemp, stage, storeDir]) {
     mkdirSync(directory);
   }
+  const store = realpathSync.native(storeDir);
   function archive(name: string) {
     writeFileSync(join(stage, "pnpm"), name);
+    mkdirSync(join(stage, "bin"), { recursive: true });
+    writeFileSync(join(stage, "bin", "pnpm.mjs"), `console.log(${JSON.stringify(version)});`);
     execFileSync("tar", ["-czf", join(image, name), "-C", root, "stage"]);
     return createHash("sha512")
       .update(readFileSync(join(image, name)))
       .digest("hex");
   }
-  const wrapperHash = archive("pnpm-12.3.4.tgz");
-  const nativeHash = archive("exe.linux-x64-12.3.4.tgz");
+  const wrapperHash = archive(`pnpm-${version}.tgz`);
+  const nativeHash = archive(`exe.linux-x64-${version}.tgz`);
   // The fixture is a trusted script with synthetic anchors, not a candidate-supplied pin.
   const script = source
     .replaceAll("/opt/crabbox/toolchain-archives", image)
-    .replaceAll("process.platform", '"linux"')
+    .replaceAll("process.platform", JSON.stringify(platform))
     .replaceAll("process.arch", '"x64"')
     .replace(
-      "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
+      version === "12.9.0"
+        ? "8f64efa0b792986ca98ae568791bcd7722807e274c4f0c1d9853c62116495c584119db98762a2a5343b1684d361b9ae26fdd16d551666d7635346d3fae830ddd"
+        : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
       wrapperHash,
     )
     .replace(
@@ -58,7 +57,7 @@ function fixture() {
     );
   const scriptPath = join(root, "seed.mjs");
   writeFileSync(scriptPath, script);
-  const spec = `pnpm@12.3.4+sha512.${wrapperHash}`;
+  const spec = `pnpm@${version}+sha512.${wrapperHash}`;
   return {
     root,
     image,
@@ -67,40 +66,66 @@ function fixture() {
     run(packageManager = spec) {
       return spawnSync(process.execPath, [scriptPath, packageManager], {
         encoding: "utf8",
-        env: { ...process.env, RUNNER_TEMP: runnerTemp, COREPACK_HOME: join(root, "old-corepack") },
+        env: {
+          ...process.env,
+          RUNNER_TEMP: runnerTemp,
+          COREPACK_HOME: join(root, "old-corepack"),
+          PNPM_CONFIG_STORE_DIR: store,
+          COREPACK_ENABLE_NETWORK: "0",
+        },
       });
     },
   };
 }
 
 describe("pnpm image archive consumer", () => {
-  it("seeds each job from verified archives into independent private Corepack state", () => {
-    const f = fixture();
-    const homes: string[] = [];
-    for (let run = 0; run < 2; run++) {
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
-      const home = result.stdout.trim();
-      homes.push(home);
-      const pnpmRoot = join(home, "v1", "pnpm", "12.3.4");
-      expect(readFileSync(join(pnpmRoot, "pnpm"), "utf8")).toBe("pnpm-12.3.4.tgz");
-      expect(
-        readFileSync(join(pnpmRoot, "node_modules", "@pnpm", "exe.linux-x64", "pnpm"), "utf8"),
-      ).toBe("exe.linux-x64-12.3.4.tgz");
-      const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
-      expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
-      expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
-      writeFileSync(join(pnpmRoot, "pnpm"), "tampered extracted executable");
-    }
-    expect(homes[0]).not.toBe(homes[1]);
-    expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
-    expect(readdirSync(f.runnerTemp)).toHaveLength(2);
-  });
+  it.each([
+    { platform: "win32", version: "12.9.0" },
+    { platform: "linux", version: "12.3.4" },
+  ])(
+    "seeds $platform jobs from verified $version archives into private Corepack state",
+    ({ platform, version }) => {
+      const f = fixture(platform, version);
+      const homes: string[] = [];
+      for (let run = 0; run < 2; run++) {
+        const result = f.run();
+        expect(result.status, result.stderr).toBe(0);
+        const home = result.stdout.trim();
+        expect(home).not.toBe("");
+        homes.push(home);
+        const pnpmRoot = join(home, "v1", "pnpm", version);
+        expect(readFileSync(join(pnpmRoot, "pnpm"), "utf8")).toBe(`pnpm-${version}.tgz`);
+        if (platform === "linux") {
+          expect(
+            readFileSync(join(pnpmRoot, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8"),
+          ).toBe(`exe.linux-x64-${version}.tgz`);
+        } else {
+          expect(existsSync(join(pnpmRoot, "node_modules"))).toBe(false);
+        }
+        const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
+        expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
+        expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
+        expect(
+          execFileSync(process.execPath, [join(pnpmRoot, metadata.bin.pnpm)], {
+            encoding: "utf8",
+          }).trim(),
+        ).toBe(version);
+        writeFileSync(join(pnpmRoot, "pnpm"), "tampered extracted executable");
+      }
+      expect(homes[0]).not.toBe(homes[1]);
+      expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
+      expect(readdirSync(f.runnerTemp)).toHaveLength(2);
+    },
+  );
 
-  it.each(["pnpm-12.3.4.tgz", "exe.linux-x64-12.3.4.tgz"])(
-    "refuses substituted %s without accepting adjacent hash or completion files",
-    (name) => {
-      const f = fixture();
+  it.each([
+    { platform: "win32", version: "12.9.0", name: "pnpm-12.9.0.tgz" },
+    { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
+    { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
+  ])(
+    "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
+    ({ platform, version, name }) => {
+      const f = fixture(platform, version);
       writeFileSync(join(f.image, name), "bad archive");
       writeFileSync(join(f.image, ".complete"), "");
       writeFileSync(
@@ -114,20 +139,15 @@ describe("pnpm image archive consumer", () => {
     },
   );
 
-  it.each(["missing", "different-version", "different-hash"])(
-    "leaves ordinary Corepack preparation in control on %s",
+  it.each(["different-version", "different-hash"])(
+    "leaves Corepack preparation in control for %s despite valid cached archives",
     (kind) => {
       const f = fixture();
-      if (kind === "missing") {
-        rmSync(join(f.image, "pnpm-12.3.4.tgz"));
-      }
-      const spec =
+      const requested =
         kind === "different-version"
           ? f.spec.replace("12.3.4", "12.3.5")
-          : kind === "different-hash"
-            ? f.spec.replace(/.$/u, "z")
-            : f.spec;
-      const result = f.run(spec);
+          : f.spec.replace(/.$/u, "z");
+      const result = f.run(requested);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("");
       expect(readdirSync(f.runnerTemp)).toEqual([]);
@@ -165,8 +185,7 @@ describe("pnpm image archive consumer", () => {
     const ready = workflow.jobs[job].steps.find(
       (step: { name?: string }) => step.name === "Mark Crabbox ready",
     );
-    const home = mkdtempSync(join(tmpdir(), "crabbox-session-"));
-    roots.push(home);
+    const home = tempDirs.make("crabbox-session-");
     const corepackHome = join(
       home,
       "corepack cache ' \" $HOME $(touch injected) `touch injected` ;",

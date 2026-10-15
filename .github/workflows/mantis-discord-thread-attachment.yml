@@ -353,7 +353,7 @@ jobs:
             : evidence.entries.map((entry) => ({ scenarioId: entry.test.id, status: entry.result.status }));
           for (const outcome of outcomes) {
             if (outcome.scenarioId === "discord-thread-reply-filepath-attachment") {
-              console.log(outcome.status);
+              console.log(String(outcome.status));
             }
           }
           NODE

@@ -52,16 +52,18 @@ export function formatIndeterminateDatabaseReadiness(
   operation: OpenClawDatabaseSchemaPreflightOperation,
 ): string {
   const shown = indeterminate
-    .slice(0, 3)
-    .map((database) => `${database.kind} ${database.path}: ${database.reason}`);
-  const omitted = indeterminate.length - shown.length;
+    .toSorted((left, right) => left.path.localeCompare(right.path))
+    .map(
+      (database) =>
+        `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}`,
+    );
   const action =
     operation === "doctor"
       ? "Doctor could not complete repair"
       : operation === "gateway-startup"
         ? "Gateway refused startup"
         : "Gateway refused restart";
-  return `${action} because persisted database readiness could not be verified: ${shown.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}. ${operation === "doctor" ? "Stop OpenClaw processes, then restore the affected database from a verified backup." : "Stop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
+  return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}\n${operation === "doctor" ? "Stop OpenClaw processes, then restore the affected database from a verified backup." : "Stop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
 }
 
 export function describeDeferredStateSchemaPublication(

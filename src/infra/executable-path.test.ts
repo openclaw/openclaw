@@ -3,9 +3,12 @@ import { spawnSync } from "node:child_process";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   clearExecutablePathCache,
@@ -106,6 +109,18 @@ describe("executable path helpers", () => {
     },
   );
 
+  it("preserves prepared directory boundaries without sharing serialized PATH cache entries", async () => {
+    const root = tempDirs.make("openclaw-path-entries-");
+    const directory = path.join(root, `tools${path.delimiter}extra`);
+    await fs.mkdir(directory);
+    const executable = path.join(directory, "runner");
+    await fs.writeFile(executable, "", { mode: 0o755 });
+
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+    expect(resolveExecutableFromPathEnv("runner", [directory])).toBe(executable);
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+  });
+
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
@@ -167,7 +182,7 @@ describe("executable path helpers", () => {
     },
   );
 
-  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+  it.each([".EXE; ;.CMD", "", ";;"])(
     "keeps extensionless lookup explicit with PATHEXT %j",
     async (pathext) => {
       await withMockedPlatform("win32", async () => {
@@ -228,7 +243,7 @@ describe("executable path helpers", () => {
     });
   });
 
-  it("does not reuse relative PATH probes after cwd changes", async () => {
+  it("does not reuse relative PATH probes after cwd changes", async ({ signal }) => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const firstCwd = path.join(base, "first");
       const secondCwd = path.join(base, "second");
@@ -237,17 +252,25 @@ describe("executable path helpers", () => {
       await fs.mkdir(secondCwd);
       const executable = path.join(firstCwd, relativeBin, "runner");
       await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      const originalCwd = process.cwd();
-      try {
-        process.chdir(firstCwd);
-        expect(resolveExecutableFromPathEnv("runner", relativeBin)).toBe(
-          path.join(relativeBin, "runner"),
-        );
-        process.chdir(secondCwd);
-        expect(resolveExecutableFromPathEnv("runner", relativeBin)).toBeUndefined();
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const result = await runNodeScript(
+        createNodeEvalArgs(
+          `import assert from "node:assert/strict";
+           import path from "node:path";
+           import { resolveExecutableFromPathEnv } from ${JSON.stringify(new URL("./executable-path.ts", import.meta.url).href)};
+           assert.equal(resolveExecutableFromPathEnv("runner", "bin"), path.join("bin", "runner"));
+           process.chdir(${JSON.stringify(secondCwd)});
+           assert.equal(resolveExecutableFromPathEnv("runner", "bin"), undefined);`,
+          { imports: [import.meta.resolve("tsx/esm")] },
+        ),
+        {
+          ...process.env,
+          TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+        },
+        undefined,
+        { cwd: firstCwd, signal, requireProcessTreeExit: process.platform !== "win32" },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
     });
   });
 

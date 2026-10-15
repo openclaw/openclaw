@@ -1,4 +1,3 @@
-// Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -6,10 +5,10 @@ import type {
   WorkboardCard,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
@@ -123,6 +122,10 @@ async function setWorkboardDraftField(
   const input = scope.getByLabel(label);
   await input.fill(value);
   await expect.poll(() => input.inputValue()).toBe(value);
+}
+
+async function requestCount(gateway: MockGatewayControls, method: string): Promise<number> {
+  return (await gateway.getRequests(method)).length;
 }
 
 async function waitForRequests(
@@ -362,7 +365,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([]),
         },
       });
@@ -380,9 +382,8 @@ suite.define(() => {
       await openWorkboardFilters(writable.page);
       const highPriority = writable.page
         .getByRole("group", { name: "Priority", exact: true })
-        .getByRole("checkbox", { name: /High/u });
-      await highPriority.focus();
-      await writable.page.keyboard.press("Space");
+        .getByRole("checkbox", { name: /High/u, disabled: false });
+      await highPriority.press("Space");
       await expect.poll(() => highPriority.isChecked()).toBe(true);
       await highPriority.uncheck();
       await expect.poll(() => highPriority.isChecked()).toBe(false);
@@ -407,7 +408,7 @@ suite.define(() => {
         createForm.getByLabel("Title"),
         createForm.getByLabel("Notes"),
       ]);
-      const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
+      const createBefore = await requestCount(writableGateway, "workboard.cards.create");
       await createForm.getByRole("button", { name: /^Create$/u }).click();
       const createRequest = await waitForNextRequest(
         writableGateway,
@@ -467,10 +468,11 @@ suite.define(() => {
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(editForm, "Title", editedCard.title);
       await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
-      await editForm.getByRole("radio", { name: "High", exact: true }).focus();
-      await writable.page.keyboard.press("Space");
+      const priority = editForm.getByRole("radio", { name: "High", exact: true, disabled: false });
+      await priority.press("Space");
+      expect(await priority.isChecked()).toBe(true);
       await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
-      const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const updateBeforeEdit = await requestCount(writableGateway, "workboard.cards.update");
       await editForm.getByRole("button", { name: /^Save$/u }).click();
       const editRequest = await waitForNextRequest(
         writableGateway,
@@ -540,7 +542,7 @@ suite.define(() => {
         .poll(() => dragSource.getAttribute("class"))
         .not.toContain("workboard-card--dragging");
 
-      const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
+      const moveBefore = await requestCount(writableGateway, "workboard.cards.move");
       await dragSource.dragTo(statusColumn(writable.page, "Running"));
       const moveRequest = await waitForNextRequest(
         writableGateway,
@@ -561,9 +563,8 @@ suite.define(() => {
       });
       await captureScreenshot(writable.page, artifacts, "07-moved-running");
 
-      const updateBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.update"))
-        .length;
-      const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
+      const updateBeforeLifecycle = await requestCount(writableGateway, "workboard.cards.update");
+      const sessionListBeforeSync = await requestCount(writableGateway, "sessions.list");
       await writableGateway.setMethodResponse(
         "sessions.list",
         sessionsListResponse([
@@ -588,9 +589,8 @@ suite.define(() => {
         updateBeforeLifecycle,
       );
 
-      const listBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
-      // Catalog and page refreshes read the same committed server state after the event.
+      const listBeforeLifecycle = await requestCount(writableGateway, "workboard.cards.list");
+      // The catalog reads summaries while the page reads full cards after the event.
       await writableGateway.setMethodResponse(
         "workboard.cards.list",
         cardsListResponse([reviewedCard]),
@@ -623,9 +623,8 @@ suite.define(() => {
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       const unsavedNotes = "Keep these unfinished Workboard notes";
       await setWorkboardDraftField(editForm, "Notes", unsavedNotes);
-      const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
-      const tasksBeforeLiveRefresh = (await writableGateway.getRequests("tasks.list")).length;
+      const listBeforeLiveRefresh = await requestCount(writableGateway, "workboard.cards.list");
+      const boardsBeforeLiveRefresh = await requestCount(writableGateway, "workboard.boards.list");
       const liveRefreshResponse = cardsListResponse([liveRefreshedCard]);
       liveRefreshResponse.boards.push({
         id: "live",
@@ -636,13 +635,16 @@ suite.define(() => {
         byStatus: {},
       });
       await writableGateway.setMethodResponse("workboard.cards.list", liveRefreshResponse);
-      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.setMethodResponse("workboard.boards.list", {
+        boards: liveRefreshResponse.boards,
+      });
+      await writableGateway.deferNext("workboard.boards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
         revision: 2,
       });
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
-      await writableGateway.resolveDeferred("workboard.cards.list");
+      await waitForNextRequest(writableGateway, "workboard.boards.list", boardsBeforeLiveRefresh);
+      await writableGateway.resolveDeferred("workboard.boards.list");
       await expect
         .poll(() =>
           writable.page
@@ -650,6 +652,9 @@ suite.define(() => {
             .count(),
         )
         .toBe(1);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listBeforeLiveRefresh,
+      );
       expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
       expect(
         await reviewedCardSurface.getByRole("heading", { includeHidden: true }).textContent(),
@@ -659,9 +664,6 @@ suite.define(() => {
           .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
           .count(),
       ).toBe(0);
-      expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
-      const listBeforeDraftClose = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
       await editForm
         .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
@@ -670,19 +672,18 @@ suite.define(() => {
         .locator(".workboard-discard")
         .getByRole("button", { name: "Discard", exact: true })
         .click();
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeDraftClose);
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
       await cardInColumn(writable.page, "Review", liveRefreshedCard.title).waitFor({
         state: "visible",
       });
-      const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
+      const listAfterLiveRefresh = await requestCount(writableGateway, "workboard.cards.list");
       await writable.page.clock.fastForward(1_250);
       expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
         listAfterLiveRefresh,
       );
 
       await writableGateway.deferNext("workboard.cards.list");
-      const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
+      const listBeforeReload = await requestCount(writableGateway, "workboard.cards.list");
       await writable.page
         .locator(".workboard-heading__actions")
         .getByRole("button", { name: /^Refresh$/u })
@@ -707,7 +708,6 @@ suite.define(() => {
           "sessions.list": sessionsListResponse([
             sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
           ]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([runningCard]),
         },
       });
@@ -775,7 +775,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse(crowdedCards),
         },
       });
@@ -825,7 +824,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([reviewCard, doneCard]),
           "workboard.cards.move": { card: { ...reviewCard, status: "ready" } },
         },
@@ -925,8 +923,12 @@ suite.define(() => {
         .getByRole("button", { name: "All", exact: true })
         .click();
       await closeWorkboardFilters(recorded.page);
+      // Clear the single-column view's retained scroll offset so both drag endpoints are visible.
+      const board = recorded.page.locator(".workboard-board--page");
+      await board.evaluate((element) => element.scrollTo({ left: 0, behavior: "instant" }));
+      await expect.poll(() => board.evaluate((element) => element.scrollLeft)).toBe(0);
 
-      const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
+      const moveCount = await requestCount(gateway, "workboard.cards.move");
       await recorded.page
         .locator(".workboard-column--review .workboard-card")
         .dragTo(recorded.page.locator(".workboard-column--ready .workboard-column__rail"));
@@ -966,7 +968,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([
             card({ id: "touch-review-card", status: "review", title: "Review on touch" }),
           ]),
@@ -1028,7 +1029,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.boards.list": { boards },
           "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
         },

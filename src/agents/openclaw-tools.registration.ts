@@ -6,8 +6,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import {
   isRuntimeToolAllowed,
   isToolAllowedByPolicies,
@@ -32,23 +35,52 @@ function expandProgressCardPolicyNames(
     : undefined;
 }
 
-/** Drops disabled optional tools while preserving candidate order. */
-export function collectPresentOpenClawTools(
-  candidates: readonly (AnyAgentTool | null | undefined)[],
-): AnyAgentTool[] {
-  return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
+/** Wraps the nodes tool with a workspace-only output-path guard when policy requires it. */
+export function applyNodesToolWorkspaceGuard(
+  nodesToolBase: AnyAgentTool,
+  options: {
+    fsPolicy?: ToolFsPolicy;
+    sandboxContainerWorkdir?: string;
+    sandboxRoot?: string;
+    workspaceDir: string;
+  },
+): AnyAgentTool {
+  if (options.fsPolicy?.workspaceOnly !== true) {
+    return nodesToolBase;
+  }
+  return wrapToolWorkspaceRootGuardWithOptions(
+    nodesToolBase,
+    options.sandboxRoot ?? options.fsPolicy.root ?? options.workspaceDir,
+    {
+      containerWorkdir: options.sandboxContainerWorkdir,
+      normalizeGuardedPathParams: true,
+      pathParamKeys: ["outPath"],
+    },
+  );
 }
 
-/** Decides whether progress_card should be included in the assembled OpenClaw tool set. */
-export function shouldIncludeProgressCardToolForOpenClawTools(params: {
+type ProgressCardToolRegistrationParams = {
   agentId?: string;
+  sandboxAgentId?: string;
   agentSessionKey?: string;
   config?: OpenClawConfig;
   modelId?: string;
   modelProvider?: string;
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];
-}): boolean {
+};
+
+export function prepareProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+) {
+  return withPreparedSessionCapabilityRead(() =>
+    shouldIncludeProgressCardToolForOpenClawTools(params),
+  );
+}
+
+export function shouldIncludeProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+): boolean {
   // `tools.updatePlan` is the shipped kill switch for the replacement progress_card tool.
   if (params.config?.tools?.updatePlan === false) {
     return false;
@@ -64,7 +96,7 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.agentSessionKey,
-    agentId: params.agentId,
+    agentId: params.sandboxAgentId ?? params.agentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
@@ -101,7 +133,7 @@ type PrimarySessionToolRegistrationParams = {
   pluginToolDenylist?: string[];
 };
 
-function shouldIncludePrimarySessionToolForOpenClawTools(
+export function shouldIncludePrimarySessionToolForOpenClawTools(
   toolName: "ask_user" | "secrets",
   params: PrimarySessionToolRegistrationParams,
 ): boolean {
@@ -114,18 +146,4 @@ function shouldIncludePrimarySessionToolForOpenClawTools(
     ...(params.pluginToolDenylist ?? []),
   ]);
   return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
-}
-
-/** Includes ask_user only on a primary session and when normal deny policy permits it. */
-export function shouldIncludeAskUserToolForOpenClawTools(
-  params: PrimarySessionToolRegistrationParams,
-): boolean {
-  return shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params);
-}
-
-/** Keeps credential management on primary sessions allowed by the normal tool policy. */
-export function shouldIncludeSecretsToolForOpenClawTools(
-  params: PrimarySessionToolRegistrationParams,
-): boolean {
-  return shouldIncludePrimarySessionToolForOpenClawTools("secrets", params);
 }

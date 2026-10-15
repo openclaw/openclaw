@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import {
   createDelegationHarness,
   emitSideband,
@@ -36,11 +37,11 @@ async function createPublisher(kind: "controller" | "direct", onTranscript: Obse
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       resolveAuth: async () => ({ type: "api-key", token: "fixture-key" }),
-      webSocketFactory: () => {
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
-      },
+      }),
     },
     openAIRealtimeHost,
   );

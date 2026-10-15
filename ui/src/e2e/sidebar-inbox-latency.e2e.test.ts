@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
@@ -47,7 +49,7 @@ suite.define(() => {
       viewport: { width: 1440, height: 900 },
     });
     const page = await context.newPage();
-    const jobs = populated
+    const jobs: CronJob[] = populated
       ? [
           {
             id: "inbox-latency-job",
@@ -67,7 +69,7 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": chatSessionListResponse(),
         "cron.list": {
-          jobs,
+          jobs: jobs.map(compactCronJobFixture),
           snapshotRevision: "inbox-latency",
           total: jobs.length,
           offset: 0,
@@ -82,7 +84,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("cron.list");
       await page.locator(".sidebar-issues-button").waitFor();
-      await page.waitForLoadState("networkidle");
+      await page.locator(".sidebar-issues-button").click();
+      await page
+        .locator(
+          populated
+            ? '#sidebar-issues-panel [data-attention-kind="cronFailed"]'
+            : ".sidebar-issues-panel__empty",
+        )
+        .waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator("#sidebar-issues-panel").waitFor({ state: "detached" });
       await expectInboxOnNextFrame(page, populated);
       await expectInboxOnNextFrame(page, populated);
 

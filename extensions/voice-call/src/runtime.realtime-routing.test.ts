@@ -1,39 +1,40 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
 }));
 
 vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./realtime-voice.runtime.js")>();
   return {
     ...actual,
-    resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+    resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
   };
 });
 
 function createStateRuntime(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by realtime routing tests");
@@ -69,10 +70,18 @@ function createRealtimeProvider(params: {
   };
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// A timed-out callback can still be closing its runtime when Vitest enters afterEach.
+let fixtureCleanup: Promise<void> | undefined;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixtureCleanup;
+    cleanup();
+  }),
+);
 
-afterEach(() => {
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReset();
+afterEach(async () => {
+  await fixtureCleanup;
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReset();
   resetPluginStateStoreForTests();
 });
 
@@ -111,7 +120,7 @@ describe("voice-call realtime route ownership", () => {
         },
       ],
     ]);
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockImplementation(
       ({ agentId }: { agentId?: string }) => {
         const registration = agentId ? registrations.get(agentId) : undefined;
         if (!registration) {
@@ -121,6 +130,13 @@ describe("voice-call realtime route ownership", () => {
       },
     );
 
+    const stopWaiting = () => {
+      salesConnected.resolve();
+      supportConnected.resolve();
+    };
+    signal.addEventListener("abort", stopWaiting, { once: true });
+    const cleanupFinished = createDeferred<void>();
+    fixtureCleanup = cleanupFinished.promise;
     try {
       const config = createVoiceCallBaseConfig();
       config.agentId = "main";
@@ -136,18 +152,19 @@ describe("voice-call realtime route ownership", () => {
       };
       const fullConfig = {
         agents: {
-          list: [{ id: "main", default: true }, { id: "sales" }, { id: "support" }],
+          entries: { main: {}, sales: {}, support: {} },
         },
       } as OpenClawConfig;
 
       runtime = await createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: fullConfig,
         fullConfig,
         agentRuntime: {} as never,
         stateRuntime: createStateRuntime(),
       });
-      expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+      expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
 
       const handler = runtime.webhookServer.getRealtimeHandler();
       if (!handler) {
@@ -181,18 +198,9 @@ describe("voice-call realtime route ownership", () => {
         );
       }
 
-      const cancelled = createDeferred<never>();
-      const onAbort = () => cancelled.reject(signal.reason);
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        await Promise.race([
-          Promise.all([salesConnected.promise, supportConnected.promise]),
-          cancelled.promise,
-        ]);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      signal.throwIfAborted();
+      await Promise.all([salesConnected.promise, supportConnected.promise]);
+      signal.throwIfAborted();
       expect(salesProvider.createBridge).toHaveBeenCalledTimes(1);
       expect(supportProvider.createBridge).toHaveBeenCalledTimes(1);
       expect(salesConnect).toHaveBeenCalledTimes(1);
@@ -210,7 +218,7 @@ describe("voice-call realtime route ownership", () => {
         }),
       );
       expect(
-        mocks.resolveConfiguredRealtimeVoiceProvider.mock.calls.map(
+        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.calls.map(
           ([options]) => (options as { agentId?: string }).agentId,
         ),
       ).toEqual(["sales", "support"]);
@@ -245,18 +253,23 @@ describe("voice-call realtime route ownership", () => {
         ]),
       );
     } finally {
+      signal.removeEventListener("abort", stopWaiting);
       try {
         await runtime?.stop();
       } finally {
-        for (const ws of sockets) {
-          if (ws.readyState !== WebSocket.CLOSED) {
-            const closed = waitForClose(ws);
-            ws.terminate();
-            await closed;
+        try {
+          for (const ws of sockets) {
+            if (ws.readyState !== WebSocket.CLOSED) {
+              const closed = waitForClose(ws);
+              ws.terminate();
+              await closed;
+            }
           }
+          await Promise.all(servers.map((server) => server.close()));
+          resetPluginStateStoreForTests();
+        } finally {
+          cleanupFinished.resolve();
         }
-        await Promise.all(servers.map((server) => server.close()));
-        resetPluginStateStoreForTests();
       }
     }
   });

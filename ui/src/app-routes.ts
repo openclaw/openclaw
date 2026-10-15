@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -14,6 +15,7 @@ import {
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
+  locationForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
@@ -21,6 +23,7 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
+import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
@@ -56,22 +59,31 @@ import { page as pluginPage } from "./pages/plugin/route.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
-import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+type AppRouteModule = (
+  | {
+      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+      renderSolid?: never;
+    }
+  | {
+      render?: never;
+      /** Mounted once per route renderer; props follow the current loader and presentation. */
+      renderSolid: (props: SolidRouteProps) => JSX.Element;
+    }
+) & {
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
-  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
@@ -79,13 +91,8 @@ type AppRouteModule = {
   ) => string | undefined;
 };
 
-export type ApplicationRouter = Router<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
-type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+export type ApplicationRouter = Router<RouteId, ApplicationContext, AppRouteModule, unknown>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
   ...chatPages,
@@ -116,6 +123,7 @@ const APP_ROUTE_TREE = [
   sessionsPage,
   systemsPage,
   secretsPage,
+  searchPage,
   usagePage,
   debugPage,
   logsPage,
@@ -123,7 +131,6 @@ const APP_ROUTE_TREE = [
   ...skillsPages,
   ...pluginsPages,
   cronPage,
-  tasksPage,
   devicePage,
   devicePermissionsPage,
   devicesPage,
@@ -159,7 +166,7 @@ function canonicalRouteLocation(
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext, AppRouteModule>({
     routes: appRoutes,
   });
   // The shared router intentionally matches exact paths only. People, Workboard
@@ -167,12 +174,16 @@ export function createApplicationRouter(): ApplicationRouter {
   return {
     ...router,
     navigate: (routeId, context, options, location) =>
-      router.navigate(
-        routeId,
-        context,
-        options,
-        location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-      ),
+      context.nativeConversation?.interceptNavigation(
+        location ?? locationForRoute(routeId, context.basePath),
+      )
+        ? Promise.resolve()
+        : router.navigate(
+            routeId,
+            context,
+            options,
+            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
+          ),
     routeIdFromPath,
   };
 }
@@ -213,7 +224,7 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();
@@ -428,6 +439,13 @@ export async function startApplicationRouter(
         });
       });
       const stopHistory = history.listen((next) => {
+        if (context.nativeConversation?.interceptNavigation(next)) {
+          const current = router.getState().location;
+          if (current) {
+            history.replace(current);
+          }
+          return;
+        }
         const canonical = canonicalRouteLocation(
           routeIdFromPath(next.pathname, basePath),
           next,

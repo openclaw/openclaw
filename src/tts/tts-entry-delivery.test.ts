@@ -160,28 +160,6 @@ async function observeEntries(expectedVoice: boolean): Promise<void> {
   });
   await assertStoredAudio(automatic.mediaUrl);
 
-  process.stdout.write(
-    `${JSON.stringify({
-      proof: "tts-entry-delivery",
-      platform: process.platform,
-      converter:
-        converter.requests.length === 0
-          ? "not-requested"
-          : process.platform === "darwin"
-            ? "controlled-failure"
-            : "real-platform-unsupported",
-      provider: PROVIDER,
-      providerCompatible: core.voiceCompatible,
-      coreVoice: core.audioAsVoice,
-      toolVoice: media?.audioAsVoice === true,
-      commandVoice: command?.reply?.audioAsVoice === true,
-      automaticVoice: automatic.audioAsVoice === true,
-      byteHash: SYNTHETIC_OGG_OPUS_SHA256,
-      requests,
-      converterRequests: converter.requests,
-    })}\n`,
-  );
-
   expect(requests).toHaveLength(4);
   expect.soft(media?.audioAsVoice === true, "tool preserves core decision").toBe(expectedVoice);
   expect

@@ -2,30 +2,8 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
-const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const SIMPLE_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t"]);
 const JSON_CONTROL_ESCAPES = new Set(["b", "f", "n", "r", "t"]);
-
-function isControlCharacter(char: string): boolean {
-  const codePoint = char.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
-
-function escapeControlCharacter(char: string): string {
-  switch (char) {
-    case "\b":
-      return "\\b";
-    case "\f":
-      return "\\f";
-    case "\n":
-      return "\\n";
-    case "\r":
-      return "\\r";
-    case "\t":
-      return "\\t";
-    default:
-      return `\\u${char.codePointAt(0)?.toString(16).padStart(4, "0") ?? "0000"}`;
-  }
-}
 
 /**
  * Repairs malformed JSON string literals by:
@@ -84,13 +62,6 @@ export function repairJson(
           index += 5;
           continue;
         }
-        // A \u not followed by four hex digits is an invalid escape: double the
-        // backslash like the other invalid escapes below. Falling through would
-        // hit the valid-escape branch (VALID_JSON_ESCAPES contains "u") and
-        // re-emit the broken \u, leaving the JSON unparseable.
-        repaired += "\\\\";
-        stringValuePrefix += "\\";
-        continue;
       }
 
       if (!preserveValidControlEscapes && JSON_CONTROL_ESCAPES.has(nextChar)) {
@@ -103,7 +74,7 @@ export function repairJson(
         }
       }
 
-      if (VALID_JSON_ESCAPES.has(nextChar)) {
+      if (SIMPLE_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
         stringValuePrefix += nextChar === "\\" ? "\\" : `\\${nextChar}`;
         index += 1;
@@ -115,7 +86,7 @@ export function repairJson(
       continue;
     }
 
-    repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+    repaired += char.charCodeAt(0) <= 0x1f ? JSON.stringify(char).slice(1, -1) : char;
     stringValuePrefix += char;
   }
 

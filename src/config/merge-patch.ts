@@ -1,4 +1,3 @@
-// Creates and applies JSON merge-patch updates to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isRecord } from "../utils.js";
@@ -12,10 +11,6 @@ type MergePatchOptions = {
   path?: string;
 };
 
-function cloneUnknown<T>(value: T): T {
-  return structuredClone(value);
-}
-
 /** Builds a merge patch; ID-keyed array mode emits changed fields for upserts. */
 export function createMergePatch(
   base: unknown,
@@ -23,7 +18,7 @@ export function createMergePatch(
   options: Pick<MergePatchOptions, "mergeObjectArraysById"> = {},
 ): unknown {
   if (!isRecord(base) || !isRecord(target)) {
-    return cloneUnknown(target);
+    return structuredClone(target);
   }
 
   const patch: Record<string, unknown> = {};
@@ -37,7 +32,7 @@ export function createMergePatch(
     }
     const targetValue = target[key];
     if (!hasBase) {
-      patch[key] = cloneUnknown(targetValue);
+      patch[key] = structuredClone(targetValue);
       continue;
     }
     const baseValue = base[key];
@@ -69,7 +64,7 @@ export function createMergePatch(
       continue;
     }
     if (!isDeepStrictEqual(baseValue, targetValue)) {
-      patch[key] = cloneUnknown(targetValue);
+      patch[key] = structuredClone(targetValue);
     }
   }
   return patch;
@@ -123,10 +118,6 @@ function isIdKeyedArray(value: unknown): value is (PlainObject & { id: string })
   return Array.isArray(value) && value.every(isObjectWithStringId);
 }
 
-function formatMergePatchArrayEntryPath(arrayPath: string): string {
-  return `${arrayPath}[]`;
-}
-
 /**
  * Merge arrays of object-like entries keyed by `id`.
  *
@@ -141,10 +132,6 @@ function mergeObjectArraysById(
   options: MergePatchOptions,
   arrayPath: string,
 ): unknown[] | undefined {
-  if (!base.every(isObjectWithStringId)) {
-    return undefined;
-  }
-
   const merged: unknown[] = [...base];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
@@ -169,7 +156,7 @@ function mergeObjectArraysById(
 
     merged[existingIndex] = applyMergePatch(merged[existingIndex], patchEntry, {
       ...options,
-      path: formatMergePatchArrayEntryPath(arrayPath),
+      path: `${arrayPath}[]`,
     });
   }
 
@@ -216,8 +203,7 @@ export function applyMergePatch(
       }
     }
     if (isPlainObject(value)) {
-      const baseValue = result[key];
-      result[key] = applyMergePatch(isPlainObject(baseValue) ? baseValue : {}, value, {
+      result[key] = applyMergePatch(result[key], value, {
         ...options,
         path,
       });

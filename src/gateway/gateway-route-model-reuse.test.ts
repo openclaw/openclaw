@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
@@ -297,11 +298,25 @@ describe("Gateway route model reuse", () => {
           signal.throwIfAborted();
           const activeClient = client;
           // Measure reuse after startup publication has settled its runtime facts.
-          await activeClient.request(
-            "models.list",
-            { agentId: "main", view: "all", refresh: true },
-            { signal },
-          );
+          const refreshCatalog = () =>
+            activeClient.request(
+              "models.list",
+              { agentId: "main", view: "all", refresh: true },
+              { signal },
+            );
+          // A startup publication can supersede this refresh; follow the documented
+          // one-retry contract for retryable catalog supersession, as the Control UI does.
+          await refreshCatalog().catch((error: unknown) => {
+            if (
+              !isGatewayProtocolResponseError(error) ||
+              error.gatewayCode !== "UNAVAILABLE" ||
+              !error.retryable
+            ) {
+              throw error;
+            }
+            signal.throwIfAborted();
+            return refreshCatalog();
+          });
           signal.throwIfAborted();
           await expect
             .poll(
@@ -341,7 +356,8 @@ describe("Gateway route model reuse", () => {
             const key = `${provider}/${model}`;
             const before = (await stats()).counts[key] ?? { resolve: 0, prepare: 0 };
             signal.throwIfAborted();
-            const beforeRequests = requests.length;
+            const modelRequests = () => requests.filter((request) => request.model === model);
+            const beforeRequests = modelRequests().length;
             const started = performance.now();
             const sessionKey = `agent:main:route-model-${randomUUID()}`;
             const accepted = await activeClient.request<{ runId: string; status: string }>(
@@ -366,8 +382,8 @@ describe("Gateway route model reuse", () => {
             );
             signal.throwIfAborted();
             expect(terminal.status, gateway.logs()).toBe("ok");
-            expect(requests.length).toBe(beforeRequests + 1);
-            expect(requests.at(-1)?.model).toBe(model);
+            expect(modelRequests()).toHaveLength(beforeRequests + 1);
+            expect(modelRequests().at(-1)?.model).toBe(model);
             expect(unexpectedCredential).toBe(false);
             const elapsedMs = performance.now() - started;
             const history = await activeClient.request<{ messages: unknown[] }>(
@@ -407,10 +423,28 @@ describe("Gateway route model reuse", () => {
           ] as const;
           // Churn more than a memo-sized set through the Gateway and verify each output.
           // Owner tests isolate exact eviction from other model-discovery caches.
-          const cold = [];
-          for (const model of capacityModels.slice(0, 64)) {
-            cold.push(await turn(PROVIDERS[0], model));
+          // Keep the eviction boundary ordered; independent middle keys can share the Gateway.
+          const cold = [await turn(PROVIDERS[0], capacityModelId(0))];
+          for (let index = 1; index < 63; index += 4) {
+            const batch = await Promise.allSettled(
+              capacityModels
+                .slice(index, Math.min(index + 4, 63))
+                .map((model) => turn(PROVIDERS[0], model)),
+            );
+            const failures = batch.filter((result) => result.status === "rejected");
+            if (failures.length > 0) {
+              throw new AggregateError(
+                failures.map((failure) => failure.reason),
+                "Route-model capacity turns failed",
+              );
+            }
+            for (const result of batch) {
+              if (result.status === "fulfilled") {
+                cold.push(result.value);
+              }
+            }
           }
+          cold.push(await turn(PROVIDERS[0], capacityModelId(63)));
           const oldestAt64 = await turn(PROVIDERS[0], capacityModelId(0));
           const newestAt64 = await turn(PROVIDERS[0], capacityModelId(63));
           await turn(PROVIDERS[0], capacityModelId(64));
@@ -479,6 +513,7 @@ describe("Gateway route model reuse", () => {
           expect(dynamic[1].prepare).toBe(dynamic[0].prepare);
           expect(stable[0].resolve).toBeGreaterThan(0);
           expect(stable[1].resolve).toBeLessThan(stable[0].resolve);
+          expect(requests).toHaveLength(76);
           return {
             head,
             gatewayPid,

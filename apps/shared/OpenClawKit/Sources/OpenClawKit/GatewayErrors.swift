@@ -1,6 +1,21 @@
 import Foundation
 import OpenClawProtocol
 
+func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
+    var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
+    if let error {
+        details[details["code"] == nil ? "code" : "errorCode"] = OpenClawProtocol.AnyCodable(error.code)
+        details["message"] = OpenClawProtocol.AnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = OpenClawProtocol.AnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
 /// A route lease became stale before its request touched the channel. Unlike
 /// a socket cancellation, this proves the payload was never dispatched.
 public enum GatewayNodeSessionRequestError: Error, Sendable {
@@ -69,51 +84,6 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
 
     public init(
         message: String,
-        detailCodeRaw: String?,
-        canRetryWithDeviceToken: Bool,
-        recommendedNextStepRaw: String? = nil,
-        requestId: String? = nil,
-        detailsReason: String? = nil,
-        ownerRaw: String? = nil,
-        titleOverride: String? = nil,
-        userMessageOverride: String? = nil,
-        actionLabel: String? = nil,
-        actionCommand: String? = nil,
-        docsURLString: String? = nil,
-        retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil,
-        clientMinProtocol: Int? = nil,
-        clientMaxProtocol: Int? = nil,
-        expectedProtocol: Int? = nil,
-        minimumProbeProtocol: Int? = nil)
-    {
-        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedRecommendedNextStep =
-            recommendedNextStepRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = trimmedDetailCode?.isEmpty == false ? trimmedDetailCode : nil
-        self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw =
-            trimmedRecommendedNextStep?.isEmpty == false ? trimmedRecommendedNextStep : nil
-        self.requestId = Self.trimmedOrNil(requestId)
-        self.detailsReason = Self.trimmedOrNil(detailsReason)
-        self.ownerRaw = Self.trimmedOrNil(ownerRaw)
-        self.titleOverride = Self.trimmedOrNil(titleOverride)
-        self.userMessageOverride = Self.trimmedOrNil(userMessageOverride)
-        self.actionLabel = Self.trimmedOrNil(actionLabel)
-        self.actionCommand = Self.trimmedOrNil(actionCommand)
-        self.docsURLString = Self.trimmedOrNil(docsURLString)
-        self.retryableOverride = retryableOverride
-        self.pauseReconnectOverride = pauseReconnectOverride
-        self.clientMinProtocol = clientMinProtocol
-        self.clientMaxProtocol = clientMaxProtocol
-        self.expectedProtocol = expectedProtocol
-        self.minimumProbeProtocol = minimumProbeProtocol
-    }
-
-    public init(
-        message: String,
         detailCode: String?,
         canRetryWithDeviceToken: Bool,
         recommendedNextStep: String? = nil,
@@ -132,30 +102,25 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         expectedProtocol: Int? = nil,
         minimumProbeProtocol: Int? = nil)
     {
-        self.init(
-            message: message,
-            detailCodeRaw: detailCode,
-            canRetryWithDeviceToken: canRetryWithDeviceToken,
-            recommendedNextStepRaw: recommendedNextStep,
-            requestId: requestId,
-            detailsReason: detailsReason,
-            ownerRaw: ownerRaw,
-            titleOverride: titleOverride,
-            userMessageOverride: userMessageOverride,
-            actionLabel: actionLabel,
-            actionCommand: actionCommand,
-            docsURLString: docsURLString,
-            retryableOverride: retryableOverride,
-            pauseReconnectOverride: pauseReconnectOverride,
-            clientMinProtocol: clientMinProtocol,
-            clientMaxProtocol: clientMaxProtocol,
-            expectedProtocol: expectedProtocol,
-            minimumProbeProtocol: minimumProbeProtocol)
-    }
-
-    private static func trimmedOrNil(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
+        self.detailCodeRaw = detailCode?.trimmedNonEmpty
+        self.canRetryWithDeviceToken = canRetryWithDeviceToken
+        self.recommendedNextStepRaw = recommendedNextStep?.trimmedNonEmpty
+        self.requestId = requestId?.trimmedNonEmpty
+        self.detailsReason = detailsReason?.trimmedNonEmpty
+        self.ownerRaw = ownerRaw?.trimmedNonEmpty
+        self.titleOverride = titleOverride?.trimmedNonEmpty
+        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.actionCommand = actionCommand?.trimmedNonEmpty
+        self.docsURLString = docsURLString?.trimmedNonEmpty
+        self.retryableOverride = retryableOverride
+        self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
     }
 
     public var detailCode: String? {
@@ -167,13 +132,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     }
 
     public var detail: GatewayConnectAuthDetailCode? {
-        guard let detailCodeRaw else { return nil }
-        return GatewayConnectAuthDetailCode(rawValue: detailCodeRaw)
+        self.detailCodeRaw.flatMap(GatewayConnectAuthDetailCode.init(rawValue:))
     }
 
     public var recommendedNextStep: GatewayConnectRecoveryNextStep? {
-        guard let recommendedNextStepRaw else { return nil }
-        return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
+        self.recommendedNextStepRaw.flatMap(GatewayConnectRecoveryNextStep.init(rawValue:))
     }
 
     public var errorDescription: String? {
@@ -190,6 +153,8 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
 
     public var isNonRecoverable: Bool {
         switch self.detail {
+        case .authTokenMismatch:
+            !self.canRetryWithDeviceToken
         case .authTokenMissing,
              .authBootstrapTokenInvalid,
              .authTokenNotConfigured,
@@ -229,32 +194,23 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
 
     public init(method: String, code: String?, message: String?, details: [String: AnyCodable]?) {
         self.method = method
-        self.code = (code?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? code!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "GATEWAY_ERROR"
-        self.message = (message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? message!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "gateway error"
+        self.code = code?.trimmedNonEmpty ?? "GATEWAY_ERROR"
+        self.message = message?.trimmedNonEmpty ?? "gateway error"
         self.details = details ?? [:]
     }
 
     public var detailsReason: String? {
-        let raw = self.details["reason"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        self.details["reason"]?.stringValue?.trimmedNonEmpty
     }
 
     public var missingScopeDetails: GatewayMissingScopeErrorDetails? {
         guard self.details["code"]?.stringValue == "MISSING_SCOPE" else { return nil }
-        let missingScope = self.details["missingScope"]?.stringValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !missingScope.isEmpty, let values = self.details["requiredScopes"]?.arrayValue else {
+        guard let missingScope = self.details["missingScope"]?.stringValue?.trimmedNonEmpty,
+              let values = self.details["requiredScopes"]?.arrayValue
+        else {
             return nil
         }
-        let requiredScopes = values.compactMap { value -> String? in
-            let scope = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return scope.isEmpty ? nil : scope
-        }
+        let requiredScopes = values.compactMap { $0.stringValue?.trimmedNonEmpty }
         guard !requiredScopes.isEmpty, requiredScopes.count == values.count else { return nil }
         return GatewayMissingScopeErrorDetails(
             missingScope: missingScope,

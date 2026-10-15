@@ -27,14 +27,6 @@ type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "para
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
-function unreadableRuntimeToolDiagnostic(toolIndex: number): RuntimeToolSchemaDiagnostic {
-  return {
-    toolName: `tool[${toolIndex}]`,
-    toolIndex,
-    violations: [`tool[${toolIndex}] is unreadable`],
-  };
-}
-
 function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   tools: readonly TTool[],
 ): (TTool | undefined)[] {
@@ -56,12 +48,10 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
   return entries;
 }
 
-function readToolProjectionField<TField extends "name" | "parameters">(
+function readToolProjectionField(
   tool: Pick<AnyAgentTool, "name" | "parameters">,
-  field: TField,
-):
-  | { readable: true; value: Pick<AnyAgentTool, "name" | "parameters">[TField] }
-  | { readable: false } {
+  field: "name" | "parameters",
+): { readable: true; value: unknown } | { readable: false } {
   try {
     return { readable: true, value: tool[field] };
   } catch {
@@ -95,7 +85,7 @@ function inspectToolSchema(
   }
 
   const schemaPath = `${toolName}.parameters`;
-  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath);
+  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath, toolName);
   const projectionViolations =
     mode === "runtime"
       ? projection.violations
@@ -119,7 +109,11 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   for (let toolIndex = 0; toolIndex < entries.length; toolIndex += 1) {
     const tool = entries[toolIndex];
     if (tool === undefined) {
-      diagnostics.push(unreadableRuntimeToolDiagnostic(toolIndex));
+      diagnostics.push({
+        toolName: `tool[${toolIndex}]`,
+        toolIndex,
+        violations: [`tool[${toolIndex}] is unreadable`],
+      });
       continue;
     }
     const diagnostic = inspectToolSchema(tool, toolIndex, mode);

@@ -35,7 +35,7 @@ import {
 } from "./verified-inference.test-support.js";
 
 export const tempDirs = createTempDirTracker();
-export const modelRef = "openai/gpt-4.1-mini";
+export const modelRef = "openai/gpt-5.4-mini";
 export const credential = {
   type: "api_key",
   provider: "openai",
@@ -55,8 +55,11 @@ export async function fixture(
     secretRef?: boolean;
     signal?: AbortSignal;
     codex?: boolean;
+    nativeCatalogEnabled?: boolean;
     subscription?: boolean;
     homeScope?: "agent" | "user";
+    modelTarget?: "utility";
+    primaryModel?: string;
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -88,12 +91,16 @@ export async function fixture(
         }
       : credential;
   const config: OpenClawConfig = {
+    meta: { migrations: { utilityModelSeparation: true } },
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace,
+        ...(options.primaryModel
+          ? { model: { primary: options.primaryModel, fallbacks: ["stable/fallback"] } }
+          : {}),
         skipBootstrap: true,
         models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
       },
@@ -107,7 +114,7 @@ export async function fixture(
           api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
           models: [
             {
-              id: "gpt-4.1-mini",
+              id: "gpt-5.4-mini",
               name: "Fixture model",
               reasoning: false,
               input: ["text"],
@@ -130,7 +137,12 @@ export async function fixture(
   if (options.codex) {
     (config.plugins!.entries ??= {}).codex = {
       enabled: true,
-      config: { appServer: { homeScope: options.homeScope } },
+      config: {
+        appServer: { homeScope: options.homeScope },
+        ...(options.nativeCatalogEnabled !== undefined
+          ? { sessionCatalog: { enabled: options.nativeCatalogEnabled } }
+          : {}),
+      },
     };
   }
   const providerModels = config.models;
@@ -148,6 +160,7 @@ export async function fixture(
     methodId: "fixture-login",
     choiceId: "fixture-login",
     choiceLabel: "Fixture sign-in",
+    ...(options.modelTarget ? { modelTarget: options.modelTarget } : {}),
     ...(options.authMethod === "api_key"
       ? { appGuidedSecret: true }
       : { appGuidedAuth: "oauth" as const }),
@@ -173,6 +186,52 @@ export async function fixture(
   };
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.providers.push({ pluginId: "openai", provider, source: "test" });
+  if (options.codex) {
+    pluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        conversationToolPolicySupport: "exact",
+        authBinding: {
+          fingerprint: async (params) => {
+            const profile = params.authProfileStore.profiles[params.authProfileId];
+            if (!profile) {
+              return undefined;
+            }
+            if (profile.type === "oauth") {
+              return fingerprintAuthProfileCredential({
+                profileId: params.authProfileId,
+                credential: profile,
+              });
+            }
+            const resolvedAuth = await resolveAuth({
+              provider: "openai",
+              cfg: params.config,
+              agentDir: params.agentDir,
+              workspaceDir: workspace,
+              profileId: params.authProfileId,
+              lockedProfile: true,
+              modelId: "gpt-5.4-mini",
+              modelApi: "openai-responses",
+              secretSentinels: true,
+            });
+            return fingerprintResolvedAuthProfileCredential({
+              profileId: params.authProfileId,
+              credential: profile,
+              resolvedAuth,
+            });
+          },
+        },
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Fixture setup uses the injected inference runner");
+        },
+      },
+    });
+  }
   // Credential checks must use the same prepared provider as setup authentication.
   // Otherwise the real resolver cold-loads unrelated bundled setup plugins.
   const resolveAuth = (input: Parameters<typeof resolveApiKeyForProviderCore>[0]) =>
@@ -235,38 +294,37 @@ export async function fixture(
             ...codexRuntimeArtifactAuth,
           }
         : {}),
-      modelId: "gpt-4.1-mini",
+      modelId: "gpt-5.4-mini",
       modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
     });
     return {
       payloads: [{ text: "OK" }],
       meta: {
         durationMs: 1,
-        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-4.1-mini" },
+        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
       },
     };
   };
   const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
     reply(params),
   );
+  // Revalidation must reload the same prepared provider used by login and the probe.
+  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,
     resolveManifestProviderAuthChoices: () => [choice],
     resolvePluginMetadataSnapshot: metadata.bind,
+    resolveApiKeyForProvider: resolveAuth,
     runEmbeddedAgent: run,
   };
   if (options.codex) {
-    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(
-      pluginRegistry,
-    );
     deps.readCodexCliActiveApiKey = () => null;
     deps.ensureCodexRuntimePlugin = async ({ cfg: candidateConfig }) => ({
       ok: true,
       cfg: candidateConfig,
       required: false,
     });
-    deps.resolveApiKeyForProvider = resolveAuth;
     deps.loadPluginRegistrySnapshot = () => ({
       plugins: [pluginRecord("openai"), pluginRecord("codex")],
     });
@@ -294,12 +352,19 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "apiKey" | "signal" | "onActivationCompletion"
+      | "agentId"
+      | "apiKey"
+      | "signal"
+      | "onActivationCompletion"
+      | "modelTarget"
+      | "modelRef"
+      | "automaticSetup"
     > = {},
   ) =>
     metadata.run(() =>
       activateSetupInference({
         kind,
+        ...(options.modelTarget ? { modelTarget: options.modelTarget } : {}),
         authChoice: choice.choiceId,
         modelRef,
         nativeSessionCatalogsEnabled: false,
@@ -318,12 +383,12 @@ export async function fixture(
         resolveManifestProviderAuthChoices: () => [choice],
         resolvePluginProviders: () => [provider],
         detectInferenceBackends: async () => [],
-        probeLocalCommand: async (command) => ({ command, found: false }),
       }),
     );
   return {
     activate,
     detect,
+    runWithMetadata: metadata.run,
     agentDir,
     before,
     config,
@@ -336,5 +401,6 @@ export async function fixture(
     login,
     prompter,
     deps,
+    pluginRegistry,
   };
 }

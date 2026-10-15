@@ -1,7 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -13,11 +12,14 @@ import { createCodexTestBindingStore } from "./app-server/session-binding.test-h
 import { clearSharedCodexAppServerClientAndWait } from "./app-server/shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { createCodexSessionCatalogControl } from "./session-catalog-control.js";
-import { listCodexSessionCatalog } from "./session-catalog-list-operation.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("uses recorded originators through the protocol while preserving exclusion-page filling", async () => {
+it("hydrates recorded originators through the protocol and serves excluded rows from memory", async () => {
   const home = await fs.realpath(tempDirs.make("openclaw-catalog-originator-peer-"));
   const sessionsRoot = path.join(home, "sessions");
   await fs.mkdir(sessionsRoot);
@@ -46,7 +48,7 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const methods: string[] = [];
   const cursors: Array<string | undefined> = [];
-  const pendingReplies = new Set<ReturnType<typeof setTimeout>>();
+  let control: ReturnType<typeof createCodexSessionCatalogControl> | undefined;
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
       const bytes = Array.isArray(raw)
@@ -72,16 +74,15 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
         const params = request.params as { cursor?: string; limit?: number };
         cursors.push(params.cursor);
         const page = Number(params.cursor ?? "0");
-        const reply = setTimeout(() => {
-          pendingReplies.delete(reply);
-          socket.send(
-            JSON.stringify({
-              id: request.id,
-              result: { data: [pages[page]], nextCursor: String(page + 1) },
-            }),
-          );
-        }, 10);
-        pendingReplies.add(reply);
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              data: [pages[page]],
+              nextCursor: page + 1 < pages.length ? String(page + 1) : null,
+            },
+          }),
+        );
         return;
       }
       socket.send(
@@ -100,7 +101,7 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
       throw new Error("Expected the fixture's loopback WebSocket port");
     }
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", agentDir: path.join(home, "agent") }] },
+      agents: { entries: { main: { agentDir: path.join(home, "agent") } } },
     };
     const pluginConfig = {
       appServer: {
@@ -110,7 +111,7 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
         requestTimeoutMs: 5_000,
       },
     };
-    const control = createCodexSessionCatalogControl({
+    control = createCodexSessionCatalogControl({
       env: { CODEX_HOME: home },
       getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => config,
@@ -120,8 +121,8 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
       ...(await control.homesForAgent("main"))[0]!,
       localSessionsRoot: sessionsRoot,
     };
-    const started = performance.now();
-    const result = await listCodexSessionCatalog({
+    await control.forRequest("main", source).initialize();
+    const listParams = {
       agentId: "main",
       config,
       bindingStore: createCodexTestBindingStore(),
@@ -130,28 +131,31 @@ it("uses recorded originators through the protocol while preserving exclusion-pa
       localHomes: [source],
       query: { hostIds: [source.hostId], limitPerHost: 1 },
       sessionEntries: { entriesForAgent: () => [], entriesForCatalog: () => [] },
-    });
+    } satisfies Parameters<typeof createCodexSessionCatalogListOperation>[0];
+    const result = await runCatalogListInline(createCodexSessionCatalogListOperation(listParams));
     const openedRollouts = opening.mock.calls.filter(
       ([file]) => typeof file === "string" && rolloutPaths.has(file),
     );
-    console.info("catalog-originator-peer", {
-      elapsedMs: Math.round(performance.now() - started),
-      pageCalls: cursors.length,
-      openedRollouts: openedRollouts.length,
-      methods,
-    });
-    expect(result.hosts).toHaveLength(1);
-    expect(result.hosts[0]).toMatchObject({ connected: true, sessions: [], nextCursor: "20" });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ connected: true, sessions: [] });
+    expect(result[0]).not.toHaveProperty("nextCursor");
     expect(cursors).toEqual(
       Array.from({ length: 20 }, (_, index) => (index === 0 ? undefined : String(index))),
     );
     expect(openedRollouts).toHaveLength(0);
+    const nativeRequests = [...methods];
+    opening.mockClear();
+    expect(await runCatalogListInline(createCodexSessionCatalogListOperation(listParams))).toEqual(
+      result,
+    );
+    expect(methods).toEqual(nativeRequests);
+    expect(
+      opening.mock.calls.filter(([file]) => typeof file === "string" && rolloutPaths.has(file)),
+    ).toHaveLength(0);
   } finally {
+    await control?.stop();
     opening.mockRestore();
     await clearSharedCodexAppServerClientAndWait();
-    for (const pending of pendingReplies) {
-      clearTimeout(pending);
-    }
     await Promise.all(
       [...server.clients].map((socket) => {
         const closed = once(socket, "close");

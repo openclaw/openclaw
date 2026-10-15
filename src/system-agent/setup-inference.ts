@@ -39,4 +39,3 @@ export {
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
-export type { ResolvePersistentApplyInferenceDeps } from "./setup-inference-turn.js";

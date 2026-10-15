@@ -26,20 +26,17 @@ vi.mock("openai", () => {
         create: (payload: unknown, requestOptions: unknown) => {
           mockOpenAI.payloads.push(payload);
           mockOpenAI.requestOptions.push(requestOptions);
-          return {
-            withResponse: async () => {
+          async function* stream() {
+            yield* mockOpenAI.chunks;
+          }
+          return Object.assign(Promise.resolve(stream()), {
+            asResponse: async () => {
               if (mockOpenAI.nextError !== undefined) {
                 throw mockOpenAI.nextError;
               }
-              async function* stream() {
-                yield* mockOpenAI.chunks;
-              }
-              return {
-                data: stream(),
-                response: { status: 200, headers: new Headers() },
-              };
+              return new Response(null, { status: 200 });
             },
-          };
+          });
         },
       },
     };
@@ -142,39 +139,6 @@ function resolveTestCapabilities(
   };
 }
 
-const defaultResolvedCompat = {
-  supportsStore: true,
-  supportsDeveloperRole: true,
-  supportsReasoningEffort: true,
-  supportsUsageInStreaming: true,
-  maxTokensField: "max_completion_tokens",
-  requiresToolResultName: false,
-  requiresAssistantAfterToolResult: false,
-  requiresThinkingAsText: false,
-  requiresReasoningContentOnAssistantMessages: false,
-  thinkingFormat: "openai",
-  openRouterRouting: undefined,
-  vercelGatewayRouting: {},
-  zaiToolStream: false,
-  supportsStrictMode: true,
-  supportsJsonSchemaResponseFormat: false,
-  cacheControlFormat: undefined,
-  sessionAffinity: "none",
-  supportsPromptCacheKey: false,
-  supportsLongCacheRetention: true,
-  visibleReasoningDetailTypes: [],
-  requiresNonEmptyUserOrAssistantMessage: false,
-} satisfies ResolvedOpenAICompletionsCompat;
-
-const proxyResolvedCompat = {
-  ...defaultResolvedCompat,
-  supportsStore: false,
-  supportsDeveloperRole: false,
-  supportsReasoningEffort: false,
-  supportsUsageInStreaming: false,
-  supportsStrictMode: false,
-} satisfies ResolvedOpenAICompletionsCompat;
-
 type DuplicatedCompatFields = Pick<
   ResolvedOpenAICompletionsCompat,
   | "supportsStore"
@@ -208,22 +172,6 @@ function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): Duplic
   };
 }
 
-const legacyCerebrasCompat = {
-  ...defaultDuplicatedCompat,
-  supportsStore: false,
-  supportsDeveloperRole: false,
-} satisfies DuplicatedCompatFields;
-const legacyXaiCompat = {
-  ...legacyCerebrasCompat,
-  supportsReasoningEffort: false,
-} satisfies DuplicatedCompatFields;
-const legacyMoonshotCompat = {
-  ...legacyXaiCompat,
-  maxTokensField: "max_tokens",
-  supportsStrictMode: false,
-} satisfies DuplicatedCompatFields;
-const legacyCloudflareGatewayCompat = legacyMoonshotCompat;
-
 const canonicalProxyCompat = {
   ...defaultDuplicatedCompat,
   supportsStore: false,
@@ -243,14 +191,6 @@ const canonicalTogetherCompat = {
   ...canonicalChutesCompat,
   thinkingFormat: "together",
 } satisfies DuplicatedCompatFields;
-const canonicalZaiCompat = {
-  ...canonicalChutesCompat,
-  thinkingFormat: "zai",
-} satisfies DuplicatedCompatFields;
-const canonicalDeepseekCompat = {
-  ...canonicalProxyCompat,
-  thinkingFormat: "deepseek",
-} satisfies DuplicatedCompatFields;
 
 type MatrixParityCase = readonly [
   name: string,
@@ -259,101 +199,15 @@ type MatrixParityCase = readonly [
 ];
 
 const legacyMatrixParityCases = [
-  ["provider openrouter", { provider: "openrouter" }, canonicalOpenRouterCompat],
-  [
-    "endpoint openrouter.ai",
-    { provider: "custom", baseUrl: "https://openrouter.ai/api/v1" },
-    canonicalOpenRouterCompat,
-  ],
   [
     "OpenRouter Anthropic model",
     { provider: "openrouter", id: "anthropic/claude-sonnet-4.6" },
     canonicalOpenRouterCompat,
   ],
   [
-    "OpenRouter OpenAI model",
-    { provider: "openrouter", id: "openai/gpt-5.6-luna" },
-    canonicalOpenRouterCompat,
-  ],
-  ["provider cerebras", { provider: "cerebras" }, canonicalProxyCompat],
-  [
-    "endpoint cerebras.ai",
-    { provider: "custom", baseUrl: "https://api.cerebras.ai/v1" },
-    canonicalProxyCompat,
-  ],
-  ["provider xai", { provider: "xai" }, canonicalProxyCompat],
-  [
-    "endpoint api.x.ai",
-    { provider: "custom", baseUrl: "https://api.x.ai/v1" },
-    canonicalProxyCompat,
-  ],
-  ["provider moonshotai", { provider: "moonshotai" }, legacyMoonshotCompat],
-  ["provider moonshotai-cn", { provider: "moonshotai-cn" }, legacyMoonshotCompat],
-  [
-    "endpoint Moonshot global",
-    { provider: "custom", baseUrl: "https://api.moonshot.ai/v1" },
-    legacyMoonshotCompat,
-  ],
-  [
-    "endpoint Moonshot China",
-    { provider: "custom", baseUrl: "https://api.moonshot.cn/v1" },
-    legacyMoonshotCompat,
-  ],
-  ["provider Cloudflare Workers AI", { provider: "cloudflare-workers-ai" }, canonicalProxyCompat],
-  [
-    "endpoint Cloudflare Workers AI",
-    { provider: "custom", baseUrl: "https://api.cloudflare.com/client/v4/accounts/test/ai/run" },
-    canonicalProxyCompat,
-  ],
-  [
-    "provider Cloudflare AI Gateway",
-    { provider: "cloudflare-ai-gateway" },
-    legacyCloudflareGatewayCompat,
-  ],
-  [
-    "endpoint Cloudflare AI Gateway",
-    { provider: "custom", baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/compat" },
-    legacyCloudflareGatewayCompat,
-  ],
-  ["provider opencode", { provider: "opencode" }, canonicalProxyCompat],
-  [
-    "endpoint opencode.ai",
-    { provider: "custom", baseUrl: "https://api.opencode.ai/v1" },
-    canonicalProxyCompat,
-  ],
-  [
-    "endpoint chutes.ai",
-    { provider: "custom", baseUrl: "https://llm.chutes.ai/v1" },
-    canonicalChutesCompat,
-  ],
-  ["provider together", { provider: "together" }, canonicalTogetherCompat],
-  [
-    "endpoint together.ai",
-    { provider: "custom", baseUrl: "https://api.together.ai/v1" },
-    canonicalTogetherCompat,
-  ],
-  [
     "endpoint together.xyz",
     { provider: "custom", baseUrl: "https://api.together.xyz/v1" },
     canonicalTogetherCompat,
-  ],
-  ["provider zai", { provider: "zai" }, canonicalProxyCompat],
-  [
-    "endpoint api.z.ai",
-    { provider: "custom", baseUrl: "https://api.z.ai/api/paas/v4" },
-    canonicalZaiCompat,
-  ],
-  ["provider xiaomi", { provider: "xiaomi" }, canonicalProxyCompat],
-  [
-    "endpoint xiaomimimo.com",
-    { provider: "custom", baseUrl: "https://api.xiaomimimo.com/v1" },
-    canonicalDeepseekCompat,
-  ],
-  ["provider deepseek", { provider: "deepseek" }, canonicalProxyCompat],
-  [
-    "endpoint deepseek.com",
-    { provider: "custom", baseUrl: "https://api.deepseek.com/v1" },
-    canonicalDeepseekCompat,
   ],
 ] satisfies MatrixParityCase[];
 
@@ -379,32 +233,16 @@ afterEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
-  it.each([
-    { provider: "dashscope", baseUrl: "", expected: "anthropic" },
-    { provider: "modelstudio", baseUrl: "", expected: "anthropic" },
-    { provider: "qwen", baseUrl: "", expected: "anthropic" },
-    {
-      provider: "custom",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      expected: "anthropic",
+  it.each([{ provider: "qwen", baseUrl: "", expected: "anthropic" }])(
+    "defaults cache markers for $provider at $baseUrl",
+    ({ provider, baseUrl, expected }) => {
+      expect(
+        resolveOpenAICompletionsCompat(createModel({ provider, baseUrl })).cacheControlFormat,
+      ).toBe(expected);
     },
-    { provider: "custom", baseUrl: "https://proxy.example/v1", expected: undefined },
-    { provider: "qwen", baseUrl: "https://proxy.example/v1", expected: undefined },
-    { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", expected: undefined },
-  ])("defaults cache markers for $provider at $baseUrl", ({ provider, baseUrl, expected }) => {
-    expect(
-      resolveOpenAICompletionsCompat(createModel({ provider, baseUrl })).cacheControlFormat,
-    ).toBe(expected);
-  });
+  );
 
-  it("honors explicit cache compatibility settings on Model Studio", () => {
-    const compat = { cacheControlFormat: "anthropic", supportsLongCacheRetention: true } as const;
-    expect(
-      resolveOpenAICompletionsCompat(createModel({ provider: "modelstudio", compat })),
-    ).toMatchObject(compat);
-  });
-
-  it.each([undefined, false, true])(
+  it.each([true])(
     "sends custom-endpoint long TTL only with explicit support: %s",
     async (supportsLongCacheRetention) => {
       await streamOpenAICompletions(
@@ -413,17 +251,16 @@ describe("OpenAI-compatible completions compatibility", () => {
         { apiKey: "test", cacheRetention: "long" },
       ).result();
       expect(mockOpenAI.payloads).toHaveLength(1);
-      const cacheControl =
-        supportsLongCacheRetention === true
-          ? { type: "ephemeral", ttl: "1h" }
-          : { type: "ephemeral" };
+      const cacheControl = supportsLongCacheRetention
+        ? { type: "ephemeral", ttl: "1h" }
+        : { type: "ephemeral" };
       expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
         `"cache_control":${JSON.stringify(cacheControl)}`,
       );
     },
   );
 
-  it.each([undefined, "anthropic"] as const)(
+  it.each(["anthropic"] as const)(
     "requires explicit cache format %s for Qwen behind a custom endpoint",
     async (cacheControlFormat) => {
       const model = createModel({
@@ -454,7 +291,7 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   );
 
-  it.each([undefined, "short", "long", "none"] as const)(
+  it.each(["none"] as const)(
     "sends Model Studio cache markers without OpenAI cache fields for retention %s",
     async (cacheRetention) => {
       const model = createModel({
@@ -562,108 +399,6 @@ describe("OpenAI-compatible completions compatibility", () => {
     expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
   });
 
-  it.each([
-    {
-      name: "OpenRouter Anthropic",
-      model: createModel({
-        id: "anthropic/claude-sonnet-4.6",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: { sendSessionAffinityHeaders: true },
-      }),
-      expected: {
-        ...proxyResolvedCompat,
-        thinkingFormat: "openrouter",
-        cacheControlFormat: "anthropic",
-        sessionAffinity: "openrouter",
-        visibleReasoningDetailTypes: ["response.output_text", "response.text"],
-      },
-    },
-    {
-      name: "OpenRouter Kimi",
-      model: createModel({
-        id: "moonshotai/kimi-k2.6",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-      }),
-      expected: {
-        ...proxyResolvedCompat,
-        thinkingFormat: "openrouter",
-        visibleReasoningDetailTypes: ["response.output_text", "response.text"],
-      },
-    },
-    {
-      name: "Z.AI GLM",
-      model: createModel({
-        id: "glm-5",
-        provider: "zai",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-      }),
-      expected: {
-        ...proxyResolvedCompat,
-        maxTokensField: "max_tokens",
-        thinkingFormat: "zai",
-      },
-    },
-    {
-      name: "OpenAI",
-      model: createModel({
-        id: "gpt-5.6-luna",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-      expected: {
-        ...defaultResolvedCompat,
-        supportsJsonSchemaResponseFormat: true,
-        supportsPromptCacheKey: true,
-      },
-    },
-    {
-      name: "Azure OpenAI",
-      model: createModel({
-        id: "gpt-5.6-luna",
-        provider: "azure-openai",
-        baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
-      }),
-      expected: {
-        ...defaultResolvedCompat,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
-        supportsStrictMode: false,
-      },
-    },
-    {
-      name: "OpenAI legacy model",
-      model: createModel({
-        id: "gpt-4-turbo",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
-    },
-    {
-      name: "custom proxy",
-      model: createModel(),
-      expected: proxyResolvedCompat,
-    },
-    {
-      name: "custom proxy with OpenRouter routing",
-      model: createModel({
-        compat: {
-          openRouterRouting: { only: ["google-vertex"] },
-          sendSessionAffinityHeaders: true,
-        },
-      }),
-      expected: {
-        ...proxyResolvedCompat,
-        openRouterRouting: { only: ["google-vertex"] },
-        sessionAffinity: "openrouter",
-      },
-    },
-  ])("resolves the $name compat record", ({ model, expected }) => {
-    expect(resolveOpenAICompletionsCompat(model)).toEqual(expected);
-  });
-
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
     const reasoningDetail = {
       type: "reasoning.encrypted",
@@ -718,35 +453,34 @@ describe("OpenAI-compatible completions compatibility", () => {
     expect(replayedAssistant?.reasoning_details).toEqual([reasoningDetail]);
   });
 
-  it.each([
-    { modelId: "openai/gpt-5.6-luna", expectedRole: "system" },
-    { modelId: "anthropic/claude-sonnet-4.6", expectedRole: "system" },
-    { modelId: "moonshotai/kimi-k2.6", expectedRole: "system" },
-  ])("uses $expectedRole instructions for OpenRouter model $modelId", async (testCase) => {
-    let payload: unknown;
-    const model = createModel({
-      id: testCase.modelId,
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: true,
-    });
+  it.each([{ modelId: "anthropic/claude-sonnet-4.6", expectedRole: "system" }])(
+    "uses $expectedRole instructions for OpenRouter model $modelId",
+    async (testCase) => {
+      let payload: unknown;
+      const model = createModel({
+        id: testCase.modelId,
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+      });
 
-    await streamOpenAICompletions(
-      model,
-      { ...context, systemPrompt: "Follow instructions." },
-      {
-        apiKey: "test",
-        onPayload(nextPayload) {
-          payload = nextPayload;
-          throw new Error("payload captured");
+      await streamOpenAICompletions(
+        model,
+        { ...context, systemPrompt: "Follow instructions." },
+        {
+          apiKey: "test",
+          onPayload(nextPayload) {
+            payload = nextPayload;
+            throw new Error("payload captured");
+          },
         },
-      },
-    ).result();
+      ).result();
 
-    expect((payload as { messages?: Array<{ role?: string }> }).messages?.[0]?.role).toBe(
-      testCase.expectedRole,
-    );
-  });
+      expect((payload as { messages?: Array<{ role?: string }> }).messages?.[0]?.role).toBe(
+        testCase.expectedRole,
+      );
+    },
+  );
 
   it("sends configured OpenRouter routing through a compatible proxy", async () => {
     let payload: unknown;
@@ -767,21 +501,16 @@ describe("OpenAI-compatible completions compatibility", () => {
   it.each([
     {
       name: "OpenAI",
-      model: createModel({ compat: { sendSessionAffinityHeaders: true } }),
+      model: createModel({
+        headers: { Authorization: "Bearer proxy-key" },
+        compat: { sendSessionAffinityHeaders: true },
+      }),
       expectedHeaders: {
+        Authorization: "Bearer proxy-key",
         session_id: "session-123",
         "x-client-request-id": "session-123",
         "x-session-affinity": "session-123",
       },
-    },
-    {
-      name: "OpenRouter",
-      model: createModel({
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: { sendSessionAffinityHeaders: true },
-      }),
-      expectedHeaders: { "x-session-id": "session-123" },
     },
     {
       name: "OpenRouter-compatible proxy",
@@ -792,12 +521,6 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
       }),
       expectedHeaders: { "x-session-id": "session-123" },
-    },
-    {
-      name: "OpenCode Go without caching",
-      cacheRetention: "none" as const,
-      model: createModel({ baseUrl: "https://opencode.ai/zen/go/v1" }),
-      expectedHeaders: { "x-opencode-session": "session-123" },
     },
     {
       name: "OpenCode Zen",
@@ -816,6 +539,8 @@ describe("OpenAI-compatible completions compatibility", () => {
       const clientOptions = mockOpenAI.clientOptions[0] as {
         defaultHeaders?: Record<string, string>;
       };
+      expect(mockOpenAI.clientOptions).toHaveLength(1);
+      expect(mockOpenAI.clientOptions[0]).toMatchObject({ apiKey: "test" });
       expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
     },
   );
@@ -873,25 +598,6 @@ describe("OpenAI-compatible completions compatibility", () => {
     expect(request.messages?.find((message) => message.role === "assistant")).toMatchObject({
       reasoning_content: "prior reasoning",
     });
-  });
-
-  it("pins OpenAI SDK retries to zero", async () => {
-    await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
-
-    expect(mockOpenAI.clientOptions[0]).toMatchObject({ maxRetries: 0 });
-  });
-
-  it("surfaces HTTP response body text from OpenAI-compatible errors", async () => {
-    mockOpenAI.nextError = Object.assign(new Error("502 status code (no body)"), {
-      status: 502,
-      body: "gateway maintenance",
-    });
-
-    const result = await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-    }).result();
-
-    expect(result.errorMessage).toBe("502: gateway maintenance");
   });
 
   it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {

@@ -12,17 +12,15 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: mocks.hasAuth,
+  resolveApiKeyForProviderCore: async (params: unknown) => {
+    if (!mocks.hasAuth(params)) {
+      throw new Error("Profile unavailable");
+    }
+    return { apiKey: "synthetic-credential" };
+  },
 }));
-vi.mock("../agents/model-auth-availability.js", () => ({
-  createModelAuthAvailabilityResolver: () => ({
-    evaluateModelAuth: (_provider: string, ref: { modelId: string }) => ({
-      availability: mocks.hasAuth(ref),
-    }),
-  }),
-}));
-vi.mock("../agents/model-auth.js", () => ({ hasAvailableAuthForProvider: vi.fn() }));
 vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: mocks.catalog }));
 vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
 vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: mocks.probe }));
@@ -103,7 +101,9 @@ describe("update repair inference", () => {
     });
     expect(mocks.hasAuth.mock.calls[0]?.[0]).toMatchObject({
       modelId: "primary",
-      pinnedProfileId: "owner-profile",
+      profileId: "owner-profile",
+      lockedProfile: true,
+      allowAuthProfileFallback: false,
     });
     expect(result).toMatchObject({
       ok: true,

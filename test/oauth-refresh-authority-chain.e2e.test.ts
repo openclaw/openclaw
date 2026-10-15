@@ -12,14 +12,14 @@ import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
 } from "../src/agents/auth-profiles/persisted.js";
-import { writePersistedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
+import {
+  runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStoreRaw,
+} from "../src/agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -129,7 +129,7 @@ function authStore(credential?: OAuthCredential): AuthProfileStore {
   return {
     version: 1,
     profiles: credential ? { [PROFILE_ID]: credential } : {},
-    order: { [PROVIDER_ID]: [PROFILE_ID] },
+    ...(credential ? { order: { [PROVIDER_ID]: [PROFILE_ID] } } : {}),
   };
 }
 
@@ -328,7 +328,9 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
       slots: { memory: "none" },
     },
     agents: {
+      ownership: "explicit",
       defaults: {
+        systemAgent: { agentId: "owner" },
         model: { primary: OWNER_MODEL_REF, fallbacks: [] },
         models: {
           [OWNER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
@@ -340,10 +342,10 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
         sandbox: { mode: "off" },
         timeoutSeconds: 60,
       },
-      list: [
-        { id: "owner", default: true, model: OWNER_MODEL_REF },
-        { id: "peer", model: PEER_MODEL_REF },
-      ],
+      entries: {
+        owner: { model: OWNER_MODEL_REF },
+        peer: { model: PEER_MODEL_REF },
+      },
     },
     tools: { profile: "minimal" },
     models: {
@@ -409,7 +411,8 @@ async function createScenario(name: string): Promise<Scenario> {
 }
 
 function writeSharedStore(instance: OpenClawTestInstance, store: AuthProfileStore): void {
-  runOpenClawStateWriteTransaction(
+  runAuthProfileWriteTransaction(
+    undefined,
     (database) => writePersistedAuthProfileStoreRaw(store, undefined, database),
     { env: instance.env },
   );
@@ -421,9 +424,7 @@ async function seedScenario(params: {
   owner: OAuthCredential;
   peer: OAuthCredential;
 }): Promise<void> {
-  if (params.shared) {
-    writeSharedStore(params.instance, authStore(params.shared));
-  }
+  writeSharedStore(params.instance, authStore(params.shared));
   await params.instance.state.writeAuthProfiles(authStore(params.owner), "owner");
   await params.instance.state.writeAuthProfiles(authStore(params.peer), "peer");
   closeOpenClawAgentDatabasesForTest(params.instance.stateDir);
@@ -459,10 +460,13 @@ function expiredAccountA(): OAuthCredential {
   });
 }
 
-function expectAuthError(result: AgentResult, message: string): void {
+function expectAuthError(result: AgentResult, message: string | RegExp): void {
   expect(result).toMatchObject({
     status: "error",
-    error: expect.stringContaining(message),
+    error:
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
   });
 }
 
@@ -778,6 +782,11 @@ describe("OAuth refresh authority chain", () => {
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
       expect(readSharedCredential(scenario.instance)).toBeUndefined();
 
+      // CLI logout may finish with a refresh warning; the follow-up needs published auth state.
+      await expect(
+        client.request("models.authRefresh", { agentId: "owner", operation: "logout" }),
+      ).resolves.toEqual({ refreshed: true });
+
       const followup = await startTurn({
         client,
         agentId: "owner",
@@ -785,7 +794,12 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-logout-followup",
       });
       const followupTerminal = await followup.terminal;
-      expectAuthError(followupTerminal, `No API key found for provider "${PROVIDER_ID}".`);
+      expectAuthError(
+        followupTerminal,
+        new RegExp(
+          `^(?:No API key found for provider "${PROVIDER_ID}"|No credentials found for profile "${PROFILE_ID}")\\.`,
+        ),
+      );
       expect(scenario.provider.modelRequests).toHaveLength(0);
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();

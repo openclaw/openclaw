@@ -14,7 +14,6 @@ export {
   ensureContextState,
   getPageForTargetId,
   hasCachedPlaywrightBrowserConnection,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session-connection.js";
 export {
@@ -42,7 +41,7 @@ export {
   createPageViaPlaywright,
   focusPageByTargetIdViaPlaywright,
   forceDisconnectPlaywrightForTarget,
-  getMainFrameDocumentIdentityViaPlaywright,
+  getDocumentIdentitiesViaPlaywright,
   getObservedBrowserStateViaPlaywright,
   listPagesViaPlaywright,
   refLocator,

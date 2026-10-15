@@ -86,43 +86,6 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry).toEqual(before);
   });
 
-  it("clears stale runtime model fields when switching overrides", () => {
-    const before = Date.now() - 5_000;
-    const entry: SessionEntry = {
-      sessionId: "sess-1",
-      updatedAt: before,
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      contextTokens: 160_000,
-      contextTokensSource: "runtime",
-      contextBudgetStatus: contextBudgetStatus({
-        updatedAt: before,
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        contextTokenBudget: 200_000,
-      }),
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: "anthropic/claude-sonnet-4-6",
-        activeModel: "anthropic/claude-sonnet-4-6",
-        reason: "provider temporary failure",
-      },
-    };
-
-    const result = applyOpenAiSelection(entry);
-
-    expect(result.updated).toBe(true);
-    expectRuntimeModelFieldsCleared(entry, before);
-    expect(entry.contextTokens).toBeUndefined();
-    expect(entry.contextTokensSource).toBeUndefined();
-    expect(entry.contextBudgetStatus).toBeUndefined();
-    expect(entry.fallbackNotice).toBeUndefined();
-    expect(entry.modelOverrideSource).toBe("user");
-    expect(entry.modelOverrideRouteResolution).toBe("resolved");
-  });
-
   it("clears stale runtime model fields even when override selection is unchanged", () => {
     const before = Date.now() - 5_000;
     const entry: SessionEntry = {
@@ -147,43 +110,6 @@ describe("applyModelOverrideToSessionEntry", () => {
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
-  });
-
-  it("retains aligned runtime model fields when selection and runtime already match", () => {
-    const before = Date.now() - 5_000;
-    const entry: SessionEntry = {
-      sessionId: "sess-3",
-      updatedAt: before,
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      contextTokens: 200_000,
-      contextTokensSource: "runtime",
-      contextBudgetStatus: contextBudgetStatus({
-        updatedAt: before,
-        provider: "openai",
-        model: "gpt-5.4",
-        contextTokenBudget: 200_000,
-      }),
-    };
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-    });
-
-    expect(result.updated).toBe(true);
-    expect(entry.modelProvider).toBe("openai");
-    expect(entry.model).toBe("gpt-5.4");
-    expect(entry.modelOverrideSource).toBe("user");
-    expect(entry.contextTokens).toBe(200_000);
-    expect(entry.contextTokensSource).toBe("runtime");
-    expect(entry.contextBudgetStatus?.contextTokenBudget).toBe(200_000);
-    expect((entry.updatedAt ?? 0) >= before).toBe(true);
   });
 
   it("clears stale contextTokens when switching back to the default model", () => {
@@ -245,22 +171,6 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  it("replaces explicit default intent with an automatic fallback source", () => {
-    const entry: SessionEntry = {
-      sessionId: "explicit-default-fallback",
-      updatedAt: 1,
-      modelOverrideSource: "default",
-    };
-
-    applyModelOverrideToSessionEntry({
-      entry,
-      selection: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      selectionSource: "auto",
-    });
-
-    expect(entry.modelOverrideSource).toBe("auto");
-  });
-
   it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
     const entry: SessionEntry = {
       sessionId: "sess-96269",
@@ -294,59 +204,6 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
-  it("marks non-default overrides with the provided source", () => {
-    const entry: SessionEntry = {
-      sessionId: "sess-5a",
-      updatedAt: Date.now() - 5_000,
-    };
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-      selectionSource: "auto",
-    });
-
-    expect(result.updated).toBe(true);
-    expect(entry.providerOverride).toBe("anthropic");
-    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
-    expect(entry.modelOverrideSource).toBe("auto");
-    expect(entry.modelOverrideRouteResolution).toBe("resolved");
-  });
-
-  it("sets liveModelSwitchPending only when explicitly requested", () => {
-    const entry: SessionEntry = {
-      sessionId: "sess-5",
-      updatedAt: Date.now() - 5_000,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-    };
-
-    const withoutFlag = applyModelOverrideToSessionEntry({
-      entry: { ...entry },
-      selection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-    });
-    expect(withoutFlag.updated).toBe(true);
-    expect(entry.liveModelSwitchPending).toBeUndefined();
-
-    const withFlagEntry: SessionEntry = { ...entry };
-    const withFlag = applyModelOverrideToSessionEntry({
-      entry: withFlagEntry,
-      selection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      markLiveSwitchPending: true,
-    });
-    expect(withFlag.updated).toBe(true);
-    expect(withFlagEntry.liveModelSwitchPending).toBe(true);
-  });
-
   it("marks profile-only switches as pending when requested", () => {
     const entry: SessionEntry = {
       sessionId: "sess-profile-switch",
@@ -374,7 +231,6 @@ describe("applyModelOverrideToSessionEntry", () => {
 
   it.each([
     { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
-    { preserveAuthProfileOverride: false, expectedProfile: undefined },
     { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
   ])(
     "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",

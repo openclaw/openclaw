@@ -1,9 +1,7 @@
-// Model probe gateway method reuses the CLI auth-probe engine behind an admin-scoped RPC.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
-  type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -17,7 +15,7 @@ import {
 } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../ws-log.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -43,7 +41,7 @@ const PROBE_ERROR_MESSAGES: Record<Exclude<AuthProbeStatus, "ok">, string> = {
   billing: "The provider reported a billing problem.",
   timeout: "The connection timed out.",
   format: "The provider rejected the model or request format.",
-  unknown: "The connection probe failed.",
+  unknown: "The connection check failed.",
   no_model: "No model is available for this provider.",
 };
 
@@ -138,10 +136,9 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
-    const request = params as ModelsProbeParams;
-    const provider = normalizeProviderId(request.provider);
-    const profileId = request.profileId?.trim();
-    if (!provider || (request.profileId !== undefined && !profileId)) {
+    const provider = normalizeProviderId(params.provider);
+    const profileId = params.profileId?.trim();
+    if (!provider || (params.profileId !== undefined && !profileId)) {
       respond(
         false,
         undefined,
@@ -151,13 +148,13 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     }
     const timeoutMs = Math.min(
       MAX_TIMEOUT_MS,
-      Math.max(MIN_TIMEOUT_MS, request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      Math.max(MIN_TIMEOUT_MS, params.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     );
     try {
       const cfg = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(cfg, request.agentId);
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, scope.agentId);
@@ -183,17 +180,17 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
       });
       const result = mapProbeResult(provider, summary.results);
       if (result.results.length === 0) {
-        result.error = "No probe targets are available for this provider.";
+        result.error = "No check targets are available for this provider.";
       }
       respond(true, result, undefined);
     } catch (error) {
-      context.logGateway.warn("Model connection probe failed.", {
+      context.logGateway.warn("Model connection check failed.", {
         event: "models_probe_failed",
         provider,
         timeoutMs,
         error: redactAuthProbeError(formatForLog(error)),
       });
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection probe failed."));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection check failed."));
     }
   },
 };

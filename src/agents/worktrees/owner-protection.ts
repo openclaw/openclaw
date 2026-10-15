@@ -1,84 +1,272 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { scheduler } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { readResolvedSessionStoreTargetsInWorker } from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
-import { prepareSessionWorkerPlacementMutationCheck } from "../../gateway/worker-environments/session-placement-lifecycle.js";
+import {
+  resolveSessionWorkerPlacementContext,
+  type SessionWorkerPlacementContext,
+} from "../../gateway/session-worker-placement-context.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import { resolveSessionWorkerPlacementMutationError } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import {
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
+import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
+import { WorktreeRemovalLockError } from "./removal-errors.js";
 import { IDLE_GC_MS } from "./service.js";
 import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
   now: () => number = Date.now,
-): {
-  shouldProtectOwner: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
-  shouldRemoveOwner: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
-} {
-  const placementChecks = new Map<string, { sessionId?: string; assertCurrent: () => void }>();
-  const state = (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => {
+): Required<
+  Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
+> {
+  type PlacementFacts = {
+    context: SessionWorkerPlacementContext;
+    current: (target: ResolvedSessionEntryStoreTarget) => Iterable<WorkerSessionPlacementRecord>;
+  };
+  let preparedOwners = new Map<string, ResolvedSessionEntryStoreTarget>();
+  const cleanupOwner = new AsyncLocalStorage<{
+    ownerId: string;
+    scope: string;
+    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
+    target: ResolvedSessionEntryStoreTarget;
+    hasChanged: () => boolean;
+    lifecycleHeld?: boolean;
+    placements: PlacementFacts;
+  }>();
+  const state = (
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+    prepared?: {
+      target: ResolvedSessionEntryStoreTarget;
+      placements: PlacementFacts;
+    },
+  ) => {
     if (ownerKind !== "session") {
       return "other";
     }
     try {
-      const target = resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId });
+      const cleanup = cleanupOwner.getStore();
+      const ownsCleanup = cleanup?.ownerId === ownerId;
+      const target = prepared?.target ?? (ownsCleanup ? cleanup.target : undefined);
+      // Outside a prepared census or cleanup lifetime there are no current owner facts.
+      if (!target || (ownsCleanup && cleanup.hasChanged())) {
+        return "active";
+      }
       const entry = target.entry;
+      const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+      if (entry?.archivedAt === undefined && activityAt > 0 && now() - activityAt <= IDLE_GC_MS) {
+        return "active";
+      }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const identities = [target.canonicalKey, ownerId, entry?.sessionId];
       if (
-        isSessionWorkAdmissionActive(scope, identities) ||
-        isSessionLifecycleMutationActive(scope, identities)
+        ownsCleanup &&
+        (cleanup.scope !== scope ||
+          cleanup.entry?.sessionId !== entry?.sessionId ||
+          cleanup.entry?.lifecycleRevision !== entry?.lifecycleRevision ||
+          cleanup.entry?.archivedAt !== entry?.archivedAt ||
+          !isDeepStrictEqual(cleanup.entry?.worktree, entry?.worktree))
       ) {
         return "active";
       }
-      let placementCheck = placementChecks.get(target.canonicalKey);
-      if (placementCheck && placementCheck.sessionId !== entry?.sessionId) {
+      if (
+        isSessionWorkAdmissionActive(scope, identities) ||
+        (!(ownsCleanup && cleanup.lifecycleHeld) &&
+          isSessionLifecycleMutationActive(scope, identities))
+      ) {
         return "active";
       }
-      if (!placementCheck) {
-        const context = resolveSessionWorkerPlacementContext();
-        const store = context.workerSessionPlacementService;
-        if (!store?.listForReconcile) {
+      const placements = prepared?.placements ?? (ownsCleanup ? cleanup.placements : undefined);
+      if (!placements) {
+        return "active";
+      }
+      // Missing session metadata cannot erase a durable remote worker's ownership.
+      for (const placement of placements.current(target)) {
+        if (
+          placement.sessionKey !== target.canonicalKey &&
+          placement.sessionId !== entry?.sessionId
+        ) {
+          continue;
+        }
+        if (
+          placement.turnClaim ||
+          resolveSessionWorkerPlacementMutationError({
+            action: "fork",
+            context: {
+              ...placements.context,
+              workerSessionPlacementService: {
+                getMany: () => new Map([[placement.sessionId, placement]]),
+              },
+            },
+            key: target.canonicalKey,
+            sessionId: placement.sessionId,
+          })
+        ) {
           return "active";
         }
-        // Missing session metadata cannot erase a durable remote worker's ownership.
-        const related = () =>
-          store.listForReconcile!()
-            .filter((placement) => placement.sessionKey === target.canonicalKey)
-            .map((placement) => placement.sessionId)
-            .toSorted();
-        const initial = related();
-        const checks = [
-          ...new Set([...initial, ...(entry?.sessionId ? [entry.sessionId] : [])]),
-        ].map((sessionId) => prepareSessionWorkerPlacementMutationCheck({ context, sessionId }));
-        const assertCurrent = () => {
-          if (JSON.stringify(related()) !== JSON.stringify(initial)) {
-            throw new Error("worktree worker placement changed during cleanup");
-          }
-          for (const check of checks) {
-            check();
-          }
-        };
-        placementCheck = { sessionId: entry?.sessionId, assertCurrent };
-        placementChecks.set(target.canonicalKey, placementCheck);
       }
-      placementCheck.assertCurrent();
-      if (!entry || entry.archivedAt !== undefined) {
-        return "retired";
-      }
-      const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
-      return activityAt > 0 && now() - activityAt <= IDLE_GC_MS ? "active" : "idle";
+      return !entry || entry.archivedAt !== undefined ? "retired" : "idle";
     } catch {
       // GC is destructive. Unknown session state must defer cleanup instead of
       // turning a transient owner lookup failure into worktree removal.
       return "active";
     }
   };
-  // Re-read at each mutation guard: an unarchive or new turn can invalidate an earlier cleanup decision.
+  // Census facts are advisory; cleanup retains receipt-invalidated facts through the mutation.
   return {
-    shouldProtectOwner: (kind, id) => state(kind, id) === "active",
-    shouldRemoveOwner: (kind, id) => state(kind, id) === "retired",
+    prepareOwners: async (records) => {
+      preparedOwners = new Map();
+      const ownerIds = [
+        ...new Set(
+          records.flatMap((record) =>
+            record.removedAt === undefined && record.ownerKind === "session" && record.ownerId
+              ? [record.ownerId]
+              : [],
+          ),
+        ),
+      ];
+      const states = new Map<string, ReturnType<typeof state>>();
+      try {
+        const context = resolveSessionWorkerPlacementContext();
+        if (!context.workerSessionPlacementService?.listAsync) {
+          throw new Error("Worker placement census is unavailable");
+        }
+        const [targets, placements] = await Promise.all([
+          readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: ownerIds }, "worktree"),
+          context.workerSessionPlacementService.listAsync(),
+        ]);
+        preparedOwners = targets;
+        const placementsByKey = new Map<string, WorkerSessionPlacementRecord[]>();
+        const placementsById = new Map<string, WorkerSessionPlacementRecord>();
+        for (const placement of placements) {
+          const matches = placementsByKey.get(placement.sessionKey);
+          if (matches) {
+            matches.push(placement);
+          } else {
+            placementsByKey.set(placement.sessionKey, [placement]);
+          }
+          placementsById.set(placement.sessionId, placement);
+        }
+        const prepared = {
+          placements: {
+            context,
+            // Index census records, not safety decisions: environment authority stays live.
+            *current(target: ResolvedSessionEntryStoreTarget) {
+              yield* placementsByKey.get(target.canonicalKey) ?? [];
+              const placement = placementsById.get(target.entry?.sessionId ?? "");
+              if (placement && placement.sessionKey !== target.canonicalKey) {
+                yield placement;
+              }
+            },
+          },
+        };
+        for (const [index, id] of ownerIds.entries()) {
+          if (index % 32 === 0) {
+            await scheduler.yield();
+          }
+          const target = targets.get(id);
+          states.set(id, target ? state("session", id, { ...prepared, target }) : "active");
+        }
+      } catch {
+        // A failed census supplies no authority to remove a session-owned checkout.
+      }
+      return {
+        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
+      };
+    },
+    readOwnerState: (kind, id) => state(kind, id),
+    withOwnerCleanup: async (record, run, signal) => {
+      if (record.ownerKind !== "session" || !record.ownerId) {
+        return await run((mutation) => mutation());
+      }
+      const ownerId = record.ownerId;
+      const expected = preparedOwners.get(ownerId);
+      let target = expected;
+      let changed = false;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if (
+          sessionChangeScopeAffectsStoredRows(change) &&
+          ("all" in change ||
+            !target ||
+            change.sessionKey === ownerId ||
+            change.sessionKey === target.canonicalKey)
+        ) {
+          changed = true;
+        }
+      });
+      try {
+        target = (
+          await readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
+        ).get(ownerId);
+        signal?.throwIfAborted();
+        if (!target) {
+          throw new WorktreeRemovalLockError(
+            "busy",
+            "worktree owner could not be read for cleanup",
+          );
+        }
+        const initial = expected ?? target;
+        const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: initial.agentId });
+        const entry = initial.entry;
+        const owner = {
+          ownerId,
+          scope,
+          target,
+          hasChanged: () => changed,
+          entry: entry && { ...entry, worktree: entry.worktree && { ...entry.worktree } },
+        };
+        const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
+        const context = resolveSessionWorkerPlacementContext();
+        const store = context.workerSessionPlacementService;
+        if (!store?.prepareMaintenancePlacements || !store.prepareSessionPlacement) {
+          throw new WorktreeRemovalLockError("busy", "worker placement preparation is unavailable");
+        }
+        const inventory = await store.prepareMaintenancePlacements();
+        let sessionPlacement: Awaited<ReturnType<typeof store.prepareSessionPlacement>> | undefined;
+        try {
+          if (entry?.sessionId) {
+            sessionPlacement = await store.prepareSessionPlacement(entry.sessionId);
+          }
+          const placements: PlacementFacts = {
+            context,
+            current: () => {
+              inventory.assertCurrent();
+              const current = sessionPlacement?.current();
+              return current ? [...inventory.placements, current] : inventory.placements;
+            },
+          };
+          // The registry claim protects Git work; final guards consume receipt-invalidated facts.
+          return await cleanupOwner.run({ ...owner, placements }, () =>
+            run((mutation, options) =>
+              runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+                scope,
+                identities,
+                signal: options?.settle ? undefined : signal,
+                run: () =>
+                  cleanupOwner.run({ ...owner, placements, lifecycleHeld: true }, mutation),
+              }),
+            ),
+          );
+        } finally {
+          sessionPlacement?.release();
+          inventory.release();
+        }
+      } finally {
+        stop();
+      }
+    },
   };
 }

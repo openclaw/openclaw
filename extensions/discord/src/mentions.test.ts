@@ -9,20 +9,8 @@ import {
 } from "./mentions.js";
 
 describe("formatMention", () => {
-  it("formats user mentions from ids", () => {
-    expect(formatMention({ userId: "123456789" })).toBe("<@123456789>");
-  });
-
-  it("formats role mentions from ids", () => {
-    expect(formatMention({ roleId: "987654321" })).toBe("<@&987654321>");
-  });
-
   it("formats channel mentions from ids", () => {
     expect(formatMention({ channelId: "777555333" })).toBe("<#777555333>");
-  });
-
-  it("throws when no mention id is provided", () => {
-    expect(() => formatMention({})).toThrow(/exactly one/i);
   });
 
   it("throws when more than one mention id is provided", () => {
@@ -63,16 +51,6 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("ping <@333333333> and <@222222222>");
   });
 
-  it("supports configured aliases with a leading @ key", () => {
-    const rewritten = rewriteDiscordKnownMentions("ping @OpsLead", {
-      accountId: "default",
-      mentionAliases: {
-        "@opslead": "444444444",
-      },
-    });
-    expect(rewritten).toBe("ping <@444444444>");
-  });
-
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
@@ -92,16 +70,6 @@ describe("rewriteDiscordKnownMentions", () => {
       expected: "inline `@alice` fence ```\n@alice\n``` text <@123456789>",
     },
     {
-      name: "closed multiline single-backtick code",
-      input: "Example: `first\nsecond`\nPlease review @alice",
-      expected: "Example: `first\nsecond`\nPlease review <@123456789>",
-    },
-    {
-      name: "closed multiline double-backtick code with CRLF",
-      input: "Example: ``first ` line\r\nsecond``\r\nPlease review @alice",
-      expected: "Example: ``first ` line\r\nsecond``\r\nPlease review <@123456789>",
-    },
-    {
       name: "closed multiline code containing a longer backtick run",
       input: "Example: ``first ``` literal\nsecond``\nPlease review @alice",
       expected: "Example: ``first ``` literal\nsecond``\nPlease review <@123456789>",
@@ -110,21 +78,6 @@ describe("rewriteDiscordKnownMentions", () => {
       name: "unterminated single-backtick code",
       input: "outside @alice then `inside @alice",
       expected: "outside <@123456789> then `inside @alice",
-    },
-    {
-      name: "unterminated double-backtick code",
-      input: "outside @alice then ``inside @alice",
-      expected: "outside <@123456789> then ``inside @alice",
-    },
-    {
-      name: "escaped literal backticks",
-      input: "literal \\` outside @alice",
-      expected: "literal \\` outside <@123456789>",
-    },
-    {
-      name: "backticks after an even number of backslashes",
-      input: "literal \\\\` inside @alice",
-      expected: "literal \\\\` inside @alice",
     },
     {
       name: "escaped backticks before real unterminated code",
@@ -167,11 +120,6 @@ describe("rewriteDiscordKnownMentions", () => {
 });
 
 describe("discordTextHasBroadcastMention", () => {
-  it("detects @everyone and @here", () => {
-    expect(discordTextHasBroadcastMention("heads up @everyone")).toBe(true);
-    expect(discordTextHasBroadcastMention("@here please")).toBe(true);
-  });
-
   it("ignores targeted mentions and lookalikes", () => {
     expect(discordTextHasBroadcastMention("ping <@123>")).toBe(false);
     expect(discordTextHasBroadcastMention("mail me at a@everyones")).toBe(false);

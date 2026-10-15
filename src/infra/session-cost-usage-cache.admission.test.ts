@@ -1,24 +1,53 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as configEnv from "../config/config-env-vars.js";
+import {
+  createSessionEntryWithTranscript,
+  prepareSessionEntryMutationDatabases,
+} from "../config/sessions/session-accessor.entry-mutation.js";
+import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  costRefreshLane,
+  retireSessionHistoryWorkerDatabases,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
 import {
-  acquireSessionCostUsageRefreshLock,
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
+import {
+  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
-  readSessionCostUsageRollupRows,
-  writeSessionCostUsageRollup,
+  prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,8 +57,106 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+it.each(["rollup", "prune"] as const)(
+  "queues warm usage %s behind the active writer reservation",
+  async (operation) => {
+    const root = tempDirs.make("openclaw-usage-writer-reservation-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const agentId = "usage-test";
+      const database = openOpenClawAgentDatabase({ agentId });
+      const databasePath = database.path;
+      runOpenClawAgentWriteTransaction(
+        ({ db }) =>
+          writeSessionCostUsageRollupInDatabase(db, {
+            rollupId: "session.jsonl",
+            valueJson: Buffer.from('{"totalTokens":1}'),
+            blob: null,
+            updatedAt: 1,
+          }),
+        { agentId, path: databasePath },
+        { operationLabel: "session-cost-usage.rollup.write" },
+      );
+      let lock: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
+      if (operation === "rollup") {
+        lock = prepareSessionCostUsageRefreshLock(agentId, databasePath);
+        expect(await lock.acquire()).toBe(true);
+      }
+      const readLock = () =>
+        database.db
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("session-cost-usage", "refresh-lock");
+      const readSnapshot = () => ({
+        lock: readLock(),
+        rows: readSessionCostUsageRollupRows(agentId, databasePath),
+      });
+      const before = readSnapshot();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
+        { agentId, path: databasePath },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      await entered.promise;
+      let settled = false;
+      const writing = (async () => {
+        switch (operation) {
+          case "rollup":
+            expect(
+              await lock!.writeRollup({
+                rollupId: "session.jsonl",
+                valueJson: Buffer.from('{"totalTokens":2}'),
+                blob: null,
+                updatedAt: 2,
+              }),
+            ).toBe(true);
+            break;
+          case "prune":
+            await deleteSessionCostUsageRollupsExcept({
+              agentId,
+              databasePath,
+              rows: before.rows,
+              liveKeys: new Set(),
+            });
+            break;
+        }
+      })().finally(() => {
+        settled = true;
+      });
+      const written = Promise.allSettled([writing]);
+      try {
+        try {
+          await setImmediate();
+          expect(readSnapshot()).toEqual(before);
+          expect(settled).toBe(false);
+        } finally {
+          release.resolve();
+          await reservation;
+          await written;
+        }
+        await expect(writing).resolves.toBeUndefined();
+        expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
+          operation === "prune"
+            ? []
+            : [
+                {
+                  key: "session.jsonl",
+                  valueJson: '{"totalTokens":2}',
+                  updatedAt: 2,
+                  bodyBytes: 0,
+                },
+              ],
+        );
+      } finally {
+        await lock?.release();
+      }
+    });
+  },
+);
+
 it.each([
-  { closing: false, retarget: false, refresh: false },
   { closing: true, retarget: false, refresh: false },
   { closing: false, retarget: true, refresh: false },
   { closing: false, retarget: true, refresh: true },
@@ -41,6 +168,7 @@ it.each([
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
+      revokeSqliteDatabaseAdmissionsForPath(databasePath);
       const cwd = retarget
         ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
         : undefined;
@@ -78,25 +206,30 @@ it.each([
         () => undefined,
       );
       const opened = Promise.allSettled([opening]);
+      const lock = refresh ? undefined : prepareSessionCostUsageRefreshLock(agentId, cachePath);
       let writeSettled = false;
       const writing = Promise.resolve()
-        .then(async () =>
-          refresh
-            ? await refreshCostUsageCacheForAgent({
-                agentId,
-                databasePath: cachePath,
-                sessionsDir,
-                agentDir: path.join(root, "agent-config"),
-              })
-            : await writeSessionCostUsageRollup({
-                agentId,
-                databasePath: cachePath,
-                rollupId: "session.jsonl",
-                previousValueJson: null,
-                valueJson: '{"totalTokens":7}',
-                updatedAt: 1,
-              }),
-        )
+        .then(async () => {
+          if (!lock) {
+            return await refreshCostUsageCacheForAgent({
+              agentId,
+              databasePath: cachePath,
+              sessionsDir,
+              agentDir: path.join(root, "agent-config"),
+            });
+          }
+          try {
+            expect(await lock.acquire()).toBe(true);
+            return await lock.writeRollup({
+              rollupId: "session.jsonl",
+              valueJson: Buffer.from('{"totalTokens":7}'),
+              blob: null,
+              updatedAt: 1,
+            });
+          } finally {
+            await lock.release();
+          }
+        })
         .finally(() => {
           writeSettled = true;
         });
@@ -131,7 +264,7 @@ it.each([
             expect(rows.map((row) => row.key)).toEqual([sessionFile]);
           } else {
             expect(rows).toEqual([
-              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1 },
+              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
             ]);
           }
         }
@@ -145,56 +278,201 @@ it.each([
   },
 );
 
-it("keeps refresh ownership after a rejected release until deletion commits", async () => {
-  const root = tempDirs.make("openclaw-usage-lock-release-");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const agentId = "usage-test";
-    const owners = await Promise.all([
-      acquireSessionCostUsageRefreshLock(agentId),
-      acquireSessionCostUsageRefreshLock(agentId),
-    ]);
-    expect(owners.map((owner) => owner.acquired)).toEqual([true, false]);
-    await owners[1].release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    const database = openOpenClawAgentDatabase({ agentId });
-    database.db.exec(`
-      CREATE TEMP TRIGGER reject_refresh_release BEFORE DELETE ON cache_entries
-      WHEN OLD.scope = 'session-cost-usage' AND OLD.key = 'refresh-lock'
-      BEGIN SELECT RAISE(ABORT, 'release rejected'); END;
-    `);
-    await expect(owners[0].release()).rejects.toThrow("release rejected");
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    database.db.exec("DROP TRIGGER reject_refresh_release");
-    await owners[0].release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const replacement = await acquireSessionCostUsageRefreshLock(agentId);
-    expect(replacement.acquired).toBe(true);
-    await owners[0].release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    await replacement.release();
-  });
-});
+it.each([false, true])(
+  "drains retained usage cleanup by captured path before physical retirement (retry=%s)",
+  async (retry) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-deletion";
+      const selected = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const otherEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("other-state") };
+      const other = openOpenClawAgentDatabase({ agentId, env: otherEnv });
+      const aliasDirectory = state.path("selected-agent");
+      fs.symlinkSync(path.dirname(selected.path), aliasDirectory, "junction");
+      const alias = path.join(aliasDirectory, path.basename(selected.path));
+      const finish = createDeferredCore();
+      const ready = createDeferredCore();
+      let cleaned = 0;
+      let otherCleaned = false;
+      const failure = new Error("Refresh cleanup temporarily failed");
+      let cleanupFailure = retry ? failure : undefined;
+      const readingFromOtherState = withSessionCostUsageWorkerDatabases(
+        [{ agentId, path: selected.path, env: otherEnv }],
+        async () => await finish.promise,
+      );
+      const read = Promise.allSettled([readingFromOtherState]);
+      const target = { agentId, path: selected.path, env: state.env, requestedPaths: [alias] };
+      const holding = withSessionCostUsageWorkerDatabases([target], async (scope) => {
+        const lock = prepareSessionCostUsageRefreshLock(agentId, selected.path, { env: state.env });
+        scope.retainCleanup(async () => {
+          if (cleanupFailure) {
+            throw cleanupFailure;
+          }
+          await lock.release();
+          cleaned++;
+        });
+        expect(await lock.acquire()).toBe(true);
+        ready.resolve();
+        await finish.promise;
+      });
+      const held = Promise.allSettled([holding]);
+      const otherReady = createDeferredCore();
+      const holdingOther = withSessionCostUsageWorkerDatabases(
+        [{ agentId, path: other.path, env: otherEnv }],
+        async (scope) => {
+          scope.retainCleanup(async () => {
+            otherCleaned = true;
+          });
+          otherReady.resolve();
+          await finish.promise;
+        },
+      );
+      const otherHeld = Promise.allSettled([holdingOther]);
+      let reopen: (() => void) | undefined;
+      try {
+        await awaitGateBeforeSettlement(ready.promise, holding, "Usage lock did not acquire");
+        await awaitGateBeforeSettlement(
+          otherReady.promise,
+          holdingOther,
+          "Sibling scope did not open",
+        );
+        reopen = closeAgentWorkAdmissions({
+          agentId,
+          env: state.env,
+          reason: new Error("Agent deletion is draining active work"),
+        });
+        const selection = {
+          agentId,
+          paths: [alias, selected.path, alias],
+        };
+        if (retry) {
+          await expect(retireSessionHistoryWorkerDatabases(selection)).rejects.toMatchObject({
+            errors: [failure],
+          });
+          await expect(
+            withSessionCostUsageWorkerDatabases([target], async () => undefined),
+          ).rejects.toThrow("Session database work is still draining");
+          cleanupFailure = undefined;
+        }
+        await retireSessionHistoryWorkerDatabases(selection);
+        expect(cleaned).toBe(1);
+        expect(otherCleaned).toBe(false);
+        expect(
+          selected.db
+            .prepare("SELECT key FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("session-cost-usage", "refresh-lock"),
+        ).toBeUndefined();
+        await closeOpenClawAgentDatabaseByPathAsync(selected.path, agentId);
+        expect(otherCleaned).toBe(false);
+        finish.resolve();
+        await expect(holding).rejects.toThrow("Session usage database work was revoked");
+        await expect(readingFromOtherState).rejects.toThrow(
+          "Session usage database work was revoked",
+        );
+        await expect(holdingOther).resolves.toBeUndefined();
+        expect(otherCleaned).toBe(true);
+        expect(cleaned).toBe(1);
+        await expect(
+          withSessionCostUsageWorkerDatabases([target], async () => undefined),
+        ).resolves.toBeUndefined();
+      } finally {
+        cleanupFailure = undefined;
+        finish.resolve();
+        await held;
+        await read;
+        await otherHeld;
+        reopen?.();
+      }
+    });
+  },
+);
 
-it("reports a live refresh that replaces the stale lock before cleanup admission", async () => {
-  const root = tempDirs.make("openclaw-usage-status-race-");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const agentId = "usage-test";
-    const database = openOpenClawAgentDatabase({ agentId });
-    database.db
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("session-cost-usage", "refresh-lock", "{}", 1);
-    const acquiring = acquireSessionCostUsageRefreshLock(agentId);
-    const running = isSessionCostUsageRefreshRunning(agentId);
-    const [owner, observedRunning] = await withEnvAsync(
-      { OPENCLAW_STATE_DIR: path.join(root, "other-env") },
-      () => Promise.all([acquiring, running]),
-    );
+it.for(["rollup", "prune"] as const)(
+  "cancels a queued usage %s before the active writer settles",
+  async (operation, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-canceled-admission";
+      const options = { agentId, env: state.env };
+      const database = openOpenClawAgentDatabase(options);
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
+      expect(await owner.acquire()).toBe(true);
+      const row = {
+        rollupId: "retained",
+        valueJson: Buffer.from("{}"),
+        blob: null,
+        updatedAt: 1,
+      };
+      expect(await owner.writeRollup(row)).toBe(true);
+      const before = readSessionCostUsageRollupRows(agentId, database.path);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const held = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      const controller = new AbortController();
+      const cancellation = new Error("Usage callback deadline expired");
+      const writing =
+        operation === "rollup"
+          ? owner.writeRollup({ ...row, rollupId: "canceled" }, controller.signal)
+          : owner.pruneRows(before, controller.signal);
+      const outcome = writing.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      controller.abort(cancellation);
+      try {
+        expect(await withinTest(outcome, signal)).toBe(cancellation);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, writing]);
+        await owner.release();
+      }
+      expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
+    });
+  },
+);
+
+it("rejects a queued rollup after its refresh authority is revoked", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-revoked-write";
+    const options = { agentId, env: state.env };
+    const database = openOpenClawAgentDatabase(options);
+    let current = true;
+    const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, {
+      env: state.env,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("Refresh revoked");
+        }
+      },
+    });
+    expect(await owner.acquire()).toBe(true);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const writing = owner.writeRollup({
+      rollupId: "revoked",
+      valueJson: Buffer.from("{}"),
+      blob: null,
+      updatedAt: 1,
+    });
+    const rejected = expect(writing).rejects.toThrow("Refresh revoked");
+    current = false;
+    release.resolve();
     try {
-      expect(owner.acquired).toBe(true);
-      expect(observedRunning).toBe(true);
+      await reservation;
+      await rejected;
+      expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual([]);
     } finally {
       await owner.release();
     }
+    expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
   });
 });
 
@@ -204,11 +482,13 @@ it("releases the acquired refresh lock after the caller changes its state direct
   const agentId = "usage-test";
   await withEnvAsync({ OPENCLAW_STATE_DIR: originalRoot }, async () => {
     const databasePath = openOpenClawAgentDatabase({ agentId }).path;
-    const original = await acquireSessionCostUsageRefreshLock(agentId);
+    const original = prepareSessionCostUsageRefreshLock(agentId);
     try {
+      expect(await original.acquire()).toBe(true);
       await withEnvAsync({ OPENCLAW_STATE_DIR: otherRoot }, async () => {
-        const other = await acquireSessionCostUsageRefreshLock(agentId);
+        const other = prepareSessionCostUsageRefreshLock(agentId);
         try {
+          expect(await other.acquire()).toBe(true);
           await original.release();
           expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
           expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
@@ -218,6 +498,352 @@ it("releases the acquired refresh lock after the caller changes its state direct
       });
     } finally {
       await original.release();
+    }
+  });
+});
+
+it("keeps usage exclusion in its mixed-case Windows state root", async () => {
+  await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
+    const agentId = "usage-test";
+    const options = { agentId, env: state.env };
+    const database = openOpenClawAgentDatabase(options);
+    const shared = openOpenClawStateDatabase({ env: state.env });
+    const registry = () =>
+      shared.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id, path").all();
+    const beforeRegistry = registry();
+    const readLock = () =>
+      database.db
+        .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+        .get("session-cost-usage", "refresh-lock");
+    const defaultRoot = path.join(state.home, ".openclaw");
+    const laterRoot = state.path("later-state");
+    expect(fs.existsSync(defaultRoot)).toBe(false);
+    expect(fs.existsSync(laterRoot)).toBe(false);
+    const originalEnv = process.env;
+    const hostPlatform = process.platform;
+    const mixedCaseEnv = { ...originalEnv };
+    for (const key of Object.keys(mixedCaseEnv)) {
+      if (key.toUpperCase() === "OPENCLAW_STATE_DIR") {
+        delete mixedCaseEnv[key];
+      }
+    }
+    mixedCaseEnv.OpenClaw_State_Dir = state.stateDir;
+    const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+    expect(mixedCaseEnv.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(withMockedPlatform("win32", () => cloneEnv(mixedCaseEnv)).OPENCLAW_STATE_DIR).toBe(
+      state.stateDir,
+    );
+    const clone = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((input) =>
+      // Only the pure clone sees Windows; path resolution and SQLite use the real host.
+      withMockedPlatform("win32", () => cloneEnv(input)),
+    );
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
+      { ...options, path: database.path },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    let owner: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
+    let acquiring: Promise<boolean> | undefined;
+    let acquired = false;
+    try {
+      await entered.promise;
+      process.env = mixedCaseEnv;
+      owner = prepareSessionCostUsageRefreshLock(agentId);
+      acquiring = owner.acquire().then((granted) => {
+        acquired = granted;
+        return granted;
+      });
+      void acquiring.catch(() => {});
+      process.env = { ...originalEnv, OPENCLAW_STATE_DIR: laterRoot };
+      expect(process.platform).toBe(hostPlatform);
+      await setImmediate();
+      expect(readLock()).toBeUndefined();
+      expect(acquired).toBe(false);
+      release.resolve();
+      await reservation;
+      expect(await acquiring).toBe(true);
+      expect(readLock()).toBeUndefined();
+      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
+      expect(registry()).toEqual(beforeRegistry);
+      expect(fs.existsSync(defaultRoot)).toBe(false);
+      expect(fs.existsSync(laterRoot)).toBe(false);
+      await owner.release();
+      expect(readLock()).toBeUndefined();
+      expect(registry()).toEqual(beforeRegistry);
+      expect(fs.existsSync(defaultRoot)).toBe(false);
+      expect(fs.existsSync(laterRoot)).toBe(false);
+    } finally {
+      process.env = originalEnv;
+      release.resolve();
+      await Promise.allSettled([reservation, acquiring]);
+      try {
+        await owner?.release();
+      } finally {
+        clone.mockRestore();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    }
+  });
+});
+
+it("finishes a foreground session write while pruning a cold existing usage store", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const template = openOpenClawAgentDatabase({ agentId, env: state.env });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        writeSessionCostUsageRollupInDatabase(db, {
+          rollupId: "removed-session.jsonl",
+          valueJson: Buffer.from('{"totalTokens":7}'),
+          blob: null,
+          updatedAt: 1,
+        }),
+      { agentId, path: template.path, env: state.env },
+      { operationLabel: "session-cost-usage.rollup.write" },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(template.path, agentId);
+    const storePath = state.statePath("cold-usage.sqlite");
+    // A closed snapshot gives the reader an existing file with no process admission yet.
+    fs.copyFileSync(template.path, storePath);
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const entry = { sessionId: "created-during-prune", updatedAt: 1 };
+    const dispatchReady = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const writerEntered = createDeferredCore();
+    const run = costRefreshLane.pool.run.bind(costRefreshLane.pool);
+    vi.spyOn(costRefreshLane.pool, "run").mockImplementation(async (input, options) => {
+      dispatchReady.resolve();
+      await releaseDispatch.promise;
+      return run(input, options);
+    });
+    const admit = writerAdmission.runOpenClawAgentWorkerWrite;
+    vi.spyOn(writerAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
+      (options, write, timing, writeSignal, priority) =>
+        admit(
+          options,
+          async () => {
+            if (options.path === storePath && priority !== "background") {
+              writerEntered.resolve();
+            }
+            return write();
+          },
+          timing,
+          writeSignal,
+          priority,
+        ),
+    );
+    const work = new AsyncWorkScope();
+    const refreshing = work.track(() =>
+      refreshCostUsageCacheForAgent({
+        agentId,
+        databasePath: storePath,
+        storePath,
+        env: state.env,
+      }),
+    );
+    const refreshed = Promise.allSettled([refreshing]);
+    let writing: Promise<unknown> | undefined;
+    let written: Promise<unknown> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(dispatchReady.promise, refreshing, "Usage scan did not dispatch"),
+        signal,
+      );
+      writing = (async () => {
+        await using preparation = prepareSessionEntryMutationDatabases(
+          [{ scope, assertCurrent() {} }],
+          Promise.resolve(),
+        );
+        const storage = await preparation.preparations[0]!;
+        return await createSessionEntryWithTranscript(scope, () => ({ ok: true, entry }), {
+          commitGuard: storage.assertCurrent,
+        });
+      })();
+      written = Promise.allSettled([writing]);
+      await withinTest(
+        awaitGateBeforeSettlement(writerEntered.promise, writing, "Session writer did not enter"),
+        signal,
+      );
+      releaseDispatch.resolve();
+      const [refreshResult, writeResult] = await withinTest(
+        Promise.all([refreshing, writing]),
+        signal,
+      );
+      expect(refreshResult).toBe("refreshed");
+      expect(writeResult).toMatchObject({ ok: true, entry });
+      const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toMatchObject(entry);
+      expect(
+        readSessionCostUsageRollupRows(agentId, storePath).map((row) => row.key),
+      ).not.toContain("removed-session.jsonl");
+    } finally {
+      work.beginClose();
+      releaseDispatch.resolve();
+      await Promise.all([refreshed, written]);
+      await work.drain();
+    }
+  });
+});
+
+it.each([
+  { name: "replacement", write: replaceSessionEntry },
+  { name: "upsert", write: upsertSessionEntryCore },
+])(
+  "allows the first session $name while a fresh usage refresh is scanning",
+  async ({ name, write }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "main";
+      const storePath = state.statePath("fresh-usage-patch.sqlite");
+      const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+      const entry = { sessionId: "patched-during-refresh", updatedAt: 1 };
+      const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+      try {
+        expect(await lock.acquire()).toBe(true);
+        expect(fs.existsSync(storePath)).toBe(false);
+        const writeStartedAt = Date.now();
+        const written = await write(scope, entry);
+        const writeFinishedAt = Date.now();
+        assert(written);
+        expect(written.sessionId).toBe(entry.sessionId);
+        if (name === "replacement") {
+          expect(written).toEqual({ ...entry, delivery: { kind: "none" } });
+        } else {
+          expect(written.updatedAt).toBeGreaterThanOrEqual(writeStartedAt);
+          expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
+        }
+        expect(
+          await lock.writeRollup({
+            rollupId: "session.jsonl",
+            valueJson: Buffer.from('{"totalTokens":7}'),
+            blob: null,
+            updatedAt: 1,
+          }),
+        ).toBe(true);
+        const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toEqual(written);
+        expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
+          { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
+        ]);
+      } finally {
+        await lock.release();
+      }
+    });
+  },
+);
+
+it("acquires a current usage writer after its captured executor retires", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+    const storePath = database.path;
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+    try {
+      // Close the captured executor before the refresh consumes its queued writer.
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+      expect(await lock.acquire()).toBe(true);
+      const entry = { sessionId: "created-after-retirement", updatedAt: 1 };
+      expect(await replaceSessionEntry(scope, entry)).toEqual({
+        ...entry,
+        delivery: { kind: "none" },
+      });
+      expect(
+        await lock.writeRollup({
+          rollupId: "session.jsonl",
+          valueJson: Buffer.from('{"totalTokens":7}'),
+          blob: null,
+          updatedAt: 1,
+        }),
+      ).toBe(true);
+      const current = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(current, scope.sessionKey)?.entry.sessionId).toBe(
+        entry.sessionId,
+      );
+      expect(readSessionCostUsageRollupRows(agentId, storePath)).toEqual([
+        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
+      ]);
+    } finally {
+      await lock.release();
+    }
+  });
+});
+
+it.each(["replacement", "revocation"] as const)(
+  "refuses usage acquisition after executor retirement and $0",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "main";
+      const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const storePath = database.path;
+      let current = true;
+      const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, {
+        env: state.env,
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Refresh revoked");
+          }
+        },
+      });
+      try {
+        await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+        if (change === "replacement") {
+          const original = state.statePath("original-usage.sqlite");
+          fs.renameSync(storePath, original);
+          fs.copyFileSync(original, storePath);
+        } else {
+          current = false;
+        }
+        const before = fs.readFileSync(storePath);
+        await expect(lock.acquire()).rejects.toThrow(
+          change === "replacement"
+            ? "SQLite database file identity changed before existing-only open"
+            : "Refresh revoked",
+        );
+        expect(fs.readFileSync(storePath)).toEqual(before);
+      } finally {
+        await lock.release();
+      }
+    });
+  },
+);
+
+it("allows first session creation while a fresh usage refresh awaits acquisition", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = state.statePath("fresh-usage.sqlite");
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+    try {
+      await using preparation = prepareSessionEntryMutationDatabases(
+        [{ scope, assertCurrent() {} }],
+        Promise.resolve(),
+      );
+      const storage = await preparation.preparations[0]!;
+      const created = await createSessionEntryWithTranscript(
+        scope,
+        () => ({ ok: true, entry: { sessionId: "created-during-refresh", updatedAt: 1 } }),
+        { commitGuard: storage.assertCurrent },
+      );
+      expect(created).toMatchObject({
+        ok: true,
+        entry: { sessionId: "created-during-refresh" },
+      });
+      expect(await lock.acquire()).toBe(true);
+      const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+        "created-during-refresh",
+      );
+      await lock.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId, storePath)).toBe(false);
+    } finally {
+      await lock.release();
     }
   });
 });

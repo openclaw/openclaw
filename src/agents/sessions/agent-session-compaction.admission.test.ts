@@ -6,16 +6,22 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
+  appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createTestSession,
@@ -28,7 +34,10 @@ import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+});
 registerAgentSessionLoopTestLifecycle();
 
 type BeforeCompactionEvent = Extract<ExtensionEvent, { type: "session_before_compact" }>;
@@ -58,6 +67,63 @@ const settings = () =>
   });
 
 describe("context replacement after write admission", () => {
+  it("does not append when a compaction extension rejects the finalized summary", async () => {
+    const dir = tempDirs.make("openclaw-rejected-compaction-");
+    const target = {
+      agentId: "main",
+      sessionId: "rejected-compaction-reopen",
+      sessionKey: "agent:main:rejected-compaction-reopen",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(target, {
+      cwd: dir,
+      message: { role: "user", content: "authoritative question", timestamp: 1 },
+    });
+    const sessionManager = SessionManager.open(target, dir);
+    sessionManager.appendMessage(
+      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
+    );
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["session_before_compact", [async () => ({ cancel: true })]],
+    ]);
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const persistedBefore = await loadTranscriptEvents(target);
+    const contextBefore = sessionManager.buildSessionContext();
+
+    await expect(session.compact()).rejects.toThrow("Compaction cancelled");
+
+    sessionManager.flushPendingPersistence();
+    const persistedAfterRejection = await loadTranscriptEvents(target);
+    expect(JSON.stringify(persistedAfterRejection)).toBe(JSON.stringify(persistedBefore));
+    expect(
+      persistedAfterRejection.some(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "type" in entry &&
+          entry.type === "compaction",
+      ),
+    ).toBe(false);
+
+    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
+    expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+    const reopened = SessionManager.open(target, dir);
+    try {
+      expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
+      expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+      expect(reopened.buildSessionContext()).toEqual(contextBefore);
+    } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+    }
+  });
+
   it.each(["compaction", "tree"] as const)(
     "does not publish a cancelled %s while waiting for the writer",
     async (operation) => {
@@ -165,52 +231,4 @@ describe("context replacement after write admission", () => {
       }
     },
   );
-
-  it("does not adopt a successor's context authority after in-memory summarization", async () => {
-    const manager = SessionManager.inMemory();
-    seedHistory(manager);
-    const summaryReady = createDeferred();
-    const release = createDeferred();
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      [
-        "session_before_compact",
-        [
-          async (event) => {
-            summaryReady.resolve();
-            await release.promise;
-            return compactionResult(event as BeforeCompactionEvent);
-          },
-        ],
-      ],
-    ]);
-    const { session } = await createTestSession({
-      sessionManager: manager,
-      settingsManager: settings(),
-      resourceLoader: createResourceLoader(handlers),
-    });
-    const before = manager.getEntries();
-    const messagesBefore = [...session.messages];
-    const accounted: string[] = [];
-    session[agentSessionSetContextReplacementHook](
-      () => accounted.push("original"),
-      () => {},
-    );
-    const work = session.compact();
-    const settled = work.catch((error: unknown) => error);
-    try {
-      await summaryReady.promise;
-      session[agentSessionSetContextReplacementHook](
-        () => accounted.push("successor"),
-        () => {},
-      );
-      release.resolve();
-      expect(await settled).toEqual(new Error("Compaction cancelled"));
-      expect(manager.getEntries()).toEqual(before);
-      expect(session.messages).toEqual(messagesBefore);
-      expect(accounted).toEqual([]);
-    } finally {
-      release.resolve();
-      await settled;
-    }
-  });
 });

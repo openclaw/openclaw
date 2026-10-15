@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { createLogger, createServer as createViteServer } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { getFreePort } from "../../../src/test-utils/ports.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiDevGateway } from "../../config/control-ui-dev-gateway.ts";
 import controlUiViteConfig from "../../vite.config.ts";
@@ -154,12 +153,6 @@ describe("configured UI development Gateway", () => {
         logger.error = (message, options) => {
           recordError("vite-error", options?.error ?? new Error(message));
         };
-        const uiPort = await getFreePort();
-        const uiOrigin = `http://127.0.0.1:${uiPort}`;
-        const webSocketOptions = {
-          // Removal: use ws's `origin` option after Bun's built-in client honors it.
-          headers: { Origin: uiOrigin },
-        };
         server = await createViteServer({
           ...config,
           configFile: false,
@@ -167,12 +160,24 @@ describe("configured UI development Gateway", () => {
           logLevel: "silent",
           customLogger: logger,
           optimizeDeps: { noDiscovery: true, include: [] },
-          server: { ...config.server, port: uiPort },
+          // This transport fixture does not exercise file watching; native watchers
+          // can outlive Vite shutdown and abort macOS workers (nodejs/node#65100).
+          server: { ...config.server, port: 0, watch: null },
         });
         const gateway = createControlUiDevGateway(upstreamUrl)!.gateway;
         vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", gateway);
+        const httpServer = server.httpServer!;
+        const listening = once(httpServer, "listening");
+        // Vite's listen(0) probes and releases a port before binding it. Bind its
+        // native server directly so the kernel retains the fixture's allocation.
+        httpServer.listen(0, "127.0.0.1");
+        await listening;
+        const uiOrigin = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
         vi.stubGlobal("location", new URL(uiOrigin));
-        await server.listen();
+        const webSocketOptions = {
+          // Removal: use ws's `origin` option after Bun's built-in client honors it.
+          headers: { Origin: uiOrigin },
+        };
         expect(server.httpServer?.address()).toMatchObject({ address: "127.0.0.1" });
         const resourcePath = `${uiDevGatewayResourceBasePath()}/control-ui-config.json`;
         const denied = await fetch(`${uiOrigin}${resourcePath}`);

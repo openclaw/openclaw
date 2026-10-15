@@ -7,22 +7,14 @@ import { replaceOutsideCodeRegions } from "../utils/directive-tags.js";
 const LEGACY_REACTION_DIRECTIVE_RE =
   /\[\[\s*(?:react|react_to_current)\s*:\s*([^\]\n]+?)\s*\]\]/giu;
 
-function stripLegacyReactionDirectives(message: Record<string, unknown>): void {
-  if (!Array.isArray(message.content)) {
-    return;
-  }
-  for (const part of message.content) {
-    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
-      continue;
-    }
-    let changed = false;
-    const stripped = replaceOutsideCodeRegions(part.text, LEGACY_REACTION_DIRECTIVE_RE, () => {
-      changed = true;
-      return "";
-    });
-    if (changed) {
-      part.text = stripped.trimStart();
-    }
+export function parseDirectiveMigrationTranscriptEvent(
+  raw: string,
+  owner: string,
+): TranscriptEvent {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${owner} contains invalid transcript JSON`, { cause: error });
   }
 }
 
@@ -40,7 +32,19 @@ export function transformHistoricalTranscriptEvent(event: TranscriptEvent): {
     return { changed: false, event };
   }
   const before = JSON.stringify(event.message);
-  stripLegacyReactionDirectives(event.message);
+  for (const part of event.message.content) {
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
+      continue;
+    }
+    let changed = false;
+    const stripped = replaceOutsideCodeRegions(part.text, LEGACY_REACTION_DIRECTIVE_RE, () => {
+      changed = true;
+      return "";
+    });
+    if (changed) {
+      part.text = stripped.trimStart();
+    }
+  }
   applyAssistantDeliveryDirectives(event.message);
   return { changed: JSON.stringify(event.message) !== before, event };
 }

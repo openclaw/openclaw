@@ -1,6 +1,6 @@
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -8,7 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Devices bindings during Settings reload" });
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const config = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   tools: { exec: { node: "disk-node" } },
 };
 const snapshot = {

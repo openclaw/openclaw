@@ -1,4 +1,4 @@
-// Withhold this run's terminal notifications and delay terminal descriptors until Stop recovers from the Gateway's no-active-run answer.
+// Withhold this run's terminal observations until Stop recovers from the Gateway's no-active-run answer.
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
@@ -53,6 +54,7 @@ type Frame = {
   type: string;
   id?: string;
   ok?: boolean;
+  error?: { code?: string; message?: string };
   method?: string;
   params?: Record<string, unknown>;
   event?: string;
@@ -197,10 +199,13 @@ suite.define(() => {
         const pending = new Map<string, Frame>();
         const knownRunIds = new Set<string>();
         let runId: string | undefined;
+        let capturedSessionId: string | undefined;
+        let withholdCompletionNotifications = false;
         let sockets = 0;
         let dropped = 0;
         let delayTerminalDescriptors = true;
         let delayedTerminalDescriptors = 0;
+        let delayedTerminalHistories = 0;
         const deferredDescriptors: Array<() => void> = [];
         let stage = "create session";
         const call = async (method: string, params: Record<string, unknown>) => {
@@ -216,10 +221,24 @@ suite.define(() => {
           });
           return result.sessions.find((row) => row.key === sessionKey) ?? null;
         };
-        const terminalNotification = (frame: Frame) => {
+        const shouldWithholdNotification = (frame: Frame) => {
           const payload = frame.payload;
-          if (!runId || frame.type !== "event" || payload?.sessionKey !== sessionKey) {
+          if (
+            !runId ||
+            frame.type !== "event" ||
+            !payload ||
+            (payload.sessionKey ?? payload.session?.key) !== sessionKey
+          ) {
             return false;
+          }
+          if (
+            withholdCompletionNotifications &&
+            capturedSessionId &&
+            (payload.sessionId === undefined || payload.sessionId === capturedSessionId) &&
+            (frame.event === "sessions.changed" || frame.event === "session.message")
+          ) {
+            // Cleanup can trigger history before its terminal snapshot is published.
+            return true;
           }
           if (payload.clientRunId === runId && payload.runId) {
             knownRunIds.add(payload.runId);
@@ -257,14 +276,14 @@ suite.define(() => {
         const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
         const url = new URL(browserUrl);
         url.pathname = "/chat/main/stop-finished";
-        url.search = "?nav=collapsed";
+        url.search = "";
         try {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
             async ({ page }) => {
               await page.addInitScript(() => {
                 localStorage.setItem(
-                  "openclaw:control-ui:community-invite",
+                  "openclaw:control-ui:community-invite:v2",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
               });
@@ -284,16 +303,19 @@ suite.define(() => {
                     }
                     if (frame.method === "chat.send") {
                       const captured = frame.params?.idempotencyKey;
+                      const requestedSessionId = frame.params?.sessionId;
                       if (
                         runId ||
                         frame.params?.sessionKey !== sessionKey ||
-                        typeof captured !== "string"
+                        typeof captured !== "string" ||
+                        typeof requestedSessionId !== "string"
                       ) {
                         throw new Error(
                           "UNQUALIFIED: unexpected additional chat send or missing exact run identity",
                         );
                       }
                       runId = captured;
+                      capturedSessionId = requestedSessionId;
                       knownRunIds.add(captured);
                     }
                   }
@@ -306,7 +328,7 @@ suite.define(() => {
                   if (frame.type === "res") {
                     received.push(frame);
                   }
-                  if (terminalNotification(frame)) {
+                  if (shouldWithholdNotification(frame)) {
                     dropped += 1;
                     // Preserve the sequence so reconnect cannot repair the deliberately missed terminal event.
                     const replacement = JSON.stringify({
@@ -324,28 +346,38 @@ suite.define(() => {
                       socket.send(message);
                     };
                     const session = frame.payload?.session;
+                    const historySession = frame.payload?.sessionInfo;
+                    const abortIndex = sent.findIndex((entry) => entry.method === "chat.abort");
+                    const hasPreStopTerminalHistory =
+                      withholdCompletionNotifications &&
+                      request !== undefined &&
+                      ["chat.startup", "chat.history"].includes(request.method ?? "") &&
+                      request.params?.sessionKey === sessionKey &&
+                      historySession?.key === sessionKey &&
+                      historySession.hasActiveRun === false &&
+                      (abortIndex < 0 || sent.indexOf(request) < abortIndex);
                     const hasTerminalDescriptor =
-                      (request?.method === "sessions.describe" &&
+                      withholdCompletionNotifications &&
+                      ((request?.method === "sessions.describe" &&
                         request.params?.key === sessionKey &&
-                        session?.lastRunId === runId &&
-                        session?.status === "done") ||
-                      (request?.method === "sessions.list" &&
-                        frame.payload?.sessions?.some(
-                          (row) =>
-                            row.key === sessionKey &&
-                            row.lastRunId === runId &&
-                            row.status === "done",
-                        ));
+                        session?.hasActiveRun === false) ||
+                        (request?.method === "sessions.list" &&
+                          frame.payload?.sessions?.some(
+                            (row) => row.key === sessionKey && row.hasActiveRun === false,
+                          )));
                     if (
                       delayTerminalDescriptors &&
                       runId &&
                       frame.type === "res" &&
                       frame.ok === true &&
-                      hasTerminalDescriptor
+                      (hasTerminalDescriptor || hasPreStopTerminalHistory)
                     ) {
-                      // Shared descriptor observations can settle ownership before Stop.
-                      // Delay this exact terminal fact, then deliver the real reply unchanged.
+                      // Even compact idle rows retire ownership without status or lastRunId.
+                      // Only history requested after Stop can prove recovery.
                       delayedTerminalDescriptors += 1;
+                      if (hasPreStopTerminalHistory) {
+                        delayedTerminalHistories += 1;
+                      }
                       deferredDescriptors.push(deliver);
                     } else {
                       deliver();
@@ -376,21 +408,14 @@ suite.define(() => {
               try {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
+                await enterControlUiSession(page);
                 await waitForControlUiGatewayReady(page);
                 const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
                 await composer.fill("Finish this fixture turn.");
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
-                stage = "qualify active ownership before releasing provider";
-                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
-                  sessionKey,
-                  runId: expect.any(String),
-                  sending: false,
-                  loading: false,
-                });
-                expect((await browserState()).runId).toBe(runId);
-                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify accepted send before active ownership";
                 const send = sent.find((frame) => frame.method === "chat.send");
                 const sessionId = send?.params?.sessionId;
                 if (!send || !runId || typeof sessionId !== "string") {
@@ -401,6 +426,15 @@ suite.define(() => {
                 await expect
                   .poll(() => received.find((frame) => frame.id === send.id), { timeout: 15_000 })
                   .toMatchObject({ ok: true, payload: { runId, status: "started" } });
+                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify active ownership before releasing provider";
+                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
+                  sessionKey,
+                  runId: expect.any(String),
+                  sending: false,
+                  loading: false,
+                });
+                expect((await browserState()).runId).toBe(runId);
                 await expect.poll(sessionRow, { timeout: 15_000 }).toMatchObject({
                   key: sessionKey,
                   sessionId,
@@ -452,6 +486,7 @@ suite.define(() => {
                   activeRow?.hasActiveRun === true && activeRow.status === "running";
                 proof.browserOwnedActiveRun = (await browserState()).runId === runId;
                 expect(sockets).toBe(1);
+                withholdCompletionNotifications = true;
                 provider.release();
                 stage = "observe exact authoritative terminal row";
                 await expect
@@ -552,6 +587,7 @@ suite.define(() => {
                   "Recovered ownership requires a post-Stop authoritative history response",
                 ).toBe(true);
                 delayTerminalDescriptors = false;
+                withholdCompletionNotifications = false;
                 for (const deliver of deferredDescriptors.splice(0)) {
                   deliver();
                 }
@@ -571,11 +607,22 @@ suite.define(() => {
                 proof.restoredDraftPreserved = (await composer.inputValue()) === "Next draft";
                 expect(await composer.inputValue()).toBe("Next draft");
               } finally {
+                const send = sent.find((frame) => frame.method === "chat.send");
+                const response = send && received.find((frame) => frame.id === send.id);
+                proof.sendAckObserved = response !== undefined;
+                proof.sendAckOk = response?.ok === true;
+                proof.sendAckStarted = response?.payload?.status === "started";
+                proof.sendAckUnavailable = response?.error?.code === "UNAVAILABLE";
+                proof.sendAckSchemaPublicationRefused =
+                  response?.error?.message?.includes(
+                    "Agent schema admission changed before publication",
+                  ) ?? false;
                 proof.stage = stage;
                 proof.browserSockets = sockets;
                 proof.connectRequests = sent.filter((frame) => frame.method === "connect").length;
                 proof.droppedTerminalNotifications = dropped;
                 proof.delayedTerminalDescriptors = delayedTerminalDescriptors;
+                proof.delayedTerminalHistories = delayedTerminalHistories;
                 proof.pendingTerminalDescriptors = deferredDescriptors.length;
                 proof.abortRequests = sent.filter((frame) => frame.method === "chat.abort").length;
                 proof.pendingBrowserRequests = pending.size;

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "request": {
     "canonical": {
       "id": "invoke-1",
@@ -10,11 +10,37 @@
       "idempotencyKey": "idem-1",
       "sessionKey": "agent:main:main"
     },
-    "invalid": {
+    "withExtensions": {
       "id": "invoke-1",
       "nodeId": "node-1",
       "command": "example.duplex",
+      "paramsJSON": null,
+      "timeoutMs": 0,
+      "idempotencyKey": "idem-1",
+      "sessionKey": "agent:main:main",
       "unexpected": true
+    },
+    "legacyParams": {
+      "id": "invoke-legacy",
+      "nodeId": "node-1",
+      "command": "example.status",
+      "params": {
+        "verbose": true
+      }
+    },
+    "ambiguousParams": {
+      "id": "invoke-ambiguous",
+      "nodeId": "node-1",
+      "command": "example.status",
+      "params": {
+        "legacy": true
+      },
+      "paramsJSON": "{\"current\":true}"
+    },
+    "invalid": {
+      "id": "",
+      "nodeId": "node-1",
+      "command": "example.duplex"
     }
   },
   "input": {
@@ -72,13 +98,18 @@
       }
     },
     "invalid": {
-      "id": "invoke-2",
+      "id": "invoke-1",
       "nodeId": "node-1",
-      "ok": false,
-      "error": {
-        "code": "",
-        "message": "missing error code"
-      }
+      "ok": "true"
+    }
+  },
+  "cancel": {
+    "canonical": {
+      "invokeId": "invoke-1",
+      "nodeId": "node-1"
+    },
+    "invalid": {
+      "invokeId": "invoke-1"
     }
   }
 }

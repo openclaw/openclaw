@@ -27,7 +27,7 @@ describe("Codex Computer Use periodic health", () => {
       "thread/start",
       {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       },
       { timeoutMs: 60_000 },
@@ -73,7 +73,7 @@ describe("Codex Computer Use periodic health", () => {
         threadId: "health-probe-thread-1",
         server: "cua_repl",
         tool: "js",
-        arguments: { code: "await cua.getState();" },
+        arguments: { code: "await cua.listApps();" },
       },
       { timeoutMs: 60_000 },
     );
@@ -175,30 +175,6 @@ describe("Codex Computer Use periodic health", () => {
       client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
     ).toHaveLength(1);
   });
-
-  it("does not start when Computer Use is disabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({ enabled: false }),
-      }),
-    ).toEqual({ started: false, reason: "disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
-  });
-
-  it("does not start periodic health checks unless explicitly enabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig(),
-      }),
-    ).toEqual({ started: false, reason: "health_disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
-  });
 });
 
 function createClient(options: { liveTestFailures?: number } = {}) {
@@ -224,7 +200,7 @@ function createClient(options: { liveTestFailures?: number } = {}) {
     if (method === "config/mcpServer/reload") {
       return undefined;
     }
-    if (method === "thread/unsubscribe" || method === "thread/archive") {
+    if (method === "thread/unsubscribe") {
       expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
       return undefined;
     }

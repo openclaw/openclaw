@@ -1,4 +1,8 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { BUZZ_RELAY_MAX_CONCURRENT_QUERY_SUBSCRIPTIONS } from "./subscription-budget.js";
+
+type BuzzSnapshotQueries = { active: number; waiting: Array<() => void> };
+const snapshotQueries = new WeakMap<Relay, BuzzSnapshotQueries>();
 
 type BuzzRelaySubscriptionParams = Omit<Parameters<Relay["prepareSubscription"]>[1], "abort">;
 
@@ -9,14 +13,13 @@ type BuzzRelaySnapshotParams<TResult> = {
   timeoutMs?: number;
   timeoutMessage: string;
   abortMessage: string;
-  failureMessage: string;
+  failureMessage?: string;
   closeReason: string;
   closeMessage: (reason: string) => string;
   onEvent: (event: Event) => void;
   result: () => TResult;
   onTimeout?: (error: Error) => void;
   closeRelayOnTimeout?: boolean;
-  checkAbortAfterSubscribe?: boolean;
 };
 
 export function openBuzzRelaySubscription(
@@ -31,17 +34,7 @@ export function openBuzzRelaySubscription(
   relay.idleSince = undefined;
   relay.ongoingOperations += 1;
 
-  let subscription: ReturnType<Relay["prepareSubscription"]>;
-  try {
-    subscription = relay.prepareSubscription(filters, params);
-  } catch (error) {
-    relay.ongoingOperations -= 1;
-    if (relay.ongoingOperations === 0) {
-      relay.idleSince = Date.now();
-      relay.scheduleIdleClose();
-    }
-    throw error;
-  }
+  const subscription = relay.prepareSubscription(filters, params);
 
   // Buzz can route on stored channel metadata absent from signed event tags.
   // Gateway owns reconnects; nostr-tools automatic refires must stay disabled
@@ -60,11 +53,61 @@ export function openBuzzRelaySubscription(
 export async function queryBuzzRelaySnapshot<TResult>(
   params: BuzzRelaySnapshotParams<TResult>,
 ): Promise<TResult> {
+  params.signal?.throwIfAborted();
+  const queries: BuzzSnapshotQueries = snapshotQueries.get(params.relay) ?? {
+    active: 0,
+    waiting: [],
+  };
+  snapshotQueries.set(params.relay, queries);
+  // Thread lookups share the reserved slots with membership, history, and directory queries.
+  if (queries.active >= BUZZ_RELAY_MAX_CONCURRENT_QUERY_SUBSCRIPTIONS) {
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        params.signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        const index = queries.waiting.indexOf(grant);
+        if (index < 0) {
+          return;
+        }
+        queries.waiting.splice(index, 1);
+        params.signal?.removeEventListener("abort", onAbort);
+        const reason: unknown = params.signal?.reason ?? new Error(params.abortMessage);
+        reject(reason instanceof Error ? reason : snapshotFailure(params.failureMessage, reason));
+      };
+      queries.waiting.push(grant);
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+      if (params.signal?.aborted) {
+        onAbort();
+      }
+    });
+  } else {
+    queries.active += 1;
+  }
+  try {
+    params.signal?.throwIfAborted();
+    return await queryBuzzRelaySnapshotNow(params);
+  } finally {
+    const next = queries.waiting.shift();
+    if (next) {
+      next();
+    } else {
+      queries.active -= 1;
+      if (queries.active === 0) {
+        snapshotQueries.delete(params.relay);
+      }
+    }
+  }
+}
+
+async function queryBuzzRelaySnapshotNow<TResult>(
+  params: BuzzRelaySnapshotParams<TResult>,
+): Promise<TResult> {
   return await new Promise<TResult>((resolve, reject) => {
     let settled = false;
     let receivedEose = false;
     let subscriptionClosed = false;
-    let subscription: ReturnType<Relay["prepareSubscription"]> | undefined;
     const timeout = setTimeout(() => {
       const error = new Error(params.timeoutMessage);
       finish(error);
@@ -90,35 +133,30 @@ export async function queryBuzzRelaySnapshot<TResult>(
       if (error === undefined) {
         resolve(params.result());
       } else {
-        reject(error instanceof Error ? error : new Error(params.failureMessage, { cause: error }));
+        reject(error instanceof Error ? error : snapshotFailure(params.failureMessage, error));
       }
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error(params.abortMessage));
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      subscription = openBuzzRelaySubscription(params.relay, params.filters, {
-        onevent: params.onEvent,
-        oneose: () => {
-          receivedEose = true;
-          if (settled) {
-            closeAfterRealEose();
-          } else {
-            finish();
-          }
-        },
-        onclose: (reason) => {
-          if (reason !== params.closeReason) {
-            finish(new Error(params.closeMessage(reason)));
-          }
-        },
-      });
-    } catch (error) {
-      finish(error);
-      return;
-    }
-    closeAfterRealEose();
-    if (params.checkAbortAfterSubscribe && params.signal?.aborted) {
-      onAbort();
-    }
+    const subscription = openBuzzRelaySubscription(params.relay, params.filters, {
+      onevent: params.onEvent,
+      oneose: () => {
+        receivedEose = true;
+        if (settled) {
+          closeAfterRealEose();
+        } else {
+          finish();
+        }
+      },
+      onclose: (reason) => {
+        if (reason !== params.closeReason) {
+          finish(new Error(params.closeMessage(reason)));
+        }
+      },
+    });
   });
+}
+
+function snapshotFailure(message: string | undefined, error: unknown): Error {
+  return message === undefined ? new Error(String(error)) : new Error(message, { cause: error });
 }

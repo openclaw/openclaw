@@ -1,7 +1,12 @@
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import "../../pages/agents-home/agents-home-page.ts";
+import { AgentsHomePage } from "../../pages/agents-home/agents-home-page.tsx";
+import { selectSidebarView } from "../app-sidebar-setup.ts";
+import { mountSolid } from "../mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../solid-application-context.tsx";
 import {
   agentIds,
   mountRoster,
@@ -62,34 +67,41 @@ describe("AppSidebar agent roster", () => {
       ]);
       sidebar.sidebarAgentsMode = "roster";
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain(parent));
-      const row = sidebar.querySelector(`[data-session-key="${parent}"]`)!;
+      const row = () => sidebar.querySelector(`[data-session-key="${parent}"]`)!;
       const runningSelector =
         ".session-run-spinner, .session-glyph__ring:not(.session-glyph__ring--queued)";
       const needsAttention = mixed || parentState === "failed";
-      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+      expect(row().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
         !needsAttention && parentState !== "running" ? 1 : 0,
       );
-      expect(row.querySelectorAll(runningSelector)).toHaveLength(
+      expect(row().querySelectorAll(runningSelector)).toHaveLength(
         !needsAttention && parentState === "running" ? 1 : 0,
       );
-      expect(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      expect(row.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
-      expect(row.querySelectorAll('[data-session-attention="error"]')).toHaveLength(
+      expect(row().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(row().querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
+      expect(row().querySelectorAll('[data-session-attention="error"]')).toHaveLength(
         needsAttention ? 1 : 0,
       );
       sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:queued-child"));
-      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+      expect(row().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
         parentState === "queued" ? 1 : 0,
       );
-      expect(row.querySelectorAll(runningSelector)).toHaveLength(parentState === "running" ? 1 : 0);
+      expect(row().querySelectorAll(runningSelector)).toHaveLength(
+        parentState === "running" ? 1 : 0,
+      );
       expect(
         sidebar.querySelectorAll(
           '[data-session-key="agent:working:queued-child"] .session-glyph__ring--queued',
         ),
       ).toHaveLength(1);
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-      await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain(parent));
+      await vi.waitFor(() => {
+        expect(sessionKeys(sidebar)).not.toContain(parent);
+        expect(
+          sidebar.querySelector('[data-agent-collapse="working"]')?.getAttribute("aria-expanded"),
+        ).toBe("false");
+      });
       const header = sidebar.querySelector(
         '[data-agent-group="working"] .sidebar-agent-roster__signals',
       );
@@ -105,35 +117,136 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it("keeps main-session activity on its row and summarizes only collapsed groups", async () => {
-    const mainKey = "agent:working:main";
-    const { sidebar, sessions } = await mountRoster(roster, [
-      session("working", 10, {
-        hasActiveRun: true,
-        status: "queued",
-        owner: { actor: owners[0] },
-        incognito: true,
-      }),
-    ]);
-    sessions.sessions.setPullRequestSummary(mainKey, { numbers: [103], state: "open" });
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    const signals = sidebar.querySelector(
-      '[data-session-key="agent:working:main"] .sidebar-recent-session__details-endcap',
-    );
-    expect(signals?.querySelector(".session-glyph__ring--queued")).not.toBeNull();
-    expect(signals?.querySelector(".session-owner-chip")).not.toBeNull();
-    expect(signals?.querySelector('[data-pull-request-state="open"]')).not.toBeNull();
-    expect(signals?.querySelector(".session-row-badge--incognito")).not.toBeNull();
-    expect(sidebar.querySelector(".sidebar-agent-roster__signals .session-glyph__ring")).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).toBeNull(),
-    );
-    expect(
-      sidebar.querySelectorAll(".sidebar-agent-roster__signals .session-glyph__ring--queued"),
-    ).toHaveLength(1);
-  });
+  it.each(["main", "home"])(
+    "uses the agent header for canonical Home %s, not a duplicate row",
+    async (mainKey) => {
+      const homeKey = `agent:working:${mainKey}`;
+      const childKey = "agent:working:project";
+      const { sidebar, context } = await mountRoster({ ...roster, mainKey }, [
+        session("working", 10, {
+          key: homeKey,
+          pinned: true,
+          category: "Saved work",
+          hasActiveRun: true,
+          status: "queued",
+          unread: true,
+          childSessions: [childKey],
+        }),
+        session("working", 9, {
+          key: childKey,
+          isMain: false,
+          spawnedBy: homeKey,
+          icon: "🚀",
+          unread: true,
+        }),
+      ]);
+      const onNavigate = vi.fn();
+      sidebar.onNavigate = onNavigate;
+      sidebar.sessionKey = homeKey;
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([childKey]));
+      const header = () =>
+        sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__header')!;
+      expect(header().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      const link = () =>
+        header().querySelector<HTMLAnchorElement>(
+          '.sidebar-agent-roster__row[data-agent-id="working"]',
+        )!;
+      link().click();
+      await vi.waitFor(() => expect(context.agentSelection.state.selectedId).toBe("working"));
+      expect(onNavigate).toHaveBeenLastCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/working" }),
+      );
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = homeKey;
+      await vi.waitFor(() => expect(link().getAttribute("aria-current")).toBe("page"));
+      sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')!.click();
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([]));
+      expect(header().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(header().querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
+      expect(link().getAttribute("aria-current")).toBe("page");
+    },
+  );
+
+  it.each([
+    ...(["chip", "roster"] as const).flatMap((mode) =>
+      [false, true].map((viaRun) => ({ mode, viaRun, collapsed: false })),
+    ),
+    { mode: "roster" as const, viaRun: true, collapsed: true },
+  ])(
+    "loads Home descendants and exposes their retry ($mode, hidden run=$viaRun, collapsed=$collapsed)",
+    async ({ mode, viaRun, collapsed }) => {
+      const agentId = mode === "chip" ? "main" : "working";
+      const homeKey = `agent:${agentId}:main`;
+      const runKey = `agent:${agentId}:subagent:bridge`;
+      const childKey = `agent:${agentId}:project`;
+      const parentKey = viaRun ? runKey : homeKey;
+      patchSettings({
+        gatewayUrl: "ws://gateway.test",
+        sidebarCollapsedAgentIds: collapsed ? [agentId] : [],
+      });
+      const { sidebar, sessions, result } = await mountRoster(roster, []);
+      let failed = false;
+      sessions.list.mockImplementation(async (options) => {
+        if (viaRun && options?.spawnedBy === homeKey) {
+          return {
+            ...result,
+            count: 1,
+            sessions: [
+              session(agentId, 9, {
+                key: runKey,
+                isMain: false,
+                spawnedBy: homeKey,
+                childSessions: [childKey],
+              }),
+            ],
+          };
+        }
+        if (options?.spawnedBy === parentKey) {
+          if (!failed) {
+            failed = true;
+            throw new Error("Could not load conversations");
+          }
+          return {
+            ...result,
+            count: 1,
+            sessions: [
+              session(agentId, 8, {
+                key: childKey,
+                isMain: false,
+                spawnedBy: parentKey,
+              }),
+            ],
+          };
+        }
+        return result;
+      });
+      result.sessions = [session(agentId, 10, { childSessions: [viaRun ? runKey : childKey] })];
+      result.count = 1;
+      sessions.publish({ result });
+      sidebar.sidebarAgentsMode = mode;
+      if (collapsed) {
+        await vi.waitFor(() =>
+          expect(sidebar.querySelector(`[data-agent-collapse="${agentId}"]`)).not.toBeNull(),
+        );
+        expect(failed).toBe(false);
+        sidebar.querySelector<HTMLButtonElement>(`[data-agent-collapse="${agentId}"]`)!.click();
+      }
+      await vi.waitFor(() =>
+        expect(sidebar.querySelector(`[data-retry-child-sessions="${parentKey}"]`)).not.toBeNull(),
+      );
+      sidebar
+        .querySelector<HTMLButtonElement>(`[data-retry-child-sessions="${parentKey}"]`)!
+        .click();
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([childKey]));
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      expect(sidebar.querySelector(`[data-session-key="${homeKey}"]`)).toBeNull();
+    },
+  );
 
   it.each([undefined, "Saved work"])(
     "does not promote stale chip-mode child caches into the shared window (category=%s)",
@@ -173,6 +286,7 @@ describe("AppSidebar agent roster", () => {
         isMain: false,
         execNode: "test-device",
         label: "Coding",
+        icon: "🔧",
       }),
       session("working", 9, { key: key("open"), isMain: false, label: "Open PR" }),
       session("working", 8, { key: key("merged"), isMain: false, label: "Merged PR" }),
@@ -207,11 +321,25 @@ describe("AppSidebar agent roster", () => {
       }),
     ]);
     sidebar.sidebarAgentsMode = "roster";
-    sidebar.hasSessionDraft = (sessionKey) => sessionKey === key("automation");
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey === key("automation"),
+    };
     sessions.sessions.setPullRequestSummary(key("open"), { numbers: [101], state: "open" });
     sessions.sessions.setPullRequestSummary(key("merged"), { numbers: [102], state: "merged" });
     await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(7));
     const row = (id: string) => sidebar.querySelector(`[data-session-key="${key(id)}"]`)!;
+    const codingLink = row("coding").querySelector(".sidebar-recent-session__link")!;
+    expect(codingLink.firstElementChild?.classList.contains("sidebar-session-indicator")).toBe(
+      true,
+    );
+    expect(codingLink.firstElementChild?.textContent).toContain("🔧");
+    expect(
+      row("coding").querySelector(
+        ".sidebar-recent-session__details-endcap .sidebar-session-indicator",
+      ),
+    ).toBeNull();
     expect(row("coding").querySelector('.session-row-badge[aria-label="Coding"]')).not.toBeNull();
     expect(row("open").querySelector('[data-pull-request-state="open"]')).not.toBeNull();
     expect(row("merged").querySelector('[data-pull-request-state="merged"]')).not.toBeNull();
@@ -248,7 +376,7 @@ describe("AppSidebar agent roster", () => {
     ).not.toBeNull();
   });
 
-  it("keeps the directly opened main session visible outside the shared window", async () => {
+  it("keeps Home activity on the agent header outside the shared window", async () => {
     const mainKey = "agent:working:main";
     const { sidebar, context } = await mountRoster(roster, [], undefined, [
       session("working", 10, { key: mainKey, hasActiveRun: true, status: "running", unread: true }),
@@ -261,50 +389,103 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() =>
       expect(
         sidebar.querySelector(
-          '[data-session-key="agent:working:main"] .sidebar-session-team-state .session-glyph__ring',
+          '[data-agent-group="working"] .sidebar-agent-roster__signals .sidebar-session-team-state .session-glyph__ring',
         ),
       ).not.toBeNull(),
     );
     expect(
       sidebar.querySelector(
-        '[data-session-key="agent:working:main"] .sidebar-session-team-state [aria-label="Unread"]',
+        '[data-agent-group="working"] .sidebar-agent-roster__signals .sidebar-session-team-state [aria-label="Unread"]',
       ),
     ).not.toBeNull();
-    expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).not.toBeNull();
-  });
-
-  it("does not reinsert a main row rejected by the normal session visibility filter", async () => {
-    const { sidebar } = await mountRoster(roster, [session("working", 10, { kind: "unknown" })]);
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    expect(sessionKeys(sidebar)).toEqual([]);
-  });
-
-  it("keeps the global main stream visible in its configured agent group", async () => {
-    const { sidebar } = await mountRoster(
-      { ...roster, scope: "global", agents: [{ id: "main", name: "Harbor" }] },
-      [
-        {
-          key: "global",
-          kind: "global",
-          label: "Shared conversation",
-          hasActiveRun: true,
-          status: "running",
-        },
-      ],
+    expect(sidebar.querySelector(`[data-session-key="${mainKey}"]`)).toBeNull();
+    expect(sidebar.querySelector('[data-agent-id="working"]')?.getAttribute("aria-current")).toBe(
+      "page",
     );
-    sidebar.sessionKey = "global";
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(["global"]));
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group="main"] [data-session-key="global"] .session-glyph__ring',
-      ),
-    ).not.toBeNull();
-    expect(sidebar.querySelector(".sidebar-agent-roster__signals .session-glyph__ring")).toBeNull();
   });
 
-  it("starts Online collapsed in team mode and keeps it expandable", async () => {
+  it.each([
+    { kind: "unknown", archived: false },
+    { kind: "direct", archived: true },
+  ] as const)(
+    "does not restore filtered main metadata ($kind, archived=$archived)",
+    async ({ kind, archived }) => {
+      const { sidebar } = await mountRoster(roster, [
+        session("working", 10, { kind, archived, hasActiveRun: true, unread: true }),
+      ]);
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+      expect(sessionKeys(sidebar)).toEqual([]);
+      expect(
+        sidebar.querySelector('[data-agent-group="working"] .sidebar-session-team-state'),
+      ).toBeNull();
+    },
+  );
+
+  it.each(
+    ["global", "GLOBAL"].flatMap((homeKey) => [false, true].map((viaRun) => ({ homeKey, viaRun }))),
+  )(
+    "represents global Home $homeKey and preserves children behind a run=$viaRun",
+    async ({ homeKey, viaRun }) => {
+      const childKey = "agent:main:project";
+      const runKey = "agent:main:subagent:bridge";
+      const { sidebar } = await mountRoster(
+        { ...roster, scope: "global", agents: [{ id: "main", name: "Harbor" }] },
+        [
+          {
+            key: homeKey,
+            childSessions: [viaRun ? runKey : childKey],
+            kind: "global",
+            label: "Shared conversation",
+            hasActiveRun: true,
+            status: "running",
+          },
+          ...(viaRun
+            ? [
+                session("main", 2, {
+                  key: runKey,
+                  isMain: false,
+                  spawnedBy: homeKey,
+                  childSessions: [childKey],
+                }),
+              ]
+            : []),
+          session("main", 1, {
+            key: childKey,
+            isMain: false,
+            spawnedBy: viaRun ? runKey : homeKey,
+            placement: {
+              state: "reclaimed",
+              generation: 1,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              stateChangedAtMs: 1,
+              workspaceResultConflict: {
+                paths: ["ui/layout.css"],
+                totalCount: 1,
+                stagedResultRef: "refs/openclaw/worker-results/test",
+              },
+            },
+          }),
+        ],
+      );
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = homeKey;
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(agentIds(sidebar)).toEqual(["main"]));
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([childKey]));
+      expect(
+        sidebar.querySelector(
+          '[data-agent-group="main"] .sidebar-agent-roster__signals .session-glyph__ring',
+        ),
+      ).not.toBeNull();
+      expect(sidebar.querySelector('[data-agent-id="main"]')?.getAttribute("aria-current")).toBe(
+        "page",
+      );
+    },
+  );
+
+  it("keeps Online separate from team sessions and opens it from the fixed rail", async () => {
     const { sidebar, gatewayHarness } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     gatewayHarness.publishEvent("presence", {
@@ -315,25 +496,18 @@ describe("AppSidebar agent roster", () => {
         },
       ],
     });
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('.sidebar-online button[aria-label="Online"]')).not.toBeNull(),
-    );
-    const toggle = sidebar.querySelector<HTMLButtonElement>(
-      '.sidebar-online button[aria-label="Online"]',
-    )!;
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
-    toggle.click();
     await sidebar.updateComplete;
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    await selectSidebarView(sidebar, "online");
     expect(sidebar.querySelector('[data-online-user-id="viewer"]')).not.toBeNull();
-    toggle.click();
-    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-content")).toBeNull();
+    await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-session-content")).not.toBeNull();
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {
-    const { sidebar, context, provider, request } = await mountRoster();
+    const { sidebar, context, sessions } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     await vi.waitFor(() =>
@@ -342,15 +516,18 @@ describe("AppSidebar agent roster", () => {
     const store = rosterActivityStore(context);
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     const listCount = () =>
-      request.mock.calls.filter(([method]) => method === "sessions.list").length;
+      sessions.list.mock.calls.filter(
+        ([query]) => query?.archivedFilter === "all" && !query.agentId && !query.spawnedBy,
+      ).length;
     const initial = listCount();
     sidebar.navigationVisible = false;
     await vi.waitFor(() => expect(store.snapshot.result).toBeNull());
     expect(sidebar.querySelector("openclaw-sidebar-agent-roster")?.isConnected).toBe(true);
     await store.refresh();
     expect(listCount()).toBe(initial);
-    const home = document.createElement("openclaw-agents-home-page");
-    provider.append(home);
+    const home = mountSolid(() => createComponent(AgentsHomePage, {}), {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    });
     await vi.waitFor(() => expect(store.snapshot.result).not.toBeNull());
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     expect(listCount()).toBe(initial + 1);
@@ -358,7 +535,7 @@ describe("AppSidebar agent roster", () => {
     await sidebar.updateComplete;
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     expect(listCount()).toBe(initial + 1);
-    home.remove();
+    home.unmount();
     expect(store.snapshot.result).not.toBeNull();
     sidebar.navigationVisible = false;
     await vi.waitFor(() => expect(store.snapshot.result).toBeNull());

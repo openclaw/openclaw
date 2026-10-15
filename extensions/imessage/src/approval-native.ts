@@ -1,6 +1,5 @@
-// Imessage plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
@@ -51,7 +50,7 @@ function isIMessageApprovalTransportEnabled(params: {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
   channel: "imessage",
   channelLabel: "iMessage",
   authorizeActorAction: (params) => imessageApprovalAuth.authorizeActorAction(params),
@@ -86,7 +85,7 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     },
   },
   createNativeRuntime: (routing) =>
-    createLazyChannelApprovalNativeRuntimeAdapter({
+    createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
@@ -96,7 +95,7 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
           accountId,
           nativeSessionOnly: true,
         }),
-      shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
+      shouldHandle: async ({ cfg, accountId, context, approvalKind, request }) =>
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>
@@ -199,16 +198,6 @@ export function shouldSuppressLocalIMessageExecApprovalPrompt(params: {
   });
 }
 
-function appendIMessageReactionHint(params: {
-  text?: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText({
-    text: params.text ?? "",
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
 function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
   const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
@@ -231,7 +220,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),
@@ -254,7 +243,7 @@ function buildIMessagePluginPendingPayload(params: {
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),

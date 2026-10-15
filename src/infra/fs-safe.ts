@@ -1,19 +1,17 @@
 // Re-exports fs-safe helpers with OpenClaw defaults and wrappers.
-import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
-import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
-  root as fsSafeRoot,
-  type ReadResult,
-  type Root as FsSafeRoot,
-  type RootDefaults,
-} from "@openclaw/fs-safe/root";
+  ensureDirectoryWithinRoot,
+  findExistingAncestor,
+  readLocalFileFromRoots as readFsSafeLocalFileFromRoots,
+} from "@openclaw/fs-safe/advanced";
+import "@openclaw/fs-safe/errors";
+import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
+import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
+import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
 
-export { FsSafeError };
-export type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
@@ -29,7 +27,7 @@ export {
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
-export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -46,7 +44,7 @@ export {
   type OpenResult,
   type ReadResult,
 } from "@openclaw/fs-safe/root";
-export { sanitizeUntrustedFileName } from "./fs-safe-advanced.js";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export {
   readSecureFile,
   type SecureFileReadOptions,
@@ -61,68 +59,18 @@ export {
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
 
-// The broad Plugin SDK infra barrel re-exports this facade. Keep fs-safe 0.5's
-// new Root.walk capability core-only until a dedicated plugin contract is approved.
-export type Root = Omit<FsSafeRoot, "walk">;
+// Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
+export type Root = Omit<CompatibleFsSafeRoot, "walk">;
 
-const PINNED_WRITE_CATCH_ALL_MESSAGE = "path is not a regular file under root";
+export const readLocalFileFromRoots: (
+  options: Parameters<typeof readFsSafeLocalFileFromRoots>[0] & LegacyNonBlockingReadOption,
+) => ReturnType<typeof readFsSafeLocalFileFromRoots> = readFsSafeLocalFileFromRoots;
 
-const PINNED_WRITE_ERRNO_MESSAGES = new Map<string, string>([
-  ["EACCES", "permission denied"],
-  ["ENOSPC", "no space left on device"],
-  ["EPERM", "permission denied"],
-  ["EROFS", "read-only filesystem"],
-]);
-
-async function runPinnedWrite(write: () => Promise<void>): Promise<void> {
-  try {
-    await write();
-  } catch (error) {
-    if (
-      !(error instanceof FsSafeError) ||
-      error.code !== "invalid-path" ||
-      error.message !== PINNED_WRITE_CATCH_ALL_MESSAGE
-    ) {
-      throw error;
-    }
-    const cause = error.cause;
-    if (
-      !(cause instanceof Error) ||
-      !("code" in cause) ||
-      typeof cause.code !== "string" ||
-      !cause.code
-    ) {
-      throw error;
-    }
-    // fs-safe retains the errno but replaces its message with a path assertion.
-    // Keep its structured classification and original cause for existing callers.
-    const described = PINNED_WRITE_ERRNO_MESSAGES.get(cause.code) ?? "filesystem write failed";
-    throw new FsSafeError(error.code, `${described} (${cause.code})`, {
-      cause,
-      details: error.details,
-    });
-  }
-}
-
-export async function root(rootDir: string, defaults?: RootDefaults): Promise<Root> {
-  const created = await fsSafeRoot(rootDir, defaults);
-  const create = created.create.bind(created);
-  const write = created.write.bind(created);
-  // Keep the dependency's handle and identity. Its JSON methods call these writes.
-  const overrides: Pick<FsSafeRoot, "create" | "write"> = {
-    create: async (relativePath, data, options) =>
-      await runPinnedWrite(async () => {
-        // Select the dependency's overload without widening streamed-write options.
-        if (typeof data === "string" || Buffer.isBuffer(data)) {
-          await create(relativePath, data, options);
-        } else {
-          await create(relativePath, data, options);
-        }
-      }),
-    write: async (relativePath, data, options) =>
-      await runPinnedWrite(async () => await write(relativePath, data, options)),
-  };
-  return Object.assign(created, overrides);
+export async function root(
+  rootDir: string,
+  defaults?: RootDefaults & LegacyNonBlockingReadOption,
+): Promise<Root> {
+  return await fsSafeRoot(rootDir, defaults);
 }
 
 export type ExternalFileWriteOptions = {
@@ -144,10 +92,16 @@ export async function ensureAbsoluteDirectory(
   const absolutePath = path.resolve(dirPath);
   const scopeLabel = options?.scopeLabel ?? "directory";
   const existingAncestor = await findExistingAncestor(absolutePath);
-  if (!existingAncestor) {
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  if (existingAncestor && existingAncestor !== absolutePath) {
+    const result = await ensureDirectoryWithinRoot({
+      rootDir: existingAncestor,
+      requestedPath: path.relative(existingAncestor, absolutePath),
+      scopeLabel,
+      mode: options?.mode,
+    });
+    return result.ok ? result : { ok: false, error: new Error(result.error) };
   }
-  if (existingAncestor === absolutePath) {
+  if (existingAncestor) {
     try {
       const stat = await fs.lstat(absolutePath);
       if (!stat.isSymbolicLink() && stat.isDirectory()) {
@@ -156,18 +110,8 @@ export async function ensureAbsoluteDirectory(
     } catch {
       // Fall through to the uniform invalid-path result below.
     }
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
-  const result = await ensureDirectoryWithinRoot({
-    rootDir: existingAncestor,
-    requestedPath: path.relative(existingAncestor, absolutePath),
-    scopeLabel,
-    mode: options?.mode,
-  });
-  if (result.ok) {
-    return result;
-  }
-  return { ok: false, error: new Error(result.error) };
+  return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
 }
 
 export async function writeExternalFileWithinRoot(
@@ -192,6 +136,7 @@ export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  /** @deprecated Omit this hint; safe reads always use nonblocking admission where supported. */
   nonBlockingRead?: boolean;
   allowSymlinkTargetWithinRoot?: boolean;
   maxBytes?: number;
@@ -200,7 +145,6 @@ export async function readFileWithinRoot(params: {
   return await fsRoot.read(params.relativePath, {
     hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
     maxBytes: params.maxBytes,
-    nonBlockingRead: params.nonBlockingRead,
     symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
   });
 }

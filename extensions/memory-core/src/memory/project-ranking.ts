@@ -2,36 +2,50 @@ import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-
 
 type ProjectRankable = {
   score: number;
+  importance?: number;
   projectKey?: string;
 };
 
+export function prepareActiveProjectKeys(
+  activeProjectKeys: readonly string[] | undefined,
+): ReadonlySet<string> | undefined {
+  return activeProjectKeys?.length ? new Set(activeProjectKeys) : undefined;
+}
+
 export function projectScoreMultiplier(
   projectKey: string | null | undefined,
-  activeProjectKeys: readonly string[] | undefined,
+  activeProjectKeys: ReadonlySet<string> | undefined,
 ): number {
-  if (!projectKey || !activeProjectKeys || activeProjectKeys.length === 0) {
+  if (!projectKey || !activeProjectKeys || activeProjectKeys.size === 0) {
     return 1;
   }
-  const active = new Set(activeProjectKeys);
   const stored = projectKey
     .split(";")
     .map((key) => key.trim())
     .filter(Boolean);
-  return stored.every((key) => active.has(key)) ? 1.15 : 0.9;
+  return stored.every((key) => activeProjectKeys.has(key)) ? 1.15 : 0.9;
 }
 
-export function applyProjectRanking<T extends ProjectRankable>(
+export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
-  activeProjectKeys?: readonly string[],
+  activeProjectKeys?: ReadonlySet<string>,
 ): T[] {
-  const eligible = results.filter(
+  const weighted = results.map((entry) => {
+    const importance = entry.importance;
+    const multiplier =
+      importance === null || importance === undefined
+        ? 1
+        : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
+    return { ...entry, score: entry.score * multiplier };
+  });
+  const eligible = weighted.filter(
     (entry) =>
       !entry.projectKey
         ?.split(";")
         .map((key) => key.trim())
         .includes(INVALID_PROJECT_ANNOTATION_KEY),
   );
-  if (!activeProjectKeys || activeProjectKeys.length === 0) {
+  if (!activeProjectKeys || activeProjectKeys.size === 0) {
     return eligible;
   }
   // Retrieval owners sort after score adjustment, preserving their exact-match tiers.

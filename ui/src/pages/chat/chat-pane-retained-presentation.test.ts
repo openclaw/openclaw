@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
+import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -8,6 +9,10 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { emptyLegacyContent } from "../../lit/solid-content.tsx";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
+import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -17,7 +22,8 @@ import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
@@ -27,13 +33,18 @@ import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  createPaneTestHost,
+  connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { resetChatComposerState } from "./components/chat-composer.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -52,7 +63,10 @@ describe("chat pane retained presentation lifecycle", () => {
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -60,7 +74,6 @@ describe("chat pane retained presentation lifecycle", () => {
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
       const presentation = pane as TestChatPane & {
         compact: boolean;
-        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
       };
       presentation.compact = compact;
       pane.connectedClient = null;
@@ -73,9 +86,6 @@ describe("chat pane retained presentation lifecycle", () => {
       );
       expect(state.sidebarLayout.open).toBe(!compact);
       expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
-      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
-        compact ? "hidden" : "expanded",
-      );
       expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
       expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
       expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
@@ -89,11 +99,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -102,7 +112,9 @@ describe("chat pane retained presentation lifecycle", () => {
     };
     dock.pane.context = page.pane.context;
     const panes = [page, dock].map(({ pane, state }, index) => {
-      const mounted = pane as TestChatPane & { inputRegion: "page" | "dock"; render(): null };
+      const mounted = pane as TestChatPane & {
+        inputRegion: "page" | "dock";
+      };
       mounted.inputRegion = index === 0 ? "page" : "dock";
       mounted.sessionKey = index === 0 ? "agent:work:task" : "agent:main:main";
       state.sessionKey = mounted.sessionKey;
@@ -112,14 +124,17 @@ describe("chat pane retained presentation lifecycle", () => {
       } as ChatPageHost["settings"];
       state.handleChatDraftChange = vi.fn();
       state.loadAssistantIdentity = vi.fn(async () => undefined);
-      mounted.render = () => null;
+      mounted.render = () => ({
+        layout: html`${emptyLegacyContent}`,
+        capabilityDialogs: undefined,
+      });
       mounted.active = true;
       const composer = document.createElement("div");
       composer.className = "agent-chat__composer-combobox";
       const textarea = composer.appendChild(document.createElement("textarea"));
       mounted.append(composer);
       const focus = vi.spyOn(textarea, "focus");
-      ChatPaneBase.prototype.connectedCallback.call(mounted);
+      connectPaneTestView(mounted);
       return { mounted, focus, state };
     });
     try {
@@ -147,7 +162,7 @@ describe("chat pane retained presentation lifecycle", () => {
       for (const { mounted } of panes) {
         mounted.active = false;
         Object.defineProperty(mounted, "isConnected", { configurable: true, value: false });
-        ChatPaneBase.prototype.disconnectedCallback.call(mounted);
+        mounted.disconnectedCallback();
       }
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -411,37 +426,87 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it("retires foreground-only state when a retained pane is hidden", () => {
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const stop = vi.fn();
-    const release = vi.fn();
-    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-    state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
-    state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    const detailHost = state as unknown as TaskDetailHost;
-    readTaskTranscript(detailHost, {
-      taskId: "task-live",
-    });
-    expect(detailHost.taskDetailState).toBeDefined();
-    pane.presentationId = "p1:visible";
-    const announcement = document.createElement("span");
-    announcement.className = "chat-transcript-announcement";
-    announcement.setAttribute("aria-live", "polite");
-    pane.append(announcement);
-    pane.presented = false;
+  it.each(["image", "reset"] as const)(
+    "retires foreground state and the %s modal while its pane is parked",
+    async (overlay) => {
+      vi.useFakeTimers();
+      installTranscriptDomMocks();
+      const restoreDialog = installDialogPolyfill();
+      const key = "agent:main:retained-modal";
+      const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
+      // SAFETY: The test host forwards the controller properties consumed by this fixture.
+      const pane = createPaneTestHost(
+        "openclaw-chat-runtime-test",
+        ChatPaneRuntime,
+      ) as unknown as TestChatPane & {
+        boardProvider: ReturnType<typeof createMockBoardProvider>;
+        confirmConversationReset: () => Promise<boolean>;
+      };
+      pane.context = fixture.context;
+      pane.sessionKey = key;
+      const provider = createApplicationContextProvider(fixture.context);
+      provider.append(pane.element);
+      document.body.append(provider);
+      try {
+        await pane.updateComplete;
+        await vi.dynamicImportSettled();
+        const state = pane.state;
+        const stop = vi.fn();
+        const release = vi.fn();
+        state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+        state.realtimeTalkActive = true;
+        state.sidebarContent = { kind: "markdown", content: "Review selection" };
+        let pending: Promise<boolean> | undefined;
+        if (overlay === "image") {
+          state.imageLightbox = { release, src: "blob:test", title: "preview" };
+          state.requestUpdate();
+        } else {
+          pane.boardProvider = createMockBoardProvider(key);
+          pending = pane.confirmConversationReset();
+        }
+        await pane.updateComplete;
+        const lightbox = pane.querySelector("openclaw-image-lightbox");
+        await lightbox?.updateComplete;
+        const modal =
+          lightbox?.shadowRoot?.querySelector("openclaw-modal-dialog") ??
+          pane.querySelector("openclaw-modal-dialog");
+        expect(modal).not.toBeNull();
+        await modal!.updateComplete;
+        expect(document.openClawModalLayers?.has(modal!)).toBe(true);
+        const updates = vi.spyOn(pane, "render");
+        const announcement = pane.querySelector(".chat-transcript-announcement");
+        expect(announcement).not.toBeNull();
+        announcement!.setAttribute("aria-live", "polite");
+        pane.presented = false;
+        let completed = false;
+        const completion = pane.updateComplete.then(() => {
+          completed = true;
+        });
+        await Promise.resolve();
 
-    expect(stop).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
-    expect(detailHost.taskDetailState).toBeUndefined();
-    expect(announcement.getAttribute("aria-live")).toBe("off");
-  });
+        expect(stop).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledTimes(overlay === "image" ? 1 : 0);
+        expect(state.sidebarContent).toBeNull();
+        expect(announcement!.getAttribute("aria-live")).toBe("off");
+        expect(modal!.isConnected).toBe(false);
+        expect(document.openClawModalLayers?.has(modal!)).toBe(false);
+        expect(updates).not.toHaveBeenCalled();
+        expect(completed).toBe(false);
+        if (pending) {
+          await expect(pending).resolves.toBe(false);
+        }
+        pane.presented = true;
+        await completion;
+        expect(pane.querySelector("openclaw-image-lightbox, openclaw-modal-dialog")).toBeNull();
+      } finally {
+        provider.remove();
+        await vi.dynamicImportSettled();
+        restoreDialog();
+        resetTranscriptTestDom();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["hidden", "disconnected"] as const)(
     "does not restore a pending file preview after its retained pane is %s",
@@ -489,6 +554,8 @@ describe("chat pane retained presentation lifecycle", () => {
           path: "README.md",
           name: "README.md",
           missing: false,
+          previewKind: "text",
+          contentEncoding: "utf8",
           content: "This retired preview must not return.",
         },
       });

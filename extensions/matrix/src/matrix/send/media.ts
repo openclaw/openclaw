@@ -1,61 +1,8 @@
-// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import type {
-  DimensionalFileInfo,
-  EncryptedFile,
-  FileWithThumbnailInfo,
-  MatrixClient,
-  TimedFileInfo,
-  VideoFileInfo,
-} from "../sdk.js";
-import type {
-  MatrixMediaContent,
-  MatrixMediaInfo,
-  MatrixMediaMsgType,
-  MatrixRelation,
-} from "./types.js";
-
-function buildMatrixMediaInfo(params: {
-  size: number;
-  mimetype?: string;
-  durationMs?: number;
-  imageInfo?: DimensionalFileInfo;
-}): MatrixMediaInfo | undefined {
-  const base: FileWithThumbnailInfo = {};
-  if (Number.isFinite(params.size)) {
-    base.size = params.size;
-  }
-  if (params.mimetype) {
-    base.mimetype = params.mimetype;
-  }
-  if (params.imageInfo) {
-    const dimensional: DimensionalFileInfo = {
-      ...base,
-      ...params.imageInfo,
-    };
-    if (typeof params.durationMs === "number") {
-      const videoInfo: VideoFileInfo = {
-        ...dimensional,
-        duration: params.durationMs,
-      };
-      return videoInfo;
-    }
-    return dimensional;
-  }
-  if (typeof params.durationMs === "number") {
-    const timedInfo: TimedFileInfo = {
-      ...base,
-      duration: params.durationMs,
-    };
-    return timedInfo;
-  }
-  if (Object.keys(base).length === 0) {
-    return undefined;
-  }
-  return base;
-}
+import type { DimensionalFileInfo, EncryptedFile, MatrixClient } from "../sdk.js";
+import type { MatrixMediaContent, MatrixMediaMsgType, MatrixRelation } from "./types.js";
 
 export function buildMediaContent(params: {
   msgtype: MatrixMediaMsgType;
@@ -70,23 +17,21 @@ export function buildMediaContent(params: {
   imageInfo?: DimensionalFileInfo;
   file?: EncryptedFile;
 }): MatrixMediaContent {
-  const info = buildMatrixMediaInfo({
-    size: params.size,
-    mimetype: params.mimetype,
-    durationMs: params.durationMs,
-    imageInfo: params.imageInfo,
-  });
   const base: MatrixMediaContent = {
     msgtype: params.msgtype,
     body: params.body,
     filename: params.filename,
-    info: info ?? undefined,
+    info: {
+      size: params.size,
+      ...(params.mimetype ? { mimetype: params.mimetype } : {}),
+      ...params.imageInfo,
+      ...(typeof params.durationMs === "number" ? { duration: params.durationMs } : {}),
+    },
   };
   // Encrypted media should only include the "file" payload, not top-level "url".
   if (!params.file && params.url) {
     base.url = params.url;
   }
-  // For encrypted files, add the file object
   if (params.file) {
     base.file = params.file;
   }

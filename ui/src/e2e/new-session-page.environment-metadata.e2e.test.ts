@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -111,7 +112,7 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
       await gateway.waitForRequest("environments.list");
       const whereTrigger = page.locator("#new-session-where-trigger");
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       const device = where.locator('[data-value="device:build-mac"]');
       const restrictedDevice = where.locator('[data-value="device:restricted-mac"]');
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -127,7 +128,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
       await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
@@ -150,7 +151,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]'),
+      );
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
@@ -162,7 +165,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isEnabled()).toBe(true);
@@ -249,7 +254,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await openEnvironmentPicker(page);
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
@@ -362,7 +367,7 @@ suite.define(() => {
         })),
       ).toEqual({ connected: true, focused: true, device: "device:alpha-device" });
       await page.keyboard.press("Enter");
-      expect(await place.getAttribute("open")).not.toBeNull();
+      expect(await place.evaluate((element) => element.matches(":popover-open"))).toBe(true);
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       for (let cycle = 1; cycle <= 4; cycle += 1) {
         await gateway.deferNext("environments.list");

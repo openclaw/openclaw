@@ -1,152 +1,65 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
-  bindCronManagementGrant,
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
+  getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../agents/admitted-run-context.js";
+import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
+import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
-import { saveSubagentRegistryChangesToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
 import {
   revokeRequesterCronAuthority,
   withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  setRuntimeConfigSnapshot,
-} from "../../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import { loadCronStore } from "../../cron/store.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  type AgentRuntimeIdentity,
-} from "../agent-runtime-identity-token.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { resolveMcpLoopbackClientGrant, revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
+import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import {
-  resolveGatewayCronCreatorAuthorityAdmission,
-  type GatewayCronCreatorAuthorityAdmission,
-} from "./cron-creator-authority-admission.js";
-import { cronHandlers } from "./cron.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+  SESSION,
+  SESSION_ID,
+  cfg,
+  stateDir,
+  cron,
+  admission,
+  type RequesterRun,
+  inRun,
+  createCronFixture,
+  type CreatorTransportTools,
+  createCreatorTransportTools,
+  installRequesterCronAuthorityTestHooks,
+} from "./requester-cron-authority.test-support.js";
+import type { RespondFn } from "./types.js";
 
-const SESSION = "agent:main:control-ui";
-const SESSION_ID = "requester-session";
-const cfg = { agents: { entries: { main: {} } } };
-let stateDir: string;
-let cron: CronService;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Attached-node inventory is unrelated to these original-caller and Cron commit boundaries.
+vi.mock("../../agents/node-exec-availability.js", () => ({
+  loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
+}));
 
-beforeEach(() => {
-  stateDir = tempDirs.make("openclaw-requester-cron-authority-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  setRuntimeConfigSnapshot(cfg);
-  replaceSessionEntrySync(
-    { sessionKey: SESSION },
-    { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original" },
-  );
-});
+installRequesterCronAuthorityTestHooks();
 
-afterEach(async () => {
-  cron?.stop();
-  revokeRequesterCronAuthority(SESSION);
-  await cleanupSessionStateForTest({ stateDir });
-  clearRuntimeConfigSnapshot();
-  vi.unstubAllEnvs();
-});
-
-function admission(runId: string, client: GatewayClient, childSessionKey?: string) {
-  return resolveGatewayCronCreatorAuthorityAdmission({
-    runId,
-    resolvedSessionKey: SESSION,
-    sessionId: SESSION_ID,
-    client,
-    request: { message: "Update the maintenance automation", idempotencyKey: runId },
-    ...(childSessionKey
-      ? {
-          inputProvenance: {
-            kind: "inter_session" as const,
-            sourceTool: "subagent_settle",
-            sourceSessionKey: childSessionKey,
-          },
-        }
-      : {}),
-    hasRestoredCronContinuation: false,
-    isOneShotModelRun: false,
-    isRestartRecoveryResumeRun: false,
-  });
-}
-
-async function inRun<T>(
-  runId: string,
-  admitted: GatewayCronCreatorAuthorityAdmission | undefined,
-  run: (identity: AgentRuntimeIdentity) => Promise<T>,
-) {
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  registerAgentRunContext(runId, { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID });
-  const identity: AgentRuntimeIdentity = {
-    kind: "agentRuntime",
-    agentId: "main",
-    sessionKey: SESSION,
-    operationalRunInstance,
-    delegatedAuthority: { kind: "local", ...authority },
-  };
-  const execute = () =>
-    withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: SESSION,
-        operationalRunInstance,
-        approvalAuthority: authority,
-      },
-      () => run(identity),
-    );
-  try {
-    if (!admitted) {
-      return await execute();
-    }
-    const capability = expectDefined(
-      createCronCreatorAuthorityCapability(
-        runId,
-        admitted.callerOrigin,
-        admitted.managementEntitlement,
-        admitted.isCurrent,
-      ),
-      "admitted cron capability",
-    );
-    admitted.bindRunScope?.(capability);
-    return await runWithCronCreatorAuthorityCapability(capability, execute);
-  } finally {
-    releaseAgentRunDelegatedAuthority(authority);
-    clearAgentRunContext(runId);
-  }
-}
-
-async function withSuccessor<T>(
-  admin: boolean | "channel-owner",
-  run: (identity: AgentRuntimeIdentity) => Promise<T>,
-) {
+async function withSuccessor<T>(admin: boolean | "channel-owner", run: RequesterRun<T>) {
   const originalRunId = "original-requester";
   const child = makeSettledChild({
     runId: "settled-child",
@@ -156,9 +69,9 @@ async function withSuccessor<T>(
     requesterSettleWake: undefined,
     completion: { required: true, resultText: "Maintenance review complete" },
   });
-  const batch = [child];
-  const runs = new Map([[child.runId, child]]);
-  const persistOrThrow = (...ids: string[]) => saveSubagentRegistryChangesToSqlite(runs, ids);
+  subagentRuns.set(child.runId, child);
+  const runs = subagentRuns;
+  const transfer = createRequesterInitialTransferFixture(runs);
   const requester = createSyntheticPluginRuntimeClient({
     scopes: admin ? ["operator.admin"] : ["operator.write"],
   });
@@ -185,17 +98,17 @@ async function withSuccessor<T>(
   }
   await inRun(originalRunId, admitted, async () => {
     expect(
-      markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedWithAuthority({
         requesterSessionKey: SESSION,
         requesterAgentId: "main",
         requesterTurnRunId: originalRunId,
         runs,
-        persistOrThrow,
+        transfer,
       }),
     ).toBe(1);
   });
   expect(
-    settleRequesterTurnAfterSessionSpawns({
+    await settleRequesterTurnAfterSessionSpawns({
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
       requesterTurnRunId: originalRunId,
@@ -208,7 +121,7 @@ async function withSuccessor<T>(
         },
       ],
       runs,
-      persistOrThrow,
+      transfer,
       schedule: () => {},
     }),
   ).toBe(true);
@@ -218,8 +131,8 @@ async function withSuccessor<T>(
       requesterSessionKey: SESSION,
       requesterSessionId: SESSION_ID,
       requesterAgentId: "main",
-      batch,
-      rearmGeneration: child.requesterSettleWake?.rearmGeneration,
+      batch: [expectDefined(runs.get(child.runId), "published requester child")],
+      rearmGeneration: runs.get(child.runId)?.requesterSettleWake?.rearmGeneration,
       runId,
       isCurrent: () => true,
     },
@@ -227,29 +140,38 @@ async function withSuccessor<T>(
       inRun(
         runId,
         admission(runId, createSyntheticPluginRuntimeClient(), child.childSessionKey),
-        async (identity) => {
+        async (identity, admittedRun, creator) => {
           // Queue acceptance retires the committed outbox before tools finish.
           // Its fresh admitted run must now own management and revocation.
-          runs.clear();
-          persistOrThrow(child.runId);
-          return await run(identity);
+          expect(creator?.callerScopedCreation).toBeUndefined();
+          if (admin) {
+            const management = bindCronManagementGrant(runId);
+            expect(management?.managementOnly).toBe(true);
+            expect(() => management?.mint("cron.add")).toThrow("management-only");
+          }
+          await mutateSubagentRuns(
+            [child.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([[child.runId, null]]),
+            }),
+            {
+              runs,
+              context: captureOpenClawStateWorkerContext(),
+              assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
+            },
+          );
+          return await run(identity, admittedRun, creator);
         },
       ),
   );
 }
 
-async function createStoredJob(listConfiguredChannels: () => Promise<string[]> = async () => []) {
-  const storePath = path.join(stateDir, "cron", "jobs.json");
-  cron = new CronService({
-    storePath,
-    cronEnabled: false,
-    defaultAgentId: "main",
-    log: createNoopLogger(),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    listConfiguredChannels,
-  });
+async function createStoredJob(
+  listConfiguredChannels: () => Promise<string[]> = async () => [],
+  config: OpenClawConfig = cfg,
+) {
+  const { context, read } = createCronFixture(listConfiguredChannels, config);
   const job = await cron.add(
     {
       name: "Maintenance",
@@ -272,62 +194,209 @@ async function createStoredJob(listConfiguredChannels: () => Promise<string[]> =
       }),
     },
   );
-  const before = (await loadCronStore(storePath)).jobs;
+  const before = await read();
   const runtimeAuthority = before[0]!.runtimeAuthority;
   expect(runtimeAuthority).toBeDefined();
-  const context = createDirectChatContext({
-    cron,
-    cronStorePath: storePath,
-    getRuntimeConfig: () => cfg,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-  });
   return {
+    context,
     before,
-    read: async () => (await loadCronStore(storePath)).jobs,
+    read,
     runtimeAuthority,
-    readRuntimeAuthority: async () => (await loadCronStore(storePath)).jobs[0]!.runtimeAuthority,
-    update: async (identity: AgentRuntimeIdentity) => {
-      const management = bindCronManagementGrant(identity.operationalRunInstance.runId);
-      const client = createSyntheticPluginRuntimeClient();
-      client.internal!.agentRuntimeIdentity = {
-        ...identity,
-        cronManagementGrant: management?.mint("cron.update"),
-      };
-      const respond = vi.fn<RespondFn>();
-      const params = {
-        id: job.id,
-        patch: {
-          name: "Reviewed maintenance",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          payload: { kind: "agentTurn", message: "Reviewed health check" },
-          delivery: { mode: "none" },
-        },
-      };
-      await expectDefined(
-        cronHandlers["cron.update"],
-        "cron.update",
-      )({
-        req: { type: "req", id: "update", method: "cron.update", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      return expectDefined(respond.mock.calls[0], "cron update response");
-    },
+    readRuntimeAuthority: async () => (await read())[0]!.runtimeAuthority,
+    update: (identity: AgentRuntimeIdentity) => updateWithGrantFor("cron.update", identity),
+    updateWithGrantFor,
   };
+
+  async function updateWithGrantFor(grantMethod: string, identity: AgentRuntimeIdentity) {
+    const management = bindCronManagementGrant(identity.operationalRunInstance.runId);
+    // A configured channel owner's turn reaches the Gateway without operator.admin.
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    client.internal!.agentRuntimeIdentity = {
+      ...identity,
+      cronManagementGrant: management?.mint(grantMethod),
+    };
+    const respond = vi.fn<RespondFn>();
+    const params = {
+      id: job.id,
+      patch: {
+        name: "Reviewed maintenance",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        payload: { kind: "agentTurn", message: "Reviewed health check" },
+        delivery: { mode: "none" },
+      },
+    };
+    // The router applies the method-scope fence before the cron handler redeems the grant.
+    await handleGatewayRequest({
+      req: { type: "req", id: "update", method: "cron.update", params },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return expectDefined(respond.mock.calls[0], "cron update response");
+  }
 }
 
 describe("requester continuation persisted automation management", () => {
-  it.each([true, false, "channel-owner"] as const)(
-    "permits the stored mutation only for an admitted manager: %s",
-    async (admin) => {
+  it("rejects creation through the ordinary tool after a real requester handoff", async () => {
+    const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
+    setRuntimeConfigSnapshot(config);
+    const fixture = createCronFixture(undefined, config);
+    await withSuccessor(true, async (_identity, admitted, creator) => {
+      bindGatewayContextResolver(admitted, () => fixture.context);
+      try {
+        const tools = await createCreatorTransportTools({
+          transport: "embedded",
+          config,
+          admitted,
+          creator,
+          senderIsOwner: true,
+        });
+        await expect(
+          tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "add",
+            job: {
+              name: "Must not be created",
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "current",
+              payload: { kind: "agentTurn", message: "Check status", timeoutSeconds: 0 },
+              delivery: { mode: "none" },
+            },
+          }),
+        ).rejects.toThrow("This turn can only list, get, update, run, or remove automations");
+        expect(await fixture.read()).toEqual([]);
+      } finally {
+        clearGatewayContextResolver(admitted);
+      }
+    });
+  });
+  it.each(["cli", "embedded"] as const)(
+    "preserves independent %s writes after requester Cron revocation",
+    { timeout: 30_000 },
+    async (transport) => {
+      const config: OpenClawConfig = {
+        ...cfg,
+        agents: { ...cfg.agents, defaults: { workspace: stateDir } },
+        tools: { allow: [AUTOMATIONS_TOOL_NAME, "write"], fs: { workspaceOnly: false } },
+      };
+      setRuntimeConfigSnapshot(config);
+      const fixture = await createStoredJob(undefined, config);
+      // The listener must not inherit the requester's Cron scope at construction.
+      if (transport === "cli") {
+        await ensureMcpLoopbackServer(0);
+      }
+      try {
+        await withSuccessor(true, async (_identity, admitted, capability) => {
+          const creator = expectDefined(capability, "requester continuation capability");
+          const isCronCurrent = expectDefined(creator.isCurrent, "requester Cron currentness");
+          const delegated = expectDefined(
+            getAdmittedRunDelegatedAuthority(admitted),
+            "admitted run",
+          );
+          const assertRunActive = expectDefined(
+            resolveAdmittedRunActiveAssertion(admitted),
+            "admitted run assertion",
+          );
+          bindGatewayContextResolver(admitted, () => fixture.context);
+          let transportTools: CreatorTransportTools | undefined;
+          try {
+            const tools = await createCreatorTransportTools({
+              transport,
+              config,
+              admitted,
+              creator,
+              senderIsOwner: true,
+            });
+            transportTools = tools;
+            const mcpGrant = tools.mcpCapture
+              ? expectDefined(resolveMcpLoopbackClientGrant(tools.mcpCapture), "live MCP grant")
+              : undefined;
+            expect(isCronCurrent()).toBe(true);
+            const committedPath = path.join(stateDir, `committed-${transport}.txt`);
+            const laterPath = path.join(stateDir, `continued-${transport}.txt`);
+            const content = "Independent file work remains admitted.\n";
+            const originalWriteHostFile = hostFileWrite.writeHostFile;
+            let revokedAcrossWrite = false;
+            const writeSpy = vi
+              .spyOn(hostFileWrite, "writeHostFile")
+              .mockImplementation(async (...args) => {
+                await originalWriteHostFile(...args);
+                if (args[0] === committedPath) {
+                  // Retire only Cron management after the owned file has actually committed.
+                  revokeRequesterCronAuthority(SESSION);
+                  revokedAcrossWrite = true;
+                }
+              });
+            try {
+              let writeResult: unknown;
+              let writeError: unknown;
+              try {
+                writeResult = await tools.invoke("write", { path: committedPath, content });
+              } catch (error) {
+                writeError = error;
+              }
+              expect(revokedAcrossWrite).toBe(true);
+              expect(await readFile(committedPath, "utf8")).toBe(content);
+              expect(writeError).toBeUndefined();
+              expect(writeResult).toMatchObject({
+                content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
+              });
+              expect(isCronCurrent()).toBe(false);
+              expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
+              expect(assertRunActive).not.toThrow();
+              expect(creator.active).toBe(true);
+              expect(creator.signal.aborted).toBe(false);
+              if (mcpGrant) {
+                expect(mcpGrant.isCurrent()).toBe(true);
+              }
+              await expect(
+                tools.invoke("write", { path: laterPath, content }),
+              ).resolves.toMatchObject({
+                content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
+              });
+              expect(await readFile(laterPath, "utf8")).toBe(content);
+              await expect(
+                tools.invoke(AUTOMATIONS_TOOL_NAME, {
+                  action: "update",
+                  jobId: fixture.before[0]!.id,
+                  job: { name: "Must not persist after requester revocation" },
+                }),
+              ).rejects.toThrow(/Automation (caller authority is no longer active|admin grant)/i);
+              expect(await fixture.read()).toEqual(fixture.before);
+            } finally {
+              writeSpy.mockRestore();
+            }
+          } finally {
+            if (transportTools?.mcpCapture) {
+              revokeMcpLoopbackClientGrant(transportTools.mcpCapture.token);
+            }
+            clearGatewayContextResolver(admitted);
+          }
+        });
+      } finally {
+        if (transport === "cli") {
+          await closeMcpLoopbackServer();
+        }
+      }
+    },
+  );
+
+  it.each([
+    [true, "cron.update"],
+    [false, "cron.update"],
+    ["channel-owner", "cron.update"],
+    ["channel-owner", "cron.remove"],
+  ] as const)(
+    "permits the stored mutation only for an admitted manager (%s) with a matching grant (%s)",
+    async (admin, grantMethod) => {
       const fixture = await createStoredJob();
-      const [ok, result, error] = await withSuccessor(admin, fixture.update);
-      expect(ok).toBe(Boolean(admin));
-      if (admin) {
+      const [ok, result, error] = await withSuccessor(admin, (identity) =>
+        fixture.updateWithGrantFor(grantMethod, identity),
+      );
+      const permitted = Boolean(admin) && grantMethod === "cron.update";
+      expect(ok).toBe(permitted);
+      if (permitted) {
         expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
         expect(await fixture.read()).toMatchObject([
           {
@@ -341,10 +410,8 @@ describe("requester continuation persisted automation management", () => {
         ]);
         expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
       } else {
-        expect(error).toMatchObject({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("Automation not found"),
-        });
+        // An absent or wrong-method grant stops at the method-scope fence.
+        expect(error).toMatchObject({ message: "missing scope: operator.admin" });
         expect(await fixture.read()).toEqual(fixture.before);
       }
     },

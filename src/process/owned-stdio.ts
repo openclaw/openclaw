@@ -1,14 +1,19 @@
 import type { Writable } from "node:stream";
 import { settlesWithin } from "../shared/settle-within.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
-import type { SpawnProcessAdapter } from "./supervisor/types.js";
+import type {
+  AwaitedStdoutConsumer,
+  ProcessCleanupResult,
+  SpawnProcessAdapter,
+  SpawnSecretInput,
+} from "./supervisor/types.js";
 
 export type OwnedStdioProcess = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 
 export class OwnedStdioCleanupError extends Error {}
 
-export async function createOwnedStdioProcess(params: {
+export type OwnedStdioProcessOptions = {
   argv: string[];
   argv0?: string;
   cwd?: string;
@@ -19,7 +24,22 @@ export async function createOwnedStdioProcess(params: {
   abortSignal?: AbortSignal;
   /** Consume stderr through a native pipe instead of callback observation. */
   stderrDestination?: Writable;
-}): Promise<OwnedStdioProcess> {
+  secretInput?: SpawnSecretInput;
+  assertCurrent?: () => void;
+  /** Require explicit stdin.end(); host loss kills the child before input EOF. */
+  terminateOnHostLoss?: true;
+  stdoutConsumption?: "awaited";
+};
+
+export function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions & { stdoutConsumption: "awaited" },
+): Promise<OwnedStdioProcess & AwaitedStdoutConsumer>;
+export function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions,
+): Promise<OwnedStdioProcess>;
+export async function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions,
+): Promise<OwnedStdioProcess> {
   let startupCleanup: Promise<boolean> | undefined;
   try {
     const { adapter, ready } = await createChildAdapter({
@@ -52,7 +72,7 @@ export async function createOwnedStdioProcess(params: {
 export async function closeOwnedStdioProcess(
   process: OwnedStdioProcess,
   options: { graceMs?: number; force?: boolean } = {},
-): Promise<void> {
+): Promise<ProcessCleanupResult | undefined> {
   const settled = Promise.allSettled([
     process.wait(),
     process.waitForExtinction?.() ??
@@ -84,6 +104,7 @@ export async function closeOwnedStdioProcess(
     if (failure) {
       throw failure.reason;
     }
+    return process.cleanupResult;
   } finally {
     process.dispose();
   }

@@ -10,7 +10,9 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -95,7 +97,28 @@ suite.define(() => {
                 { id: "charlie", name: "Needle Charlie" },
               ],
             },
-            "cron.list": { jobs: [{ id: "bravo", name: "Needle Bravo" }] },
+            "cron.list": cronListResponseFixture({
+              jobs: [
+                {
+                  id: "bravo",
+                  name: "Needle Bravo",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "main",
+                  wakeMode: "next-heartbeat",
+                  payload: { kind: "systemEvent", text: "Prepare the sample report." },
+                  state: {},
+                },
+              ],
+              snapshotRevision: "palette-group-order",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
             "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
             "sessions.usage": emptyUsage,
           },
@@ -308,7 +331,7 @@ suite.define(() => {
           });
 
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+        const agentMenu = sidebar.locator(".sidebar-agent-menu");
         await agentMenu.getByText("Research", { exact: true }).waitFor();
         await agentMenu.getByText("Writer", { exact: true }).waitFor();
         expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
@@ -368,22 +391,26 @@ suite.define(() => {
         await gateway.waitForRequest("agents.list");
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-        const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-        // The card sits at the top of the sidebar: the menu drops below it so the
-        // agent you clicked (and its checkmark row) stays visible.
+        const agentMenu = sidebar.locator(".sidebar-agent-menu");
+        // The compact avatar stays visible above its menu. Viewport padding may
+        // shift the menu's left edge inside the rail without detaching it.
         await expect
           .poll(async () => {
             const [card, menu] = await Promise.all([
               sidebar.locator(".sidebar-agent-card__main").boundingBox(),
-              agentMenu.locator('[part~="menu"], .wa-dropdown__menu').first().boundingBox(),
+              agentMenu.boundingBox(),
             ]);
             if (!card || !menu) {
               return null;
             }
-            return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+            return {
+              belowCard: menu.y >= card.y + card.height,
+              anchoredToCard: menu.x <= card.x + card.width && menu.x + menu.width >= card.x,
+              inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
+            };
           })
-          .toEqual({ belowCard: true, leftAligned: true });
-        await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
+          .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
+        await agentMenu.locator('[data-value="agent:writer"]').click();
         await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
         await expect
           .poll(async () =>
@@ -391,12 +418,10 @@ suite.define(() => {
           )
           .toBe("Writer");
 
-        await sidebar.getByRole("link", { name: "Home" }).click();
+        await openHomeFullPage(page, "writer");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
         await sidebar.locator(".sidebar-identity-card").click();
-        await sidebar
-          .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-          .click();
+        await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
         await waitForRequest(gateway, "sessions.usage", (params) => params.agentId === "writer");
         const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
@@ -409,8 +434,8 @@ suite.define(() => {
 
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
-          .locator("wa-dropdown.sidebar-agent-menu")
-          .locator('wa-dropdown-item[value="command:agent-settings"]')
+          .locator(".sidebar-agent-menu")
+          .locator('[data-value="command:agent-settings"]')
           .click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer");
         expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
@@ -456,7 +481,7 @@ suite.define(() => {
 
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
 
@@ -474,7 +499,7 @@ suite.define(() => {
         const sessionRequestsBeforeAll = (await gateway.getRequests("sessions.list")).length;
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .evaluate((item) => (item as HTMLElement).click());
         await expect

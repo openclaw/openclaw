@@ -1,17 +1,54 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   setActiveDegradedSecretOwners,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
-import { githubApiToken, hasConfiguredGitHubApiCredential } from "./control-ui-github-api.js";
+import {
+  gitHubPublicApi,
+  githubApiToken,
+  hasConfiguredGitHubApiCredential,
+} from "./github-public-api.js";
 
-afterEach(() => setActiveDegradedSecretOwners([]));
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+  clearRuntimeConfigSnapshot();
+});
 
 describe("Control UI GitHub credential", () => {
+  it.each([
+    { enabled: false },
+    { entries: { github: { enabled: false } } },
+    { allow: ["another-plugin"] },
+  ])(
+    "keeps the packaged host read library available independently of plugin activation: %j",
+    async (plugins) => {
+      setRuntimeConfigSnapshot({ plugins });
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ id: 1 }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      expect(gitHubPublicApi.resolveGitHubApiCredentialScope({}).token).toBeUndefined();
+      await expect(
+        gitHubPublicApi.fetchGitHubJson("https://api.github.com/user", fetchMock),
+      ).resolves.toEqual({ id: 1 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps the explicit preview credential separate and preserves ambient fallback by omission", () => {
     const env = { GH_TOKEN: "ambient-gh", GITHUB_TOKEN: "ambient-github" };
 
     expect(githubApiToken(env, {})).toBe("ambient-gh");
+    expect(
+      githubApiToken(env, {
+        gateway: { github: { host: "ghe.example.test" } },
+      }),
+    ).toBeUndefined();
     expect(
       githubApiToken(env, {
         gateway: { controlUi: { github: { token: "preview-service-token" } } },
@@ -62,5 +99,26 @@ describe("Control UI GitHub credential", () => {
     );
     expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
     expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
+  });
+
+  it("requires the structured service credential to name the selected Enterprise host", () => {
+    const gateway = { github: { host: "ghe.example.test" } };
+    expect(() =>
+      githubApiToken(
+        { GH_TOKEN: "public-token" },
+        { gateway: { ...gateway, controlUi: { github: { token: "public-service-token" } } } },
+      ),
+    ).toThrow(SecretSurfaceUnavailableError);
+    expect(
+      githubApiToken(
+        { GH_TOKEN: "public-token" },
+        {
+          gateway: {
+            ...gateway,
+            controlUi: { github: { host: "ghe.example.test", token: "enterprise-token" } },
+          },
+        },
+      ),
+    ).toBe("enterprise-token");
   });
 });

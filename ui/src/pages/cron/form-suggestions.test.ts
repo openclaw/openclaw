@@ -2,14 +2,14 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
-import { buildCronSuggestions } from "./form-suggestions.ts";
+import { buildCronSuggestions, resolveConversationTargetSuggestions } from "./form-suggestions.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
 describe("buildCronSuggestions", () => {
   const telegramTarget = "-1001234567890";
   const webhookTarget = "https://example.test/hooks/saved";
   const accountUrl = "https://example.test/account-name";
-  const telegramAccounts = ["default", telegramTarget, "work", accountUrl];
+  const telegramAccounts = ["default", "work", "ops"];
 
   it.each([
     {
@@ -22,7 +22,7 @@ describe("buildCronSuggestions", () => {
       channel: "last",
       mode: "announce",
       recipients: [telegramTarget, webhookTarget],
-      accounts: [...telegramAccounts, "discord-account", "Discord account"],
+      accounts: [...telegramAccounts, "discord-account"],
     },
     {
       channel: "telegram",
@@ -30,10 +30,17 @@ describe("buildCronSuggestions", () => {
       recipients: [webhookTarget],
       accounts: telegramAccounts,
     },
-  ] as const)("keeps $channel $mode recipients separate from account options", (scenario) => {
+    {
+      channel: "unconfigured",
+      mode: "announce",
+      recipients: [telegramTarget, webhookTarget],
+      accounts: [],
+    },
+  ] as const)("suggests account IDs and separate $channel $mode recipients", (scenario) => {
     const channels = createChannelCapability({
       snapshot: { client: null, phase: "stopped" },
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
     });
     onTestFinished(() => channels.dispose());
     channels.state.channelsSnapshot = {
@@ -45,6 +52,8 @@ describe("buildCronSuggestions", () => {
         telegram: [
           { accountId: "default", name: telegramTarget },
           { accountId: "work", name: accountUrl },
+          // A real ID must survive even when another account uses it as a name.
+          { accountId: "ops", name: "work" },
         ],
         discord: [{ accountId: "discord-account", name: "Discord account" }],
       },
@@ -77,9 +86,56 @@ describe("buildCronSuggestions", () => {
       cron,
       agentsList: null,
       modelSuggestions: [],
+      conversationTargets: ["-1009876543210", "https://example.test/conversation-shaped-url"],
     });
 
-    expect(suggestions.deliveryToSuggestions).toEqual(scenario.recipients);
+    expect(suggestions.deliveryToSuggestions).toEqual(
+      scenario.mode === "webhook"
+        ? scenario.recipients
+        : [
+            ...scenario.recipients,
+            "-1009876543210",
+            "https://example.test/conversation-shaped-url",
+          ].toSorted(),
+    );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
+  });
+});
+
+describe("resolveConversationTargetSuggestions", () => {
+  const conversations = [
+    {
+      conversationRef: "conv_personal",
+      channel: "telegram",
+      accountId: "personal",
+      kind: "group" as const,
+      target: "-100personal",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+    {
+      conversationRef: "conv_work",
+      channel: "telegram",
+      accountId: "work",
+      kind: "group" as const,
+      target: "-100work",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+    {
+      conversationRef: "conv_work_topic",
+      channel: "telegram",
+      accountId: "work",
+      kind: "group" as const,
+      target: "-100work",
+      threadId: "42",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+  ];
+
+  it("requires an explicit account before exposing routeable target suggestions", () => {
+    expect(resolveConversationTargetSuggestions(conversations, " work ")).toEqual(["-100work"]);
+    expect(resolveConversationTargetSuggestions(conversations, "")).toEqual([]);
   });
 });

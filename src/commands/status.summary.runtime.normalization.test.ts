@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import type { OpenClawConfig } from "../config/types.js";
 
 const resolveManifestModelIdNormalizationPoliciesMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
@@ -21,43 +23,97 @@ describe("statusSummaryRuntime configured model normalization", () => {
   it("skips manifest and plugin model normalization for configured model refs", async () => {
     const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
 
-    expect(
+    const resolveConfigured = (cfg: OpenClawConfig) =>
       statusSummaryRuntime.resolveConfiguredStatusModelRef({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai-codex/gpt-5.5" },
-            },
-          },
-        } as never,
+        cfg,
         defaultProvider: "openai",
         defaultModel: "gpt-5.5",
-      }),
-    ).toEqual({
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
-
+      });
     expect(
-      statusSummaryRuntime.resolveConfiguredStatusModelRef({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "fast-codex" },
-              models: {
-                "openai-codex/gpt-5.5": { alias: "fast-codex" },
-              },
-            },
+      resolveConfigured({ agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } } }),
+    ).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
+    expect(
+      resolveConfigured({
+        agents: {
+          defaults: {
+            model: { primary: "fast-codex" },
+            models: { "openai-codex/gpt-5.5": { alias: "fast-codex" } },
           },
-        } as never,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
+        },
       }),
-    ).toEqual({
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
+    ).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
 
+    expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves agent-local aliases without model normalization", async () => {
+    const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
+    const cases: Array<{
+      name: string;
+      defaults: Record<string, { alias?: string }>;
+      models: Record<string, { alias?: string }>;
+      primary?: string;
+      expected: { provider: string; model: string };
+    }> = [
+      {
+        name: "agent-only alias",
+        defaults: {},
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        primary: "fast",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "agent alias shadows the global alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        primary: "fast",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "inherited primary uses the agent alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "empty agent alias clears the inherited alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "openai/fixture-global": { alias: "" } },
+        expected: { provider: "openai", model: "fast" },
+      },
+      {
+        name: "omitted agent alias keeps the inherited alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "openai/fixture-global": {} },
+        expected: { provider: "openai", model: "fixture-global" },
+      },
+      {
+        name: "agent alias matching ignores case and whitespace",
+        defaults: {},
+        models: { "anthropic/fixture-local": { alias: " fast " } },
+        primary: "  FAST  ",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+    ];
+    for (const { name, defaults, models, primary, expected } of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "fast", models: defaults },
+          entries: { work: { ...(primary ? { model: primary } : {}), models } },
+        },
+      };
+
+      expect(
+        statusSummaryRuntime.resolveConfiguredStatusModelRef({
+          cfg,
+          agentId: "work",
+          defaultProvider: "openai",
+          defaultModel: "fixture-fallback",
+        }),
+        name,
+      ).toEqual(expected);
+    }
     expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
@@ -68,39 +124,20 @@ describe("statusSummaryRuntime configured model normalization", () => {
 
     normalizeProviderModelIdWithRuntimeMock.mockReturnValue("runtime-normalized-opus");
 
-    expect(
-      statusSummaryRuntime.resolveSessionModelRef(configured, {
-        model: "opus-4.6",
-      }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "opus-4.6",
-    });
-
-    expect(
-      statusSummaryRuntime.resolveSessionModelRef(configured, {
-        model: "fallback-runtime-model",
-        modelOverride: "opus-4.6",
-      }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "opus-4.6",
-    });
-
-    expect(
-      statusSummaryRuntime.resolveStatusModelComparisonLabel({
+    for (const entry of [
+      { model: "opus-4.6" },
+      { model: "fallback-runtime-model", modelOverride: "opus-4.6" },
+    ]) {
+      expect(statusSummaryRuntime.resolveSessionModelRef(configured, entry)).toEqual({
         provider: "anthropic",
         model: "opus-4.6",
-        defaultProvider: "anthropic",
-      }),
-    ).toBe("anthropic/claude-opus-4-6");
-    expect(
-      statusSummaryRuntime.resolveStatusModelLookupRef({
-        provider: "anthropic",
-        model: "opus-4.6",
-        defaultProvider: "anthropic",
-      }),
-    ).toEqual({
+      });
+    }
+    const ref = { provider: "anthropic", model: "opus-4.6", defaultProvider: "anthropic" };
+    expect(statusSummaryRuntime.resolveStatusModelComparisonLabel(ref)).toBe(
+      "anthropic/claude-opus-4-6",
+    );
+    expect(statusSummaryRuntime.resolveStatusModelLookupRef(ref)).toEqual({
       provider: "anthropic",
       model: "claude-opus-4-6",
     });

@@ -1,6 +1,5 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -27,30 +26,15 @@ export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
-export function createControllerHost(element: OpenClawLightDomElement): ReactiveControllerHost {
-  return {
-    addController: (controller: ReactiveController) => element.addController(controller),
-    removeController: (controller: ReactiveController) => element.removeController(controller),
-    requestUpdate: () => element.requestUpdate(),
-    get updateComplete() {
-      return element.updateComplete;
-    },
-  };
-}
-
 export function closeAgentPicker(root: ParentNode) {
-  const dropdown = root.querySelector<HTMLElement & { open: boolean }>(
-    ".new-session-page__select--agent wa-dropdown",
-  );
-  if (dropdown) {
-    dropdown.open = false;
+  const picker = root.querySelector(".new-session-page__select--agent");
+  if (picker) {
+    closeMenusWithin(picker);
   }
 }
 
-export function closeSessionMenus(root: ParentNode) {
-  for (const selector of ["wa-dropdown[open]", "wa-popover.new-session-page__picker-popover"]) {
-    for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>(selector)) {
-      menu.open = false;
-    }
-  }
+export function closeSessionMenus(
+  root: Pick<ParentNode, "querySelectorAll"> & { ownerDocument: Document },
+) {
+  closeMenusWithin(root);
 }

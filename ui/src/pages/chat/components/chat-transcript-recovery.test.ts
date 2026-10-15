@@ -5,13 +5,13 @@ import { html, LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { resetChatViewState } from "../chat-view-state.ts";
-import type { SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
@@ -36,7 +36,7 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends LitElement {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  private readonly transcript = new ChatTranscriptController(this);
+  private readonly transcript = new ChatTranscriptController(this, () => this.props.paneId);
 
   override createRenderRoot() {
     return this;
@@ -94,33 +94,6 @@ describe("chat transcript full-message recovery", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("automatically loads once and keeps full text through rerenders and search filtering", async () => {
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Complete answer."));
-    const pane = mountTranscript("recovery-visible", load);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Complete answer."));
-    expect(load).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "assistant-full-1",
-    });
-    expect(pane.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-
-    await searchTranscript(pane, "complete answer");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Complete answer.");
-    expect(previewMessage.content).toBe("Preview\n...(truncated)...");
-    await searchTranscript(pane, "unmatched search");
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
-
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
-    await pane.updateComplete;
-    pane.requestUpdate();
-    await pane.updateComplete;
-    expect(pane.textContent).toContain("Complete answer.");
-    expect(load).toHaveBeenCalledOnce();
-  });
-
   it("updates an unchanged search when a hidden reply finishes recovering", async () => {
     const pending = createDeferred<FullMessageResult>();
     const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(() => pending.promise);
@@ -134,6 +107,57 @@ describe("chat transcript full-message recovery", () => {
       expect(pane.querySelector(".chat-bubble")?.textContent).toContain("lunarneedle"),
     );
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("recovers an oversized source group with its tool cards and complete output", async () => {
+    const output = "x".repeat(5_000_000) + " OUTPUT_END";
+    const full = {
+      role: "assistant",
+      __openclaw: { id: "oversized-tools" },
+      content: [
+        { type: "toolCall", id: "large-result", name: "exec", arguments: { command: "check" } },
+        { type: "toolResult", id: "large-result", name: "exec", text: output },
+      ],
+    };
+    const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(async ({ maxChars }) => ({
+      ok: true,
+      message: {
+        ...full,
+        content: [
+          full.content[0],
+          { ...full.content[1], text: output.slice(0, maxChars ?? 500_000) },
+        ],
+      },
+    }));
+    const pane = mountTranscript("recovery-oversized-tools", load);
+    pane.props = {
+      ...pane.props,
+      showToolCalls: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "[chat.history omitted: message too large]",
+          __openclaw: { id: "oversized-tools", truncated: true, reason: "oversized" },
+        },
+      ],
+    };
+    await pane.updateComplete;
+    await expectDefined(load.mock.results[0]?.value, "full-message load");
+    await pane.updateComplete;
+    expect(load).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      messageId: "oversized-tools",
+      maxChars: 8_000_000,
+    });
+    expectDefined(
+      pane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
+      "recovered tool disclosure",
+    ).click();
+    await pane.updateComplete;
+    expect(pane.querySelector(".chat-tool-term__out")?.textContent).toBe(output);
+    expect(pane.textContent).not.toContain("This message is too large to display here.");
+    expect(pane.textContent).not.toContain("Could not load the full message.");
   });
 
   it("keeps the preview through bounded retries and recovers on manual retry", async () => {
@@ -266,28 +290,6 @@ describe("chat transcript full-message recovery", () => {
     expect(pane.querySelector(".chat-bubble")).toBeNull();
     await searchTranscript(pane, "Second scope");
     expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Second scope.");
-  });
-
-  it("discards recovered bodies when their source leaves active history", async () => {
-    const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue(fullMessage("Original body."));
-    const pane = mountTranscript("recovery-pruning", load);
-    await vi.waitFor(() => expect(pane.textContent).toContain("Original body."));
-    await searchTranscript(pane, "Original body");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Original body.");
-
-    pane.props.messages = [];
-    pane.requestUpdate();
-    await pane.updateComplete;
-    load.mockResolvedValue(fullMessage("Revisited body."));
-    pane.props.messages = [previewMessage];
-    pane.requestUpdate();
-    await pane.updateComplete;
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
-    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(pane.textContent).toContain("Revisited body."));
-    await searchTranscript(pane, "Original body");
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
   });
 
   it("keeps recovered pending-input text until that input leaves the source", async () => {

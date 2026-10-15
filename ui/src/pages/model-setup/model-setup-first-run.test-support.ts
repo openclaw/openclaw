@@ -7,9 +7,15 @@ import type { ApplicationContext, ApplicationGateway } from "../../app/context.t
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { ModelSetupPage, type ModelSetupRouteData } from "./model-setup-page.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
 import type { ModelSetupPageState } from "./state.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  type TestModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -70,6 +76,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -142,13 +149,14 @@ export async function mountPage(
   },
 ) {
   const provider = createApplicationContextProvider(context);
-  const page = new ModelSetupPage();
+  const page = createPage(context);
   // Prime inventory through the real detection boundary; the request fixture
   // below it continues observing subsequent activation and recovery actions.
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
+  mountModelSetupPage(page);
   await page.updateComplete;
   await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };
@@ -176,10 +184,14 @@ export function requestParameters(params: unknown) {
   return params;
 }
 
-export async function clickCandidate(page: ModelSetupPage, kind: string) {
-  await waitForFast(() =>
-    expect(page.querySelector(`[data-candidate-kind="${kind}"] button`)).not.toBeNull(),
-  );
+export async function clickCandidate(page: TestModelSetupPage, kind: string) {
+  await waitForFast(() => {
+    const candidateButton = page.querySelector<HTMLButtonElement>(
+      `[data-candidate-kind="${kind}"] button`,
+    );
+    expect(candidateButton).not.toBeNull();
+    expect(candidateButton!.disabled).toBe(false);
+  });
   const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
   expect(button).not.toBeNull();
   expect(button!.disabled).toBe(false);
@@ -187,10 +199,20 @@ export async function clickCandidate(page: ModelSetupPage, kind: string) {
   await page.updateComplete;
 }
 
-export async function selectManualProvider(page: ModelSetupPage, providerId: string) {
+export async function selectManualProvider(page: TestModelSetupPage, providerId: string) {
   const picker = page.querySelector(".model-setup-provider-select")!;
-  const item = picker.querySelector(`[data-manual-provider="${providerId}"]`);
+  const trigger = picker.querySelector<HTMLButtonElement>(".model-setup-provider-select__trigger")!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  const item = picker.querySelector<HTMLButtonElement>(`[data-manual-provider="${providerId}"]`);
   expect(item).not.toBeNull();
-  picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  item!.click();
   await page.updateComplete;
+}
+
+export async function waitForModelSetupDetection(page: TestModelSetupPage): Promise<void> {
+  await page.updateComplete;
+  await waitForFast(() =>
+    expect(page.querySelector(".model-setup")?.getAttribute("aria-busy")).toBe("false"),
+  );
 }

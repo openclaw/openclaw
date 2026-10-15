@@ -71,9 +71,17 @@ suite.define(() => {
         const initialHistory = {
           messages: [],
           sessionId,
-          sessionInfo: { key: sessionKey, kind: "direct", hasActiveRun: false, status: "done" },
+          sessionInfo: {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+          },
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [initialHistory.sessionInfo],
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
@@ -153,12 +161,23 @@ suite.define(() => {
             expect(await userImage.count()).toBe(1);
             // Native pending sources may report zero dimensions while the browser
             // still paints the current decoded image. Compare the actual pixels.
-            expect(
-              (await takeControlUiElementScreenshot(page, userImage, [userImage])).equals(
-                initialPixels,
-              ),
-              `${stage} preserves the displayed image pixels`,
-            ).toBe(true);
+            const currentPixels = await takeControlUiElementScreenshot(page, userImage, [
+              userImage,
+            ]);
+            const unchanged = currentPixels.equals(initialPixels);
+            if (!unchanged) {
+              await Promise.all([
+                writeFile(
+                  path.join(suite.artifactDir, `image-handoff-${order}-${stage}-initial.png`),
+                  initialPixels,
+                ),
+                writeFile(
+                  path.join(suite.artifactDir, `image-handoff-${order}-${stage}-current.png`),
+                  currentPixels,
+                ),
+              ]);
+            }
+            expect(unchanged, `${stage} preserves the displayed image pixels`).toBe(true);
             expect(await page.locator(".chat-group.user [aria-busy='true']").count()).toBe(0);
           };
           await expectImageStillVisible("01-submitted");
@@ -175,12 +194,21 @@ suite.define(() => {
               __openclaw: {
                 id: "pending:accepted-image-input",
                 mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-                media: [{ path: source, contentType: "image/png", fileName: "stable-preview.png" }],
+                media: [
+                  {
+                    path: source,
+                    contentType: "image/png",
+                    fileName: "stable-preview.png",
+                    width: 180,
+                    height: 180,
+                  },
+                ],
               },
             },
           };
           const sessionInfo = {
             key: sessionKey,
+            sessionId,
             kind: "direct",
             activeRunIds: [runId],
             hasActiveRun: true,
@@ -282,6 +310,40 @@ suite.define(() => {
           await continuity.dispose();
           expect(frames.length).toBeGreaterThan(1);
           expect(frames.every(Boolean)).toBe(true);
+        } catch (error) {
+          const images = await page
+            .locator(".chat-group.user img.chat-message-image")
+            .evaluateAll((imageElements) =>
+              imageElements.map((image) => {
+                const ancestors = [];
+                for (let node: Element | null = image; node; node = node.parentElement) {
+                  const bounds = node.getBoundingClientRect();
+                  const style = getComputedStyle(node);
+                  ancestors.push({
+                    tag: node.tagName,
+                    className: node.getAttribute("class"),
+                    inlineStyle: node.getAttribute("style"),
+                    display: style.display,
+                    visibility: style.visibility,
+                    contentVisibility: style.contentVisibility,
+                    width: bounds.width,
+                    height: bounds.height,
+                    clientHeight: node.clientHeight,
+                    measuringRows: node.hasAttribute("data-measuring-rows"),
+                    connected: node.isConnected,
+                  });
+                }
+                return {
+                  src: image.getAttribute("src"),
+                  naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : null,
+                  naturalHeight: image instanceof HTMLImageElement ? image.naturalHeight : null,
+                  ancestors,
+                };
+              }),
+            )
+            .catch((captureError: unknown) => ({ captureError: String(captureError) }));
+          console.info("IMAGE_HANDOFF_FAILURE", JSON.stringify({ order, images }));
+          throw error;
         } finally {
           releaseMetadata();
           releaseImage();

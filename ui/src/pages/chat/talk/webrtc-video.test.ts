@@ -1,89 +1,85 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import type { RealtimeTalkCallbacks } from "./shared.ts";
+import {
+  dispatchRealtimeEvent,
+  FakePeerConnection,
+  requirePeer,
+  sentRealtimeEvents,
+} from "./webrtc.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
-class FakeDataChannel extends EventTarget {
-  readyState: RTCDataChannelState = "open";
-  send = vi.fn();
-  close = vi.fn(() => {
-    this.readyState = "closed";
-  });
-}
-
-class FakePeerConnection extends EventTarget {
-  static instance: FakePeerConnection | undefined;
-
-  connectionState: RTCPeerConnectionState = "new";
-  readonly channel = new FakeDataChannel();
-  readonly addTrack = vi.fn();
+class VideoPeerConnection extends FakePeerConnection {
   readonly sctp = { maxMessageSize: 512 };
-  localDescription: RTCSessionDescriptionInit | null = null;
-
-  constructor() {
-    super();
-    FakePeerConnection.instance = this;
-  }
-
-  createDataChannel(): RTCDataChannel {
-    return this.channel as unknown as RTCDataChannel;
-  }
-
-  async createOffer(): Promise<RTCSessionDescriptionInit> {
-    return { type: "offer", sdp: "offer-sdp" };
-  }
-
-  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.localDescription = description;
-  }
-
-  async setRemoteDescription(): Promise<void> {}
-
-  close(): void {
-    this.connectionState = "closed";
-  }
 }
 
-function sentRealtimeEvents(): Array<Record<string, unknown>> {
-  return (
-    FakePeerConnection.instance?.channel.send.mock.calls.map(
-      ([payload]) => JSON.parse(String(payload)) as Record<string, unknown>,
-    ) ?? []
+async function createTransport(callbacks: RealtimeTalkCallbacks = {}, videoDeviceId?: string) {
+  const context = {
+    input: await prepareRealtimeTalkTestInput(),
+    client: {} as never,
+    sessionKey: "main",
+    callbacks,
+    videoDeviceId,
+  };
+  const transport = new WebRtcSdpRealtimeTalkTransport(
+    { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+    context,
   );
+  return { transport, context };
+}
+
+function audioFixture() {
+  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+  const stream = {
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
+function cameraFixture(deviceId?: string) {
+  const track = Object.assign(new EventTarget(), {
+    stop: vi.fn(),
+    readyState: "live",
+    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
+  });
+  const stream = {
+    getVideoTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
 }
 
 function dispatchDescribeViewToolCall(
   peer: FakePeerConnection | undefined,
   ids: { itemId: string; callId: string },
 ): void {
-  peer?.channel.dispatchEvent(
-    new MessageEvent("message", {
-      data: JSON.stringify({
-        type: "response.done",
-        response: {
-          id: `response-${ids.callId}`,
+  dispatchRealtimeEvent(peer, {
+    type: "response.done",
+    response: {
+      id: `response-${ids.callId}`,
+      status: "completed",
+      output: [
+        {
+          type: "function_call",
           status: "completed",
-          output: [
-            {
-              type: "function_call",
-              status: "completed",
-              id: ids.itemId,
-              call_id: ids.callId,
-              name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-              arguments: "{}",
-            },
-          ],
+          id: ids.itemId,
+          call_id: ids.callId,
+          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+          arguments: "{}",
         },
-      }),
-    }),
-  );
+      ],
+    },
+  });
 }
 
 describe("OpenAI Realtime media lifecycle", () => {
   beforeEach(() => {
-    FakePeerConnection.instance = undefined;
-    vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
+    FakePeerConnection.instances = [];
+    vi.stubGlobal("RTCPeerConnection", VideoPeerConnection);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
@@ -96,29 +92,18 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("ends the call visibly when the microphone track ends", async () => {
-    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
-    const getUserMedia = vi.fn(async () => ({
-      getTracks: () => [track],
-      getAudioTracks: () => [track],
-    }));
+    const { track, stream } = audioFixture();
+    const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const onStatus = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onStatus },
-      },
-    );
+    const { transport } = await createTransport({ onStatus });
     try {
       await transport.start();
 
       track.dispatchEvent(new Event("ended"));
 
       expect(onStatus).toHaveBeenCalledWith("error", expect.stringContaining("Microphone"));
-      expect(FakePeerConnection.instance?.connectionState).toBe("closed");
+      expect(requirePeer().connectionState).toBe("closed");
       expect(track.stop).toHaveBeenCalledOnce();
       expect(document.querySelector("audio")).toBeNull();
     } finally {
@@ -127,23 +112,10 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const videoTrack = Object.assign(new EventTarget(), {
-      stop: videoStop,
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [videoTrack],
-      getTracks: () => [videoTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const audioStop = audioTrack.stop;
+    const videoStop = videoTrack.stop;
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
@@ -171,22 +143,10 @@ describe("OpenAI Realtime media lifecycle", () => {
     const onVideoStream = vi.fn();
     const onTalkEvent = vi.fn();
     const onStatus = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "test-client-secret",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onStatus, onTalkEvent, onVideoStream },
-      },
-    );
+    const { transport } = await createTransport({ onStatus, onTalkEvent, onVideoStream });
 
     await transport.start();
-    const peer = FakePeerConnection.instance;
+    const peer = requirePeer();
     expect(getUserMedia).toHaveBeenCalledOnce();
     expect(peer?.addTrack).toHaveBeenCalledWith(audioTrack, audio);
     expect(onVideoStream).not.toHaveBeenCalled();
@@ -195,7 +155,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     expect(onVideoStream).toHaveBeenCalledWith(camera);
     dispatchDescribeViewToolCall(peer, { itemId: "item-camera", callId: "call-camera" });
     await Promise.resolve();
-    expect(sentRealtimeEvents()).not.toContainEqual(
+    expect(sentRealtimeEvents(peer)).not.toContainEqual(
       expect.objectContaining({
         item: expect.objectContaining({ content: expect.any(Array) }),
       }),
@@ -204,7 +164,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     captureVideo?.dispatchEvent(new Event("loadeddata"));
 
     await vi.waitFor(() =>
-      expect(sentRealtimeEvents()).toContainEqual({
+      expect(sentRealtimeEvents(peer)).toContainEqual({
         type: "conversation.item.create",
         item: {
           type: "message",
@@ -213,7 +173,7 @@ describe("OpenAI Realtime media lifecycle", () => {
         },
       }),
     );
-    expect(sentRealtimeEvents()).toContainEqual({
+    expect(sentRealtimeEvents(peer)).toContainEqual({
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
@@ -221,7 +181,7 @@ describe("OpenAI Realtime media lifecycle", () => {
         output: JSON.stringify({ ok: true, frameAttached: true }),
       },
     });
-    expect(sentRealtimeEvents()).toContainEqual({ type: "response.create" });
+    expect(sentRealtimeEvents(peer)).toContainEqual({ type: "response.create" });
     expect(getUserMedia).toHaveBeenNthCalledWith(1, {
       audio: {
         autoGainControl: true,
@@ -247,7 +207,7 @@ describe("OpenAI Realtime media lifecycle", () => {
       callId: "call-camera-off",
     });
     await vi.waitFor(() =>
-      expect(sentRealtimeEvents()).toContainEqual({
+      expect(sentRealtimeEvents(peer)).toContainEqual({
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
@@ -263,29 +223,9 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const firstVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const secondVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const firstCamera = {
-      getVideoTracks: () => [firstVideoTrack],
-      getTracks: () => [firstVideoTrack],
-    } as unknown as MediaStream;
-    const secondCamera = {
-      getVideoTracks: () => [secondVideoTrack],
-      getTracks: () => [secondVideoTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { track: firstVideoTrack, stream: firstCamera } = cameraFixture();
+    const { stream: secondCamera } = cameraFixture();
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -294,15 +234,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onVideoStream },
-      },
-    );
+    const { transport } = await createTransport({ onVideoStream });
 
     await transport.start();
     await transport.setVideoEnabled(true);
@@ -317,14 +249,8 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("keeps voice alive when lazy camera acquisition fails", async () => {
-    const audioStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const audioStop = audioTrack.stop;
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -332,15 +258,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const onStatus = vi.fn();
     const onVideoStream = vi.fn();
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: { onStatus, onVideoStream },
-      },
-    );
+    const { transport } = await createTransport({ onStatus, onVideoStream });
 
     await transport.start();
     await expect(transport.setVideoEnabled(true)).rejects.toThrow("Camera access is blocked");
@@ -353,74 +271,32 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("releases acquired media when stopped during the camera prompt", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audio = {
-      getAudioTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [Object.assign(new EventTarget(), { stop: audioStop })],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: videoStop }],
-    } as unknown as MediaStream;
-    let resolveCamera: (stream: MediaStream) => void = () => undefined;
-    const cameraPending = new Promise<MediaStream>((resolve) => {
-      resolveCamera = resolve;
-    });
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockReturnValueOnce(cameraPending);
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const cameraPending = createDeferred<MediaStream>();
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockReturnValueOnce(cameraPending.promise);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "test-client-secret",
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: {},
-      },
-    );
+    const { transport } = await createTransport();
 
     await transport.start();
     const enabling = transport.setVideoEnabled(true);
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
     transport.stop();
-    expect(audioStop).toHaveBeenCalledOnce();
-    resolveCamera(camera);
+    expect(audioTrack.stop).toHaveBeenCalledOnce();
+    cameraPending.resolve(camera);
 
     await expect(enabling).resolves.toBeUndefined();
-    expect(videoStop).toHaveBeenCalledOnce();
+    expect(videoTrack.stop).toHaveBeenCalledOnce();
   });
 
   it("switches an active camera and updates the capture stream", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const frontStop = vi.fn();
-    const frontTrack = Object.assign(new EventTarget(), {
-      stop: frontStop,
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const backTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "back" }),
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const frontCamera = {
-      getVideoTracks: () => [frontTrack],
-      getTracks: () => [frontTrack],
-    } as unknown as MediaStream;
-    const backCamera = {
-      getVideoTracks: () => [backTrack],
-      getTracks: () => [backTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { track: frontTrack, stream: frontCamera } = cameraFixture("front");
+    const { stream: backCamera } = cameraFixture("back");
+    const frontStop = frontTrack.stop;
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -429,17 +305,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const context = {
-      input: await prepareRealtimeTalkTestInput(),
-      client: {} as never,
-      sessionKey: "main",
-      callbacks: { onVideoStream },
-      videoDeviceId: "front",
-    };
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      context,
-    );
+    const { transport } = await createTransport({ onVideoStream }, "front");
 
     await transport.start();
     await transport.setVideoEnabled(true);
@@ -458,31 +324,9 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("restores the previous camera when a live switch fails", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const firstFrontTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const restoredFrontTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const firstFrontCamera = {
-      getVideoTracks: () => [firstFrontTrack],
-      getTracks: () => [firstFrontTrack],
-    } as unknown as MediaStream;
-    const restoredFrontCamera = {
-      getVideoTracks: () => [restoredFrontTrack],
-      getTracks: () => [restoredFrontTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { stream: firstFrontCamera } = cameraFixture("front");
+    const { stream: restoredFrontCamera } = cameraFixture("front");
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -492,17 +336,7 @@ describe("OpenAI Realtime media lifecycle", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
-    const context = {
-      input: await prepareRealtimeTalkTestInput(),
-      client: {} as never,
-      sessionKey: "main",
-      callbacks: { onVideoStream },
-      videoDeviceId: "front",
-    };
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
-      context,
-    );
+    const { transport, context } = await createTransport({ onVideoStream }, "front");
 
     await transport.start();
     await transport.setVideoEnabled(true);

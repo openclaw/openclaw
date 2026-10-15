@@ -9,13 +9,13 @@ import type {
   SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { createBoundedChildOutput } from "../../../test/helpers/bounded-child-output.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { persistenceRuntimeEntrypoint } from "./persistence-runtime.test-support.js";
-
-// Source-runtime startup uses the same bound as test/helpers/openclaw-test-instance.ts.
-// Publication and child close each retain their independent 10-second bound.
-const SOURCE_RUNTIME_STARTUP_MS = 60_000;
-const PERSISTENCE_OPERATION_MS = 10_000;
 
 export const PERSISTENCE_SESSION_KEY = "agent:main:library-persistence";
 export const PERSISTENCE_SESSION_ID = "library-persistence-session";
@@ -68,8 +68,7 @@ export type PersistenceCommand =
       action: "publish-hold" | "stage-hold" | "save";
       pin: SkillLibrarySelection;
       version: "new" | "orphan";
-    }
-  | { action: "older-reader"; entrypoint: string; profileId: string };
+    };
 
 export type PersistenceReply =
   | { kind: "seeded"; profileId: string; pins: SkillLibrarySelection[] }
@@ -81,13 +80,13 @@ export type PersistenceReply =
       files: SkillLibraryFile[][];
       catalog: Array<{ name: string; baseDir: string }>;
       available: string[];
-    }
-  | { kind: "older-reader"; stateVersion: number; agentVersion: number };
+    };
 
 /** IPC owns readiness; close is installed before any signal, and every child is reaped in finally. */
 export async function withPersistenceChild<T>(
   root: string,
   command: PersistenceCommand,
+  signal: AbortSignal,
   use: (
     reply: PersistenceReply,
     child: { pid: number; kill: () => Promise<void>; finish: () => Promise<void> },
@@ -112,15 +111,11 @@ export async function withPersistenceChild<T>(
   child.stdout?.on("data", output.append);
   child.stderr?.on("data", output.append);
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
   });
-  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const moduleReady = createDeferred();
   try {
-    const reply = await new Promise<PersistenceReply>((resolve, reject) => {
-      deadline = setTimeout(
-        () => reject(new Error(`Persistence child did not become module-ready: ${diagnostic()}`)),
-        SOURCE_RUNTIME_STARTUP_MS,
-      );
+    const replyPromise = new Promise<PersistenceReply>((resolve, reject) => {
       child.once("error", reject);
       child.on("message", (message: { kind?: string; error?: string; phase?: string }) => {
         if (message.kind === "phase") {
@@ -134,11 +129,7 @@ export async function withPersistenceChild<T>(
           });
         } else if (message.kind === "ready") {
           recordPhase("module-ready");
-          clearTimeout(deadline);
-          deadline = setTimeout(
-            () => reject(new Error(`Persistence operation missed its barrier: ${diagnostic()}`)),
-            PERSISTENCE_OPERATION_MS,
-          );
+          moduleReady.resolve();
           child.send({ kind: "run" }, (error) => {
             if (error) {
               reject(error);
@@ -151,41 +142,36 @@ export async function withPersistenceChild<T>(
           resolve(message as PersistenceReply);
         }
       });
-      void closed.then(({ code, signal }) =>
+      void closed.then(({ code, signal: exitSignal }) =>
         reject(
           new Error(
-            `Persistence child exited before its reply (${signal ?? code}): ${diagnostic()}`,
+            `Persistence child exited before its reply (${exitSignal ?? code}): ${diagnostic()}`,
           ),
         ),
       );
     });
-    clearTimeout(deadline);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        moduleReady.promise,
+        replyPromise,
+        "Persistence child did not become module-ready",
+      ),
+      signal,
+    );
+    const reply = await withinTest(replyPromise, signal);
     assert.ok(child.pid);
     return await use(reply, {
       pid: child.pid,
       async kill() {
         assert.equal(child.kill("SIGKILL"), true);
-        assert.deepEqual(await closed, { code: null, signal: "SIGKILL" });
+        assert.deepEqual(await withinTest(closed, signal), { code: null, signal: "SIGKILL" });
       },
       async finish() {
-        try {
-          const result = await Promise.race([
-            closed,
-            new Promise<never>((_resolve, reject) => {
-              deadline = setTimeout(
-                () => reject(new Error(`Persistence child did not close: ${diagnostic()}`)),
-                PERSISTENCE_OPERATION_MS,
-              );
-            }),
-          ]);
-          assert.deepEqual(result, { code: 0, signal: null }, output.text());
-        } finally {
-          clearTimeout(deadline);
-        }
+        const result = await withinTest(closed, signal);
+        assert.deepEqual(result, { code: 0, signal: null }, output.text());
       },
     });
   } finally {
-    clearTimeout(deadline);
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
     }
@@ -194,8 +180,12 @@ export async function withPersistenceChild<T>(
   }
 }
 
-export async function runPersistenceChild(root: string, command: PersistenceCommand) {
-  return await withPersistenceChild(root, command, async (reply, child) => {
+export async function runPersistenceChild(
+  root: string,
+  command: PersistenceCommand,
+  signal: AbortSignal,
+) {
+  return await withPersistenceChild(root, command, signal, async (reply, child) => {
     await child.finish();
     return reply;
   });

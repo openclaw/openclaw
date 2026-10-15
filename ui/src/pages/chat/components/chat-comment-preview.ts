@@ -1,9 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
@@ -76,27 +76,27 @@ export function renderCommentPreviewChip(
   count: number,
   content: TemplateResult,
   onReveal?: () => void,
-  openOnClick = false,
+  removal?: { onRemove: (event: Event) => void; disabled: boolean },
+  elementRef?: (element: Element | undefined) => void,
 ) {
   return html`<openclaw-tooltip
-    class="chat-comment-preview"
+    class=${removal ? "chat-comment-preview chat-comment-preview--editable" : "chat-comment-preview"}
     placement="top-start"
     auto-size
     .describe=${false}
-    .openOnClick=${openOnClick}
+    .openOnClick=${true}
+    .hoverDismissDelay=${removal ? 200 : undefined}
   >
-    <span
-      class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
-      tabindex="0"
-      @pointerenter=${onReveal}
-      @focusin=${onReveal}
-      @click=${openOnClick ? onReveal : undefined}
-    >
-      <span class="chat-attachment-file">
-        <span aria-hidden="true">${icons.messageSquare}</span>
-        ${t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", { count: String(count) })}
-      </span>
-    </span>
+    ${renderAttachmentChip({
+      label: t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
+        count: String(count),
+      }),
+      icon: icons.messageSquare,
+      onReveal,
+      onClick: onReveal,
+      elementRef,
+      removal: removal ? { ...removal, label: t("chat.messages.removeAnnotations") } : undefined,
+    })}
     <div
       slot="content"
       class="chat-comment-preview__scroll"

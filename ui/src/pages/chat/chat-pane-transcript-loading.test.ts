@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -18,7 +18,11 @@ import {
 } from "./chat-pane.test-support.ts";
 
 describe("chat pane transcript loading", () => {
-  it("restores live observation when refreshing after a subscription timeout", async () => {
+  it("automatically restores live observation after a subscription timeout without a composer error", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const sessionKey = "agent:main:subscription-recovery";
     const messages = [nativeHistoryMessage(2, "The node completed the work.")];
     let failSubscription = true;
@@ -46,22 +50,25 @@ describe("chat pane transcript loading", () => {
         return { messages, completeSnapshot: true, sessionId: "subscription-recovery" };
       },
     });
-    const { pane, state } = createRefreshChatPane(client);
+    const { state } = createRefreshChatPane(client);
     state.sessionKey = sessionKey;
     state.hello = gatewayHelloForMethods([], ["operator.read", "operator.approvals"]);
 
-    await syncSelectedSessionMessageSubscription(state);
-    expect(state.chatError).toContain("sessions.messages.subscribe");
-    expect(observing).toBe(false);
-
-    pane.render();
-    pane.chatProps!.onRefresh();
-
-    await vi.waitFor(() => expect(state.chatMessages).toEqual(messages));
+    const subscription = syncSelectedSessionMessageSubscription(state);
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(500);
+    await subscription;
+    expect(state.chatError).toBeNull();
+    expect(observing).toBe(true);
+    const history = loadChatHistory(state);
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    await history;
+    expect(state.chatMessages).toEqual(messages);
     expect(observing).toBe(true);
     expect(subscriptions).toEqual([
-      { key: sessionKey, includeApprovals: true },
-      { key: sessionKey, includeApprovals: true },
+      { subscriptionId: expect.any(String), key: sessionKey, includeApprovals: true },
+      { subscriptionId: expect.any(String), key: sessionKey, includeApprovals: true },
     ]);
     expect(state.chatError).toBeNull();
   });

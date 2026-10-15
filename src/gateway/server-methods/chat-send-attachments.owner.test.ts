@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -10,6 +11,7 @@ it.each(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode) => {
     await withOpenClawTestState({ label: "gateway-media-owner" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const cfg = {
         agents: {
           ownership: "explicit" as const,
@@ -32,7 +34,8 @@ it.each(["off", "all"] as const)(
       const paths: string[] = [];
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
-        const request = normalizeChatSendRequest({
+        const fileName = "notes café 雪 🦞.txt";
+        const request = await normalizeChatSendRequest({
           client: null,
           params: {
             agentId,
@@ -41,7 +44,7 @@ it.each(["off", "all"] as const)(
             idempotencyKey: `media-${agentId}`,
             attachments: [
               {
-                fileName: "notes.txt",
+                fileName,
                 mimeType: "text/plain",
                 content: Buffer.from(bytes).toString("base64"),
               },
@@ -53,6 +56,7 @@ it.each(["off", "all"] as const)(
           throw new Error(request.error);
         }
         const respond = vi.fn();
+        const controller = new AbortController();
         const result = await prepareChatSendAttachments({
           request: request.value,
           session: {
@@ -63,7 +67,8 @@ it.each(["off", "all"] as const)(
             clientRunId: `media-${agentId}`,
           },
           admission: {
-            activeRunAbort: { controller: new AbortController() },
+            activeRunAbort: { controller },
+            assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
             cleanupAdmittedRun() {},
           },
           context: { logGateway: createSubsystemLogger("test/media-owner") },
@@ -74,10 +79,9 @@ it.each(["off", "all"] as const)(
         if (!result.ok) {
           throw new Error("attachment preparation failed");
         }
-        const staged = result.value.mediaPathOffloadPaths[0]!;
-        const file = result.value.mediaPathOffloadWorkspaceDir
-          ? path.join(result.value.mediaPathOffloadWorkspaceDir, staged)
-          : staged;
+        const media = result.value.mediaPathOffloads[0]!;
+        expect(media.fileName).toBe(fileName);
+        const file = path.resolve(media.workspaceDir!, media.path!);
         expect(await fs.readFile(file, "utf8")).toBe(bytes);
         paths.push(file);
         if (mode === "all") {
