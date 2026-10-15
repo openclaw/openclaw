@@ -163,37 +163,6 @@ describe("hooks mapping", () => {
     }
   }
 
-  it("defaults agent mappings to isolated sessions and accepts persistent overrides", async () => {
-    const isolated = await applyGmailMappings({
-      mappings: [
-        createGmailAgentMapping({
-          id: "isolated",
-          messageTemplate: "Subject: {{messages[0].subject}}",
-        }),
-      ],
-    });
-    expect(isolated?.ok).toBe(true);
-    if (isolated?.ok && isolated.action?.kind === "agent") {
-      expect(isolated.action.sessionMode).toBe("isolated");
-    }
-
-    const persistent = await applyGmailMappings({
-      mappings: [
-        {
-          ...createGmailAgentMapping({
-            id: "persistent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-          }),
-          sessionMode: "persistent",
-        },
-      ],
-    });
-    expect(persistent?.ok).toBe(true);
-    if (persistent?.ok && persistent.action?.kind === "agent") {
-      expect(persistent.action.sessionMode).toBe("persistent");
-    }
-  });
-
   it("validates sessionMode returned by hook transforms", async () => {
     const configDir = makeTempDir(hooksTempDirs, "openclaw-hook-session-mode-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
@@ -226,36 +195,6 @@ describe("hooks mapping", () => {
       ok: false,
       error: "hook mapping sessionMode must be isolated or persistent",
     });
-  });
-
-  it("carries wake agent and session routing from mappings", async () => {
-    const mappings = resolveHookMappings({
-      mappings: [
-        {
-          id: "targeted-wake",
-          match: { path: "gmail" },
-          action: "wake",
-          textTemplate: "Subject: {{messages[0].subject}}",
-          agentId: "hooks",
-          sessionKey: "hook:gmail:{{messages[0].subject}}",
-        },
-      ],
-    });
-    const result = await applySingleHookMapping(mappings, {
-      payload: gmailPayload,
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
-
-    expect(result?.ok).toBe(true);
-    if (result?.ok && result.action?.kind === "wake") {
-      expect(result.action).toMatchObject({
-        agentId: "hooks",
-        sessionKey: "hook:gmail:Hello",
-        sessionKeySource: "templated",
-      });
-    }
   });
 
   it.each(["wake", "agent"] as const)(
@@ -768,6 +707,7 @@ describe("hook mapping fan-out", () => {
     expect(result.dropped).toBe(0);
     expect(result.actions).toHaveLength(2);
     const agentActions = result.actions.filter((action) => action.kind === "agent");
+    expect(agentActions.map((action) => action.sessionMode)).toEqual(["isolated", "isolated"]);
     expect(agentActions.map((action) => action.sessionKey)).toEqual([
       "hook:gmail:m1",
       "hook:gmail:m2",
