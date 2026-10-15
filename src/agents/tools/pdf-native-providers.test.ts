@@ -215,7 +215,7 @@ describe("native PDF provider API calls", () => {
     expect(error.message).toContain("Anthropic PDF request failed (401 reflected token=***)");
   });
 
-  it("masks a reflected custom request-auth credential and preserves its prefix", async () => {
+  it("masks a reflected custom request-auth header and credential", async () => {
     mockFetchResponse(
       textResponse("upstream echoed Token-abc123 and fallback-key", { status: 401 }),
     );
@@ -243,7 +243,8 @@ describe("native PDF provider API calls", () => {
     expect(opts.headers.get("X-Corp-Credential")).toBe("Token-abc123");
     expect(error.message).not.toContain("abc123");
     expect(error.message).not.toContain("fallback-key");
-    expect(error.message).toContain("Token-***");
+    expect(error.message).toContain("***");
+    expect(error.message).not.toContain("Token-");
   });
 
   it.each([
@@ -277,7 +278,8 @@ describe("native PDF provider API calls", () => {
     expect(opts.headers.get("X-Corp-Credential")).toBe(`Token-${credential}`);
     expect(error.message).not.toContain("Token-a");
     expect(error.message).not.toContain("Token-custom");
-    expect(error.message).toContain("Token-***");
+    expect(error.message).toContain("***");
+    expect(error.message).not.toContain("Token-");
   });
 
   it("anthropicAnalyzePdf throws when response has no text", async () => {
