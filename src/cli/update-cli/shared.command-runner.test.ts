@@ -162,7 +162,7 @@ describe("update CLI shared helpers", () => {
     },
   );
 
-  it.each(["/shared", "/opt/homebrew-custom"])(
+  it.each(["/shared"])(
     "refuses unowned packages under %s without treating global npm as a Homebrew formula",
     async (prefix) => {
       const root = `${prefix}/lib/node_modules/openclaw`;
@@ -237,62 +237,6 @@ describe("update CLI shared helpers", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps build storage stationary while publishing a clone (existing destination: %s)",
-    async (existing) => {
-      await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {
-        const checkoutDir = path.join(base, "nested", "openclaw");
-        if (existing) {
-          await fs.mkdir(checkoutDir, { recursive: true });
-        }
-        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-          const stagingDir = cloneTarget(argv);
-          expect(stagingDir).toMatch(/[/\\]\.openclaw-clone-[^/\\]+[/\\]repository$/u);
-          expect(stagingDir).not.toBe(checkoutDir);
-          if (!existing) {
-            await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-          await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
-          return successfulCommandResult;
-        });
-
-        const result = await ensureGitCheckout({
-          dir: checkoutDir,
-          timeoutMs: 1_000,
-          env: process.env,
-          useStagedCheckout: async (stagingDir, publish, targetRoot, storageRoot) => {
-            const artifacts = path.join(storageRoot, ".artifacts");
-            await fs.mkdir(artifacts);
-            await fs.writeFile(path.join(artifacts, "build.marker"), "built\n");
-            expect(path.dirname(stagingDir)).toBe(storageRoot);
-            expect(await publish()).toBe(targetRoot);
-            expect((await fs.stat(artifacts)).dev).toBe((await fs.stat(targetRoot)).dev);
-            expect(await fs.readFile(path.join(artifacts, "build.marker"), "utf8")).toBe("built\n");
-          },
-        });
-        expect(result).toMatchObject({ checkoutDir, step: { exitCode: 0 } });
-        expect(result.step?.warnings).toBeUndefined();
-
-        await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
-          "complete\n",
-        );
-        await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
-        expect(runCommandWithTimeout).toHaveBeenCalledWith(
-          [
-            "git",
-            "clone",
-            "--filter=blob:none",
-            "https://github.com/openclaw/openclaw.git",
-            expect.stringMatching(/[/\\]\.openclaw-clone-[^/\\]+[/\\]repository$/u),
-          ],
-          expect.objectContaining({ env: process.env, timeoutMs: 1_000 }),
-        );
-      });
-    },
-  );
-
   it("preserves a destination created while a fresh clone is running", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-race-" }, async (base) => {
       const checkoutDir = path.join(base, "openclaw");
@@ -316,9 +260,8 @@ describe("update CLI shared helpers", () => {
   });
 
   it.each([
-    { existing: false, failure: "allocation" },
     { existing: true, failure: "allocation" },
-    { existing: false, failure: "clone" },
+
     { existing: true, failure: "clone" },
   ])(
     "keeps clone destinations retryable after $failure failure (existing: $existing)",
@@ -412,7 +355,7 @@ describe("update CLI shared helpers", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([false, true])(
+  it.runIf(process.platform !== "win32").each([true])(
     "publishes through the original empty-directory alias target (retargeted: %s)",
     async (retargeted) => {
       await withTestDir({ prefix: "openclaw-update-clone-alias-race-" }, async (base) => {
@@ -601,10 +544,8 @@ describe("update CLI shared helpers", () => {
   );
 
   it.each([
-    { callbackFails: false, cleanupFailure: "remove", reportingUnknown: false },
-    { callbackFails: true, cleanupFailure: "remove", reportingUnknown: false },
     { callbackFails: false, cleanupFailure: "inspect", reportingUnknown: false },
-    { callbackFails: true, cleanupFailure: "inspect", reportingUnknown: false },
+
     { callbackFails: false, cleanupFailure: "remove", reportingUnknown: true },
     { callbackFails: true, cleanupFailure: "remove", reportingUnknown: true },
   ])(

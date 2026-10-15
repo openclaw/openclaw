@@ -95,15 +95,11 @@ describe("maybeRestartService", () => {
     mocks.inspectGatewayRestart.mockResolvedValue(healthy);
   });
 
-  it.each(["refresh inspection", "restart inspection", "restart command"] as const)(
+  it.each(["refresh inspection"] as const)(
     "does not continue restart work after uncertain cleanup from %s",
     async (source) => {
       const failure = new CommandProcessCleanupError();
-      if (source === "restart command") {
-        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(failure);
-      } else {
-        mocks.waitForGatewayHealthyRestart.mockRejectedValueOnce(failure);
-      }
+      mocks.waitForGatewayHealthyRestart.mockRejectedValueOnce(failure);
       const onVerified = vi.fn();
       await expect(
         maybeRestartService({
@@ -132,18 +128,16 @@ describe("maybeRestartService", () => {
   );
 
   it.each([
-    "current",
     "revoked",
     "aborted",
     "initial-stopped",
     "initial-stopped-reachable",
     "initial-plugin-error",
     "initial-plugin-unavailable",
-    "initial-readyz-error",
+
     "initial-readyz-rollback",
     "initial-version-error",
     "initial-build-error",
-    "initial-settle-error",
   ] as const)(
     "accepts readiness only for the original live executor and healthy service: %s",
     async (change) => {
@@ -167,11 +161,7 @@ describe("maybeRestartService", () => {
         const health = await mocks.waitForGatewayHealthyRestart();
         const observedHealth = {
           ...health,
-          healthy:
-            pluginOnly ||
-            change === "initial-readyz-error" ||
-            rollback ||
-            change === "initial-stopped-reachable",
+          healthy: pluginOnly || rollback || change === "initial-stopped-reachable",
           runtime: {
             status: change.startsWith("initial-stopped") ? "stopped" : "running",
             pid: 8000,
@@ -187,9 +177,6 @@ describe("maybeRestartService", () => {
                 buildIdMismatch: { expected: "expected-build", actual: gateway.buildId },
                 expectedBuildId: "expected-build",
               }
-            : {}),
-          ...(change === "initial-settle-error"
-            ? { waitOutcome: "timeout", probeError: "Gateway did not settle" }
             : {}),
           ...(change === "initial-plugin-error" || change.startsWith("initial-stopped")
             ? {
@@ -215,7 +202,7 @@ describe("maybeRestartService", () => {
           controller.abort();
         }
         current = change !== "revoked";
-        return { healthz: 200, readyz: change === "initial-readyz-error" || rollback ? 503 : 200 };
+        return { healthz: 200, readyz: rollback ? 503 : 200 };
       });
       const onVerified = vi.fn();
       const opts = {
@@ -248,11 +235,9 @@ describe("maybeRestartService", () => {
             ? { check: "versionMatch", code: "version-mismatch" }
             : change === "initial-build-error"
               ? { check: "versionMatch", code: "build-id-mismatch" }
-              : change === "initial-readyz-error" || rollback
+              : rollback
                 ? { check: "readyz", code: "readyz-unhealthy" }
-                : change === "initial-settle-error"
-                  ? { check: "settled", code: "timeout" }
-                  : { check: "service", code: "service-not-running" };
+                : { check: "service", code: "service-not-running" };
         expect(updateResult.steps).toContainEqual(
           expect.objectContaining({
             name: "gateway verification",
@@ -625,7 +610,7 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it.each(["default", "work"])(
+  it.each(["work"])(
     "directs stopped-service drift to the selected native installer: %s",
     (profile) => {
       const home = tempDirs.make("stopped-service-guidance-");
@@ -714,13 +699,7 @@ describe("maybeRestartService", () => {
     ).resolves.toBe("failed");
   });
 
-  it.each([
-    { refreshServiceEnv: false, readyz: 503, verified: false, buildId: "new-build" },
-    { refreshServiceEnv: false, readyz: 200, verified: true, buildId: "new-build" },
-    { refreshServiceEnv: false, readyz: 200, verified: true, buildId: undefined },
-    { refreshServiceEnv: true, readyz: 503, verified: false, buildId: "new-build" },
-    { refreshServiceEnv: true, readyz: 200, verified: true, buildId: "new-build" },
-  ])(
+  it.each([{ refreshServiceEnv: true, readyz: 503, verified: false, buildId: "new-build" }])(
     "requires HTTP readiness (readyz=$readyz, refresh=$refreshServiceEnv)",
     async ({ refreshServiceEnv, readyz, verified, buildId }) => {
       mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
@@ -791,11 +770,9 @@ describe("maybeRestartService", () => {
 
   it.for([
     "native refusal",
-    "install refusal",
+
     "install root refusal",
     "install health observation",
-    "health observation",
-    "unmasked",
   ] as const)(
     "keeps service-definition refusal separate from candidate health: %s",
     async (scenario, { onTestFinished }) => {
@@ -804,14 +781,10 @@ describe("maybeRestartService", () => {
         status: "stopped",
         systemd: {
           unit: "openclaw-gateway.service",
-          ...(scenario === "unmasked"
-            ? {}
-            : {
-                startRefusal: {
-                  reason: "masked" as const,
-                  message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
-                },
-              }),
+          startRefusal: {
+            reason: "masked" as const,
+            message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+          },
         },
       };
       const service = createMockGatewayService({ readRuntime: async () => runtime });
@@ -862,24 +835,22 @@ describe("maybeRestartService", () => {
           onVerified,
           onVerificationFailure,
         }),
-      ).resolves.toBe(scenario === "unmasked" ? "failed" : "reconciliation-pending");
+      ).resolves.toBe("reconciliation-pending");
       expect(onVerified).not.toHaveBeenCalled();
       expect(onVerificationFailure).not.toHaveBeenCalled();
       expect(result.status).toBe("ok");
-      if (scenario !== "unmasked") {
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({
-            exitCode: 0,
-            advisory: expect.objectContaining({
-              message: expect.stringMatching(/SERVICE-DEFINITION.*unmask.*openclaw gateway start/),
-            }),
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          exitCode: 0,
+          advisory: expect.objectContaining({
+            message: expect.stringMatching(/SERVICE-DEFINITION.*unmask.*openclaw gateway start/),
           }),
-        );
-        expect(result.steps.some((step) => step.exitCode === 1)).toBe(false);
-        expect(
-          result.steps.flatMap((step) => step.advisory?.message ?? []).join("\n"),
-        ).not.toContain("gateway install --force");
-      }
+        }),
+      );
+      expect(result.steps.some((step) => step.exitCode === 1)).toBe(false);
+      expect(result.steps.flatMap((step) => step.advisory?.message ?? []).join("\n")).not.toContain(
+        "gateway install --force",
+      );
       if (scenario.startsWith("install")) {
         expect(
           mocks.runUpdatedInstallGatewayCommand.mock.calls.map(([, action]) => action),

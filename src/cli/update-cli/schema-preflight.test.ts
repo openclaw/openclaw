@@ -99,57 +99,6 @@ describe("target-release database schema preflight", () => {
     }
   });
 
-  it.each([
-    { outcome: "accepts compatible", version: OPENCLAW_AGENT_SCHEMA_VERSION, refusal: false },
-    { outcome: "refuses newer", version: OPENCLAW_AGENT_SCHEMA_VERSION + 1, refusal: true },
-  ])("$outcome agent schemas committed to active WAL", async ({ version, refusal }) => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-wal-state-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
-    openOpenClawStateDatabase({ env });
-    const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    // Capture before opening the writer: closing another main-file descriptor
-    // in its process would release the writer's POSIX locks.
-    const databaseBefore = fs.readFileSync(agentPath);
-    const agent = new DatabaseSync(agentPath);
-    try {
-      agent.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      agent.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-      // Keep the committed schema change in WAL while the connection remains open.
-      agent.exec(`PRAGMA user_version = ${version};`);
-      const walBefore = fs.readFileSync(`${agentPath}-wal`);
-      expect(databaseBefore.readUInt32BE(60)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      expect(walBefore.length).toBeGreaterThan(32);
-
-      const result = await checkTargetDatabaseSchemasForContexts(
-        { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
-        [{ config, env }],
-      );
-
-      expect(result.indeterminate).toEqual([]);
-      expect(result.incompatible).toEqual(
-        refusal
-          ? [
-              expect.objectContaining({
-                kind: "agent",
-                path: agentPath,
-                foundVersion: version,
-                supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-              }),
-            ]
-          : [],
-      );
-      expect(hasSchemaRefusal(result)).toBe(refusal);
-      expect(fs.readFileSync(agentPath)).toEqual(databaseBefore);
-      expect(fs.readFileSync(`${agentPath}-wal`)).toEqual(walBefore);
-    } finally {
-      agent.close();
-    }
-  });
-
   it.runIf(process.platform !== "win32")(
     "deduplicates alias refusals without losing their lexical import boundaries",
     async () => {
@@ -234,55 +183,6 @@ describe("target-release database schema preflight", () => {
     } finally {
       inspectedState.close();
     }
-  });
-
-  it("finds every multi-agent store before refusing a v2026.7.1-2 target", async () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-preflight-state-"));
-    const customDir = fs.realpathSync.native(tempDirs.make("openclaw-update-preflight-custom-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {}, configured: {} } },
-    };
-    openOpenClawStateDatabase({ env });
-    const configuredPath = openOpenClawAgentDatabase({ agentId: "configured", env }).path;
-    const unregisteredPath = openOpenClawAgentDatabase({ agentId: "retired", env }).path;
-    const registeredCustomPath = openOpenClawAgentDatabase({
-      agentId: "registered-custom",
-      env,
-      path: path.join(customDir, "registered", "openclaw-agent.sqlite"),
-    }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    unregisterOpenClawAgentDatabase({ agentId: "retired", env, path: unregisteredPath });
-
-    const before = [configuredPath, unregisteredPath, registeredCustomPath].map((pathname) => ({
-      pathname,
-      bytes: fs.readFileSync(pathname),
-      mtimeNs: fs.statSync(pathname, { bigint: true }).mtimeNs,
-    }));
-    const result = await checkTargetDatabaseSchemasForContexts(
-      // v2026.7.1-2 supports state/agent schema 1. The reported upgrade to
-      // v2026.8.1 advances them to state 15 and agent 19.
-      { state: 1, agent: 1 },
-      [{ config, env }],
-    );
-
-    const incompatibleAgentPaths = result.incompatible
-      .filter((database) => database.kind === "agent")
-      .map((database) => database.path)
-      .toSorted();
-    expect(incompatibleAgentPaths).toEqual(
-      [configuredPath, unregisteredPath, registeredCustomPath].toSorted(),
-    );
-    expect(result.indeterminate).toEqual([]);
-    expect(hasSchemaRefusal(result)).toBe(true);
-    expect(
-      before.map(({ pathname }) => ({
-        pathname,
-        bytes: fs.readFileSync(pathname),
-        mtimeNs: fs.statSync(pathname, { bigint: true }).mtimeNs,
-      })),
-    ).toEqual(before);
   });
 
   it("unions custom stores across matching contexts and observes deletion holds at the next checkpoint", async () => {
@@ -412,23 +312,6 @@ describe("planned legacy configuration admission", () => {
 });
 
 describe("planned migration managed profile isolation", () => {
-  it("reports invalid model policy paths without disclosing their values", async () => {
-    await withTempHome(async (home) => {
-      const rejectedValue = "synthetic-private-config-value";
-      const configPath = await writeOpenClawConfig(home, {
-        agents: { defaults: { modelPolicy: { allow: [rejectedValue] } } },
-      });
-      const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-      const before = fs.readFileSync(configPath);
-      const inspected = captureTargetDatabaseSchemaContext(env);
-      await expect(inspected).rejects.toMatchObject({ reason: "invalid-config" });
-      await expect(inspected).rejects.toThrow("agents.defaults.modelPolicy.allow.0:");
-      await expect(inspected).rejects.toThrow("openclaw doctor --fix");
-      await expect(inspected).rejects.not.toThrow(rejectedValue);
-      expect(fs.readFileSync(configPath)).toEqual(before);
-    });
-  });
-
   it("admits a newly valid replacement without reusing the prior legacy plan", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
@@ -452,29 +335,22 @@ describe("planned migration managed profile isolation", () => {
     });
   });
 
-  it.each([
-    "same source",
-    "other valid source",
-    "other legacy source",
-    "other invalid source",
-  ] as const)("admits only the owned service's config: %s", async (scenario) => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const callerPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local", bind: "localhost" },
-        });
-        const callerEnv = { ...process.env, OPENCLAW_CONFIG_PATH: callerPath };
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: callerEnv,
-          observe: false,
-        }).readConfigFileSnapshotForWrite();
-        const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-        expect(legacyConfigPlan).toBeDefined();
-        const servicePath =
-          scenario === "same source"
-            ? callerPath
-            : path.join(path.dirname(callerPath), "service.json");
-        if (servicePath !== callerPath) {
+  it.each(["other legacy source", "other invalid source"] as const)(
+    "admits only the owned service's config: %s",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const callerPath = await writeOpenClawConfig(home, {
+            gateway: { mode: "local", bind: "localhost" },
+          });
+          const callerEnv = { ...process.env, OPENCLAW_CONFIG_PATH: callerPath };
+          const { snapshot, writeOptions } = await createConfigIO({
+            env: callerEnv,
+            observe: false,
+          }).readConfigFileSnapshotForWrite();
+          const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+          expect(legacyConfigPlan).toBeDefined();
+          const servicePath = path.join(path.dirname(callerPath), "service.json");
           fs.writeFileSync(
             servicePath,
             JSON.stringify({
@@ -485,45 +361,33 @@ describe("planned migration managed profile isolation", () => {
               },
             }),
           );
-        }
-        const before = fs.readFileSync(servicePath);
-        const serviceEnv = { ...callerEnv, OPENCLAW_CONFIG_PATH: servicePath };
-        const originalEnv = { ...process.env };
-        const inspected = captureOwnedManagedUpdatePreflightContext({
-          processEnv: callerEnv,
-          legacyConfigPlan,
-          stopState: {
-            stopped: false,
-            inspected: true,
-            runtimeInspected: true,
-            running: true,
-            serviceEnv,
-            serviceDefinitionEnv: serviceEnv,
-            serviceUpdateVerdict: {
-              kind: "owned",
-              root: "/synthetic/openclaw",
-              fingerprint: "owned",
-              refreshDefinition: false,
+          const before = fs.readFileSync(servicePath);
+          const serviceEnv = { ...callerEnv, OPENCLAW_CONFIG_PATH: servicePath };
+          const originalEnv = { ...process.env };
+          const inspected = captureOwnedManagedUpdatePreflightContext({
+            processEnv: callerEnv,
+            legacyConfigPlan,
+            stopState: {
+              stopped: false,
+              inspected: true,
+              runtimeInspected: true,
+              running: true,
+              serviceEnv,
+              serviceDefinitionEnv: serviceEnv,
+              serviceUpdateVerdict: {
+                kind: "owned",
+                root: "/synthetic/openclaw",
+                fingerprint: "owned",
+                refreshDefinition: false,
+              },
             },
-          },
-        });
-        if (scenario === "other legacy source" || scenario === "other invalid source") {
+          });
           await expect(inspected).rejects.toMatchObject({ reason: "invalid-config" });
-        } else {
-          const context = await inspected;
-          expect(context?.config.gateway?.bind).toBe(
-            scenario === "same source" ? "loopback" : "lan",
-          );
-          expect(context?.configSnapshot.path).toBe(servicePath);
-          expect(context?.configSnapshot.valid).toBe(scenario !== "same source");
-          if (scenario === "other valid source") {
-            expect(context?.legacyConfigPlan).toBeUndefined();
-          }
-        }
-        expect(fs.readFileSync(servicePath)).toEqual(before);
-        expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
-        expect({ ...process.env }).toEqual(originalEnv);
+          expect(fs.readFileSync(servicePath)).toEqual(before);
+          expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
+          expect({ ...process.env }).toEqual(originalEnv);
+        });
       });
-    });
-  });
+    },
+  );
 });

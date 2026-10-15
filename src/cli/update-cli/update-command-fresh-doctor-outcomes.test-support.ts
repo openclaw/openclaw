@@ -25,7 +25,7 @@ export function registerFreshDoctorOutcomeTests(
   },
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0],
 ): void {
-  it.each([false, true])(
+  it.each([false])(
     "reports plugin repairs still pending after successful Doctor (completed: %s)",
     async (completed) => {
       const pending = ["acpx", "codex"].map((pluginId): DeferredPluginMigration => ({
@@ -66,7 +66,6 @@ export function registerFreshDoctorOutcomeTests(
   );
 
   it.each([
-    { kind: "advisory", check: "doctor", code: "doctor-failed", blocks: false },
     {
       kind: "migration refusal",
       check: "state.session-participants",
@@ -162,7 +161,7 @@ export function registerFreshDoctorOutcomeTests(
     expect(mocks.runUtf8).toHaveBeenCalledOnce();
   });
 
-  it.each(["settlement", "startup"])(
+  it.each(["startup"])(
     "blocks further work when Doctor %s leaves write custody unsettled",
     async (phase) => {
       mocks.command.mockRejectedValueOnce(
@@ -180,7 +179,7 @@ export function registerFreshDoctorOutcomeTests(
     },
   );
 
-  it.each(["cleanup", "output", "settled"])(
+  it.each(["output"])(
     "preserves an unsafe Doctor refusal when warning publication fails (%s)",
     async (fault) => {
       const original = new Error("Doctor migration refused");

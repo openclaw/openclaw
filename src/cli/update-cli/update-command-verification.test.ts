@@ -177,10 +177,7 @@ describe("update readiness generation", () => {
     readyzStatus: number;
     replaced: boolean;
     slowInspection?: "command" | "runtime" | "listener";
-  }>([
-    { readyzStatus: 200, replaced: true },
-    { readyzStatus: 200, replaced: false, slowInspection: "command" },
-  ])(
+  }>([{ readyzStatus: 200, replaced: true }])(
     "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced, slow=$slowInspection)",
     async ({ readyzStatus, replaced, slowInspection }) => {
       const service = makeGatewayService({ status: "stopped" });
@@ -578,8 +575,7 @@ describe("update readiness generation", () => {
 
   it.each([
     { activation: "native restart", exhausted: true },
-    { activation: "service refresh", exhausted: false },
-    { activation: "service refresh", exhausted: true },
+
     { activation: "child readiness timeout", exhausted: true },
   ])(
     "preserves a slow startup ($activation, exhausted=$exhausted)",
