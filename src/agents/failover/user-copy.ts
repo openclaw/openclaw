@@ -17,7 +17,11 @@ import {
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
-import type { CliTimeoutContext, FallbackAttemptRecord } from "./error.js";
+import {
+  AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+  type CliTimeoutContext,
+  type FallbackAttemptRecord,
+} from "./error.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -396,7 +400,10 @@ function extractCodexUsageLimitErrorMessage(
 ): string | undefined {
   const attempt = attempts.find(
     (candidate) =>
-      candidate.provider === "openai" && candidate.reason === "rate_limit" && candidate.error,
+      candidate.provider === "openai" &&
+      candidate.reason === "rate_limit" &&
+      candidate.code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE &&
+      candidate.error,
   );
   const text =
     attempt?.error ??
@@ -424,6 +431,7 @@ export function renderRateLimitReplyCopy(params: {
   message: string;
   reason?: FailoverReason;
   provider?: string;
+  code?: string;
   attempts?: readonly ReplyFallbackAttempt[];
   rateLimitRetriesExhausted?: number;
   cooldownExpiry?: number | null;
@@ -431,6 +439,8 @@ export function renderRateLimitReplyCopy(params: {
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  // Local cooldown diagnostics name the operator's saved login; only provider text becomes copy.
+  const providerMessage = params.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? "" : params.message;
   if (params.reason === "rate_limit") {
     const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
     if (promptSizeCopy) {
@@ -451,7 +461,7 @@ export function renderRateLimitReplyCopy(params: {
   }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
-    params.message,
+    providerMessage,
     params.reason,
     params.provider,
     params.sanitizeText,
@@ -463,17 +473,21 @@ export function renderRateLimitReplyCopy(params: {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (attempts.length === 0) {
-    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
-      const providerMessage = renderSanitizedUserFacingText(
-        params.sanitizeText?.(params.message) ?? params.message,
+    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(providerMessage)) {
+      const copy = renderSanitizedUserFacingText(
+        params.sanitizeText?.(providerMessage) ?? providerMessage,
         { errorContext: true },
       );
-      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+      return copy.startsWith("⚠️") ? copy : `⚠️ ${copy}`;
     }
     return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   for (const attempt of attempts) {
-    if (attempt.reason !== "rate_limit" || !attempt.error) {
+    if (
+      attempt.reason !== "rate_limit" ||
+      attempt.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ||
+      !attempt.error
+    ) {
       continue;
     }
     const hint = extractProviderRateLimitMessage(attempt.error);
