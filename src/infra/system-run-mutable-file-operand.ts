@@ -414,8 +414,62 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
 }
 
+const SHELL_PAYLOAD_METACHARACTER_PATTERN = /[;&|<>]/u;
+const SHELL_PAYLOAD_ACTIVE_METACHARACTERS = new Set([";", "&", "|", "<", ">"]);
+
+/**
+ * Reports whether the payload still contains shell syntax that quoting leaves active.
+ * Quoted separators are literal argument data (for example a callback URL query string),
+ * so they must not force a stable binding on their own. Substitution contexts stay
+ * refused because the characters they produce are evaluated as real shell text (#173240).
+ */
+function shellPayloadHasActiveShellSyntax(shellCommand: string): boolean {
+  if (!SHELL_PAYLOAD_METACHARACTER_PATTERN.test(shellCommand)) {
+    return false;
+  }
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  // A substitution inside double quotes still evaluates its own shell text.
+  let quotedSubstitution = false;
+  for (let index = 0; index < shellCommand.length; index += 1) {
+    const char = shellCommand.charAt(index);
+    if (char === "\\" && !inSingleQuote) {
+      index += 1;
+      continue;
+    }
+    if (inSingleQuote) {
+      inSingleQuote = char !== "'";
+      continue;
+    }
+    if (char === "'" && !inDoubleQuote) {
+      inSingleQuote = true;
+      continue;
+    }
+    if (char === '"') {
+      inDoubleQuote = !inDoubleQuote;
+      quotedSubstitution = false;
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (char === "`" || (char === "$" && shellCommand.charAt(index + 1) === "(")) {
+        quotedSubstitution = true;
+        continue;
+      }
+      if (quotedSubstitution && SHELL_PAYLOAD_ACTIVE_METACHARACTERS.has(char)) {
+        return true;
+      }
+      continue;
+    }
+    if (SHELL_PAYLOAD_ACTIVE_METACHARACTERS.has(char)) {
+      return true;
+    }
+  }
+  // Unbalanced quoting keeps the previous refusal: the payload cannot be proven literal.
+  return inSingleQuote || inDoubleQuote;
+}
+
 function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
-  if (/[;&|<>]/u.test(shellCommand)) {
+  if (shellPayloadHasActiveShellSyntax(shellCommand)) {
     return true;
   }
   const argv = splitShellArgs(shellCommand);

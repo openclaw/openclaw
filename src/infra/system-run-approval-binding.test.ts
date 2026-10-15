@@ -16,6 +16,7 @@ import {
   revalidateSystemRunMutableFileBinding,
 } from "./system-run-approval-binding.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
+import { resolveSystemRunMutableFileOperandTarget } from "./system-run-mutable-file-operand.js";
 import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
 import {
   hasPosixShellCodeLoadingOption,
@@ -333,6 +334,63 @@ describe("POSIX shell stdin option detection", () => {
   ])("detects stdin options only before the operand: $argv", ({ argv, loading, index }) => {
     expect(hasPosixShellCodeLoadingOption(argv, "bash")).toBe(loading);
     expect(resolvePosixShellScriptOperandIndex(argv, "bash")).toBe(index);
+  });
+});
+
+describe("shell payload literal metacharacter handling", () => {
+  const cannotBind =
+    "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command";
+  const callbackUrl = "http://127.0.0.1:9876/oauth2/callback?state=synthetic&code=synthetic";
+  // The node host plans `exec host=node` as a POSIX shell carrier (#173240).
+  const planShellCarrier = (text: string) =>
+    resolveSystemRunMutableFileOperandTarget({
+      argv: ["/bin/sh", "-c", text],
+      cwd: undefined,
+      shellCommand: text,
+    });
+
+  it.runIf(process.platform !== "win32")(
+    "accepts a quoted callback URL instead of refusing the payload",
+    () => {
+      expect(planShellCarrier(`/usr/bin/printf '%s\\n' '${callbackUrl}'`)).toEqual({
+        ok: true,
+        argvIndex: null,
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "accepts double-quoted and escaped literal separators",
+    () => {
+      expect(planShellCarrier(`/usr/bin/printf "%s\\n" "${callbackUrl}"`)).toEqual({
+        ok: true,
+        argvIndex: null,
+      });
+      expect(
+        planShellCarrier(
+          "/usr/bin/printf '%s\\n' http://127.0.0.1:9876/oauth2/callback?state=synthetic\\&code=synthetic",
+        ),
+      ).toEqual({ ok: true, argvIndex: null });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("still refuses active shell syntax", () => {
+    const commands = [
+      `/usr/bin/printf '%s\\n' 'a' && /usr/bin/printf '%s\\n' 'b'`,
+      `/usr/bin/printf '%s\\n' 'a' ; /usr/bin/printf '%s\\n' 'b'`,
+      `/usr/bin/printf '%s\\n' 'a' > /tmp/openclaw-shell-quoting-out`,
+      `/usr/bin/printf '%s\\n' "$(/usr/bin/printf 'a;b')"`,
+      `/usr/bin/printf '%s\\n' "$(/usr/bin/printf 'a|b')"`,
+      "/usr/bin/printf '%s\\n' `/usr/bin/printf 'a' ; /usr/bin/printf 'b'`",
+      `/usr/bin/printf '%s\\n' 'unterminated&`,
+    ];
+    for (const command of commands) {
+      expect(planShellCarrier(command), command).toEqual({
+        ok: false,
+        reason: "unsupported-command-shape",
+        message: cannotBind,
+      });
+    }
   });
 });
 
