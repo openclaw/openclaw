@@ -29,7 +29,8 @@ vi.mock("./onboard-helpers.js", () => ({
   formatControlUiSshHint: formatControlUiSshHintMock,
 }));
 
-vi.mock("../infra/browser-handoff.js", () => ({
+vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
   openUrlPrivately: openUrlPrivatelyMock,
 }));
 

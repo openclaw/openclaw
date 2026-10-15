@@ -11,7 +11,8 @@ const { openLocalFileMock, createPrivateWindowsDirectoryMock, createPrivateWindo
     createPrivateWindowsFileMock: vi.fn(),
   }));
 
-vi.mock("./browser-open.js", () => ({
+vi.mock("./browser-open.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser-open.js")>()),
   openLocalFile: openLocalFileMock,
 }));
 
@@ -20,6 +21,7 @@ vi.mock("./windows-private-directory.js", async (importOriginal) => {
   createPrivateWindowsDirectoryMock.mockImplementation(actual.createPrivateWindowsDirectory);
   createPrivateWindowsFileMock.mockImplementation(actual.createPrivateWindowsFile);
   return {
+    ...actual,
     createPrivateWindowsDirectory: createPrivateWindowsDirectoryMock,
     createPrivateWindowsFile: createPrivateWindowsFileMock,
   };

@@ -23,7 +23,8 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   resolveControlUiLinks: mocks.resolveControlUiLinks,
   detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
   openUrl: mocks.openUrl,
@@ -34,7 +35,8 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
 }));
 
-vi.mock("../infra/browser-handoff.js", () => ({
+vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
   openUrlPrivately: mocks.openUrlPrivately,
 }));
 
