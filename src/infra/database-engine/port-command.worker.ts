@@ -16,6 +16,7 @@ import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
 import {
+  assertDatabasePortNamespaceOwner,
   databasePortProviders,
   sqliteDatabasePortProvider,
   withDatabasePortConnection,
@@ -111,17 +112,7 @@ async function inspectPostgres(
   identity: Identity,
   verifyDefinitions = true,
 ) {
-  const owner = (
-    await db.query(
-      "SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS owned FROM pg_namespace WHERE nspname = $1",
-      [identity.namespace],
-    )
-  ).rows[0];
-  if (!owner?.owned) {
-    refuse(
-      "observed missing namespace or different owner; required namespace owned by the configured role",
-    );
-  }
+  await assertDatabasePortNamespaceOwner(db, identity.namespace);
   await db.query("SET row_security = off");
   const { tables, allocations } = await inspectDatabasePort(
     { engine: "postgres", db, namespace: identity.namespace },

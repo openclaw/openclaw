@@ -55,6 +55,20 @@ export async function withDatabasePortConnection<T>(
   }
 }
 
+export async function assertDatabasePortNamespaceOwner(client: Client, namespace: string) {
+  const owner = (
+    await client.query(
+      "SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS owned FROM pg_namespace WHERE nspname = $1",
+      [namespace],
+    )
+  ).rows[0];
+  if (!owner?.owned) {
+    throw new DatabasePortDataError(
+      "observed missing namespace or different owner; required namespace owned by the configured role",
+    );
+  }
+}
+
 export function withDatabasePortPostgres<T>(
   config: OpenClawConfig,
   anchor: { namespace: string; storeId: string },
@@ -67,7 +81,9 @@ export function withDatabasePortPostgres<T>(
       )
       .then(
         (result) => result.rows,
-        () => {
+        async () => {
+          // Ownership can make metadata unreadable before the normal source inspection.
+          await assertDatabasePortNamespaceOwner(client, anchor.namespace);
           throw new DatabasePortDataError(
             `Cannot resolve PostgreSQL anchor family; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
           );
