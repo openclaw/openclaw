@@ -7,6 +7,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { verifyCollaborativeCancellation } from "./gateway.sessions-send-provenance.cancellation.test-support.js";
 import {
   createScenario,
   gateway,
@@ -19,7 +20,6 @@ import {
   runHuman,
   runProofIngress,
   updateSenderPolicies,
-  verifyCollaborativeCancellation,
   type RunResult,
   type ProofCase,
   type ProofModelRequest,
