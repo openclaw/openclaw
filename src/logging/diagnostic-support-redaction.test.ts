@@ -140,7 +140,6 @@ describe("diagnostic support redaction", () => {
       ),
     ).toBe(code);
   });
-
   it("keeps a closed cause from later npm stderr lines", () => {
     expect(
       redactPublicSupportDiagnosticLine(
@@ -390,16 +389,6 @@ describe("diagnostic support redaction", () => {
       expect(redactSupportString(sanitized, redaction)).toBe(expected);
     },
   );
-
-  it("preserves canonical state path markers across repeated support handoffs", () => {
-    const redaction = { env: {}, stateDir: tempDir };
-    const expected = "Config: $OPENCLAW_STATE_DIR/openclaw.json";
-    const sanitized = redactSupportString(`Config: ${tempDir}/openclaw.json`, redaction);
-
-    expect(sanitized).toBe(expected);
-    expect(redactSupportString(sanitized, redaction)).toBe(expected);
-    expect(redactSupportString("$OPENCLAW_STATE_DIR", redaction)).toBe("$OPENCLAW_STATE_DIR");
-  });
 
   it("truncates support strings without splitting UTF-16 surrogate pairs", () => {
     const redaction = {

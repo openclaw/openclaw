@@ -158,6 +158,7 @@ export type SessionCatalogGroupsParams = {
   visibleSessionLimits: ReadonlyMap<string, number>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   renderLiveRow: (
     row: () => GatewaySessionRow,
     display: CatalogBackingSessionDisplay,

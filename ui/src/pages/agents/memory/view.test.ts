@@ -426,9 +426,13 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams-diary__preview-backdrop")).toBeNull();
 
     const closePreviewButton = container.querySelector<HTMLButtonElement>(
-      ".dreams-diary__preview-header .btn",
+      ".dreams-diary__preview-footer .btn",
     );
     expect(closePreviewButton).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".dreams-diary__preview-header button")).toBeNull();
+    expect(
+      closePreviewButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
+    ).toBe(closePreviewButton?.closest("openclaw-modal-actions"));
     closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
@@ -558,9 +562,13 @@ describe("dreaming view", () => {
     );
 
     const closePreviewButton = container.querySelector<HTMLButtonElement>(
-      ".dreams-diary__preview-header .btn",
+      ".dreams-diary__preview-footer .btn",
     );
     expect(closePreviewButton).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".dreams-diary__preview-header button")).toBeNull();
+    expect(
+      closePreviewButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
+    ).toBe(closePreviewButton?.closest("openclaw-modal-actions"));
     closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");

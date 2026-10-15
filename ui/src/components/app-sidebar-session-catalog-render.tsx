@@ -7,7 +7,6 @@ import type {
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   groupCatalogSessionsByPerson,
@@ -246,7 +245,7 @@ function renderCatalogGroup(
       return row ? [row] : [];
     });
   });
-  const hasActiveRun = createMemo(() => liveRows().some(isSessionRunActive));
+  const hasActiveRun = createMemo(() => liveRows().some(params.isRunVisuallyActive));
   const hasUnread = createMemo(() => liveRows().some((row) => row.unread === true));
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
   const loadingMore = createMemo(() => params.loadingMoreCatalogIds.has(readCatalog().id));

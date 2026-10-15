@@ -1979,7 +1979,7 @@ export const en: TranslationMap & {
       dialogLabel: "Provider sign-in",
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
-      connected: "Account connected. Choose a model when you want to test a reply.",
+      connected: "Account connected.",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -3671,7 +3671,6 @@ export const en: TranslationMap & {
       selectionQuoteOnly:
         "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
-      askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",

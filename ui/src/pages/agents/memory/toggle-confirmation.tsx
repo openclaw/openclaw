@@ -57,7 +57,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
           {props.hasError ? (
             <div class="exec-approval-error">{t("dreaming.toggleConfirmation.failed")}</div>
           ) : undefined}
-          <div class="exec-approval-actions">
+          <openclaw-modal-actions class="exec-approval-actions">
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.loading}
@@ -68,7 +68,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <button class="btn" disabled={props.loading} onClick={() => props.onCancel()}>
               {t("common.cancel")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>

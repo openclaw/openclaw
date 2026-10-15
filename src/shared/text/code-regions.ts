@@ -96,6 +96,21 @@ export function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
   return regions.some((region) => pos >= region.start && pos < region.end);
 }
 
+/** Appends cannot revoke block code after its opening line; inline ownership can change. */
+export function isInsideSettledBlockCode(
+  pos: number,
+  text: string,
+  regions: ReturnType<typeof findCodeRegions>,
+): boolean {
+  return regions.some(
+    (region) =>
+      region.block &&
+      region.start <= pos &&
+      pos < region.end &&
+      /[\r\n]/.test(text.slice(region.start, pos)),
+  );
+}
+
 /** Removes control lines while retaining literal code and original line endings. */
 export function stripLinesOutsideCode(
   text: string,

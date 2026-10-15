@@ -3,6 +3,7 @@ import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authori
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -22,6 +23,17 @@ export async function captureCronInferenceBinding(params: {
   const model = resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: params.model });
   if (!model) {
     throw new Error("Automation model could not be resolved.");
+  }
+  // CLI backends own their login; a host profile cannot bind that account.
+  if (
+    resolveCliRuntimeExecutionProvider({
+      cfg,
+      agentId,
+      provider: model.provider,
+      modelId: model.modelId,
+    })
+  ) {
+    return undefined;
   }
   // A temporary creator model does not change the model an unpinned job will run.
   const creatorProvider =
