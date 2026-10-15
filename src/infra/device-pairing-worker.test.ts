@@ -418,7 +418,7 @@ test("coalesces reconnect presence without rewriting recent last-seen or replace
   expect(before.pairedByDeviceId[device.deviceId]).toMatchObject(patch);
   await recordPairedDeviceAccess(
     device.deviceId,
-    { ...patch, lastSeenAtMs: 100_001 },
+    { ...patch, lastSeenAtMs: 100_001, lastSeenReason: "device-token-auth" },
     device,
     baseDir,
   );

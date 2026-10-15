@@ -3,21 +3,13 @@ import type { PairedDevice } from "./device-pairing.types.js";
 
 export type DevicePairingAccessIdentity = Pick<PairedDevice, "publicKey" | "approvedAtMs">;
 
-/** Reconnect diagnostics may lag by a minute; changed metadata is always recorded. */
+/** Last-seen time/reason may lag by a minute; changed metadata is always recorded. */
 export function preparePairedDeviceAccessPatch(
   device: PairedDevice,
   patch: Partial<PairedDeviceMetadataPatch>,
 ): Partial<PairedDeviceMetadataPatch> | undefined {
   const metadataChanged = (
-    [
-      "displayName",
-      "operatorLabel",
-      "platform",
-      "clientId",
-      "clientMode",
-      "remoteIp",
-      "lastSeenReason",
-    ] as const
+    ["displayName", "operatorLabel", "platform", "clientId", "clientMode", "remoteIp"] as const
   ).some((key) => key in patch && device[key] !== patch[key]);
   if (
     !metadataChanged &&
