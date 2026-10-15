@@ -1,3 +1,4 @@
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   areDiagnosticsEnabledForProcess,
   createSubsystemLogger,
@@ -163,8 +164,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
   const publicationGuards = new WeakMap<SessionCatalogHost, () => void>();
   let context: OpenClawPluginServiceContextV2 | undefined;
   let nextWarningAt = 0;
-  const workers = new Set<number>();
-  const queued = new Map<NodeSnapshot, () => Promise<void>>();
+  const refreshes = createPermitPool(MAX_REFRESHES);
   const bindingFor = (nodeId: string) =>
     sessionShareNodeBinding(api.runtime.config.current(), nodeId);
   const current = (entry: NodeSnapshot) =>
@@ -179,142 +179,111 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
   const sameConnection = (entry: NodeSnapshot, node: CatalogNode | undefined) =>
     node?.connected && isSessionHost(node) && node.connectedAtMs === entry.node.connectedAtMs;
 
-  function pump(owner: OpenClawPluginServiceContextV2) {
-    if (context !== owner || owner.scheduler.signal.aborted) {
-      return;
-    }
-    for (let worker = 0; worker < MAX_REFRESHES; worker++) {
-      if (workers.has(worker) || !queued.size) {
-        continue;
-      }
-      workers.add(worker);
-      owner.scheduler.schedule({
-        id: `refresh:${worker}`,
-        delayMs: 0,
-        async run() {
-          try {
-            for (;;) {
-              const next = queued.entries().next().value;
-              if (!next) {
-                return;
-              }
-              const [entry, run] = next;
-              queued.delete(entry);
-              if (current(entry)) {
-                await run();
-              } else {
-                retire(entry);
-              }
-            }
-          } finally {
-            workers.delete(worker);
-            pump(owner);
-          }
-        },
-      });
-    }
-  }
-
   function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
     const completion = Promise.withResolvers<void>();
     entry.pending = completion.promise;
     const signal = entry.scope.signal;
-    const release = () => {
-      queued.delete(entry);
-      completion.resolve();
-    };
+    const release = () => completion.resolve();
     signal.addEventListener("abort", release, { once: true });
-    queued.set(entry, async () => {
-      try {
-        const snapshot = await observeCatalogRefresh(
-          async () => {
-            const deadline = performance.now() + REFRESH_BUDGET_MS;
-            const sessions: SessionCatalogSession[] = [];
-            let cursor: string | undefined;
-            let bytes = 0;
-            do {
-              if (!current(entry) || !owner.invokeNode) {
-                throw new Error("Session Share catalog owner retired");
+    entry.scope.schedule({
+      id: "refresh",
+      delayMs: 0,
+      async run() {
+        const releasePermit = await refreshes.acquire({ signal });
+        try {
+          if (!releasePermit || !current(entry)) {
+            return;
+          }
+          const snapshot = await observeCatalogRefresh(
+            async () => {
+              const deadline = performance.now() + REFRESH_BUDGET_MS;
+              const sessions: SessionCatalogSession[] = [];
+              let cursor: string | undefined;
+              let bytes = 0;
+              do {
+                if (!current(entry) || !owner.invokeNode) {
+                  throw new Error("Session Share catalog owner retired");
+                }
+                const timeoutMs = Math.min(REFRESH_MS, Math.ceil(deadline - performance.now()));
+                if (timeoutMs <= 0) {
+                  throw new Error("Session Share catalog refresh timed out");
+                }
+                const page = parseSessionSharePage(
+                  await owner.invokeNode({
+                    nodeId: entry.node.nodeId,
+                    command: SESSION_SHARE_LIST_COMMAND,
+                    params: { limit: 100, ...(cursor ? { cursor } : {}) },
+                    timeoutMs,
+                    signal,
+                  }),
+                );
+                bytes += Buffer.byteLength(JSON.stringify(page));
+                if (
+                  sessions.length + page.sessions.length > MAX_SNAPSHOT_ROWS ||
+                  bytes > MAX_SNAPSHOT_BYTES
+                ) {
+                  throw new SnapshotLimitError();
+                }
+                sessions.push(...page.sessions);
+                if (
+                  page.nextCursor !== undefined &&
+                  sessionCatalogPaging.decodeCursor(page.nextCursor) <=
+                    sessionCatalogPaging.decodeCursor(cursor)
+                ) {
+                  throw new Error("Session Share catalog cursor did not advance");
+                }
+                cursor = page.nextCursor;
+              } while (cursor);
+              return sessions;
+            },
+            () => {
+              const now = performance.now();
+              if (now < nextWarningAt) {
+                return false;
               }
-              const timeoutMs = Math.min(REFRESH_MS, Math.ceil(deadline - performance.now()));
-              if (timeoutMs <= 0) {
-                throw new Error("Session Share catalog refresh timed out");
-              }
-              const page = parseSessionSharePage(
-                await owner.invokeNode({
-                  nodeId: entry.node.nodeId,
-                  command: SESSION_SHARE_LIST_COMMAND,
-                  params: { limit: 100, ...(cursor ? { cursor } : {}) },
-                  timeoutMs,
-                  signal,
-                }),
-              );
-              bytes += Buffer.byteLength(JSON.stringify(page));
-              if (
-                sessions.length + page.sessions.length > MAX_SNAPSHOT_ROWS ||
-                bytes > MAX_SNAPSHOT_BYTES
-              ) {
-                throw new SnapshotLimitError();
-              }
-              sessions.push(...page.sessions);
-              if (
-                page.nextCursor !== undefined &&
-                sessionCatalogPaging.decodeCursor(page.nextCursor) <=
-                  sessionCatalogPaging.decodeCursor(cursor)
-              ) {
-                throw new Error("Session Share catalog cursor did not advance");
-              }
-              cursor = page.nextCursor;
-            } while (cursor);
-            return sessions;
-          },
-          () => {
-            const now = performance.now();
-            if (now < nextWarningAt) {
-              return false;
-            }
-            nextWarningAt = now + MAX_STALENESS_MS;
-            return true;
-          },
-        );
-        const connectedNode = (await api.runtime.nodes.list()).nodes.find(
-          (candidate) => candidate.nodeId === entry.node.nodeId,
-        );
-        if (!current(entry)) {
-          return;
+              nextWarningAt = now + MAX_STALENESS_MS;
+              return true;
+            },
+          );
+          const connectedNode = (await api.runtime.nodes.list()).nodes.find(
+            (candidate) => candidate.nodeId === entry.node.nodeId,
+          );
+          if (!current(entry)) {
+            return;
+          }
+          if (!sameConnection(entry, connectedNode)) {
+            retire(entry);
+            return;
+          }
+          entry.sessions = snapshot;
+          entry.refreshedAt = performance.now();
+          entry.retryMs = REFRESH_MS;
+          entry.error = undefined;
+        } catch (error) {
+          entry.retryMs = entry.error ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
+          entry.error =
+            error instanceof SnapshotLimitError
+              ? { code: "CATALOG_TOO_LARGE", message: error.message }
+              : {
+                  code: "NODE_INVOKE_FAILED",
+                  message:
+                    "Cannot refresh OpenClaw sessions. Check the paired node's session-share configuration and connection.",
+                };
+        } finally {
+          releasePermit?.();
+          entry.pending = undefined;
+          signal.removeEventListener("abort", release);
+          completion.resolve();
+          if (current(entry)) {
+            entry.scope.schedule({
+              id: "next-refresh",
+              delayMs: entry.retryMs,
+              run: () => refresh(entry, owner),
+            });
+          }
         }
-        if (!sameConnection(entry, connectedNode)) {
-          retire(entry);
-          return;
-        }
-        entry.sessions = snapshot;
-        entry.refreshedAt = performance.now();
-        entry.retryMs = REFRESH_MS;
-        entry.error = undefined;
-      } catch (error) {
-        entry.retryMs = entry.error ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
-        entry.error =
-          error instanceof SnapshotLimitError
-            ? { code: "CATALOG_TOO_LARGE", message: error.message }
-            : {
-                code: "NODE_INVOKE_FAILED",
-                message:
-                  "Cannot refresh OpenClaw sessions. Check the paired node's session-share configuration and connection.",
-              };
-      } finally {
-        entry.pending = undefined;
-        signal.removeEventListener("abort", release);
-        completion.resolve();
-        if (current(entry)) {
-          entry.scope.schedule({
-            id: "next-refresh",
-            delayMs: entry.retryMs,
-            run: () => refresh(entry, owner),
-          });
-        }
-      }
+      },
     });
-    pump(owner);
   }
 
   function reconcile(nodes: CatalogNode[]) {
@@ -376,7 +345,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     apiVersion: 2,
     start(ctx) {
       // The host joins the previous scheduler before starting a new service generation.
-      workers.clear();
       context = ctx;
       ctx.scheduler.schedule({
         id: "nodes",
@@ -396,7 +364,6 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     stop() {
       context = undefined;
       snapshots.clear();
-      queued.clear();
     },
   });
 

@@ -529,8 +529,10 @@ class LogbookDatabaseStore {
     return row ? { day: row.day, text: row.text, updatedMs: row.updated_ms } : null;
   }
 
-  saveStandup(day: string, text: string): void {
-    this.statements.saveStandup({ day, text, now: Date.now() });
+  saveStandup(day: string, text: string): LogbookStandup {
+    const updatedMs = Date.now();
+    this.statements.saveStandup({ day, text, now: updatedMs });
+    return { day, text, updatedMs };
   }
 
   pruneFrames(olderThanMs: number): number {

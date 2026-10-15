@@ -395,32 +395,18 @@ export function createMemoryWikiCompiledCacheStore(
         return;
       }
       const durableIdentity = await loadDurableIdentity();
-      if (durableIdentity.compiledCachePublicationId) {
-        try {
-          await store.lookup(publicationKey(ownerId, durableIdentity.compiledCachePublicationId));
-        } catch (error) {
-          options.onReadError?.(error);
-          throw error;
-        }
-      }
-      const confirmedIdentity = await loadDurableIdentity();
       if (resolveActiveVault(config) !== activeVault) {
         return;
       }
-      if (
-        !confirmedIdentity.vaultGeneration ||
-        confirmedIdentity.vaultGeneration !== durableIdentity.vaultGeneration ||
-        confirmedIdentity.compiledCachePublicationId !== durableIdentity.compiledCachePublicationId
-      ) {
+      if (!durableIdentity.vaultGeneration) {
         activeVaults.delete(ownerId);
         return;
       }
-      // SQLite is observed before the durable identity reread. A cross-process write that
-      // races this boundary stays unreadable until the next lifecycle refresh.
+      // Lifecycle refresh owns identity changes; reads validate the selected blob.
       activeVaults.set(ownerId, {
         path: activeVault.path,
-        vaultGeneration: confirmedIdentity.vaultGeneration,
-        compiledCachePublicationId: confirmedIdentity.compiledCachePublicationId ?? undefined,
+        vaultGeneration: durableIdentity.vaultGeneration,
+        compiledCachePublicationId: durableIdentity.compiledCachePublicationId ?? undefined,
         reconciled: true,
       });
     },

@@ -681,6 +681,9 @@ async function openGoogleSseAttempt(params: {
     throw await createProviderHttpError(response, params.errorPrefix);
   }
   const chunks = parseGoogleSseChunks(response, signal);
+  if (!attemptSignal) {
+    return { type: "ready", chunks };
+  }
   const iterator = chunks[Symbol.asyncIterator]();
   let first: IteratorResult<GoogleSseChunk>;
   try {
@@ -688,11 +691,11 @@ async function openGoogleSseAttempt(params: {
   } catch (error) {
     return handleTimedOperationError(error);
   }
-  attemptSignal?.clearDeadline();
+  attemptSignal.clearDeadline();
   return {
     type: "ready",
     ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks: iterateGoogleSseChunks(iterator, attemptSignal?.cleanup),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal.cleanup),
   };
 }
 
@@ -713,28 +716,6 @@ async function openGoogleSseChunks(params: {
   const retryMs = shouldRetryGoogleGemini3FirstResponse(params)
     ? resolveGoogleGemini3FirstResponseRetryMs()
     : 0;
-  if (retryMs <= 0) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal: params.options?.signal,
-    });
-    await notifyProviderHttpResponse({
-      options: params.options,
-      response,
-      model: canonicalGoogleModel(params.model),
-      signal: params.options?.signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
   const firstAttempt = await openGoogleSseAttempt({
     ...params,
     parentSignal: params.options?.signal,
