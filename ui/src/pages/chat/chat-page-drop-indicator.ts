@@ -1,5 +1,5 @@
-import type { ReactiveControllerHost } from "lit";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
+import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import {
   resolveSplitDropZone,
@@ -44,7 +44,7 @@ export class ChatPageDropIndicator {
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
 
   constructor(
-    private readonly host: HTMLElement & Pick<ReactiveControllerHost, "requestUpdate">,
+    private readonly host: HTMLElement & Pick<SolidControllerHost, "requestUpdate">,
     private readonly options: {
       sessionSplitAvailable: () => boolean;
       narrow: () => boolean;
