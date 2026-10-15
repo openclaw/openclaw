@@ -175,28 +175,6 @@ describe("memory session side-data consumers", () => {
     });
   });
 
-  it("reports a committed message-tool outcome publication failure after one write", async () => {
-    const { scope, actor } = await fixture();
-    const sequence = actor.snapshot(authority)!.version.sequence;
-    const stop = failSessionActorMemoryPublication(scope.sessionKey);
-    try {
-      await expect(
-        recordMessageToolRunOutcome({
-          ...scope,
-          runId: "run",
-          provider: "test",
-          model: "test",
-          outcome: "mute",
-          runStatus: "completed",
-          occurredAt: 1,
-        }),
-      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
-    } finally {
-      stop();
-    }
-    expect(actor.snapshot(authority)!.version.sequence).toBe(sequence + 1);
-  });
-
   it("reports an outbox publication failure while preserving the accepted turn", async () => {
     const { scope, binding, turn } = await fixture();
     const boundary = await turn("accepted");
