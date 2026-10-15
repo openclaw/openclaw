@@ -69,6 +69,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     catalog: params.catalog?.entries,
     // Thinking policy was already validated by the patch owner; create discards hydration.
     hydrateThinkingCatalog: false,
+    prepareNativeCatalog: true,
     validateModelSelection: params.validateModelSelection,
     ...(context ? { placement: { context, sessionKey } } : {}),
   });
