@@ -2,10 +2,25 @@ import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { fixtureDescriptor } from "./port-provider-fixture.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const it = createCommandTest();
+
+it("composes standalone SQLite fragments after a canonical trigger", async () => {
+  const descriptor = fixtureDescriptor();
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(descriptor.sqlite);
+  for (const fragment of descriptor.fragments ?? []) {
+    source.exec(fragment.sqlite);
+  }
+  const admitted = await admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor);
+  using destination = openNodeSqliteDatabase(":memory:");
+  expect(() => destination.exec(admitted.sqlite)).not.toThrow();
+});
 
 describe.skipIf(!connection)("generic database family provider", () => {
   it("ports and restores a second family's fragments, triggers and rebuilt projections", async ({

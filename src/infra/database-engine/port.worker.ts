@@ -391,7 +391,7 @@ async function referenceCatalog(
     await endpoint.db.query(
       `CREATE SCHEMA ${quote(reference.namespace)}; SET LOCAL search_path = ${quote(reference.namespace)}`,
     );
-    await endpoint.db.query(descriptor.preData + "\n" + descriptor.postData);
+    await endpoint.db.query(descriptor.preData + "\n;\n" + descriptor.postData);
     return await catalogEvidence(reference, descriptor);
   } finally {
     await endpoint.db.query("ROLLBACK");

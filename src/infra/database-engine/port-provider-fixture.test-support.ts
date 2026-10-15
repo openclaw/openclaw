@@ -18,7 +18,7 @@ function schema(name: string, extra = false) {
   return {
     tables: portTables(data),
     sqlite,
-    preData: postgres,
+    preData: postgres.slice(0, -1),
     postData: "",
     expectedCatalog: expectedPostgresCatalog(data),
   };
@@ -37,7 +37,7 @@ export function fixtureDescriptor(): PortDescriptor {
     ...items,
     tables: [...items.tables, ...projection.tables],
     sqlite,
-    preData: items.preData + projection.preData,
+    preData: items.preData + ";\n" + projection.preData,
     postData,
     triggers: [trigger],
     expectedCatalog: [...items.expectedCatalog, ...projection.expectedCatalog],

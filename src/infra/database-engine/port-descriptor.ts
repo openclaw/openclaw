@@ -106,9 +106,9 @@ function selectFragments(descriptor: PortDescriptor, tables: ReadonlySet<string>
     triggers: schemas.flatMap((schema) => schema.triggers ?? []),
     projections: schemas.flatMap((schema) => schema.projections ?? []),
     expectedCatalog: schemas.flatMap((schema) => schema.expectedCatalog),
-    sqlite: schemas.map((schema) => schema.sqlite).join("\n"),
-    preData: schemas.map((schema) => schema.preData).join("\n"),
-    postData: schemas.map((schema) => schema.postData).join("\n"),
+    sqlite: schemas.map((schema) => schema.sqlite).join("\n;\n"),
+    preData: schemas.map((schema) => schema.preData).join("\n;\n"),
+    postData: schemas.map((schema) => schema.postData).join("\n;\n"),
   };
 }
 
