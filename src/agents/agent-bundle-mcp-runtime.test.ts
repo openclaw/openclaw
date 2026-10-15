@@ -726,21 +726,17 @@ describe("session MCP runtime", () => {
 
       nowMs += 5_001;
       expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const staleCatalog = await withinTest(runtime.getCatalog(), signal);
-      expect(staleCatalog).toBe(failedCatalog);
-      expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await withinTest(receipts.waitFor(retryLogPath, "recv tools/list", 2), signal);
+      const recovery = runtime.getCatalog();
+      await withinTest(
+        fixtureEventBeforeSettlement(retryLogPath, "recv tools/list", recovery, 2),
+        signal,
+      );
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,
       });
       await fs.writeFile(retryReleasePath, "release", "utf8");
 
-      await waitForRuntimeState(
-        () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
-        "background catalog recovery",
-        signal,
-      );
-      const recoveredCatalog = await runtime.getCatalog();
+      const recoveredCatalog = await withinTest(recovery, signal);
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
       expect(recoveredCatalog.servers.retryServer).toBeDefined();
