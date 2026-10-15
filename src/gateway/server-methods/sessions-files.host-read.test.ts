@@ -21,11 +21,17 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 import * as workspaceFs from "./workspace-fs.js";
 
 const hoisted = vi.hoisted(() => ({
+  ensureSandboxWorkspaceForSession: vi.fn(),
   execOpenPath: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   readDelta: vi.fn(),
+}));
+
+vi.mock("../../agents/sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox.js")>()),
+  ensureSandboxWorkspaceForSession: hoisted.ensureSandboxWorkspaceForSession,
 }));
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
@@ -65,6 +71,7 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 
 let workspaceRoot: string;
 beforeEach(() => {
+  hoisted.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
   workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
 });
 
@@ -111,6 +118,112 @@ function prepareHostFileRead(
 }
 
 describe("sessions.files host read boundary", () => {
+  it.each([
+    { workspaceAccess: "rw" as const, containerWorkdir: "/workspace", separate: false },
+    { workspaceAccess: "ro" as const, containerWorkdir: "/project", separate: true },
+    { workspaceAccess: "none" as const, containerWorkdir: "/workspace", separate: true },
+  ])(
+    "resolves the sandbox workspace alias with $workspaceAccess access",
+    async ({ workspaceAccess, containerWorkdir, separate }) => {
+      const sandboxWorkspace = separate
+        ? outsideDirs.make(`session-files-sandbox-${workspaceAccess}-`)
+        : workspaceRoot;
+      fs.writeFileSync(path.join(sandboxWorkspace, "report.md"), `${workspaceAccess}\n`, "utf8");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              workspaceAccess,
+              docker: { workdir: containerWorkdir },
+            },
+          },
+        },
+      };
+      const fixture = prepareHostFileRead({}, cfg);
+      hoisted.ensureSandboxWorkspaceForSession.mockResolvedValue({
+        workspaceDir: sandboxWorkspace,
+        containerWorkdir,
+        workspaceAccess,
+      });
+
+      const payload = expectOkPayload(
+        await invoke(
+          "sessions.files.get",
+          { sessionKey, path: `${containerWorkdir}/report.md` },
+          fixture.context,
+          fixture.options,
+        ),
+      );
+
+      expect(payload.file).toMatchObject({
+        content: `${workspaceAccess}\n`,
+        missing: false,
+        previewKind: "text",
+      });
+    },
+  );
+
+  it("resolves the read-only agent mount but denies unknown, traversing, and shadowed aliases", async () => {
+    const sandboxWorkspace = outsideDirs.make("session-files-sandbox-ro-");
+    const bindWorkspace = outsideDirs.make("session-files-sandbox-bind-");
+    const outsidePath = outsideFile();
+    fs.writeFileSync(path.join(workspaceRoot, "agent-only.md"), "agent\n", "utf8");
+    fs.writeFileSync(path.join(bindWorkspace, "secret.md"), "secret\n", "utf8");
+    fs.writeFileSync(outsidePath, "outside\n", "utf8");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            workspaceAccess: "ro",
+            docker: {
+              workdir: "/workspace",
+              binds: [`${bindWorkspace}:/workspace/shadow:ro`],
+            },
+          },
+        },
+      },
+    };
+    const fixture = prepareHostFileRead({}, cfg);
+    hoisted.ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: sandboxWorkspace,
+      containerWorkdir: "/workspace",
+      workspaceAccess: "ro",
+    });
+
+    const agentFile = expectOkPayload(
+      await invoke(
+        "sessions.files.get",
+        { sessionKey, path: "/agent/agent-only.md" },
+        fixture.context,
+        fixture.options,
+      ),
+    );
+    expect(agentFile.file.content).toBe("agent\n");
+
+    for (const requestedPath of [
+      "/unknown/agent-only.md",
+      "/workspace/../agent-only.md",
+      "/workspace/shadow/secret.md",
+      outsidePath,
+    ]) {
+      const error = expectError(
+        await invoke(
+          "sessions.files.get",
+          { sessionKey, path: requestedPath },
+          fixture.context,
+          fixture.options,
+        ),
+      );
+      expect(error.details).toMatchObject({
+        path: requestedPath,
+        type: "session_file_not_found",
+        reason: "outside_session_boundary",
+      });
+    }
+  });
+
   it.each<{
     label: string;
     entry?: Partial<InternalSessionEntry>;

@@ -53,6 +53,7 @@ import {
   resolveRepositoryArtifactPath,
 } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import { resolveSandboxSessionFileAlias } from "./session-sandbox-file-alias.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { loadSessionTouchedFiles } from "./session-touched-files.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
@@ -373,6 +374,28 @@ async function handleSessionFilesRead(
         const loaded = await loadSessionFiles(source, context, assertSourceCurrent);
         using repository = loaded.repository;
         assertCurrent();
+        const sandboxAlias =
+          request.kind === "list" || !source.root || !source.agentId
+            ? undefined
+            : await resolveSandboxSessionFileAlias({
+                cfg: source.cfg,
+                agentId: source.agentId,
+                sessionKey: source.canonicalKey,
+                entry: source.entry,
+                root: source.root,
+                filePath: request.params.path,
+                assertCurrent,
+              });
+        const fileLoaded = sandboxAlias
+          ? {
+              ...loaded,
+              root: sandboxAlias.root,
+              fileRoot: sandboxAlias.root,
+              diffCwd: undefined,
+            }
+          : loaded;
+        const requestedPath =
+          request.kind === "list" ? "" : (sandboxAlias?.path ?? request.params.path);
         if (
           request.kind !== "list" &&
           repository?.kind === "stored" &&
@@ -406,8 +429,8 @@ async function handleSessionFilesRead(
           assertCurrent();
         } else if (request.kind === "assets") {
           result = await getSessionWorkspaceAssets({
-            ...loaded,
-            path: request.params.path,
+            ...fileLoaded,
+            path: requestedPath,
             refs: request.params.refs,
             authorizeHostRead: hostRead.authorizeHostRead,
             assertCurrent,
@@ -425,14 +448,14 @@ async function handleSessionFilesRead(
           });
           assertCurrent();
         } else {
-          const query = { files: loaded.files, path: request.params.path };
+          const query = { files: fileLoaded.files, path: requestedPath };
           const fileResult =
             repository?.kind === "stored"
               ? await getRepositoryArtifact(repository, request.params.path)
               : repository
                 ? await repository.inspect("get", query)
                 : await getSessionWorkspaceFile({
-                    ...loaded,
+                    ...fileLoaded,
                     ...query,
                     assertCurrent,
                     authorizeHostRead: hostRead.authorizeHostRead,
