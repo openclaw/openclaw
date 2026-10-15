@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { jsonExtractText } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -56,11 +56,12 @@ export function readSessionEntryList(
               .select("session_key")
               .where("session_key", ">", page.afterSessionKey ?? "")
               // Absent facts evaluate to SQL NULL; empty obligations are not candidates.
-              .where(
-                /* kysely-allow-raw: Filter private recovery facts in SQLite before selecting entry payloads. */
-                sql<string>`json_extract(entry_json, '$.pendingExecNotifications')`,
-                "!=",
-                "{}",
+              .where((eb) =>
+                eb(
+                  jsonExtractText(database.db, eb.ref("entry_json"), "pendingExecNotifications"),
+                  "!=",
+                  "{}",
+                ),
               )
               .orderBy("session_key")
               .limit(page.limit),
