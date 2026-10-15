@@ -1,7 +1,11 @@
 import type { ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { writeJson } from "../shared/http-json.js";
-import { type QaMockProviderDispatchResult, writeSse } from "./mock-openai-contracts.js";
+import {
+  type QaMockProviderDispatchResult,
+  writeSse,
+  writeSseHeaders,
+} from "./mock-openai-contracts.js";
 
 export async function writeMockOpenAiResponsesHttp(
   res: ServerResponse,
@@ -22,7 +26,22 @@ export async function writeMockOpenAiResponsesHttp(
     return;
   }
   if (dispatched.responsePauseMs !== undefined) {
-    await sleep(dispatched.responsePauseMs);
+    if (stream && dispatched.responseKeepaliveMs !== undefined) {
+      // Accept the stream and keep the connection live without model progress.
+      writeSseHeaders(res);
+      const keepalive = setInterval(() => {
+        if (!res.destroyed && !res.writableEnded) {
+          res.write(": keepalive\n\n");
+        }
+      }, dispatched.responseKeepaliveMs);
+      try {
+        await sleep(dispatched.responsePauseMs);
+      } finally {
+        clearInterval(keepalive);
+      }
+    } else {
+      await sleep(dispatched.responsePauseMs);
+    }
   }
   if (!stream) {
     const completion = dispatched.events.at(-1);
