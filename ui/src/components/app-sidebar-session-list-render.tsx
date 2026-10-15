@@ -121,6 +121,9 @@ function renderSessionCatalog(params: {
       visibleSessionLimits={host().sessionData.visibleSessionLimits}
       projectGrouping={snapshot().projectGrouping}
       liveRows={snapshot().liveRows}
+      isRunVisuallyActive={(row) =>
+        host().sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false
+      }
       renderLiveRow={(row, display) => (
         <RecentSession
           host={host()}

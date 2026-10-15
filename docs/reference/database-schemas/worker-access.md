@@ -5073,6 +5073,17 @@ the write remain queued for the next flush. Incognito uses the memory actor;
 maintenance scopes and already executing workers keep their native kernel. Event bytes, ordering,
 retention limits, schemas, and update behavior are unchanged.
 
+The host retains the last trajectory session's next sequence and retained UTF-8 byte
+count per physical execution owner. It passes these facts through the existing
+append request inside the writer FIFO, consumes them before awaiting the write,
+and installs the returned committed facts before releasing that FIFO. An unknown
+append outcome leaves the next request cold. Lifecycle row publications invalidate
+these facts; retention invalidates them inside its existing writer operation.
+Ordinary under-budget appends need no window read. Cold appends and actual overflow
+retain the SQL-side byte projection and bounded suffix scan. An hourly retention
+sweep may make the next append cold even when it deletes nothing. Exclusive
+Doctor/CLI repairs run outside this runtime cache's owner lifetime.
+
 Successful embedded attempts defer their final diagnostic flush to the logical-turn
 lifecycle owner, which appends the accepted `session.ended` event to the same batch.
 Failed attempts and retry boundaries still flush diagnostic progress; replacing an

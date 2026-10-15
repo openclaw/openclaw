@@ -8,7 +8,6 @@ import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
-import { rememberNativeRuntimeConsent } from "../config/native-runtime-consent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUtilityModelSeparationError } from "../config/utility-model-separation-migration.js";
@@ -278,7 +277,7 @@ async function stagePreparedCandidate(
     profile = saved.profile;
     preparedConfig = saved.config;
   }
-  let config = projectSetupInferenceConfig({
+  const config = projectSetupInferenceConfig({
     base: ctx.cfg,
     prepared: preparedConfig,
     modelRef,
@@ -289,9 +288,6 @@ async function stagePreparedCandidate(
     pluginId,
     agentRuntimeId,
   });
-  for (const harnessId of params.result.nativeRuntimeConsent ?? []) {
-    config = rememberNativeRuntimeConsent(config, ctx.routeAgentId, harnessId);
-  }
   return {
     modelRef,
     ...(modelTarget ? { modelTarget } : {}),
@@ -609,7 +605,6 @@ export async function stageProviderAuthCandidate(
             runtime: params.runtime,
             method,
             agentDir: ctx.agentDir,
-            agentId: ctx.routeAgentId,
             workspaceDir: ctx.workspace,
             prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
             signal: params.signal,
