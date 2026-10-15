@@ -1,8 +1,10 @@
 // @vitest-environment node
 import "../../test/host.setup.ts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { getWorkboardLifecycle } from "./lifecycle.ts";
 import { loadWorkboard, refreshWorkboard } from "./loading.ts";
+import { moveWorkboardCard, updateWorkboardCardProperties } from "./mutations.ts";
 import { getWorkboardState, resetWorkboardConnectionState } from "./runtime.ts";
 import {
   createGatewaySession,
@@ -43,6 +45,40 @@ describe("Workboard native owners", () => {
     expect(state.loaded).toBe(false);
     expect(state.mutationReadiness).toBe("canonical_reload_required");
     expect(state.cards).toHaveLength(1);
+  });
+
+  it("reserves every reordered card until the ordered move settles", async () => {
+    const host = {};
+    const moving = createWorkboardCard({ id: "moving", position: 2000 });
+    const peer = createWorkboardCard({ id: "peer", position: 0 });
+    const shifted = { ...peer, position: 1999, updatedAt: 2 };
+    const moved = { ...moving, position: 999, updatedAt: 2 };
+    const pending = createDeferred<{ card: typeof peer }>();
+    const client = createWorkboardTestClient((method) =>
+      method === "workboard.cards.update" ? pending.promise : { card: moved },
+    );
+    const state = getWorkboardState(host);
+    state.cards = [peer, moving];
+    const move = moveWorkboardCard({
+      host,
+      client,
+      cardId: moving.id,
+      status: "todo",
+      beforeCardId: peer.id,
+      boardFilter: "__all__",
+    });
+    expect(
+      await updateWorkboardCardProperties({ host, client, card: peer, patch: { title: "X" } }),
+    ).toBe(false);
+    expect(client.request).toHaveBeenCalledTimes(1);
+    pending.resolve({ card: shifted });
+    await move;
+    expect(state.cards).toEqual([moved, shifted]);
+    expect(state.busyCardIds.size).toBe(0);
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "workboard.cards.update",
+      "workboard.cards.move",
+    ]);
   });
 
   it.each([

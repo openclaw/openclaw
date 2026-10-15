@@ -26,13 +26,13 @@ import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.tsx";
 import {
   renderSessionListFrame,
-  renderSessionSection,
+  renderSessionSection as SessionSection,
 } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
-  renderSessionTree,
+  renderSessionTree as SessionTree,
   renderSidebarSessionIndicators,
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -412,17 +412,13 @@ export function SidebarAgentRoster(props: RosterProps) {
                       {(key) => renderChildSessionLoadError(roster.host(), key)}
                     </For>
                     <For each={sections()} keyed={(section) => section.id}>
-                      {(section) =>
-                        renderSessionSection({
-                          get host() {
-                            return roster.host();
-                          },
-                          get section() {
-                            return section();
-                          },
-                          personHeaders: undefined,
-                        })
-                      }
+                      {(section) => (
+                        <SessionSection
+                          host={roster.host()}
+                          section={section()}
+                          personHeaders={undefined}
+                        />
+                      )}
                     </For>
                   </Show>
                 </section>
@@ -461,14 +457,12 @@ export function renderSidebarPinnedSession(host: RosterHost, session: () => Side
       (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
     return cards.find((agent) => agent.id === agentId());
   });
-  return renderSessionTree({
-    host,
-    get session() {
-      return session();
-    },
-    listItem: false,
-    get icon() {
-      return <AgentIdentityAvatar agent={card() ?? { id: agentId() }} />;
-    },
-  });
+  return (
+    <SessionTree
+      host={host}
+      session={session()}
+      listItem={false}
+      icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}
+    />
+  );
 }

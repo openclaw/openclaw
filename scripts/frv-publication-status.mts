@@ -278,6 +278,7 @@ type EvidenceRef = {
 };
 type Phase = { state: string; evidence: EvidenceRef[] };
 type Surface = {
+  target?: { tag: string; sourceTag: string };
   selection: "unknown" | "selected" | "not-selected";
   verificationSelection: "unknown" | "selected" | "not-selected";
   operation: Phase;
@@ -329,6 +330,12 @@ type SurfaceName = (typeof surfaces)[number];
 export type PublicationObservation = {
   version: 1;
   requested: { repository: string; validationRunId: string; publicationRunId: string };
+  release: {
+    version: string | null;
+    tag: string | null;
+    distTag: string | null;
+    sourceSha: string | null;
+  } | null;
   publisher: {
     runId: string;
     runAttempt: number;
@@ -377,6 +384,7 @@ export function newPublicationObservation(
   return {
     version: 1,
     requested: { repository: repo, validationRunId, publicationRunId },
+    release: null,
     publisher: null,
     relationship: {
       status: "unverified",
@@ -518,6 +526,13 @@ export function observePublicationDiagnostic(
       runAttempt: observation.publisher.runAttempt,
     },
   ];
+  const context = diagnostic.context;
+  observation.release = {
+    version: context.releaseVersion,
+    tag: context.releaseTag,
+    distTag: context.npmDistTag,
+    sourceSha: context.requestedSourceSha,
+  };
   observation.diagnostics = {
     state: "available",
     artifactId,
@@ -724,6 +739,7 @@ export function formatPublicationObservation(value: PublicationObservation) {
     `relationship: ${value.relationship.status} (${value.relationship.reason})`,
     `collection: ${value.collection.complete ? "complete" : `incomplete (${value.collection.error ?? "unknown"})`}`,
     `publisher: ${value.publisher?.runId ?? "unknown"} attempt=${value.publisher?.runAttempt ?? "unknown"} ${value.publisher?.status ?? "unknown"}/${value.publisher?.conclusion ?? "unknown"}`,
+    `release: version=${value.release?.version ?? "unknown"} tag=${value.release?.tag ?? "unknown"} dist-tag=${value.release?.distTag ?? "unknown"} source-sha=${value.release?.sourceSha ?? "unknown"} (producer diagnostic)`,
     `validation binding: original-plan-attempt=${value.relationship.originalPlanAttempt ?? "unknown"} selected-attempt=${value.relationship.validationAttempt ?? "unknown"}`,
     `diagnostics: ${value.diagnostics.state}; verification=${value.verification.state}; binding=${value.binding.state}; assets=${value.assets.state}`,
   ];
@@ -735,6 +751,11 @@ export function formatPublicationObservation(value: PublicationObservation) {
     lines.push(
       `${name}: selection=${surface.selection} operation=${surface.operation.state} verification=${surface.verification.state} registry-observation=${surface.registryObservation.state} terminal-marker=${surface.terminalMarker.state}${surface.advisory ? " advisory" : ""}`,
     );
+    if (surface.target) {
+      lines.push(
+        `  target-tag=${surface.target.tag} source-tag=${surface.target.sourceTag} (dispatch record)`,
+      );
+    }
     for (const job of surface.jobs) {
       lines.push(
         `  job=${job.jobId} run=${job.runId} attempt=${job.runAttempt} ${job.status}/${job.conclusion ?? "unknown"} (job conclusion only)`,
@@ -767,7 +788,13 @@ export function formatPublicationObservation(value: PublicationObservation) {
       `${dispatch.scope} dispatch: ${dispatch.state} parent=${dispatch.runId} attempt=${dispatch.runAttempt} artifact=${dispatch.artifactId}`,
     );
   }
+  const stableVersion = value.release?.version;
   lines.push(
+    "Mac assets and feeds are not observed here; consult the native publication owner." +
+      (stableVersion && /^\d{4}\.\d{1,2}\.\d+$/u.test(stableVersion)
+        ? ` Retained orchestration facts: pnpm release:stable ${stableVersion} --status (use the original --state-dir if customized).`
+        : ""),
+    "Website deployment is not observed here; read-only production checks: https://github.com/openclaw/openclaw.ai#companion-downloads",
     "Missing observations remain unknown; consult the existing owner evidence. No recovery action was performed.",
   );
   return lines.join("\n");

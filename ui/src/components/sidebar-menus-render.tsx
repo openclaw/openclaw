@@ -4,7 +4,6 @@ import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
-import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -36,13 +35,8 @@ import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
-import {
-  isSidebarAttentionDismissed,
-  isUpdateAttentionForced,
-  loadDismissals,
-  resolveSidebarAttentionKey,
-  resolveUpdateAttentionDismissal,
-} from "./sidebar-attention-dismissals.ts";
+import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
+import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 
 export {
@@ -196,31 +190,16 @@ export function renderSidebarIdentityMenuForController(
     const user = selfUser();
     return user ? { ...user, watchedSessions: [] } : undefined;
   });
-  const updateAttentionDismissal = createMemo(() =>
-    resolveUpdateAttentionDismissal({
-      gatewayBootId: context()?.gateway.snapshot.hello?.server?.bootId,
-      updateAvailable: overlaySnapshot()?.updateAvailable,
-      updateSchedule: overlaySnapshot()?.updateSchedule,
-    }),
-  );
-  const updateAttentionDismissed = createMemo(() =>
-    Boolean(
-      context() &&
-      updateAttentionDismissal() &&
-      isUpdateActionable(
+  const updateAvailable = createMemo(
+    () =>
+      isReleaseUpdateAvailable(
         overlaySnapshot()?.updateAvailable,
         overlaySnapshot()?.updateSchedule,
-        Boolean(overlaySnapshot()?.updateRunning || overlaySnapshot()?.updateReconciliationPending),
       ) &&
       !overlaySnapshot()?.updateRunning &&
       !overlaySnapshot()?.updateReconciliationPending &&
       overlaySnapshot()?.updateSchedule?.campaign?.state !== "applying" &&
-      !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone) &&
-      isSidebarAttentionDismissed(
-        loadDismissals(resolveSidebarAttentionKey(context()!.gateway)),
-        updateAttentionDismissal()!,
-      ),
-    ),
+      !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
   );
   return (
     <SidebarIdentityMenu
@@ -230,7 +209,7 @@ export function renderSidebarIdentityMenuForController(
         canPairDevice: host.canPairDevice,
         basePath: host.basePath,
         gatewayVersion: host.gatewayVersion,
-        updateAttentionDismissed: updateAttentionDismissed(),
+        updateAvailable: updateAvailable(),
         profileViewer: profileViewer(),
         canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
         themeMode: host.themeMode,

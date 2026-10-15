@@ -61,14 +61,14 @@ vi.mock("./transcript-mirror.js", async (importOriginal) => ({
   importCodexThreadHistoryToTranscript: transcriptMocks.importHistory,
 }));
 
-vi.mock("./upstream-fork-boundary.js", () => ({
+vi.mock("./upstream-fork-boundary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./upstream-fork-boundary.js")>()),
   resolveCodexUpstreamForkBoundary: vi.fn(async () => ({
     ok: true,
     boundary,
     editorText: "edit me",
   })),
   listCodexUpstreamTurns: boundaryMocks.listTurns,
-  precheckCodexUpstreamForkBoundary: vi.fn(() => ({ ok: true, boundary })),
 }));
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
@@ -228,9 +228,7 @@ describe("forkCodexUpstreamSession", () => {
   it("verifies the original source cut, imports history, then links before binding", async () => {
     const sourceThreadId = "thread-source";
     const retainedTurn = codexForkTurn("turn-1", "one");
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
-      .mockResolvedValueOnce([retainedTurn]);
+    boundaryMocks.listTurns.mockResolvedValueOnce([retainedTurn]);
     const { archiveThread, control, controlFactory, forkThread } = forkControl();
     const events: string[] = [];
     linkMocks.upsert.mockImplementation(() => {
@@ -311,9 +309,7 @@ describe("forkCodexUpstreamSession", () => {
   });
 
   it("requests a workspace sandbox when the fork creator requires isolation", async () => {
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
-      .mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
+    boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
     const { controlFactory, forkThread } = forkControl();
     const bindingStore = createCodexTestBindingStore();
     const runtime = createForkTestRuntime(undefined, bindingStore, "codex-custom");
@@ -382,9 +378,10 @@ describe("forkCodexUpstreamSession", () => {
   );
 
   it("archives a fork whose read-back history proves beforeTurnId was ignored", async () => {
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
-      .mockResolvedValueOnce([codexForkTurn("turn-1", "one"), codexForkTurn("turn-2", "edit me")]);
+    boundaryMocks.listTurns.mockResolvedValueOnce([
+      codexForkTurn("turn-1", "one"),
+      codexForkTurn("turn-2", "edit me"),
+    ]);
     const { archiveThread, controlFactory, retireConnection } = forkControl();
     const runtime = createPluginRuntimeMock();
 

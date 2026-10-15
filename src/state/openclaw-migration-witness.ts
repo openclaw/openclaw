@@ -12,7 +12,10 @@ import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-asse
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  MEDIA_ROWS_MIGRATION_META_KEY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import {
   assertOpenClawAgentSchemaContains,
   getOpenClawAgentMigrationSchema,
@@ -251,6 +254,14 @@ function captureTable(
         ];
       }),
     );
+  if (role === "agent" && table === "schema_meta") {
+    // This exact row records derived repair completion, not retained agent content.
+    query = query.where(
+      witnessIdentifier("meta_key", "witness"),
+      "!=",
+      MEDIA_ROWS_MIGRATION_META_KEY,
+    );
+  }
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
   const primaryNames = outbox ? ["advancement_key"] : primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {

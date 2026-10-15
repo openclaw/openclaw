@@ -12,6 +12,7 @@ import { findClickClackWorkspace } from "../resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearDiscussionBindingGeneration,
+  getPendingDiscussionOpen,
   listPendingDiscussionOpens,
   type PendingDiscussionOpen,
 } from "./binding-generation.js";
@@ -133,9 +134,7 @@ export class ClickClackDiscussionService {
       void this.#withOperation(async () => {
         if (
           (await this.#store.getAsync(event.sessionKey)) ||
-          (await listPendingDiscussionOpens(this.#runtime)).some(
-            (pending) => pending.sessionKey === event.sessionKey,
-          )
+          (await getPendingDiscussionOpen(this.#runtime, event.sessionKey))
         ) {
           if (activation === this.#activation) {
             this.#reconcileScheduler?.schedule(event.sessionKey);
@@ -182,7 +181,6 @@ export class ClickClackDiscussionService {
           if (resolved.state !== "active") {
             return { state: "none" };
           }
-          await this.#finalizePendingBinding(sessionKey, existing);
           await this.#reconcileBinding(sessionKey, existing, resolved.account);
           const current = await this.#store.getAsync(sessionKey);
           if (!current) {
@@ -226,7 +224,6 @@ export class ClickClackDiscussionService {
           return { state: "available" };
         }
       } else if (resolved.state === "active") {
-        await this.#finalizePendingBinding(sessionKey, existing);
         await this.#reconcileBinding(sessionKey, existing, resolved.account);
         const current = await this.#store.getAsync(sessionKey);
         if (current) {
@@ -274,9 +271,7 @@ export class ClickClackDiscussionService {
         if (binding) {
           await this.#reconcileBinding(sessionKey, binding);
         }
-        const pending = (await listPendingDiscussionOpens(this.#runtime)).find(
-          (candidate) => candidate.sessionKey === sessionKey,
-        );
+        const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
         if (pending) {
           await this.#reconcilePendingOpen(pending);
         }
@@ -600,11 +595,8 @@ export class ClickClackDiscussionService {
   ): Promise<boolean> {
     // Release local routing authority only. The ClickClack room remains durable,
     // and its lifecycle remains owned by ClickClack.
-    const pending = (await listPendingDiscussionOpens(this.#runtime)).find(
-      (candidate) =>
-        candidate.sessionKey === sessionKey && candidate.externalRef === binding.externalRef,
-    );
-    if (pending) {
+    const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
+    if (pending?.externalRef === binding.externalRef) {
       await clearDiscussionBindingGeneration({
         runtime: this.#runtime,
         sessionKey,
@@ -630,11 +622,8 @@ export class ClickClackDiscussionService {
     sessionKey: string,
     binding: ClickClackDiscussionBinding,
   ): Promise<void> {
-    const pending = (await listPendingDiscussionOpens(this.#runtime)).find(
-      (candidate) =>
-        candidate.sessionKey === sessionKey && candidate.externalRef === binding.externalRef,
-    );
-    if (pending) {
+    const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
+    if (pending?.externalRef === binding.externalRef) {
       // A matching binding is the durable commit record. Clear the fail-closed
       // tombstone first, then the recovery reservation; every crash point can
       // replay this sequence without orphaning the remote channel.
