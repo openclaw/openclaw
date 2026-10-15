@@ -4,13 +4,17 @@ import { queueGuardedEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embe
 import { readSessionSubmittedInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { normalizePersistedSteerTargetRunId } from "../sessions/user-turn-transcript.metadata.js";
 import type { PluginActiveRunSteerParams, PluginActiveRunSteerResult } from "./plugin-api.types.js";
 
 export async function steerPluginActiveRun(params: {
   cfg: OpenClawConfig;
   pluginId: string;
+  pluginName?: string;
   input: PluginActiveRunSteerParams;
   assertCurrent: () => void;
 }): Promise<PluginActiveRunSteerResult> {
@@ -42,16 +46,25 @@ export async function steerPluginActiveRun(params: {
       return runId ? { steered: true, runId } : { steered: false, reason: "duplicate" };
     }
   }
+  const message = buildPersistedUserTurnMessage({
+    text: params.input.text,
+    idempotencyKey: params.input.idempotencyKey,
+    // This is internal guidance, not a user instruction or another session's message.
+    provenance: { kind: "internal_system", sourceTool: `plugin:${params.pluginId}` },
+    display: false,
+    senderIsOwner: false,
+  });
+  message["__openclaw"] = {
+    ...message["__openclaw"],
+    pluginSteering: {
+      pluginId: params.pluginId,
+      ...(params.pluginName ? { pluginName: params.pluginName } : {}),
+      ...(params.input.displayText !== undefined ? { displayText: params.input.displayText } : {}),
+    },
+  };
   const recorder = createUserTurnTranscriptRecorder({
     assertOriginalInputCommit: params.assertCurrent,
-    input: {
-      text: params.input.text,
-      idempotencyKey: params.input.idempotencyKey,
-      // This is internal guidance, not a user instruction or another session's message.
-      provenance: { kind: "internal_system", sourceTool: `plugin:${params.pluginId}` },
-      display: false,
-      senderIsOwner: false,
-    },
+    message,
     target,
   });
   params.assertCurrent();
