@@ -35,12 +35,9 @@ it.each(["scope", "session"] as const)(
       const written = transactionComplete(write);
       write.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({ sessionKey });
       await written;
-      const transaction = IDBDatabase.prototype.transaction;
-      vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementationOnce(function (
-        this: IDBDatabase,
-        ...args
-      ) {
-        const pending = transaction.apply(this, args);
+      const transaction = database.transaction.bind(database);
+      vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementationOnce((...args) => {
+        const pending = transaction(...args);
         queueMicrotask(() => pending.abort());
         return pending;
       });
