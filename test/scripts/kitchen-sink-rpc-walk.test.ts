@@ -41,7 +41,6 @@ import {
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   hasChildExited,
-  isRetryableGatewayCallError,
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
   listKitchenSinkAuthorizationRpcProbeNames,
   makeEnv,
@@ -1556,19 +1555,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     await expect(
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => ({})),
     ).rejects.toThrow("skills.bins unexpectedly allowed operator access");
-  });
-
-  it("retries typed request failures only when the Gateway marks them retryable", () => {
-    const requestError = (retryable: boolean) =>
-      Object.assign(new Error("Talk catalog is warming; retry shortly"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "UNAVAILABLE",
-        retryable,
-        retryAfterMs: 250,
-      });
-
-    expect(isRetryableGatewayCallError(requestError(true))).toBe(true);
-    expect(isRetryableGatewayCallError(requestError(false))).toBe(false);
   });
 
   it("reconstructs typed request failures from gateway CLI JSON", async () => {

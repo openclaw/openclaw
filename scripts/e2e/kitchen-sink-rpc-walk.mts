@@ -1093,7 +1093,7 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
   );
 }
 
-export function isRetryableGatewayCallError(error: unknown) {
+function isRetryableGatewayCallError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
   return (
     // Typed request errors carry the Gateway's own retry verdict, such as a

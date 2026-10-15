@@ -26,6 +26,32 @@ function storeRef(fill: string) {
   return { source: "store", provider: "default", id: `CHANNEL_SETUP_${fill.repeat(32)}` };
 }
 
+function writeTeamSecrets(home: string, values: Record<string, string>): void {
+  const stateDir = path.join(home, ".openclaw", "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS secret_store_entries (
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        deleted_at_ms INTEGER,
+        PRIMARY KEY (scope_kind, scope_id, name)
+      ) STRICT;
+    `);
+    const insert = db.prepare(
+      "INSERT OR REPLACE INTO secret_store_entries (scope_kind, scope_id, name, value) VALUES ('team', '', ?, ?)",
+    );
+    for (const [fill, value] of Object.entries(values)) {
+      insert.run(storeRef(fill).id, value);
+    }
+  } finally {
+    db.close();
+  }
+}
+
 function writeOnboardConfig(home: string): void {
   const configDir = path.join(home, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
@@ -381,10 +407,23 @@ describe("npm onboard channel agent assertions", () => {
         slack: { enabled: true, appToken: storeRef("B"), botToken: storeRef("C") },
         telegram: { enabled: true, botToken: storeRef("D") },
       });
+      writeTeamSecrets(tempDir, {
+        A: "discord-token",
+        B: "xapp-token",
+        C: "xoxb-token",
+        D: "telegram-token",
+      });
 
       expect(runAssert(tempDir, "telegram", "telegram-token").status).toBe(0);
       expect(runAssert(tempDir, "discord", "discord-token").status).toBe(0);
       expect(runAssert(tempDir, "slack", "xoxb-token", "xapp-token").status).toBe(0);
+      expect(runAssert(tempDir, "discord", "wrong-discord-token").stderr).toContain(
+        `discord token SecretRef ${storeRef("A").id} did not store the expected token`,
+      );
+      // Swapped Slack credentials must not pass.
+      expect(runAssert(tempDir, "slack", "xapp-token", "xoxb-token").stderr).toContain(
+        "did not store the expected token",
+      );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

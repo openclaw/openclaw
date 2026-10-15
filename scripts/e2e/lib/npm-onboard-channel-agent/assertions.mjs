@@ -1,6 +1,7 @@
 // Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -143,10 +144,24 @@ function assertMockModelConfig() {
   }
 }
 
+function readTeamSecretStoreValue(stateDir, name) {
+  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
+  try {
+    return db
+      .prepare(
+        "SELECT value FROM secret_store_entries WHERE scope_kind = 'team' AND scope_id = '' AND name = ? AND deleted_at_ms IS NULL",
+      )
+      .get(name)?.value;
+  } finally {
+    db.close();
+  }
+}
+
 function assertChannelConfig() {
   const channel = process.argv[3];
   const expectedTokens = process.argv.slice(4);
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+  const stateDir = path.join(process.env.HOME, ".openclaw");
+  const configPath = path.join(stateDir, "openclaw.json");
   const configText = readTextFileBounded(configPath, "config", JSON_ARTIFACT_MAX_BYTES, {
     tailBytes: ERROR_DETAIL_TAIL_BYTES,
   });
@@ -183,6 +198,9 @@ function assertChannelConfig() {
     }
     if (configText.includes(expectedTokens[index])) {
       throw new Error(`${channel} config persisted the plaintext ${field}`);
+    }
+    if (readTeamSecretStoreValue(stateDir, ref.id) !== expectedTokens[index]) {
+      throw new Error(`${channel} ${field} SecretRef ${ref.id} did not store the expected token`);
     }
   }
 }
