@@ -178,7 +178,8 @@ it("shows live environment and context facts while preserving disclosure intent"
     },
   });
   expect(element.textContent).toContain("Design workstation");
-  expect(element.textContent).toContain("/workspace/project");
+  expect(element.textContent).toContain("project");
+  expect(element.textContent).not.toContain("/workspace/project");
   expect(element.textContent).toContain("demo-model");
   expect(element.querySelector('[aria-label="Copy path"]')).not.toBeNull();
   expect(element.querySelector('[aria-label="Copy branch name"]')).not.toBeNull();
@@ -206,4 +207,17 @@ it("shows live environment and context facts while preserving disclosure intent"
     .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
     .click();
   expect(openFiles).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "/home/private-user/.openclaw/workspace/",
+  "C:\\Users\\private-user\\.openclaw\\workspace\\",
+])("keeps an unlabelled workspace's private parent path out of Details: %s", async (root) => {
+  const element = await mount({ detailsWorkspace: { root, label: null } });
+  const environment = element.querySelector(".chat-details__environment")!;
+  expect(environment.textContent).toContain("workspace");
+  expect(environment.textContent).not.toContain(root);
+  expect(environment.textContent).not.toContain("private-user");
+  expect(environment.querySelector(".chat-details__row")?.getAttribute("title")).toBe("workspace");
+  expect(environment.querySelector('[aria-label="Copy path"]')).not.toBeNull();
 });

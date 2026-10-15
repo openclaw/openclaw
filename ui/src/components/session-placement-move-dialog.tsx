@@ -256,14 +256,14 @@ export function showSessionPlacementTargetDialog(
                 </For>
               </div>
             )}
-            <div class="exec-approval-actions">
+            <openclaw-modal-actions class="exec-approval-actions">
               <button type="submit" class="btn primary" disabled={!selectable()}>
                 {t(`sessionsView.${options.mode}SessionAction`)}
               </button>
               <button type="button" class="btn" onClick={() => finish(null)}>
                 {t("common.cancel")}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </form>
         </openclaw-modal-dialog>
       );

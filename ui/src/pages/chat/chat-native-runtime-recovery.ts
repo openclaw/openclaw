@@ -1,9 +1,11 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
+import { hasRememberedNativeRuntimeConsent } from "../../../../src/config/native-runtime-consent.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import type { SessionPatchResult } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, type SessionPatchResult } from "../../lib/sessions/index.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 registerModelControlsEnglish();
@@ -36,13 +38,32 @@ export async function confirmNativeRuntimePermissionRecovery(
   ) {
     return null;
   }
-  const confirmed = await showConfirmDialog({
-    title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
-    message: `${t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, { runtime: restriction.runtimeLabel })}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}${options.retriesMessage ? `\n\n${t("chat.nativeRuntimeRecovery.retryMessage")}` : ""}`,
-    confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
-    danger: true,
-    signal: options.signal,
-  });
+  const scope = host.sessions.captureConnectionScope();
+  const agentId = options.agentId ?? scopedAgentIdForSession(host, sessionKey);
+  if (!scope || !agentId) {
+    return null;
+  }
+  const snapshot = await scope.client.request<{ hash: string; config: OpenClawConfig }>(
+    "config.get",
+    {},
+  );
+  if (!canRecover() || !host.sessions.isConnectionScopeCurrent(scope)) {
+    return null;
+  }
+  const remembered = hasRememberedNativeRuntimeConsent(
+    snapshot.config,
+    agentId,
+    restriction.runtimeId,
+  );
+  const confirmed =
+    remembered ||
+    (await showConfirmDialog({
+      title: t("chat.nativeRuntimeRecovery.title", { runtime: restriction.runtimeLabel }),
+      message: `${t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, { runtime: restriction.runtimeLabel })}\n\n${t("chat.nativeRuntimeRecovery.confirmMessage", { runtime: restriction.runtimeLabel })}${options.retriesMessage ? `\n\n${t("chat.nativeRuntimeRecovery.retryMessage")}` : ""}`,
+      confirmLabel: t("chat.nativeRuntimeRecovery.confirm"),
+      danger: true,
+      signal: options.signal,
+    }));
   if (!confirmed || !canRecover()) {
     return null;
   }
@@ -53,13 +74,15 @@ export async function confirmNativeRuntimePermissionRecovery(
       ...(options.model !== undefined
         ? { model: options.model, agentRuntime: restriction.runtimeId }
         : {}),
-      nativeRuntimeConsent: restriction.runtimeId,
+      ...(!remembered ? { nativeRuntimeConsent: restriction.runtimeId } : {}),
       sandboxMode: "off",
       permissionMode: "full",
       expectedLifecycleRevision: recovery.lifecycleRevision,
       expectedPermissionMode: recovery.expectedPermissionMode,
       expectedSandboxMode: recovery.expectedSandboxMode,
-      expectedNativeRuntimeConsent: recovery.expectedNativeRuntimeConsent,
+      ...(remembered
+        ? {}
+        : { expectedNativeRuntimeConsent: recovery.expectedNativeRuntimeConsent }),
     },
     {
       agentId: options.agentId,

@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
@@ -426,7 +427,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             />
             {renderMutationMessage(props.messages.add)}
           </div>
-          <div class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
               {t("common.cancel")}
             </button>
@@ -437,7 +438,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             >
               {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>
@@ -446,24 +447,31 @@ function AddProvider(props: ModelProvidersViewProps) {
 
 function ModelReadiness(props: ModelProvidersViewProps) {
   const signedIn = () => props.cards.some(hasVerifiedProvider);
+  const ready = () => props.configuredModels.some((model) => model.available !== false);
   return (
-    <div class="model-providers__setup" data-model-readiness="model-required">
+    <div class="model-providers__setup" data-model-readiness={ready() ? "ready" : "model-required"}>
       <SettingsSection title={t("modelProviders.readiness.title")}>
         <SettingsRow
-          title={t("modelProviders.readiness.heading")}
+          title={t(
+            ready() ? "modelProviders.readiness.readyHeading" : "modelProviders.readiness.heading",
+          )}
           description={
-            signedIn()
-              ? t("modelProviders.readiness.signedInNoModels")
-              : t("modelProviders.readiness.notConfigured")
+            ready()
+              ? t("modelProviders.readiness.readyDescription")
+              : signedIn()
+                ? t("modelProviders.readiness.signedInNoModels")
+                : t("modelProviders.readiness.notConfigured")
           }
           control={
             <>
               <SettingsStatus
-                kind={"warn"}
+                kind={ready() ? "ok" : "warn"}
                 label={
-                  signedIn()
-                    ? t("modelProviders.readiness.noModels")
-                    : t("modelProviders.readiness.modelRequired")
+                  ready()
+                    ? t("modelProviders.status.ready")
+                    : signedIn()
+                      ? t("modelProviders.readiness.noModels")
+                      : t("modelProviders.readiness.modelRequired")
                 }
               />
               <button
@@ -510,13 +518,11 @@ export function ModelProviders(props: ModelProvidersViewProps) {
 }
 
 function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  const needsModelSetup = () =>
-    !props.loading && !props.configuredModels.some((model) => model.available !== false);
   return (
     <>
       <SettingsPage>
         <>
-          {needsModelSetup() ? <ModelReadiness {...props} /> : undefined}
+          <ModelReadiness {...props} />
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}
@@ -563,7 +569,17 @@ function ProviderAccess(props: ModelProvidersViewProps) {
       </label>
       <div class="model-providers__provider-list">
         {props.error ? (
-          <SettingsGroup>{renderProviderNoticeRow(props.error)}</SettingsGroup>
+          <SettingsGroup>
+            {renderProviderNoticeRow(props.error)}
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={props.refreshing}
+              onClick={() => props.onRefresh()}
+            >
+              {t("common.retry")}
+            </button>
+          </SettingsGroup>
         ) : undefined}
         {props.providerUsageFailed ? (
           <SettingsGroup>
@@ -671,7 +687,7 @@ export function renderModelProvidersPageShell(props: {
   loginMessage?: ModelProviderRowMessage;
 }): JSX.Element {
   return (
-    <>
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
       <SettingsPageHeader
         title={t("routeTitles.modelProviders")}
         subtitle={
@@ -688,6 +704,6 @@ export function renderModelProvidersPageShell(props: {
         </>
       </SettingsWorkspace>
       {props.login}
-    </>
+    </ShellLayoutBoundary>
   );
 }

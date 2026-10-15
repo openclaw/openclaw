@@ -579,6 +579,10 @@ page before the link, and Forward returns to the current destination.
 
 Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
+After provider sign-in, Models refreshes credentials and the shared model catalog
+without reloading its existing rows, usage, or cost requests. If credentials were
+saved but status could not refresh, the page keeps its rows and offers **Retry**.
+
 The retired General route and its `/config` alias are replaced once with
 `/settings/appearance?section=__appearance__#settings-language`. The historical
 `#settings-general-model` target instead lands on the Models behavior section.

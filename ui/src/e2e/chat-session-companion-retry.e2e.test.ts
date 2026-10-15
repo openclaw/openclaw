@@ -59,6 +59,17 @@ suite.define(() => {
         await gateway.deferNext("sessions.companion.ask");
         await send(followup);
         await side.locator(".chat-session-rail__exchange--pending").waitFor();
+        // Pending answers use the main transcript's working indicator, not a text hint.
+        await side
+          .locator(
+            ".chat-session-rail__exchange--pending .chat-working-indicator .chat-reading-indicator",
+          )
+          .waitFor();
+        expect(
+          await side
+            .locator(".chat-session-rail__exchange--pending .chat-session-rail__hint")
+            .count(),
+        ).toBe(0);
         expect(await questions()).toEqual(["What changed?", question, followup]);
         expect(await side.locator(".chat-session-rail__retry").isDisabled()).toBe(true);
         await gateway.rejectDeferred("sessions.companion.ask", {

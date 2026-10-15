@@ -196,6 +196,10 @@ execute plugin code or require the Custom plugin UI Labs setting.
           "title": "a crab, allegedly",
           "crossMs": 12000
         }
+      },
+      "backgrounds": {
+        "light": "assets/theme-art/hull-light.webp",
+        "dark": "assets/theme-art/hull-dark.webp"
       }
     }
   ]
@@ -236,9 +240,21 @@ the element limit. Stylesheets, filters, and embedded images are unsupported.
 Hats overlay the avatar's full square; place the hat near the top of the SVG
 viewBox and leave the lower area transparent.
 
-Include the definition JSON and every declared SVG in the published package's
-`files` list. OpenClaw's bundled metadata copier and runtime package builder
-include these declared paths automatically. An unreadable or invalid SVG omits
+`backgrounds` maps `light` and/or `dark` to a relative PNG, JPEG, or WebP path
+with the same containment rules. Each file must be at most 512 KiB; OpenClaw
+checks its image signature when it captures the theme. When the theme is
+selected and **Appearance → Background** uses theme artwork, the Control UI
+paints the image for the matching color mode instead of the neutral plugin
+artwork. A mode without a declared image keeps the neutral artwork. Background
+placement, presentation, visibility, and the accessibility fallbacks that hide
+artwork stay under the viewer's control. Like a custom upload, the image is
+dimmed under a theme-colored overlay sized from the palette's text contrast, so
+busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
+the most detail. The built-in images are lossless WebP files of about 20–35 KiB.
+
+Include the definition JSON and every declared SVG and background in the published
+package's `files` list. OpenClaw's bundled metadata copier and runtime package builder
+include these declared paths automatically. An unreadable or invalid artwork file omits
 the whole theme from the catalog with a plugin warning diagnostic; other plugin
 capabilities remain available.
 

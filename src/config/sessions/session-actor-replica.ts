@@ -269,6 +269,7 @@ function discard(cell: ReplicaCell): void {
   }
   pool.bytes -= cell.bytes;
   cell.transcript = undefined;
+  cell.transcriptBytes = 0;
   cell.snapshot = undefined;
   cell.entry = undefined;
   cell.bytes = 0;
@@ -312,9 +313,10 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   if (!cell.snapshot && !cell.entry && !cell.transcript) {
     pool.snapshots += 1;
   }
-  const previousBytes = cell.transcript ? estimateReplicaBytes(cell.transcript) : 0;
+  const previousBytes = cell.transcriptBytes;
   const bytes = estimateReplicaBytes(transcript);
   cell.transcript = transcript;
+  cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
   touch(cell);
@@ -556,7 +558,7 @@ export function retainSessionActorEntryFacts(
     const key = targetKey(target);
     let cell = pool.cells.get(key);
     if (!cell) {
-      cell = { target, handles: 0, bytes: 0 };
+      cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
       pool.cells.set(key, cell);
     }
     if (cell.snapshot) {
@@ -591,7 +593,7 @@ export function createSessionActorReplica(params: {
   const key = targetKey(target);
   let cell = pool.cells.get(key);
   if (!cell) {
-    cell = { target, handles: 0, bytes: 0 };
+    cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
     pool.cells.set(key, cell);
   }
   const owned = cell;
