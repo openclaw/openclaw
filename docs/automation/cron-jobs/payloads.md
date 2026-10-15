@@ -190,9 +190,8 @@ activation. A manual source upgrade must include `openclaw doctor --fix` before
 starting the Gateway. Startup reports potentially unmigrated host-account jobs
 before scheduling; it does not capture credentials or rewrite jobs.
 
-Keys in the environment or provider config, and AWS SDK routes the provider config
-declares, have no stored account to record. A job on such a route stays unbound and
-runs on that credential; once a stored account becomes eligible for its route, the
+Keys in the environment or provider config have no stored account to record. A job
+on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
 job stops with the adoption instructions instead of switching to that account. Job
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.

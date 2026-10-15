@@ -298,6 +298,56 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
   );
 });
 
+it("never records a personal account that the unattended planner does not select", async () => {
+  await withOpenClawTestState(
+    {
+      label: "cron-inference-personal-first",
+      env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined },
+    },
+    async (state) => {
+      const personalId =
+        "personal:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222";
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+          defaults: { model: "openai/gpt-5.5" },
+        },
+        auth: { order: { openai: [personalId, "openai:shared"] } },
+        plugins: { allow: ["openai"], slots: { memory: "none" } },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(
+        new Error("No external I/O in offline migration"),
+      );
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: personalId,
+            credential: { type: "api_key", provider: "openai", key: "synthetic-personal" },
+          },
+          {
+            profileId: "openai:shared",
+            credential: { type: "api_key", provider: "openai", key: "synthetic-shared" },
+          },
+        ],
+      });
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, { version: 1, jobs: [job("personal-first")] });
+      await withDoctorConfigMaintenance(async () => {
+        const result = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: true });
+        // Personal accounts are owner-scoped, so an unattended run never plans one even when
+        // auth.order lists it first; Doctor records the shared account the run would use.
+        expect(result.changes.join("\n")).toContain("retain openai:shared");
+        expect(result.changes.join("\n")).not.toContain(personalId);
+        expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toMatchObject({
+          profileId: "openai:shared",
+        });
+      });
+    },
+  );
+});
+
 it.each(["job edit", "account replacement", "backup failure"] as const)(
   "leaves jobs unchanged when %s prevents safe migration",
   async (change) => {
