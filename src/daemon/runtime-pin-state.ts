@@ -10,6 +10,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
+  completeUnshippedDaemonRuntimePinMigration,
   readDaemonRuntimePinValue,
   withDaemonRuntimePinStore,
   type DaemonRuntimePinDatabase,
@@ -39,6 +40,9 @@ function resolveKey({ kind, env }: PinScope) {
 }
 const migrationPending = new Map<string, boolean>();
 export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): boolean {
+  if (completeUnshippedDaemonRuntimePinMigration(env)) {
+    return false;
+  }
   const source = resolveOpenClawStateSqlitePath(env);
   if (!migrationPending.has(source)) {
     const receipt = withDaemonRuntimePinStore(env, false, (db) =>
@@ -50,7 +54,11 @@ export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): bo
           .where("version", "=", 1),
       ),
     );
-    migrationPending.set(source, receipt?.phase !== "complete" || receipt.source_state !== source);
+    migrationPending.set(
+      source,
+      receipt?.phase !== "complete" ||
+        (receipt.source_state !== source && receipt.source_state !== "none/unshipped"),
+    );
   }
   return migrationPending.get(source) ?? false;
 }

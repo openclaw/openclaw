@@ -5,6 +5,7 @@ import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced"
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
@@ -151,4 +152,22 @@ export function readDaemonRuntimePinValue(db: DatabaseSync, key: string): unknow
       .where("state_key", "=", key),
   );
   return row ? JSON.parse(row.value_json) : undefined;
+}
+
+const unshippedMigrations = new Set<string>();
+export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): boolean {
+  if (!getDatabaseEngineSelection()?.input) {
+    return false;
+  }
+  const pathname = resolveDaemonRuntimePinStorePath(env);
+  if (!unshippedMigrations.has(pathname)) {
+    withDaemonRuntimePinStore(env, true, (db) =>
+      db
+        .prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, 'none/unshipped', 'complete', ?)
+        ON CONFLICT(version) DO UPDATE SET source_state='none/unshipped', phase='complete', updated_at=excluded.updated_at`)
+        .run(Date.now()),
+    );
+    unshippedMigrations.add(pathname);
+  }
+  return true;
 }

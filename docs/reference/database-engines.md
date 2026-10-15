@@ -17,6 +17,7 @@ Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
 intent to the macOS app without requiring a running Gateway or PostgreSQL
 connection. Shared-state engine selection does not move this store.
+No release stored runtime pins in PostgreSQL shared state, so PostgreSQL installs have no legacy pin source to migrate.
 
 ## Configure PostgreSQL
 

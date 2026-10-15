@@ -19,6 +19,7 @@ import {
   type FinalizeArgs,
   type FinalizeArgsOverrides,
 } from "./setup.finalize.fixtures.test-support.js";
+import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
   createRuntimeProbeResult,
   expectNoteContains,
@@ -32,15 +33,6 @@ type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
 
-const readPin = vi.hoisted(() =>
-  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
-);
-// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
-vi.mock("../daemon/runtime-pin-state.js", () => ({
-  readDaemonRuntimePinForInstall: readPin,
-  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
-    read(),
-}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),

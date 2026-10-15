@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  completeUnshippedDaemonRuntimePinMigration,
   type DaemonRuntimePinDatabase,
   withDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
@@ -14,6 +15,9 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
+  if (completeUnshippedDaemonRuntimePinMigration(env)) {
+    return { changes: [], warnings: [] };
+  }
   const sourceState = resolveOpenClawStateSqlitePath(env);
   const receipt = (db: DatabaseSync, phase: "copied" | "complete") => {
     const result = db
