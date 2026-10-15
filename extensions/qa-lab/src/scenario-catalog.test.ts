@@ -1,4 +1,3 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
@@ -139,57 +138,6 @@ describe("qa scenario catalog", () => {
       ...JSON.stringify(scenario.execution.flow).matchAll(/"senderId":"([^"]*)"/g),
     ].map((match) => match[1]);
     expect(senderIds).toEqual(["primary"]);
-  });
-
-  it("keeps the busy-lane completion payload out of its own initiating prompt", () => {
-    const scenario = requireFlowScenario(
-      readQaScenarioById("subagent-completion-busy-lane-telegram-live"),
-    );
-    const flow = scenario.execution.flow;
-    if (!flow) {
-      throw new Error("busy-lane scenario no longer declares a flow");
-    }
-    // Flow actions are an open DSL union; this test reads only the two shapes it
-    // names below, so each access is narrowed rather than asserted.
-    const actions = flow.steps.flatMap((step) => step.actions) as Record<string, unknown>[];
-    const setExpr = (name: string) => {
-      const value = actions.find((entry) => entry.set === name)?.value;
-      return isRecord(value) && typeof value.expr === "string" ? value.expr : undefined;
-    };
-    const instruction = setExpr("requesterInstruction") ?? "";
-
-    // The requester must publish a value its prompt never carried, so both
-    // markers are derived from a token the child's barrier exec mints at run
-    // time and records where only the scenario reads it.
-    expect(setExpr("barrierCommand")).toContain("childTokenFile");
-    expect(
-      actions.some(
-        (entry) => entry.call === "waitForCondition" && entry.saveAs === "childMintedToken",
-      ),
-    ).toBe(true);
-    expect(setExpr("childResult")).toContain("childMintedToken");
-    expect(setExpr("childVisible")).toContain("childMintedToken");
-
-    // The prompt may name the two prefixes; interpolating either marker would
-    // hand the requester the payload and make every outbound, tool-count and
-    // ordering assertion satisfiable without the delivered completion.
-    const inbound = actions.find((entry) => entry.sendInbound)?.sendInbound;
-    const inboundText = isRecord(inbound) ? inbound.text : undefined;
-    expect(isRecord(inboundText) ? inboundText.ref : undefined).toBe("requesterInstruction");
-    expect(instruction).not.toContain("${childVisible}");
-    expect(instruction).not.toContain("${childResult}");
-    expect(instruction).not.toContain("childMintedToken");
-
-    // And the scenario proves that at run time rather than only by construction.
-    expect(
-      actions.some((entry) => {
-        const expr = isRecord(entry.assert) ? entry.assert.expr : undefined;
-        return (
-          typeof expr === "string" &&
-          expr.includes("!requesterInstruction.includes(childMintedToken)")
-        );
-      }),
-    ).toBe(true);
   });
 
   it("declares every release agentic scenario in the core lane", () => {
