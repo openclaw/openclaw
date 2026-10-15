@@ -79,6 +79,8 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
+  /** Canonical exact HTTPS origins for browser-direct ordinary message Markdown images. */
+  remoteImageOrigins?: string[];
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
   /** Whether optional composer prediction inference is enabled. */

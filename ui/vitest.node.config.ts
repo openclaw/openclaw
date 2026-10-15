@@ -7,6 +7,7 @@ import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 
 // Node-only tests for pure logic (no Playwright/browser dependency).
 export default defineConfig({
+  resolve: { alias: sharedVitestConfig.resolve.alias },
   plugins: [
     controlUiLocaleModulesPlugin(),
     createRedactingReporterPlugin(),

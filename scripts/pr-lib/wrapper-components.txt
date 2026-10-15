@@ -777,6 +777,7 @@ src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
 src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-ui-bootstrap-contract.ts
+src/gateway/control-ui-remote-images.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-publication-base.ts

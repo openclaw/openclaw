@@ -80,6 +80,7 @@ async function mount(
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: false,
+    remoteImageOrigins: [],
     communityInvite: false,
     terminalEnabled: false,
     uploadsEnabled: true,

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
-import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
   captureSidebarUiProof,
@@ -474,10 +474,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["system.info"],
-      methodResponses: { "system.info": deviceSystemInfo },
-    });
+    const gateway = await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
@@ -506,8 +503,7 @@ suite.define(() => {
       expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
-      await gateway.waitForRequest("system.info");
-      const reads = (await gateway.getRequests("system.info")).length;
+      await waitForControlUiGatewayReady(page);
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
@@ -520,7 +516,7 @@ suite.define(() => {
       expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await gateway.waitForRequest("system.info", { after: reads });
+      await waitForControlUiGatewayReady(page);
       expect(await credential.getAttribute("type")).toBe("password");
 
       for (const [input, value] of [

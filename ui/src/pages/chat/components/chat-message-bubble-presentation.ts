@@ -177,6 +177,12 @@ export function prepareGroupedMessage(
     sessionLinks: true,
     tableInteractions: "enabled",
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+    ...(opts.remoteImageOrigins !== undefined
+      ? {
+          remoteImages: opts.remoteImageOrigins.length > 0,
+          remoteImageOrigins: opts.remoteImageOrigins,
+        }
+      : {}),
   };
 
   // Classify completed bare JSON before Markdown can interpret its literal values.

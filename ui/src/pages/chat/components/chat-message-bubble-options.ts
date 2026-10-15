@@ -55,6 +55,7 @@ export type GroupedMessageOptions = {
   onAssistantAttachmentLoaded?: () => void;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  remoteImageOrigins?: MarkdownRenderOptions["remoteImageOrigins"];
   fetchLinkFavicon?: LinkFaviconFetcher;
   pluginToolIcons?: PluginToolIcons;
   githubRepo?: MarkdownRenderOptions["githubRepo"];

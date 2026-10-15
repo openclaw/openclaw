@@ -22,6 +22,8 @@ export type MarkdownRenderOptions = {
   progressBars?: boolean;
   mode?: "document" | "message";
   remoteImages?: boolean;
+  /** Gateway-normalized exact origins allowed for browser-direct message images. */
+  remoteImageOrigins?: readonly string[];
   sessionLinks?: boolean;
   tableInteractions?: "enabled" | "none";
 };
@@ -31,7 +33,8 @@ export type MarkdownGitHubContext = Pick<
   "githubRepo" | "githubRepositories"
 >;
 
-export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
+export type MarkdownRenderEnv = Required<Omit<MarkdownRenderOptions, "remoteImageOrigins">> & {
+  remoteImageOrigins?: readonly string[];
   streamingOpenFence?: boolean;
   humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
@@ -52,6 +55,7 @@ export function normalizeMarkdownRenderOptions(
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     remoteImages: options.remoteImages ?? options.mode === "document",
+    remoteImageOrigins: options.remoteImageOrigins,
     sessionLinks: options.sessionLinks ?? false,
     tableInteractions: options.tableInteractions ?? "none",
   };

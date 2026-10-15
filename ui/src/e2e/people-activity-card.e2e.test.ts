@@ -133,6 +133,7 @@ async function capturePeopleCard(page: Page, filename: string) {
 suite.define(() => {
   it("reports native browser interaction but not automatic reconnection", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await page.clock.install();
       const gateway = await installMockGateway(page, scenario());
       await page.clock.install();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));

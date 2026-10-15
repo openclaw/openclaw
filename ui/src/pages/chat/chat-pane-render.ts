@@ -1,6 +1,4 @@
 import { html, nothing } from "lit";
-import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -29,6 +27,7 @@ import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-go
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
+import { chatPaneMediaProps } from "./chat-pane-media-props.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createChatPaneQueuedEditProps,
@@ -65,7 +64,6 @@ import {
 import type { ChatProps } from "./chat-view.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
@@ -666,11 +664,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       mainKey,
       ...userPresentation,
       personActivity: personActivityRouting(this.context),
-      mediaPolicyEpoch: state.mediaPolicyEpoch,
-      connectionEpoch: state.connectionEpoch,
-      embedSandboxMode: state.embedSandboxMode,
-      allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
+      ...chatPaneMediaProps(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       chatBubbleMode: isChatBubbleMode(
         state.settings,
@@ -679,9 +673,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         mainKey,
       ),
       branding: this.context?.theme.branding,
-      assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
       resourceBasePath: state.resourceBasePath,

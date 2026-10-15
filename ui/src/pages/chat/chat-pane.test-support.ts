@@ -353,6 +353,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
         terminalEnabled: false,
+        remoteImageOrigins: [],
       },
     },
     agentSelection: {
@@ -484,6 +485,7 @@ export function createSessionContext(
       current: {
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,
+        remoteImageOrigins: [],
       },
     },
     chatSubmissions: createChatSubmissions(),
@@ -549,6 +551,7 @@ export function createTestChatPane(params: {
     hello: sessionMutationGatewayHello(),
     modelAuthStatusRequestVersion: 0,
     requestUpdate,
+    remoteImageOrigins: [],
     sessionKey: "agent:main:current",
     sessions: context.sessions,
     sessionsError: null,

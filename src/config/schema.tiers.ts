@@ -175,6 +175,7 @@ wizard.accessMode wizard.appRecommendations
   .split(/\s+/);
 
 const ADVANCED_TUNING_PATHS = new Set([
+  "gateway.controlUi.remoteImageOrigins",
   "agents.defaults.heartbeat.every",
   "agents.entries.*.tools.github.allowInSandbox",
   "session.maintenance.preserveRecent",

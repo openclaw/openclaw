@@ -172,6 +172,7 @@ export function createChatPageStateContext() {
     config: {
       current: {
         allowExternalEmbedUrls: false,
+        remoteImageOrigins: [],
         assistantIdentity: { name: "Assistant" },
         embedSandboxMode: "scripts",
       },

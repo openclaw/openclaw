@@ -27,6 +27,7 @@ type ApplicationConfig = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
+  remoteImageOrigins: readonly string[];
   communityInvite: boolean;
   chatBubblesEnabled?: boolean;
   composerPredictionsEnabled?: boolean;
@@ -59,6 +60,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
+  remoteImageOrigins: [],
   communityInvite: false,
   chatBubblesEnabled: false,
   composerPredictionsEnabled: false,
@@ -111,6 +113,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
+    remoteImageOrigins: parsed.remoteImageOrigins ?? [],
     communityInvite: parsed.communityInvite === true,
     chatBubblesEnabled: parsed.chatBubblesEnabled === true,
     composerPredictionsEnabled: parsed.composerPredictionsEnabled === true,
@@ -274,7 +277,7 @@ export function createApplicationConfigCapability(params: {
         if (!loaded || !isCurrent()) {
           return null;
         }
-        const next = loaded.config;
+        let next = loaded.config;
         // Independent callers keep their own abort signals and valid results;
         // only the newest successful request publishes shared presentation.
         if (version < publishedVersion) {
@@ -292,8 +295,11 @@ export function createApplicationConfigCapability(params: {
           // direction so the document and accepted terminal state stay aligned.
           if (canReloadControlUiDocument()) {
             window.location.reload();
+            return next;
           }
-          return next;
+          // Keep this document's CSP-bound terminal capability, but still publish
+          // live renderer policy changes such as remote image-origin revocation.
+          next = { ...next, terminalEnabled: documentTerminalEnabled };
         }
         current = next;
         const auth = params.getAuth?.() ?? {};

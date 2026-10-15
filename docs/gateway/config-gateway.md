@@ -70,6 +70,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
       // automaticallyFetchFavicons: true, // SSRF-guarded link favicon fetches
+      // remoteImageOrigins: ["https://images.example.com"], // exact HTTPS origins for ordinary Markdown images
       // allowedOrigins: ["https://control.example.com"], // optional override of publicOrigin
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },

@@ -20,6 +20,7 @@ import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.te
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { renderStreamGroup } from "./chat-message-stream.test-support.ts";
 import {
+  expectElement,
   createAssistantMessage,
   createCanvasPreview,
   createToolResultBlock,
@@ -68,6 +69,8 @@ function getSafeLocalStorageMock(): Storage {
 
 beforeEach(() => {
   view = document.createElement("div");
+  markdownRenderMock.mockReset();
+  streamingMarkdownRenderMock.mockReset();
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
@@ -77,19 +80,6 @@ beforeEach(() => {
 });
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
-function expectElement<T extends Element>(
-  container: Element,
-  selector: string,
-  constructor: new () => T,
-): T {
-  const element = container.querySelector<T>(selector);
-  expect(element).toBeInstanceOf(constructor);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Expected ${selector} to match ${constructor.name}`);
-  }
-  return element;
-}
-
 function elementText(selector: string, container: Element = view) {
   return container.querySelector(selector)?.textContent;
 }

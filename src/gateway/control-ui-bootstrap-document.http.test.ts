@@ -14,9 +14,16 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each([false, true])(
-  "embeds the endpoint payload only in admitted documents (catalog failure: %s)",
-  async (catalogFails) => {
+it.each(
+  [false, true].flatMap((catalogFails) =>
+    [undefined, ["https://images.example", "http://blocked.example"]].map((remoteImageOrigins) => ({
+      catalogFails,
+      remoteImageOrigins,
+    })),
+  ),
+)(
+  "embeds admitted image policy $remoteImageOrigins (catalog failure: $catalogFails)",
+  async ({ catalogFails, remoteImageOrigins }) => {
     const plugin = {
       pluginId: "review",
       name: "Review",
@@ -39,7 +46,7 @@ it.each([false, true])(
     const name = '"><script>alert(1)</script> $$ $`';
     const config: OpenClawConfig = {
       agents: { entries: { main: { workspace: root, identity: { name, emoji: "🔭" } } } },
-      gateway: { terminal: { enabled: false } },
+      gateway: { terminal: { enabled: false }, controlUi: { remoteImageOrigins } },
     };
     const options = {
       basePath: "/control",
@@ -68,6 +75,7 @@ it.each([false, true])(
       assistantName: name,
       assistantAvatar: "🔭",
       terminalEnabled: false,
+      remoteImageOrigins: remoteImageOrigins ? ["https://images.example"] : [],
       pluginControlUiModules: catalogFails ? [] : [plugin],
     });
     const document = await request("/control/chat/main/topic", true, true);

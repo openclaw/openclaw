@@ -423,6 +423,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
+    state.remoteImageOrigins = config.remoteImageOrigins;
   }
 
   protected applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {

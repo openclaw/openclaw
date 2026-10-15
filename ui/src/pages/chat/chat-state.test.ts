@@ -2905,6 +2905,7 @@ describe("loadPageAssistantIdentity", () => {
       config: {
         current: {
           allowExternalEmbedUrls: false,
+          remoteImageOrigins: [],
           assistantIdentity: { name: "Assistant" },
           chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",
