@@ -3882,7 +3882,6 @@
 ["src/channels/plugins/bundled.shape-guard.test.ts","../../plugins/bundled-channel-runtime.js","851c839a4b13b012719f605bb6c4bfb22b5caa33ff6dede7dfdabaf84c9ef05c",1]
 ["src/channels/plugins/bundled.shape-guard.test.ts","../../plugins/bundled-channel-runtime.js","f158b08b15e58dca8cf8bca5b38d021dae4b307777a7429436526e56f5466ca1",1]
 ["src/channels/plugins/bundled.shape-guard.test.ts","../../plugins/bundled-channel-runtime.js","f5f96128c2dbb6b683b37cca89c7d045181c54215d19ca10dc23a829955a983b",1]
-["src/channels/plugins/bundled.shape-guard.test.ts","../../plugins/channel-catalog-registry.js","5186be52fa5a9524b3d5940ac447c42259147954abdfcdf27f07dc5a0e21d5bc",1]
 ["src/channels/plugins/bundled.shape-guard.test.ts","./bundled-root.js","3fa98af51e911b7aafef1c843997f059bac6539d273d0a806d66cbfde85cabf0",1]
 ["src/channels/plugins/bundled.shape-guard.test.ts","./bundled-root.js","ce42c0aa2152c6dfbe538ac926577079e877a20c8b5766a8b8fd1c32602e9aea",1]
 ["src/channels/plugins/catalog.test.ts","../../plugins/channel-catalog-registry.js","5be76f52c401757c9506f59291615b93e1ff812d92762588b3786b67e9c114c1",1]
