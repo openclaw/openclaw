@@ -5324,6 +5324,20 @@ jobs:
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
 
+      - name: Restore iOS test build products
+        id: ios-build-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off' && matrix.phase == 'tests' && env.IOS_MAIN_TIER == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_build_cache_paths |
+            ~/Library/Developer/Xcode/DerivedData/OpenClaw-*/Build
+            ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+            ~/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex
+            apps/ios/build/ci-input-metadata.json
+          key: ios-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('scripts/swift-build-cache-metadata.py', 'apps/ios/project.yml', 'apps/ios/Config/**', 'apps/ios/**/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved', 'apps/shared/OpenClawWatchRTC/Cargo.*', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh') }}-${{ hashFiles('apps/ios/Sources/**', 'apps/ios/Tests/**', 'apps/ios/ShareExtension/**', 'apps/ios/ActivityWidget/**', 'apps/ios/WatchApp/**', 'apps/ios/Resources/**', 'apps/shared/**/Sources/**', 'apps/shared/OpenClawKit/Plugins/**', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/swabble/Sources/**', 'apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift', 'apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift', 'apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift', 'apps/macos/Tests/OpenClawIPCTests/TestWait.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift') }}
+          restore-keys: |
+            ios-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('scripts/swift-build-cache-metadata.py', 'apps/ios/project.yml', 'apps/ios/Config/**', 'apps/ios/**/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved', 'apps/shared/OpenClawWatchRTC/Cargo.*', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh') }}-
+
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
         id: watch-rust-toolchain
@@ -5485,6 +5499,8 @@ jobs:
                       os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_FROZEN_TARGET") != "true"
                   ):
                       subprocess.run(["pnpm", "ios:gen"], check=True)
+                      if os.environ.get("IOS_MAIN_TIER") == "true" and os.environ.get("IOS_FROZEN_TARGET") != "true":
+                          subprocess.run(["python3", "-I", "-S", ".ci-harness/scripts/swift-build-cache-metadata.py", "restore", "ios"], check=True)
                       subprocess.run([
                           "python3", ".ci-harness/scripts/ci-xcodebuild.py",
                           "-project", "apps/ios/OpenClaw.xcodeproj",
@@ -5492,8 +5508,11 @@ jobs:
                           "-configuration", "Debug",
                           "-destination", os.environ.get("IOS_DEST") or "generic/platform=iOS Simulator",
                           "-showBuildTimingSummary",
-                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" else "build",
+                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true" else "build",
                       ], check=True)
+                      if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true":
+                          with open(os.environ["GITHUB_ENV"], "a") as environment:
+                              environment.write("IOS_TEST_BUILD_PREPARED=true\n")
                   else:
                       subprocess.run(["pnpm", "ios:build"], check=True)
                   print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
@@ -5570,7 +5589,7 @@ jobs:
           # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
           # Preserve xcresult bundles and command logs without that extra collection.
           test_action=test
-          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
             test_action=test-without-building
           fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
@@ -5633,7 +5652,7 @@ jobs:
             )
           fi
           test_action=test
-          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
             test_action=test-without-building
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
@@ -5736,6 +5755,22 @@ jobs:
             "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
+
+      - name: Record iOS build-cache input metadata
+        id: record-ios-build-cache-metadata
+        if: success() && steps.ios-build-cache.outputs.cache-primary-key != '' && steps.ios-build-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'schedule'
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 -I -S scripts/swift-build-cache-metadata.py record ios
+
+      - name: Save iOS test build products
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.record-ios-build-cache-metadata.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_build_cache_paths
+          key: ${{ steps.ios-build-cache.outputs.cache-primary-key }}
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}

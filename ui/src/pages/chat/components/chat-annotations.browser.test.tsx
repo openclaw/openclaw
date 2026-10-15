@@ -1,18 +1,19 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
-import { renderCommentPreviewChip, renderCommentPreviewRows } from "./chat-comment-preview.tsx";
+import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
 const longComment =
   "Please verify the deployment checklist and retain the original context. ".repeat(24);
 let container: HTMLDivElement;
+let comments: ReturnType<typeof mountSolid> | undefined;
 let originalTheme: string | undefined;
 let originalPalette: string | undefined;
 
@@ -26,7 +27,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   removeChatSelectionPopup();
-  render(nothing, container);
+  comments?.unmount();
+  comments = undefined;
   container.remove();
   if (originalTheme === undefined) {
     delete document.documentElement.dataset.themeMode;
@@ -42,16 +44,18 @@ afterEach(() => {
 
 function mountComments(count: number, top: number) {
   container.style.cssText = `position: fixed; right: 16px; top: ${top}px`;
-  render(
-    renderCommentPreviewChip(
-      count,
-      renderCommentPreviewRows(
-        Array.from({ length: count }, () => ({
-          comment: { text: longSelection, comment: longComment },
-        })),
-      ),
+  comments?.unmount();
+  comments = mountSolid(
+    () => (
+      <CommentPreviewChip count={count}>
+        <ol class="chat-comment-preview__list" role="list">
+          {Array.from({ length: count }, () => (
+            <CommentPreviewRow comment={{ text: longSelection, comment: longComment }} />
+          ))}
+        </ol>
+      </CommentPreviewChip>
     ),
-    container,
+    { container },
   );
   return container.querySelector<HTMLElement>(".chat-selection-annotations__chip")!;
 }
