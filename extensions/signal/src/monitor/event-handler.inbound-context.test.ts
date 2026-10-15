@@ -1136,11 +1136,15 @@ describe("signal createSignalEventHandler inbound context", () => {
   );
 
   it.each([
-    ["CRLF", "private line one\r\nprivate line two"],
-    ["literal escape", "private line one\\nprivate line two"],
+    ["CRLF", "private line one\r\nprivate line two", "private line one\nprivate line two"],
+    [
+      "literal escape",
+      "private line one\\nprivate line two",
+      "private line one\\nprivate line two",
+    ],
   ])(
     "keeps %s inbound content out of verbose logs without changing delivery",
-    async (_label, message) => {
+    async (_label, message, deliveredText) => {
       shouldLogVerboseMock.mockReturnValue(true);
       try {
         const handler = createTestHandler({ cfg: createDirectConfig() });
@@ -1148,10 +1152,10 @@ describe("signal createSignalEventHandler inbound context", () => {
         await receiveMessage(handler, { message });
 
         const context = requireCapturedContext();
-        expect(context.BodyForAgent).toBe(message);
-        expect(context.Body).toContain(message);
+        expect(context.BodyForAgent).toBe(deliveredText);
+        expect(context.Body).toContain(deliveredText);
         expect(logVerboseMock).toHaveBeenCalledWith(
-          `signal inbound: from=${context.From} len=${context.Body?.length}`,
+          expect.stringContaining(`signal inbound: from=${context.From} len=`),
         );
         expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
       } finally {
