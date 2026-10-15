@@ -1018,7 +1018,7 @@ process.stdout.write(${JSON.stringify(
       continue;
     }
     if (step.name === "Upload immutable publication observations") {
-      check(step.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+      check(step.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
       check(step.with).toEqual({
         name: "full-release-publication-observations-${{ github.run_id }}-${{ github.run_attempt }}",
         path: "${{ runner.temp }}/publication-observations.json",

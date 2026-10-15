@@ -1309,7 +1309,7 @@ describe("startGatewayConfigReloader", () => {
           expect(harness.onHotReload).not.toHaveBeenCalled();
           expect(configAuditMocks.upsertSnapshot).not.toHaveBeenCalled();
         } else {
-          await harness.reloader.ready;
+          await waitForReloadState(() => harness.reloader.isReady());
           await flushReload(harness.reloader);
           expect(getOnlyHotReloadCall(harness)[1]).toEqual(write.runtimeConfig);
           expect(harness.reloader.isReady()).toBe(true);

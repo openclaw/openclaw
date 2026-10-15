@@ -24,7 +24,7 @@ export const MENTION_INBOX_COMPAT_RECORD = {
   tests: [
     "src/plugins/compat/registry.test.ts",
     "src/plugins/compat/mention-inbox-deprecation.test.ts",
-    "src/plugin-sdk/gateway-mention-inbox-compat.test.ts",
+    "test/type-contracts/gateway-mention-inbox-compat.ts",
     "src/gateway/mention-inbox.test.ts",
     "src/gateway/mention-inbox.compat.test.ts",
   ],

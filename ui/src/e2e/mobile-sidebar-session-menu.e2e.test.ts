@@ -15,6 +15,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  sessionMenuLabels,
   waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
 
@@ -366,12 +367,16 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Archive session", exact: true }).waitFor();
         await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
 
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
+        ).toBe(0);
         await page.getByRole("menuitem", { name: "Move to group" }).click();
         const back = page.getByRole("menuitem", { name: "Back" });
         await back.waitFor({ state: "visible" });
         await page.getByRole("menuitemradio", { name: "Operations" }).waitFor({ state: "visible" });
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
+        ).toBe(0);
         const menuBox = await menu.boundingBox();
         if (!menuBox) {
           throw new Error("expected visible compact sidebar session menu");
@@ -478,11 +483,7 @@ suite.define(() => {
           const menu = page.locator("openclaw-session-menu");
           await menu.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
           const phase = "after-" + width;
-          expect(
-            await menu
-              .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
-              .allTextContents(),
-          ).toEqual([
+          expect(await sessionMenuLabels(menu.locator(".session-menu__panel"))).toEqual([
             "Pin session",
             "Rename…",
             "Mark as unread",
@@ -511,7 +512,7 @@ suite.define(() => {
           await menu.getByRole("menuitem", { name: "Assign to…", exact: true }).click();
           await menu.getByRole("menuitemradio", { name: "Ben", exact: true }).waitFor();
           if (width === 390) {
-            expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+            expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
             await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
             await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
           } else {
@@ -540,7 +541,7 @@ suite.define(() => {
           if (width === 390) {
             for (const label of ["Copy details", "Open in", "Icon & color"]) {
               await menu.getByRole("menuitem", { name: label, exact: true }).click();
-              expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+              expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
               await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
               await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
             }
