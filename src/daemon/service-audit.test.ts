@@ -168,7 +168,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
     expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(
       "/usr/bin/node",
-      { HOME: "/tmp" },
+      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
       1234,
     );
     expect(result.issues).toContainEqual(
@@ -420,7 +420,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
     expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      env(),
+      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
       [
         "show",
         "openclaw-audit.service",
