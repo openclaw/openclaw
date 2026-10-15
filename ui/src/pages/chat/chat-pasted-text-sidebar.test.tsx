@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -16,7 +16,7 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createPasteEvent, renderChatView } from "./chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
-import { renderComposerPastedText } from "./components/chat-composer-pasted-text.tsx";
+import { ComposerPastedText } from "./components/chat-composer-pasted-text.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -146,7 +146,13 @@ it.each(["disabled", "removed", "aborted"] as const)(
       onOpenSidebar,
     };
     const container = document.createElement("div");
-    render(renderComposerPastedText(attachment, props), container);
+    const mounted = mountSolid(
+      () => <ComposerPastedText attachment={attachment} controls={props} />,
+      {
+        container,
+      },
+    );
+    onTestFinished(mounted.unmount);
     document.body.append(container);
     await waitForFast(() =>
       expect(container.querySelector(".chat-attachment-text-action")).not.toBeNull(),

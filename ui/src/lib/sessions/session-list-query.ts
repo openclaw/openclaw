@@ -59,6 +59,7 @@ export function canApplySessionListSnapshot(
       spawnedBy: undefined,
       includeOwnerSessionCounts: false,
       involvingMe: false,
+      ownerId: undefined,
       excludeCron: countsOnly ? false : options.excludeCron,
       excludeSystem: countsOnly ? false : options.excludeSystem,
     })

@@ -183,7 +183,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
     sessionKey: string,
     transcriptLoad: Promise<boolean>,
   ) => void;
-  presentationTitle: string | undefined;
+  paneLabel: string | undefined;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
@@ -398,6 +398,9 @@ export function createSessionCapabilityFixture(
     createSessionRowProvenance(),
   );
   return {
+    get presentation() {
+      return { result: overrides.state?.result ?? null, agentId: overrides.state?.agentId ?? null };
+    },
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
     subscribe: () => () => undefined,

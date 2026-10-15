@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { constants, type DatabaseSync } from "node:sqlite";
+import { constants, type DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { z } from "zod";
 import { sha256File } from "./directory-durability.js";
 import {
@@ -102,12 +102,8 @@ export function inspectScopedMigrationTables(
       type: string;
       wr: number;
     }>;
-    if (catalog.some((entry) => isStatisticTable(entry.name)) && !names.some(isStatisticTable)) {
-      throw new ScopedMigrationSnapshotUnsupportedError(
-        "existing planner statistics must be declared because table restoration rebuilds indexes",
-      );
-    }
     if (
+      names.some(isStatisticTable) &&
       catalog.some((entry) => entry.name === "sqlite_stat4") &&
       !source.prepare("SELECT sqlite_compileoption_used('ENABLE_STAT4') AS enabled").get()!.enabled
     ) {
@@ -173,13 +169,11 @@ export function inspectScopedMigrationTables(
   }
 }
 
-function copyRows(
+function* readRows(
   source: DatabaseSync,
   query: string,
   columns: string[],
-  target: DatabaseSync,
-  insert: string,
-): void {
+): Generator<SQLInputValue[]> {
   // Keep TEXT bytes out of JavaScript string decoding on both capture and restore.
   const projection = columns.flatMap((column, index) => [
     `typeof(${quote(column)}) = 'text' AS ${quote(`t${index}`)}`,
@@ -187,15 +181,37 @@ function copyRows(
   ]);
   const reader = source.prepare(`SELECT ${projection.join(", ")} FROM (${query})`);
   reader.setReadBigInts(true);
+  for (const row of reader.iterate()) {
+    yield Object.values(row);
+  }
+}
+
+function writeRows(
+  target: DatabaseSync,
+  insert: string,
+  columns: string[],
+  rows: Iterable<SQLInputValue[]>,
+): void {
   const values = columns.map((_, index) => {
     const text = index * 2 + 1;
     const value = text + 1;
     return `CASE WHEN ?${text} THEN CAST(?${value} AS TEXT) ELSE ?${value} END`;
   });
   const writer = target.prepare(`${insert} VALUES (${values.join(", ")})`);
-  for (const row of reader.iterate()) {
-    writer.run(...Object.values(row));
+  writer.setReadBigInts(true);
+  for (const row of rows) {
+    writer.run(...row);
   }
+}
+
+function copyRows(
+  source: DatabaseSync,
+  query: string,
+  columns: string[],
+  target: DatabaseSync,
+  insert: string,
+): void {
+  writeRows(target, insert, columns, readRows(source, query, columns));
 }
 
 function storedColumns(table: ScopedMigrationInspection["tables"][number]): string[] {
@@ -401,14 +417,11 @@ export function restoreScopedMigrationSnapshot(params: {
           const currentTables = target
             .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'")
             .all();
-          if (
-            kinds.some((entry) => typeof entry.name === "string" && isStatisticTable(entry.name)) &&
-            !inspection.tables.some((table) => isStatisticTable(table.name))
-          ) {
-            throw new Error(
-              "Cannot restore scoped backup over undeclared planner statistics; use a full database backup.",
-            );
-          }
+          const undeclaredStatistics = inspection.tables.some((table) =>
+            isStatisticTable(table.name),
+          )
+            ? []
+            : statisticTables.filter((name) => kinds.some((entry) => entry.name === name));
           for (const table of inspection.tables) {
             const currentSql = currentTables.find(
               (entry) =>
@@ -432,6 +445,26 @@ export function restoreScopedMigrationSnapshot(params: {
               throw new Error(`Cannot restore scoped backup over nonordinary table: ${table.name}`);
             }
           }
+          // DROP TABLE removes planner rows even when the migration does not own statistics.
+          // Buffer current rows, including later ANALYZE results, through the archive's byte codec.
+          const preservedStatistics = undeclaredStatistics.map((name) => {
+            const tableColumns = target
+              .prepare(`PRAGMA main.table_info(${quote(name)})`)
+              // SAFETY: SQLite owns the table_info column names for its planner statistics tables.
+              .all() as Array<{ name: string }>;
+            const columns = ["rowid", ...tableColumns.map((column) => column.name)];
+            return {
+              name,
+              columns,
+              rows: [
+                ...readRows(
+                  target,
+                  `SELECT ${columns.map(quote).join(", ")} FROM main.${quote(name)}`,
+                  columns,
+                ),
+              ],
+            };
+          });
           for (const table of inspection.tables) {
             if (!isStatisticTable(table.name)) {
               target.exec(`DROP TABLE IF EXISTS ${quote(table.name)}`);
@@ -470,6 +503,15 @@ export function restoreScopedMigrationSnapshot(params: {
             // Table/index DDL edits statistics, so restore the declared stats after all such DDL.
             target.exec(`DELETE FROM ${quote(table.name)}`);
             restoreRows(archive, target, table, index);
+          }
+          for (const { name, columns, rows } of preservedStatistics) {
+            target.exec(`DELETE FROM main.${quote(name)}`);
+            writeRows(
+              target,
+              `INSERT INTO main.${quote(name)} (${columns.map(quote).join(", ")})`,
+              columns,
+              rows,
+            );
           }
           writeSqliteUserVersion(target, inspection.userVersion);
         }),

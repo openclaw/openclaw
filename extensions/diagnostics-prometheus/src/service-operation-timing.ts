@@ -168,6 +168,34 @@ export function recordOperationTimingEvent(
             },
           );
         }
+        if (evt.method === "sessions.list" && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_requests_total",
+            "Session list requests by client kind and bounded request shape.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+            },
+          );
+        }
+        if (evt.method === "cron.list" && evt.cronList) {
+          const cron = evt.cronList;
+          store.counter(
+            "openclaw_cron_list_requests_total",
+            "Cron list requests by client kind and bounded request shape.",
+            {
+              client_kind: cron.clientKind,
+              source: cron.source,
+              scope: cron.scope,
+              compact: String(cron.compact),
+              page: cron.page,
+            },
+          );
+        }
         return;
       }
       if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {

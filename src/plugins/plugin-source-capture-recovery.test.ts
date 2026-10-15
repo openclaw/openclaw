@@ -384,7 +384,7 @@ it.each([
     const managed = path.join(stateDir, "tmp", "plugin-captures");
     const failure = Object.assign(new Error("Fixture capture allocation refused"), { code });
     const acquire = stagingToken.acquireSqliteStagingToken;
-    const realpath = fs.realpathSync.bind(fs);
+    const realpath = fs.realpathSync.native;
     const mkdir = fs.mkdirSync.bind(fs);
     const mkdtemp = fs.mkdtempSync.bind(fs);
     if (stage === "lease") {
@@ -397,7 +397,7 @@ it.each([
         },
       );
     } else if (stage === "canonical path") {
-      vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+      vi.spyOn(fs.realpathSync, "native").mockImplementation((file, options) => {
         if (String(file).startsWith(managed + path.sep)) {
           throw failure;
         }

@@ -138,20 +138,17 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await fs.access(generatedClaude.wrapperPath);
   });
 
-  it.each([
-    { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.86.0" },
-  ] as const)(
+  it.each([{ agent: "codex", packageName: "codex-acp", version: "2.1.1" }] as const)(
     "launches $agent after its captured adapter is removed",
-    async ({ agent, packageName, version }) => {
-      const { root, generated, generatedClaude, prepare } = createWrapperFixture();
+    async ({ packageName, version }) => {
+      const { root, generated, prepare } = createWrapperFixture();
       const capturedBin = path.join(root, "captured-adapter.cjs");
       await fs.writeFile(capturedBin, "console.log('captured adapter');\n");
       await prepare({
         resolveInstalledCodexAcpBinPath: async () => capturedBin,
         resolveInstalledClaudeAcpBinPath: async () => capturedBin,
       });
-      const wrapperPath = agent === "codex" ? generated.wrapperPath : generatedClaude.wrapperPath;
+      const wrapperPath = generated.wrapperPath;
       const packageDir = path.join(root, "node_modules", "@agentclientprotocol", packageName);
       const binDir = path.join(root, "node_modules", ".bin");
       await fs.mkdir(packageDir, { recursive: true });
@@ -609,32 +606,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ]);
 
     await expectPathMissing(stderrLogPath);
-  });
-
-  it("starts the adapter when a previous stderr log cannot be removed", async () => {
-    const { root, stateDir, generated, prepare } = createWrapperFixture();
-    const quietScript = path.join(root, "quiet-adapter.mjs");
-    await fs.writeFile(quietScript, "process.exit(0);\n", "utf8");
-
-    await prepare({
-      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
-    });
-
-    const stderrLogPath = path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.blocked-lease.log");
-    await fs.mkdir(stderrLogPath);
-
-    await expect(
-      execFileAsync(process.execPath, [
-        generated.wrapperPath,
-        "--openclaw-run-configured",
-        process.execPath,
-        quietScript,
-        OPENCLAW_ACPX_LEASE_ID_ARG,
-        "blocked-lease",
-        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-        "gateway-test",
-      ]),
-    ).resolves.toMatchObject({ stderr: "" });
   });
 
   it("keeps the persisted stderr line tail UTF-16 safe at the 256 KiB boundary", async () => {

@@ -13,7 +13,10 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import {
+  scopePreparedModelRuntimeLease,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -183,6 +186,29 @@ describe("prepared model runtime owner selection", () => {
       expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
     },
   );
+
+  it("honors live catalog demand inside a retained static parent", async () => {
+    const input = {
+      ...fixture.agentInput("default", {}),
+      workspaceDir: fixture.state.workspaceDir,
+    };
+    const discovered = { id: "live-only", name: "Live catalog row", provider: "custom" };
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [discovered],
+      routeVariants: [discovered],
+    });
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }),
+    );
+    expect(parent.snapshot.modelCatalog.entries).toEqual([]);
+    await parent.run(async () => {
+      await using live = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "live",
+        pluginGeneration: parent.pluginGeneration,
+      });
+      expect(live.snapshot.modelCatalog.entries.map(({ id }) => id)).toEqual(["live-only"]);
+    });
+  });
 
   it("rejects unpublished plugin generations while matching pending callers share their owner", async () => {
     const config = {};
