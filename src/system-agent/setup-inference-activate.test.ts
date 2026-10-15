@@ -176,7 +176,7 @@ describe("setup activation credentials and configuration", () => {
         throw new Error("Native account no longer has model access");
       }
     });
-    setup.pluginRegistry.agentHarnesses.push({
+    setup.pluginRegistry.agentHarnesses[0] = {
       pluginId: "codex",
       source: "test",
       harness: {
@@ -189,7 +189,7 @@ describe("setup activation credentials and configuration", () => {
           throw new Error("Setup must not start a turn");
         },
       },
-    });
+    };
     expect((await setup.activate("codex-cli")).ok).toBe(false);
     expect(verifySetup).toHaveBeenCalledTimes(2);
     expect(setup.run).not.toHaveBeenCalled();
@@ -358,7 +358,7 @@ describe("setup activation credentials and configuration", () => {
     const setup = await fixture({ codex: true });
     setup.deps.readCodexCliActiveApiKey = () => credential;
     const result = await setup.activate("codex-cli");
-    expect(result).toMatchObject({ ok: true });
+    expect(result, result.ok ? undefined : result.error).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()?.[1]).toMatchObject(credential);

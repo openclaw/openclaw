@@ -111,29 +111,30 @@ export function renderSettingsSegmented<T extends string>(
       aria-label=${props.ariaLabel ?? nothing}
     >
       ${props.options.map(
-        (option) => html`<button
-          type="button"
-          class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""} ${props.variant === "accent" ? "btn btn--sm" : ""}"
-          aria-pressed=${props.ariaPressed === false ? nothing : String(option.value === props.value)}
-          aria-label=${option.ariaLabel ?? nothing}
-          data-compact-label=${option.compactLabel ?? nothing}
-          data-test-id=${option.testId ?? nothing}
-          title=${option.title ?? nothing}
-          ?disabled=${props.disabled || option.disabled}
-          @click=${(event: MouseEvent) => {
-            props.onClick?.(event, option.value);
-            if (event.defaultPrevented || props.disabled || option.disabled) {
-              return;
-            }
-            if (option.value === props.value) {
-              props.onReselect?.(option.value);
-            } else {
-              props.onChange(option.value);
-            }
-          }}
-        >
-          ${option.label}
-        </button>`,
+        (option) =>
+          html`<button
+            type="button"
+            class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""} ${props.variant === "accent" ? "btn btn--sm" : ""}"
+            aria-pressed=${props.ariaPressed === false ? nothing : String(option.value === props.value)}
+            aria-label=${option.ariaLabel ?? nothing}
+            data-compact-label=${option.compactLabel ?? nothing}
+            data-test-id=${option.testId ?? nothing}
+            title=${option.title ?? nothing}
+            ?disabled=${props.disabled || option.disabled}
+            @click=${(event: MouseEvent) => {
+              props.onClick?.(event, option.value);
+              if (event.defaultPrevented || props.disabled || option.disabled) {
+                return;
+              }
+              if (option.value === props.value) {
+                props.onReselect?.(option.value);
+              } else {
+                props.onChange(option.value);
+              }
+            }}
+          >
+            ${option.label}
+          </button>`,
       )}
     </div>`;
   }

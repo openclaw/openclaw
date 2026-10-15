@@ -420,6 +420,7 @@ describe("X publication production-owner composition", () => {
       );
 
     const outcomes = new Map<Case, unknown>();
+    const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
     const childWritten = Promise.withResolvers<string>();
     const childRuns = new Set<Promise<unknown>>();
@@ -520,6 +521,7 @@ describe("X publication production-owner composition", () => {
             }
             console.info("[x-proof] spawn result", activeCase, result.details);
           } catch (error) {
+            spawnErrors.set(activeCase, error);
             outcomes.set(activeCase, { error: String(error) });
             text = deniedWorkSessionReply;
             console.info("[x-proof] spawn error", activeCase, String(error));
@@ -719,6 +721,9 @@ describe("X publication production-owner composition", () => {
                 );
           await withinTest(
             dispatch.catch((error: unknown) => {
+              if (!creationRequests.some((request) => request.kind === kind)) {
+                throw error;
+              }
               // Author removal forbids final delivery. Registry retirement may
               // instead reject the monitor's last plugin-runtime callback.
               if (kind === "author-revoked") {
@@ -732,6 +737,14 @@ describe("X publication production-owner composition", () => {
             signal,
           );
           if (kind !== "guest") {
+            if (!creationRequests.some((request) => request.kind === kind)) {
+              if (spawnErrors.has(kind)) {
+                throw spawnErrors.get(kind);
+              }
+              throw new Error(
+                `X ${kind} dispatch completed without sessions.create; outcome: ${JSON.stringify(outcomes.get(kind))}`,
+              );
+            }
             await withinTest(creationSettled.promise, signal);
           }
         } finally {

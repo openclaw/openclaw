@@ -341,6 +341,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(result).toMatchObject({ ok: true });
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        trigger: "event",
         job: expect.objectContaining({
           delivery: expect.objectContaining({ accountId: "default" }),
         }),

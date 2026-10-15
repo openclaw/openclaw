@@ -43,6 +43,7 @@ export type PanelHostedTabsElement = HTMLElement & {
     | LegacyTemplateResult
     | Node
     | typeof emptyLegacyContent
+    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
     | ReturnType<typeof solidContent>;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;

@@ -146,6 +146,30 @@ describe("process-owned directory observation", () => {
     expect(watch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps an absent directory's ancestor watch across unrelated child renames", () => {
+    const root = tempDirs.make("owned-directory-ancestor-");
+    const agents = path.join(root, "agents");
+    const watch = vi.spyOn(fs, "watch");
+    const opened = () =>
+      watch.mock.results.flatMap((result, index) =>
+        result.type === "return"
+          ? [{ path: watch.mock.calls[index]?.[0], watcher: result.value }]
+          : [],
+      );
+    subscriptions.push(observeOwnedDirectory(path.join(agents, "work"), () => {}));
+    const [ancestor] = opened();
+    expect(ancestor?.path).toBe(root);
+    const close = vi.spyOn(ancestor!.watcher, "close");
+    // SQLite sidecars beside a state database appear and vanish on every write.
+    ancestor!.watcher.emit("change", "rename", "state.sqlite-journal");
+    expect(close).not.toHaveBeenCalled();
+    expect(opened()).toHaveLength(1);
+    fs.mkdirSync(agents);
+    ancestor!.watcher.emit("change", "rename", "agents");
+    expect(close).toHaveBeenCalledOnce();
+    expect(opened().map((entry) => entry.path)).toEqual([root, agents]);
+  });
+
   it("re-admits an absent directory and invalidates after missed notifications", () => {
     vi.useFakeTimers({
       toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

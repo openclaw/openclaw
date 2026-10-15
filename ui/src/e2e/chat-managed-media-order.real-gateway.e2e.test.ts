@@ -398,6 +398,7 @@ suite.define(() => {
                 await expect
                   .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
                   .toBe(2);
+                await expect.poll(() => bubble.locator("img.chat-message-image").count()).toBe(2);
                 try {
                   await bubble.locator("img.chat-message-image").evaluateAll(async (images) => {
                     await Promise.all(

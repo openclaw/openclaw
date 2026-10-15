@@ -1,8 +1,7 @@
-diff --git a/dist/chunks/chunk.4HJPQ4O4.js b/dist/chunks/chunk.4HJPQ4O4.js
-index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcfcff09197 100644
---- a/dist/chunks/chunk.4HJPQ4O4.js
-+++ b/dist/chunks/chunk.4HJPQ4O4.js
-@@ -25,9 +25,6 @@ import {
+diff --git a/dist/chunks/chunk.6RPNM7SD.js b/dist/chunks/chunk.6RPNM7SD.js
+--- a/dist/chunks/chunk.6RPNM7SD.js
++++ b/dist/chunks/chunk.6RPNM7SD.js
+@@ -25,9 +25,6 @@
  import {
    uniqueId
  } from "./chunk.KNJT7KBU.js";
@@ -12,7 +11,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -80,83 +77,45 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -80,82 +77,44 @@
      this.for = null;
      this.anchor = null;
      this.eventController = new AbortController();
@@ -20,14 +19,6 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -      this.dismissedByPress = false;
 -      if (this.hasTrigger("focus")) {
 -        this.hide();
--      }
--    };
--    this.handleClick = () => {
--      if (this.hasTrigger("click")) {
--        if (this.open) {
--          this.hide();
--        } else {
--          this.show();
 +    this.openTransition = { open: false };
 +    this.handleTrigger = (event) => {
 +      const type = event.type;
@@ -37,7 +28,32 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 +        if (!this.hasTrigger("click")) {
 +          if (!this.hasTrigger("manual")) this.lightDismiss();
 +          return;
-         }
++        }
++        if (type !== "click") return;
++        open = !this.open;
++      } else {
++        if (!open) {
++          const target = event.relatedTarget;
++          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
++          this.dismissedByPress = false;
++        }
++        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
++      }
++      const request = () => open ? this.show() : this.hide();
++      if (hover) {
++        clearTimeout(this.hoverTimeout);
++        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
++      } else {
++        request();
+       }
+     };
+-    this.handleClick = () => {
+-      if (this.hasTrigger("click")) {
+-        if (this.open) {
+-          this.hide();
+-        } else {
+-          this.show();
+-        }
 -        return;
 -      }
 -      if (this.hasTrigger("manual")) {
@@ -51,29 +67,14 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -      }
 -      if (this.hasTrigger("focus")) {
 -        this.show();
-+        if (type !== "click") return;
-+        open = !this.open;
-+      } else {
-+        if (!open) {
-+          const target = event.relatedTarget;
-+          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
-+          this.dismissedByPress = false;
-+        }
-+        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
-       }
+-      }
 -    };
 -    this.handleMouseDown = () => {
 -      if (this.hasTrigger("click") || this.hasTrigger("manual")) {
 -        return;
-+      const request = () => open ? this.show() : this.hide();
-+      if (hover) {
-+        clearTimeout(this.hoverTimeout);
-+        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
-+      } else {
-+        request();
-       }
+-      }
 -      this.lightDismiss();
-     };
+-    };
 -    this.handleDocumentKeyDown = (event) => {
 -      if (this.hasTrigger("manual")) {
 -        return;
@@ -90,14 +91,14 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -    };
 -    this.handleDocumentClick = (event) => {
 -      if (this.hasTrigger("manual")) {
--        return;
--      }
--      if (this.anchor && event.composedPath().includes(this.anchor)) {
 +      } else if (this.anchor && event.composedPath().includes(this.anchor)) {
          return;
        }
+-      if (this.anchor && event.composedPath().includes(this.anchor)) {
+-        return;
+-      }
        this.hide();
-     };
+-    };
 -    this.handleMouseOver = () => {
 -      if (this.dismissedByPress) {
 -        return;
@@ -121,11 +122,10 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -          this.hide();
 -        }, this.hideDelay);
 -      }
--    };
+     };
    }
    connectedCallback() {
-     super.connectedCallback();
-@@ -165,43 +124,33 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -165,42 +124,32 @@
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -168,7 +168,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
      if (this.anchor) {
        this.removeFromAriaLabelledBy(this.anchor, this.id);
      }
-   }
+-  }
 -  firstUpdated(changedProperties) {
 -    this.body.hidden = !this.open;
 -    if (this.open) {
@@ -176,11 +176,10 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -      this.popup.reposition();
 -    }
 -    super.firstUpdated(changedProperties);
--  }
+   }
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
-     clearTimeout(this.hoverTimeout);
-@@ -233,41 +182,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -233,41 +182,47 @@
      }
    }
    async handleOpenChange() {
@@ -210,6 +209,15 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 -      if (waHideEvent.defaultPrevented) {
 -        this.open = true;
 -        return;
+-      }
+-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-      document.removeEventListener("click", this.handleDocumentClick);
+-      unregisterDismissible(this);
+-      await animateWithClass(this.popup.popup, "hide-with-scale");
+-      this.popup.active = false;
+-      this.body.hidden = true;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
 +    if (this.disabled) this.open = false;
 +    const previous = this.openTransition;
 +    const open = this.open;
@@ -248,20 +256,13 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
 +          // Reposition emits a synchronous public event that can revoke ownership.
 +          if (isCurrent()) this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
 +        })();
-       }
--      document.removeEventListener("keydown", this.handleDocumentKeyDown);
--      document.removeEventListener("click", this.handleDocumentClick);
--      unregisterDismissible(this);
--      await animateWithClass(this.popup.popup, "hide-with-scale");
--      this.popup.active = false;
--      this.body.hidden = true;
--      this.dispatchEvent(new WaAfterHideEvent());
-     }
++      }
++    }
 +    return this.openTransition.promise;
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -281,23 +236,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -281,23 +236,19 @@
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -298,7 +299,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
      }
      this.anchor = newAnchor;
    }
-@@ -307,26 +258,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -307,26 +258,19 @@
        this.popup.reposition();
      }
    }
@@ -334,7 +335,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
    }
    render() {
      return html`
-@@ -349,7 +293,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -349,7 +293,7 @@
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -343,7 +344,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
            <slot></slot>
          </div>
        </wa-popup>
-@@ -401,7 +345,7 @@ __decorateClass([
+@@ -401,7 +345,7 @@
    state()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -352,7 +353,7 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -409,9 +353,6 @@ __decorateClass([
+@@ -409,9 +353,6 @@
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -362,11 +363,10 @@ index 0cd72f56fc98357609a4b2b7576f3579e36bc997..49f741894a607d779a79ca3644e2cfcf
  WaTooltip = __decorateClass([
    customElement("wa-tooltip")
  ], WaTooltip);
-diff --git a/dist/chunks/chunk.BV5W4T7H.js b/dist/chunks/chunk.BV5W4T7H.js
-index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f9298d8b637d 100644
---- a/dist/chunks/chunk.BV5W4T7H.js
-+++ b/dist/chunks/chunk.BV5W4T7H.js
-@@ -29,6 +29,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+diff --git a/dist/chunks/chunk.JZGJWX35.js b/dist/chunks/chunk.JZGJWX35.js
+--- a/dist/chunks/chunk.JZGJWX35.js
++++ b/dist/chunks/chunk.JZGJWX35.js
+@@ -29,6 +29,7 @@
    constructor() {
      super(...arguments);
      this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
@@ -374,7 +374,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
      this.active = false;
      this.variant = "default";
      this.size = "m";
-@@ -40,7 +41,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -40,7 +41,10 @@
      this.submenuOpen = false;
      this.hasSubmenu = false;
      this.handleSlotChange = () => {
@@ -386,7 +386,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
        this.updateHasSubmenuState();
        if (this.hasSubmenu) {
          this.setAttribute("aria-haspopup", "menu");
-@@ -67,7 +71,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -67,7 +71,6 @@
      /** Handles pointer enter to open the submenu on hover */
      this.handlePointerEnter = (event) => {
        if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
@@ -394,7 +394,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
          this.submenuOpen = true;
        }
      };
-@@ -84,7 +87,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -84,7 +87,15 @@
    }
    disconnectedCallback() {
      super.disconnectedCallback();
@@ -411,7 +411,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
      this.removeEventListener?.("click", this.handleHostClick);
      this.removeEventListener?.("pointerenter", this.handlePointerEnter);
      this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
-@@ -127,11 +138,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -127,11 +138,8 @@
      }
      if (changedProperties.has("submenuOpen")) {
        this.customStates.set("submenu-open", this.submenuOpen);
@@ -425,27 +425,27 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
      }
    }
    /** Update the has-submenu custom state */
-@@ -140,22 +148,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -140,22 +148,51 @@
    }
    /** Opens the submenu. */
    async openSubmenu() {
--    const submenu = this.submenuElement;
--    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
--    this.notifyParentOfOpening();
--    submenu.showPopover?.();
--    submenu.hidden = false;
--    submenu.setAttribute("data-visible", "");
 +    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
-     this.submenuOpen = true;
--    this.setAttribute("aria-expanded", "true");
--    await animateWithClass(submenu, "show");
--    setTimeout(() => {
++    this.submenuOpen = true;
 +    await this.updateComplete;
 +    return this.submenuAnimation;
 +  }
 +  /** Reconciles property and public-method requests through one submenu lifecycle. */
 +  async updateSubmenuVisibility(previousAnimation) {
-+    const submenu = this.submenuElement;
+     const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
+-    this.notifyParentOfOpening();
+-    submenu.showPopover?.();
+-    submenu.hidden = false;
+-    submenu.setAttribute("data-visible", "");
+-    this.submenuOpen = true;
+-    this.setAttribute("aria-expanded", "true");
+-    await animateWithClass(submenu, "show");
+-    setTimeout(() => {
 +    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
 +    if (!this.hasSubmenu || !submenu || !this.isConnected) {
 +      await previousAnimation;
@@ -491,7 +491,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
    }
    /** Notifies the parent dropdown that this item is opening its submenu */
    notifyParentOfOpening() {
-@@ -165,30 +202,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -165,30 +202,15 @@
        detail: { item: this }
      });
      this.dispatchEvent(event);
@@ -527,7 +527,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
    }
    /** Determines whether the item navigates when selected. Items with submenus never navigate. */
    isLink() {
-@@ -218,8 +240,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -218,8 +240,9 @@
    }
    /** Gets all dropdown items in the submenu. */
    getSubmenuItems() {
@@ -539,7 +539,7 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
      );
    }
    render() {
-@@ -278,7 +301,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -278,7 +301,7 @@
              >
                <slot name="submenu"></slot>
              </div>
@@ -548,11 +548,10 @@ index ae8bd9b5f14b5b0fbdab4faca38319fbc7e48b2e..9a52ad235e67c90728ca8829d627f929
      `;
    }
  };
-diff --git a/dist/chunks/chunk.KB3IOPVF.js b/dist/chunks/chunk.KB3IOPVF.js
-index 3b1abee761087a9d9784b7a91f6555e1be323145..a870bafe03138f84a1dcdc8a687cda3e5940ad1e 100644
---- a/dist/chunks/chunk.KB3IOPVF.js
-+++ b/dist/chunks/chunk.KB3IOPVF.js
-@@ -169,10 +169,17 @@ var WaPopup = class extends WebAwesomeElement {
+diff --git a/dist/chunks/chunk.UEBQI7VV.js b/dist/chunks/chunk.UEBQI7VV.js
+--- a/dist/chunks/chunk.UEBQI7VV.js
++++ b/dist/chunks/chunk.UEBQI7VV.js
+@@ -169,10 +169,17 @@
      if (!this.anchorEl || !this.active || !this.isConnected) {
        return;
      }
@@ -572,10 +571,9 @@ index 3b1abee761087a9d9784b7a91f6555e1be323145..a870bafe03138f84a1dcdc8a687cda3e
    async stop() {
      return new Promise((resolve) => {
 diff --git a/dist/chunks/chunk.L6CIKOFQ.js b/dist/chunks/chunk.L6CIKOFQ.js
-index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
 --- a/dist/chunks/chunk.L6CIKOFQ.js
 +++ b/dist/chunks/chunk.L6CIKOFQ.js
-@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+@@ -5,32 +5,19 @@
    return el.animate(keyframes, options).finished.catch(() => {
    });
  }
@@ -621,11 +619,10 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  }
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
-diff --git a/dist/chunks/chunk.LKUZUNJV.js b/dist/chunks/chunk.LKUZUNJV.js
-index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65ce602c07e 100644
---- a/dist/chunks/chunk.LKUZUNJV.js
-+++ b/dist/chunks/chunk.LKUZUNJV.js
-@@ -43,9 +43,6 @@ import {
+diff --git a/dist/chunks/chunk.ZAVDMBWV.js b/dist/chunks/chunk.ZAVDMBWV.js
+--- a/dist/chunks/chunk.ZAVDMBWV.js
++++ b/dist/chunks/chunk.ZAVDMBWV.js
+@@ -43,9 +43,6 @@
  import {
    size_styles_default
  } from "./chunk.G5ZZIGWB.js";
@@ -635,7 +632,7 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -74,6 +71,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -74,6 +71,7 @@
      this.selectionOrder = /* @__PURE__ */ new Map();
      this.typeToSelectString = "";
      this.slotChangePending = false;
@@ -643,7 +640,7 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
      this.displayLabel = "";
      this.selectedOptions = [];
      this.name = "";
-@@ -294,7 +292,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -294,7 +292,12 @@
    }
    disconnectedCallback() {
      super.disconnectedCallback();
@@ -657,10 +654,12 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
      this.cachedOptions = null;
    }
    updateDefaultValue() {
-@@ -308,24 +311,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-       this._defaultValue = this.getAttribute("value") || null;
+@@ -306,24 +309,6 @@
      }
-   }
+     if (this.hasAttribute("value")) {
+       this._defaultValue = this.getAttribute("value") || null;
+-    }
+-  }
 -  addOpenListeners() {
 -    document.addEventListener("focusin", this.handleDocumentFocusIn);
 -    document.addEventListener("keydown", this.handleDocumentKeyDown);
@@ -677,12 +676,10 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
 -    unregisterDismissible(this);
 -    if (this.getRootNode() !== document) {
 -      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
-   handleFocus() {
-     this.displayInput.setSelectionRange(0, 0);
+     }
    }
-@@ -590,6 +575,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleFocus() {
+@@ -590,6 +575,8 @@
    handleDisabledChange() {
      if (this.disabled && this.open) {
        this.open = false;
@@ -691,7 +688,7 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
      }
    }
    handleValueChange() {
-@@ -600,56 +587,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -600,56 +587,72 @@
      this.updateValidity();
    }
    async handleOpenChange() {
@@ -755,16 +752,17 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
 -      if (waHideEvent.defaultPrevented) {
 -        this.open = false;
 -        return;
-+      if (!open) {
-+        this.listbox.hidden = true;
-+        this.popup.active = false;
-       }
+-      }
 -      this.removeOpenListeners();
 -      await animateWithClass(this.popup.popup, "hide");
 -      this.listbox.hidden = true;
 -      this.popup.active = false;
 -      this.dispatchEvent(new WaAfterHideEvent());
 -    }
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
++      }
 +      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
 +    })();
 +    return this.openAnimation;
@@ -775,8 +773,9 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
 +    if (this.disabled) {
        this.open = false;
 -      return void 0;
+-    }
 +      return;
-     }
++    }
 +    if (!this.isConnected) return;
      this.open = true;
 -    return waitForEvent(this, "wa-after-show");
@@ -797,11 +796,10 @@ index e85a015903374362f83cdb454cb7f449346a9448..79901048ffc7619e842bfa31e09cd65c
    }
    /** Sets focus on the control. */
    focus(options) {
-diff --git a/dist/chunks/chunk.XSKA3LE6.js b/dist/chunks/chunk.XSKA3LE6.js
-index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45f941bfed 100644
---- a/dist/chunks/chunk.XSKA3LE6.js
-+++ b/dist/chunks/chunk.XSKA3LE6.js
-@@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
+diff --git a/dist/chunks/chunk.GU5IUSXK.js b/dist/chunks/chunk.GU5IUSXK.js
+--- a/dist/chunks/chunk.GU5IUSXK.js
++++ b/dist/chunks/chunk.GU5IUSXK.js
+@@ -58,17 +58,16 @@
  var WaDropdown = class extends WebAwesomeElement {
    constructor() {
      super(...arguments);
@@ -821,7 +819,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        const isRtl = this.localize.dir() === "rtl";
        if (event.key === "Escape" && this.open && isTopDismissible(this)) {
          const trigger = this.getTrigger();
-@@ -78,22 +77,12 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -78,22 +77,12 @@
          trigger?.focus({ preventScroll: true });
          return;
        }
@@ -849,7 +847,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        let itemToSelect;
        if (event.key === "ArrowUp") {
          event.preventDefault();
-@@ -113,39 +102,23 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -113,39 +102,23 @@
            itemToSelect = items[0];
          }
        }
@@ -897,7 +895,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
          return;
        }
        if (event.key === "Home" || event.key === "End") {
-@@ -154,7 +127,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -154,7 +127,7 @@
          itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
        }
        if (event.key === "Tab") {
@@ -906,7 +904,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        }
        if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
          clearTimeout(this.userTypedTimeout);
-@@ -180,19 +153,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -180,19 +153,11 @@
          itemToSelect.scrollIntoView({ block: "nearest" });
          return;
        }
@@ -927,7 +925,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
          } else {
            this.makeSelection(activeItem, event);
          }
-@@ -213,7 +178,8 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -213,7 +178,8 @@
      };
      /** Handle global mouse movement for safe triangle logic */
      this.handleGlobalMouseMove = (event) => {
@@ -937,7 +935,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -231,7 +197,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -231,7 +197,7 @@
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
@@ -946,7 +944,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -241,15 +207,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,15 +207,20 @@
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -972,7 +970,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -266,12 +237,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -266,12 +237,7 @@
          return;
        }
        this.customStates.set("open", this.open);
@@ -986,7 +984,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -300,104 +266,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -300,104 +266,96 @@
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -1007,8 +1005,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +  /** Gets the current active submenu item. */
    getCurrentSubmenuItem() {
 -    return this.openSubmenuStack.length > 0 ? this.openSubmenuStack[this.openSubmenuStack.length - 1] : void 0;
-+    return this.activeSubmenus.at(-1)?.item;
-   }
+-  }
 -  /** Closes all submenus in the dropdown. */
 -  closeAllSubmenus() {
 -    const items = this.getItems(true);
@@ -1033,6 +1030,8 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 -    });
 -    if (!this.openSubmenuStack.includes(item)) {
 -      this.openSubmenuStack.push(item);
++    return this.activeSubmenus.at(-1)?.item;
++  }
 +  /** Retires an ancestor branch before its hide animations can complete. */
 +  closeAllSubmenus(from = 0) {
 +    // Remove ownership first: item close notifications may reenter this owner.
@@ -1064,6 +1063,12 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      }
 -    if (this.popup.active) {
 -      return;
+-    }
+-    openDropdowns.forEach((dropdown) => dropdown.open = false);
+-    this.popup.active = true;
+-    this.open = true;
+-    openDropdowns.add(this);
+-    registerDismissible(this);
 +    // Membership records accepted open ownership. The popup stays active while hiding,
 +    // so its active flag cannot distinguish a canceled hide from a reopen.
 +    if (!this.isConnected || this.open !== open || open && openDropdowns.has(this)) return;
@@ -1085,12 +1090,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +      this.closeAllSubmenus();
 +      openDropdowns.delete(this);
 +      unregisterDismissible(this);
-     }
--    openDropdowns.forEach((dropdown) => dropdown.open = false);
--    this.popup.active = true;
--    this.open = true;
--    openDropdowns.add(this);
--    registerDismissible(this);
++    }
      this.syncAriaAttributes();
 -    document.addEventListener("keydown", this.handleDocumentKeyDown);
 -    document.addEventListener("pointerdown", this.handleDocumentPointerDown);
@@ -1101,6 +1101,29 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 -    if (items.length > 0) {
 -      items.forEach((item, index) => item.active = index === 0);
 -      items[0].focus({ preventScroll: true });
+-    }
+-    this.dispatchEvent(new WaAfterShowEvent());
+-  }
+-  /** Hides the dropdown menu. This should only be called from within updated(). */
+-  async hideMenu() {
+-    if (!this.popup || !this.menu) return;
+-    const hideEvent = new WaHideEvent({ source: this });
+-    this.dispatchEvent(hideEvent);
+-    if (hideEvent.defaultPrevented) {
+-      this.open = true;
+-      return;
+-    }
+-    this.open = false;
+-    openDropdowns.delete(this);
+-    unregisterDismissible(this);
+-    this.syncAriaAttributes();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("show");
+-    await animateWithClass(this.menu, "hide");
+-    this.popup.active = this.open;
+-    this.dispatchEvent(new WaAfterHideEvent());
 +    // Join canceled animation cleanup before reusing its class. Show and hide share
 +    // one CSS animation name, so overlapping helpers cannot own separate animations.
 +    this.menu.classList.remove("show", "hide");
@@ -1134,17 +1157,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +        if (initialItem.autofocus) initialItem.scrollIntoView({ block: "nearest" });
 +      }
 +      if (!isCurrent()) return;
-     }
--    this.dispatchEvent(new WaAfterShowEvent());
--  }
--  /** Hides the dropdown menu. This should only be called from within updated(). */
--  async hideMenu() {
--    if (!this.popup || !this.menu) return;
--    const hideEvent = new WaHideEvent({ source: this });
--    this.dispatchEvent(hideEvent);
--    if (hideEvent.defaultPrevented) {
--      this.open = true;
--      return;
++    }
 +    await this.menuAnimation;
 +    if (!isCurrent()) return;
 +    if (open) {
@@ -1152,22 +1165,11 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +    } else {
 +      this.popup.active = false;
 +      this.dispatchEvent(new WaAfterHideEvent());
-     }
--    this.open = false;
--    openDropdowns.delete(this);
--    unregisterDismissible(this);
--    this.syncAriaAttributes();
--    document.removeEventListener("keydown", this.handleDocumentKeyDown);
--    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
--    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
--    this.menu.classList.remove("show");
--    await animateWithClass(this.menu, "hide");
--    this.popup.active = this.open;
--    this.dispatchEvent(new WaAfterHideEvent());
++    }
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -405,8 +363,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -405,8 +363,6 @@
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -1176,7 +1178,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -433,60 +389,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -433,60 +389,57 @@
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -1188,6 +1190,8 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 -    this.addToSubmenuStack(openingItem);
 -    this.setupSubmenuPosition(openingItem);
 -    this.processSubmenuItems(openingItem);
+-  }
+-  /** Sets up submenu positioning with autoUpdate */
 +    event.stopPropagation();
 +    const path = event.composedPath();
 +    const branch = path.slice(0, path.indexOf(this)).filter((el) => el instanceof HTMLElement && el.localName === "wa-dropdown-item").reverse();
@@ -1204,8 +1208,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +    for (const item of branch.slice(shared)) {
 +      this.activeSubmenus.push({ item, cleanup: this.setupSubmenuPosition(item) });
 +    }
-   }
--  /** Sets up submenu positioning with autoUpdate */
++  }
 +  /** Binds positioning and close notifications to this exact open lifetime. */
    setupSubmenuPosition(item) {
 -    if (!item.submenuElement) return;
@@ -1240,20 +1243,14 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 -    items.forEach((item) => {
 -      item.submenuAdjacent = hasSubmenuItems;
 -      item.checkboxAdjacent = hasCheckboxItems;
--    });
 +    submenuSlot?.addEventListener("slotchange", () => this.processSubmenuItems(item), { signal });
 +    this.processSubmenuItems(item);
 +    return () => {
 +      controller.abort();
 +      cleanup();
 +    };
-   }
-   processSubmenuItems(item) {
--    if (!item.submenuElement) return;
--    const submenuItems = this.getSubmenuItems(item, true);
--    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
--    submenuItems.forEach((subItem) => {
--      subItem.submenuAdjacent = hasSubmenuItems;
++  }
++  processSubmenuItems(item) {
 +    const items = this.getSubmenuItems(item, true);
 +    const hasSubmenu = items.some((child) => child.hasSubmenu);
 +    const hasCheckbox = items.some((child) => child.type === "checkbox");
@@ -1262,6 +1259,14 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
 +      child.checkboxAdjacent = hasCheckbox;
      });
    }
+-  processSubmenuItems(item) {
+-    if (!item.submenuElement) return;
+-    const submenuItems = this.getSubmenuItems(item, true);
+-    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
+-    submenuItems.forEach((subItem) => {
+-      subItem.submenuAdjacent = hasSubmenuItems;
+-    });
+-  }
 -  /** Cleans up submenu positioning */
 -  cleanupSubmenuPosition(item) {
 -    const cleanup = this.submenuCleanups.get(item);
@@ -1276,7 +1281,7 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -506,6 +459,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -506,6 +459,7 @@
          })
        ]
      }).then(({ x, y, placement: placement2 }) => {
@@ -1285,10 +1290,9 @@ index 000b05d33179ddd930fd72221becf7a7e3042a2f..971c99516ef06aabb30afca195c4aa45
        Object.assign(item.submenuElement.style, {
          left: `${x}px`,
 diff --git a/dist/components/dropdown/dropdown.d.ts b/dist/components/dropdown/dropdown.d.ts
-index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
 --- a/dist/components/dropdown/dropdown.d.ts
 +++ b/dist/components/dropdown/dropdown.d.ts
-@@ -29,11 +29,12 @@ import '../popup/popup.js';
+@@ -29,11 +29,12 @@
   */
  export default class WaDropdown extends WebAwesomeElement {
      static css: import("lit").CSSResult[];
@@ -1303,7 +1307,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      defaultSlot: HTMLSlotElement;
      private menu;
      private popup;
-@@ -51,6 +52,7 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -51,6 +52,7 @@
      distance: number;
      /** The offset of the dropdown menu along its trigger. */
      skidding: number;
@@ -1311,7 +1315,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      disconnectedCallback(): void;
      firstUpdated(changedProperties: PropertyValues<typeof this>): void;
      updated(changedProperties: PropertyValues<typeof this>): Promise<void>;
-@@ -60,22 +62,14 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -60,22 +62,14 @@
      private getSubmenuItems;
      /** Syncs item sizes with the dropdown's size property. */
      private syncItemSizes;
@@ -1338,7 +1342,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      /** Handles key down events when the menu is open */
      private handleDocumentKeyDown;
      /** Handles pointer down events when the dropdown is open. */
-@@ -90,10 +84,7 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -90,10 +84,7 @@
      private handleSubmenuOpening;
      /** Sets up submenu positioning with autoUpdate */
      private setupSubmenuPosition;
@@ -1350,10 +1354,9 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      private positionSubmenu;
      /** Updates the safe triangle coordinates for a submenu */
 diff --git a/dist/components/dropdown-item/dropdown-item.d.ts b/dist/components/dropdown-item/dropdown-item.d.ts
-index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b81d972888 100644
 --- a/dist/components/dropdown-item/dropdown-item.d.ts
 +++ b/dist/components/dropdown-item/dropdown-item.d.ts
-@@ -35,6 +35,8 @@ import '../icon/icon.js';
+@@ -35,6 +35,8 @@
  export default class WaDropdownItem extends WebAwesomeElement {
      static css: import("lit").CSSResult;
      private readonly hasSlotController;
@@ -1362,7 +1365,7 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      submenuElement: HTMLDivElement;
      private linkElement;
      /** @internal The controller will set this property to true when the item is active. */
-@@ -91,6 +93,8 @@ export default class WaDropdownItem extends WebAwesomeElement {
+@@ -91,6 +93,8 @@
      private updateHasSubmenuState;
      /** Opens the submenu. */
      openSubmenu(): Promise<void>;
@@ -1372,10 +1375,9 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      private notifyParentOfOpening;
      /** Closes the submenu. */
 diff --git a/dist/components/select/select.d.ts b/dist/components/select/select.d.ts
-index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b464fb37c 100644
 --- a/dist/components/select/select.d.ts
 +++ b/dist/components/select/select.d.ts
-@@ -66,6 +66,8 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+@@ -66,6 +66,8 @@
      static get validators(): import("../../internal/webawesome-form-associated-element.js").Validator<WebAwesomeFormAssociatedElement>[];
      assumeInteractionOn: string[];
      private cachedOptions;
@@ -1384,7 +1386,7 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private readonly hasSlotController;
      private readonly localize;
      private selectionOrder;
-@@ -154,8 +156,6 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+@@ -154,8 +156,6 @@
      connectedCallback(): void;
      disconnectedCallback(): void;
      private updateDefaultValue;
@@ -1394,7 +1396,6 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private handleDocumentFocusIn;
      private handleDocumentKeyDown;
 diff --git a/dist/components/tooltip/tooltip.d.ts b/dist/components/tooltip/tooltip.d.ts
-index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f132a03f81 100644
 --- a/dist/components/tooltip/tooltip.d.ts
 +++ b/dist/components/tooltip/tooltip.d.ts
 @@ -1,4 +1,3 @@
@@ -1402,7 +1403,7 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
  import WebAwesomeElement from '../../internal/webawesome-element.js';
  import WaPopup from '../popup/popup.js';
  /**
-@@ -62,19 +61,14 @@ export default class WaTooltip extends WebAwesomeElement {
+@@ -62,19 +61,14 @@
      for: string | null;
      anchor: null | Element;
      private eventController;
@@ -1426,7 +1427,7 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      private hasTrigger;
      /** Adds the tooltip ID to the aria-labelledby attribute */
      private addToAriaLabelledBy;
-@@ -83,7 +77,6 @@ export default class WaTooltip extends WebAwesomeElement {
+@@ -83,7 +77,6 @@
      handleOpenChange(): Promise<void>;
      handleForChange(): void;
      handleOptionsChange(): Promise<void>;
@@ -1435,24 +1436,23 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      show(): Promise<void>;
      /** Hides the tooltip */
 diff --git a/dist/custom-elements.json b/dist/custom-elements.json
-index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2edc59b9db 100644
 --- a/dist/custom-elements.json
 +++ b/dist/custom-elements.json
-@@ -18189,22 +18189,12 @@
+@@ -18389,22 +18389,12 @@
              },
              {
                "kind": "field",
 -              "name": "handleBlur",
--              "privacy": "private"
--            },
--            {
--              "kind": "field",
--              "name": "handleClick",
 +              "name": "openTransition",
                "privacy": "private"
              },
              {
                "kind": "field",
+-              "name": "handleClick",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
 -              "name": "handleFocus",
 -              "privacy": "private"
 -            },
@@ -1463,7 +1463,7 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
                "privacy": "private"
              },
              {
-@@ -18215,22 +18205,7 @@
+@@ -18415,22 +18405,7 @@
              },
              {
                "kind": "field",
@@ -1487,21 +1487,21 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
                "privacy": "private"
              },
              {
-@@ -18307,13 +18282,6 @@
-                 "text": "handleOptionsChange() => void"
-               }
+@@ -18509,13 +18484,6 @@
              },
--            {
--              "kind": "method",
+             {
+               "kind": "method",
 -              "name": "handleDisabledChange",
 -              "type": {
 -                "text": "handleDisabledChange() => void"
 -              }
 -            },
-             {
-               "kind": "method",
+-            {
+-              "kind": "method",
                "name": "show",
-@@ -18399,6 +18367,11 @@
+               "description": "Shows the tooltip.",
+               "type": {
+@@ -18599,6 +18567,11 @@
                  "name": "WebAwesomeElement",
                  "module": "internal/webawesome-element.js"
                }
@@ -1513,7 +1513,7 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
              }
            ],
            "events": [
-@@ -27985,13 +27958,13 @@
+@@ -28638,13 +28611,13 @@
                "privacy": "private"
              },
              {
@@ -1532,7 +1532,6 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
              },
              {
 diff --git a/dist/internal/animate.d.ts b/dist/internal/animate.d.ts
-index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
 --- a/dist/internal/animate.d.ts
 +++ b/dist/internal/animate.d.ts
 @@ -1,9 +1,6 @@
@@ -1546,11 +1545,10 @@ index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3
  export declare function animateWithClass(el: Element, className: string): Promise<void>;
  /** Parses a CSS duration and returns the number of milliseconds. */
  export declare function parseDuration(duration: number | string): number;
-diff --git a/dist-cdn/chunks/chunk.EPFYRZYN.js b/dist-cdn/chunks/chunk.EPFYRZYN.js
-index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259964de436 100644
---- a/dist-cdn/chunks/chunk.EPFYRZYN.js
-+++ b/dist-cdn/chunks/chunk.EPFYRZYN.js
-@@ -46,9 +46,6 @@ import {
+diff --git a/dist-cdn/chunks/chunk.W55GO32K.js b/dist-cdn/chunks/chunk.W55GO32K.js
+--- a/dist-cdn/chunks/chunk.W55GO32K.js
++++ b/dist-cdn/chunks/chunk.W55GO32K.js
+@@ -46,9 +46,6 @@
  import {
    size_styles_default
  } from "./chunk.JB5Y2AN3.js";
@@ -1560,7 +1558,7 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -88,6 +85,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -88,6 +85,7 @@
      this.selectionOrder = /* @__PURE__ */ new Map();
      this.typeToSelectString = "";
      this.slotChangePending = false;
@@ -1568,7 +1566,7 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
      this.displayLabel = "";
      this.selectedOptions = [];
      this.name = "";
-@@ -308,7 +306,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -308,7 +306,12 @@
    }
    disconnectedCallback() {
      super.disconnectedCallback();
@@ -1582,10 +1580,12 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
      this.cachedOptions = null;
    }
    updateDefaultValue() {
-@@ -322,24 +325,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
-       this._defaultValue = this.getAttribute("value") || null;
+@@ -320,24 +323,6 @@
      }
-   }
+     if (this.hasAttribute("value")) {
+       this._defaultValue = this.getAttribute("value") || null;
+-    }
+-  }
 -  addOpenListeners() {
 -    document.addEventListener("focusin", this.handleDocumentFocusIn);
 -    document.addEventListener("keydown", this.handleDocumentKeyDown);
@@ -1602,12 +1602,10 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
 -    unregisterDismissible(this);
 -    if (this.getRootNode() !== document) {
 -      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
--    }
--  }
-   handleFocus() {
-     this.displayInput.setSelectionRange(0, 0);
+     }
    }
-@@ -604,6 +589,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleFocus() {
+@@ -604,6 +589,8 @@
    handleDisabledChange() {
      if (this.disabled && this.open) {
        this.open = false;
@@ -1616,7 +1614,7 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
      }
    }
    handleValueChange() {
-@@ -614,56 +601,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+@@ -614,56 +601,72 @@
      this.updateValidity();
    }
    async handleOpenChange() {
@@ -1680,16 +1678,17 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
 -      if (waHideEvent.defaultPrevented) {
 -        this.open = false;
 -        return;
-+      if (!open) {
-+        this.listbox.hidden = true;
-+        this.popup.active = false;
-       }
+-      }
 -      this.removeOpenListeners();
 -      await animateWithClass(this.popup.popup, "hide");
 -      this.listbox.hidden = true;
 -      this.popup.active = false;
 -      this.dispatchEvent(new WaAfterHideEvent());
 -    }
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
++      }
 +      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
 +    })();
 +    return this.openAnimation;
@@ -1700,8 +1699,9 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
 +    if (this.disabled) {
        this.open = false;
 -      return void 0;
+-    }
 +      return;
-     }
++    }
 +    if (!this.isConnected) return;
      this.open = true;
 -    return waitForEvent(this, "wa-after-show");
@@ -1723,10 +1723,9 @@ index dcad1dbeba28c41e7798b9524c87cd19248e1493..b53cb1bcbd40e8d6aae77687f326a259
    /** Sets focus on the control. */
    focus(options) {
 diff --git a/dist-cdn/chunks/chunk.L6CIKOFQ.js b/dist-cdn/chunks/chunk.L6CIKOFQ.js
-index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
 --- a/dist-cdn/chunks/chunk.L6CIKOFQ.js
 +++ b/dist-cdn/chunks/chunk.L6CIKOFQ.js
-@@ -5,32 +5,19 @@ async function animate(el, keyframes, options) {
+@@ -5,32 +5,19 @@
    return el.animate(keyframes, options).finished.catch(() => {
    });
  }
@@ -1772,11 +1771,10 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  }
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
-diff --git a/dist-cdn/chunks/chunk.OHGWARAS.js b/dist-cdn/chunks/chunk.OHGWARAS.js
-index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c76b74ba73 100644
---- a/dist-cdn/chunks/chunk.OHGWARAS.js
-+++ b/dist-cdn/chunks/chunk.OHGWARAS.js
-@@ -36,6 +36,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+diff --git a/dist-cdn/chunks/chunk.W2C46OQX.js b/dist-cdn/chunks/chunk.W2C46OQX.js
+--- a/dist-cdn/chunks/chunk.W2C46OQX.js
++++ b/dist-cdn/chunks/chunk.W2C46OQX.js
+@@ -36,6 +36,7 @@
    constructor() {
      super(...arguments);
      this.hasSlotController = new HasSlotController(this, "[default]", "start", "end");
@@ -1784,7 +1782,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
      this.active = false;
      this.variant = "default";
      this.size = "m";
-@@ -47,7 +48,10 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -47,7 +48,10 @@
      this.submenuOpen = false;
      this.hasSubmenu = false;
      this.handleSlotChange = () => {
@@ -1796,7 +1794,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
        this.updateHasSubmenuState();
        if (this.hasSubmenu) {
          this.setAttribute("aria-haspopup", "menu");
-@@ -74,7 +78,6 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -74,7 +78,6 @@
      /** Handles pointer enter to open the submenu on hover */
      this.handlePointerEnter = (event) => {
        if (event.pointerType === "mouse" && this.hasSubmenu && !this.disabled) {
@@ -1804,7 +1802,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
          this.submenuOpen = true;
        }
      };
-@@ -91,7 +94,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -91,7 +94,15 @@
    }
    disconnectedCallback() {
      super.disconnectedCallback();
@@ -1821,7 +1819,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
      this.removeEventListener?.("click", this.handleHostClick);
      this.removeEventListener?.("pointerenter", this.handlePointerEnter);
      this.shadowRoot?.removeEventListener?.("click", this.handleClick, { capture: true });
-@@ -134,11 +145,8 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -134,11 +145,8 @@
      }
      if (changedProperties.has("submenuOpen")) {
        this.customStates.set("submenu-open", this.submenuOpen);
@@ -1835,27 +1833,27 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
      }
    }
    /** Update the has-submenu custom state */
-@@ -147,22 +155,51 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -147,22 +155,51 @@
    }
    /** Opens the submenu. */
    async openSubmenu() {
--    const submenu = this.submenuElement;
--    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
--    this.notifyParentOfOpening();
--    submenu.showPopover?.();
--    submenu.hidden = false;
--    submenu.setAttribute("data-visible", "");
 +    if (!this.hasSubmenu || !this.submenuElement || !this.isConnected) return;
-     this.submenuOpen = true;
--    this.setAttribute("aria-expanded", "true");
--    await animateWithClass(submenu, "show");
--    setTimeout(() => {
++    this.submenuOpen = true;
 +    await this.updateComplete;
 +    return this.submenuAnimation;
 +  }
 +  /** Reconciles property and public-method requests through one submenu lifecycle. */
 +  async updateSubmenuVisibility(previousAnimation) {
-+    const submenu = this.submenuElement;
+     const submenu = this.submenuElement;
+-    if (!this.hasSubmenu || !submenu || !this.isConnected) return;
+-    this.notifyParentOfOpening();
+-    submenu.showPopover?.();
+-    submenu.hidden = false;
+-    submenu.setAttribute("data-visible", "");
+-    this.submenuOpen = true;
+-    this.setAttribute("aria-expanded", "true");
+-    await animateWithClass(submenu, "show");
+-    setTimeout(() => {
 +    if (!this.submenuOpen) this.dispatchEvent(new Event("submenu-closing"));
 +    if (!this.hasSubmenu || !submenu || !this.isConnected) {
 +      await previousAnimation;
@@ -1901,7 +1899,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
    }
    /** Notifies the parent dropdown that this item is opening its submenu */
    notifyParentOfOpening() {
-@@ -172,30 +209,15 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -172,30 +209,15 @@
        detail: { item: this }
      });
      this.dispatchEvent(event);
@@ -1937,7 +1935,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
    }
    /** Determines whether the item navigates when selected. Items with submenus never navigate. */
    isLink() {
-@@ -225,8 +247,9 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -225,8 +247,9 @@
    }
    /** Gets all dropdown items in the submenu. */
    getSubmenuItems() {
@@ -1949,7 +1947,7 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
      );
    }
    render() {
-@@ -285,7 +308,7 @@ var WaDropdownItem = class extends WebAwesomeElement {
+@@ -285,7 +308,7 @@
              >
                <slot name="submenu"></slot>
              </div>
@@ -1958,11 +1956,10 @@ index f0acaba806a2879c569a25877f8ef0dc94567791..c16274b21a03ff1a16525db107b491c7
      `;
    }
  };
-diff --git a/dist-cdn/chunks/chunk.QYBSWZDP.js b/dist-cdn/chunks/chunk.QYBSWZDP.js
-index 7d00635638361679a37070b02f3c2df9f6921cea..52b573eeac08eb9ada098fb43b9648c66eda936f 100644
---- a/dist-cdn/chunks/chunk.QYBSWZDP.js
-+++ b/dist-cdn/chunks/chunk.QYBSWZDP.js
-@@ -1643,10 +1643,17 @@ var WaPopup = class extends WebAwesomeElement {
+diff --git a/dist-cdn/chunks/chunk.EFKLEU6F.js b/dist-cdn/chunks/chunk.EFKLEU6F.js
+--- a/dist-cdn/chunks/chunk.EFKLEU6F.js
++++ b/dist-cdn/chunks/chunk.EFKLEU6F.js
+@@ -1643,10 +1643,17 @@
      if (!this.anchorEl || !this.active || !this.isConnected) {
        return;
      }
@@ -1981,11 +1978,10 @@ index 7d00635638361679a37070b02f3c2df9f6921cea..52b573eeac08eb9ada098fb43b9648c6
    }
    async stop() {
      return new Promise((resolve) => {
-diff --git a/dist-cdn/chunks/chunk.R3TB74QH.js b/dist-cdn/chunks/chunk.R3TB74QH.js
-index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd088819820f 100644
---- a/dist-cdn/chunks/chunk.R3TB74QH.js
-+++ b/dist-cdn/chunks/chunk.R3TB74QH.js
-@@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
+diff --git a/dist-cdn/chunks/chunk.LOCSL3WJ.js b/dist-cdn/chunks/chunk.LOCSL3WJ.js
+--- a/dist-cdn/chunks/chunk.LOCSL3WJ.js
++++ b/dist-cdn/chunks/chunk.LOCSL3WJ.js
+@@ -68,17 +68,16 @@
  var WaDropdown = class extends WebAwesomeElement {
    constructor() {
      super(...arguments);
@@ -2005,7 +2001,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        const isRtl = this.localize.dir() === "rtl";
        if (event.key === "Escape" && this.open && isTopDismissible(this)) {
          const trigger = this.getTrigger();
-@@ -88,22 +87,12 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -88,22 +87,12 @@
          trigger?.focus({ preventScroll: true });
          return;
        }
@@ -2033,7 +2029,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        let itemToSelect;
        if (event.key === "ArrowUp") {
          event.preventDefault();
-@@ -123,39 +112,23 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -123,39 +112,23 @@
            itemToSelect = items[0];
          }
        }
@@ -2081,7 +2077,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
          return;
        }
        if (event.key === "Home" || event.key === "End") {
-@@ -164,7 +137,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -164,7 +137,7 @@
          itemToSelect = event.key === "Home" ? items[0] : items[items.length - 1];
        }
        if (event.key === "Tab") {
@@ -2090,7 +2086,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        }
        if (event.key.length === 1 && !(event.metaKey || event.ctrlKey || event.altKey) && !(event.key === " " && this.userTypedQuery === "")) {
          clearTimeout(this.userTypedTimeout);
-@@ -190,19 +163,11 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -190,19 +163,11 @@
          itemToSelect.scrollIntoView({ block: "nearest" });
          return;
        }
@@ -2111,7 +2107,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
          } else {
            this.makeSelection(activeItem, event);
          }
-@@ -223,7 +188,8 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -223,7 +188,8 @@
      };
      /** Handle global mouse movement for safe triangle logic */
      this.handleGlobalMouseMove = (event) => {
@@ -2121,7 +2117,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        if (!currentSubmenuItem?.submenuOpen || !currentSubmenuItem.submenuElement) return;
        const submenuRect = currentSubmenuItem.submenuElement.getBoundingClientRect();
        const isRtl = this.localize.dir() === "rtl";
-@@ -241,7 +207,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -241,7 +207,7 @@
        );
        if (!isOverItem && !isOverSubmenu) {
          setTimeout(() => {
@@ -2130,7 +2126,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
              currentSubmenuItem.submenuOpen = false;
            }
          }, 100);
-@@ -251,15 +217,20 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -251,15 +217,20 @@
    handleSizeChange() {
      warnDeprecatedSize(this.localName, this.size);
    }
@@ -2156,7 +2152,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      unregisterDismissible(this);
    }
    firstUpdated(changedProperties) {
-@@ -276,12 +247,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -276,12 +247,7 @@
          return;
        }
        this.customStates.set("open", this.open);
@@ -2170,7 +2166,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -310,104 +276,96 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -310,104 +276,96 @@
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -2191,8 +2187,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +  /** Gets the current active submenu item. */
    getCurrentSubmenuItem() {
 -    return this.openSubmenuStack.length > 0 ? this.openSubmenuStack[this.openSubmenuStack.length - 1] : void 0;
-+    return this.activeSubmenus.at(-1)?.item;
-   }
+-  }
 -  /** Closes all submenus in the dropdown. */
 -  closeAllSubmenus() {
 -    const items = this.getItems(true);
@@ -2217,6 +2212,8 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 -    });
 -    if (!this.openSubmenuStack.includes(item)) {
 -      this.openSubmenuStack.push(item);
++    return this.activeSubmenus.at(-1)?.item;
++  }
 +  /** Retires an ancestor branch before its hide animations can complete. */
 +  closeAllSubmenus(from = 0) {
 +    // Remove ownership first: item close notifications may reenter this owner.
@@ -2248,6 +2245,12 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      }
 -    if (this.popup.active) {
 -      return;
+-    }
+-    openDropdowns.forEach((dropdown) => dropdown.open = false);
+-    this.popup.active = true;
+-    this.open = true;
+-    openDropdowns.add(this);
+-    registerDismissible(this);
 +    // Membership records accepted open ownership. The popup stays active while hiding,
 +    // so its active flag cannot distinguish a canceled hide from a reopen.
 +    if (!this.isConnected || this.open !== open || open && openDropdowns.has(this)) return;
@@ -2269,12 +2272,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +      this.closeAllSubmenus();
 +      openDropdowns.delete(this);
 +      unregisterDismissible(this);
-     }
--    openDropdowns.forEach((dropdown) => dropdown.open = false);
--    this.popup.active = true;
--    this.open = true;
--    openDropdowns.add(this);
--    registerDismissible(this);
++    }
      this.syncAriaAttributes();
 -    document.addEventListener("keydown", this.handleDocumentKeyDown);
 -    document.addEventListener("pointerdown", this.handleDocumentPointerDown);
@@ -2285,6 +2283,29 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 -    if (items.length > 0) {
 -      items.forEach((item, index) => item.active = index === 0);
 -      items[0].focus({ preventScroll: true });
+-    }
+-    this.dispatchEvent(new WaAfterShowEvent());
+-  }
+-  /** Hides the dropdown menu. This should only be called from within updated(). */
+-  async hideMenu() {
+-    if (!this.popup || !this.menu) return;
+-    const hideEvent = new WaHideEvent({ source: this });
+-    this.dispatchEvent(hideEvent);
+-    if (hideEvent.defaultPrevented) {
+-      this.open = true;
+-      return;
+-    }
+-    this.open = false;
+-    openDropdowns.delete(this);
+-    unregisterDismissible(this);
+-    this.syncAriaAttributes();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
+-    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
+-    this.menu.classList.remove("show");
+-    await animateWithClass(this.menu, "hide");
+-    this.popup.active = this.open;
+-    this.dispatchEvent(new WaAfterHideEvent());
 +    // Join canceled animation cleanup before reusing its class. Show and hide share
 +    // one CSS animation name, so overlapping helpers cannot own separate animations.
 +    this.menu.classList.remove("show", "hide");
@@ -2318,17 +2339,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +        if (initialItem.autofocus) initialItem.scrollIntoView({ block: "nearest" });
 +      }
 +      if (!isCurrent()) return;
-     }
--    this.dispatchEvent(new WaAfterShowEvent());
--  }
--  /** Hides the dropdown menu. This should only be called from within updated(). */
--  async hideMenu() {
--    if (!this.popup || !this.menu) return;
--    const hideEvent = new WaHideEvent({ source: this });
--    this.dispatchEvent(hideEvent);
--    if (hideEvent.defaultPrevented) {
--      this.open = true;
--      return;
++    }
 +    await this.menuAnimation;
 +    if (!isCurrent()) return;
 +    if (open) {
@@ -2336,22 +2347,11 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +    } else {
 +      this.popup.active = false;
 +      this.dispatchEvent(new WaAfterHideEvent());
-     }
--    this.open = false;
--    openDropdowns.delete(this);
--    unregisterDismissible(this);
--    this.syncAriaAttributes();
--    document.removeEventListener("keydown", this.handleDocumentKeyDown);
--    document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
--    document.removeEventListener("mousemove", this.handleGlobalMouseMove);
--    this.menu.classList.remove("show");
--    await animateWithClass(this.menu, "hide");
--    this.popup.active = this.open;
--    this.dispatchEvent(new WaAfterHideEvent());
++    }
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -415,8 +373,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -415,8 +373,6 @@
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -2360,7 +2360,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -443,60 +399,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -443,60 +399,57 @@
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -2372,6 +2372,8 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 -    this.addToSubmenuStack(openingItem);
 -    this.setupSubmenuPosition(openingItem);
 -    this.processSubmenuItems(openingItem);
+-  }
+-  /** Sets up submenu positioning with autoUpdate */
 +    event.stopPropagation();
 +    const path = event.composedPath();
 +    const branch = path.slice(0, path.indexOf(this)).filter((el) => el instanceof HTMLElement && el.localName === "wa-dropdown-item").reverse();
@@ -2388,8 +2390,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +    for (const item of branch.slice(shared)) {
 +      this.activeSubmenus.push({ item, cleanup: this.setupSubmenuPosition(item) });
 +    }
-   }
--  /** Sets up submenu positioning with autoUpdate */
++  }
 +  /** Binds positioning and close notifications to this exact open lifetime. */
    setupSubmenuPosition(item) {
 -    if (!item.submenuElement) return;
@@ -2424,20 +2425,14 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 -    items.forEach((item) => {
 -      item.submenuAdjacent = hasSubmenuItems;
 -      item.checkboxAdjacent = hasCheckboxItems;
--    });
 +    submenuSlot?.addEventListener("slotchange", () => this.processSubmenuItems(item), { signal });
 +    this.processSubmenuItems(item);
 +    return () => {
 +      controller.abort();
 +      cleanup();
 +    };
-   }
-   processSubmenuItems(item) {
--    if (!item.submenuElement) return;
--    const submenuItems = this.getSubmenuItems(item, true);
--    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
--    submenuItems.forEach((subItem) => {
--      subItem.submenuAdjacent = hasSubmenuItems;
++  }
++  processSubmenuItems(item) {
 +    const items = this.getSubmenuItems(item, true);
 +    const hasSubmenu = items.some((child) => child.hasSubmenu);
 +    const hasCheckbox = items.some((child) => child.type === "checkbox");
@@ -2446,6 +2441,14 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
 +      child.checkboxAdjacent = hasCheckbox;
      });
    }
+-  processSubmenuItems(item) {
+-    if (!item.submenuElement) return;
+-    const submenuItems = this.getSubmenuItems(item, true);
+-    const hasSubmenuItems = submenuItems.some((subItem) => subItem.hasSubmenu);
+-    submenuItems.forEach((subItem) => {
+-      subItem.submenuAdjacent = hasSubmenuItems;
+-    });
+-  }
 -  /** Cleans up submenu positioning */
 -  cleanupSubmenuPosition(item) {
 -    const cleanup = this.submenuCleanups.get(item);
@@ -2460,7 +2463,7 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -516,6 +469,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -516,6 +469,7 @@
          })
        ]
      }).then(({ x: x2, y, placement: placement2 }) => {
@@ -2468,11 +2471,10 @@ index f2c229192dc968570e8350f74778ffb0993c3b20..95a89e20fe546ac3ebcd39c4bd91bd08
        item.submenuElement.setAttribute("data-placement", placement2);
        Object.assign(item.submenuElement.style, {
          left: `${x2}px`,
-diff --git a/dist-cdn/chunks/chunk.RJFFANZD.js b/dist-cdn/chunks/chunk.RJFFANZD.js
-index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e512f6d084 100644
---- a/dist-cdn/chunks/chunk.RJFFANZD.js
-+++ b/dist-cdn/chunks/chunk.RJFFANZD.js
-@@ -25,9 +25,6 @@ import {
+diff --git a/dist-cdn/chunks/chunk.UVIXNJVD.js b/dist-cdn/chunks/chunk.UVIXNJVD.js
+--- a/dist-cdn/chunks/chunk.UVIXNJVD.js
++++ b/dist-cdn/chunks/chunk.UVIXNJVD.js
+@@ -25,9 +25,6 @@
  import {
    uniqueId
  } from "./chunk.O6IZ4I7T.js";
@@ -2482,7 +2484,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
  import {
    animateWithClass
  } from "./chunk.L6CIKOFQ.js";
-@@ -87,83 +84,45 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -87,82 +84,44 @@
      this.for = null;
      this.anchor = null;
      this.eventController = new AbortController();
@@ -2490,14 +2492,6 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -      this.dismissedByPress = false;
 -      if (this.hasTrigger("focus")) {
 -        this.hide();
--      }
--    };
--    this.handleClick = () => {
--      if (this.hasTrigger("click")) {
--        if (this.open) {
--          this.hide();
--        } else {
--          this.show();
 +    this.openTransition = { open: false };
 +    this.handleTrigger = (event) => {
 +      const type = event.type;
@@ -2507,7 +2501,32 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 +        if (!this.hasTrigger("click")) {
 +          if (!this.hasTrigger("manual")) this.lightDismiss();
 +          return;
-         }
++        }
++        if (type !== "click") return;
++        open = !this.open;
++      } else {
++        if (!open) {
++          const target = event.relatedTarget;
++          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
++          this.dismissedByPress = false;
++        }
++        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
++      }
++      const request = () => open ? this.show() : this.hide();
++      if (hover) {
++        clearTimeout(this.hoverTimeout);
++        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
++      } else {
++        request();
+       }
+     };
+-    this.handleClick = () => {
+-      if (this.hasTrigger("click")) {
+-        if (this.open) {
+-          this.hide();
+-        } else {
+-          this.show();
+-        }
 -        return;
 -      }
 -      if (this.hasTrigger("manual")) {
@@ -2521,29 +2540,14 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -      }
 -      if (this.hasTrigger("focus")) {
 -        this.show();
-+        if (type !== "click") return;
-+        open = !this.open;
-+      } else {
-+        if (!open) {
-+          const target = event.relatedTarget;
-+          if (hover && target && ((this.anchor && containsComposedNode(this.anchor, target)) || containsComposedNode(this, target))) return;
-+          this.dismissedByPress = false;
-+        }
-+        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
-       }
+-      }
 -    };
 -    this.handleMouseDown = () => {
 -      if (this.hasTrigger("click") || this.hasTrigger("manual")) {
 -        return;
-+      const request = () => open ? this.show() : this.hide();
-+      if (hover) {
-+        clearTimeout(this.hoverTimeout);
-+        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
-+      } else {
-+        request();
-       }
+-      }
 -      this.lightDismiss();
-     };
+-    };
 -    this.handleDocumentKeyDown = (event) => {
 -      if (this.hasTrigger("manual")) {
 -        return;
@@ -2560,14 +2564,14 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -    };
 -    this.handleDocumentClick = (event) => {
 -      if (this.hasTrigger("manual")) {
--        return;
--      }
--      if (this.anchor && event.composedPath().includes(this.anchor)) {
 +      } else if (this.anchor && event.composedPath().includes(this.anchor)) {
          return;
        }
+-      if (this.anchor && event.composedPath().includes(this.anchor)) {
+-        return;
+-      }
        this.hide();
-     };
+-    };
 -    this.handleMouseOver = () => {
 -      if (this.dismissedByPress) {
 -        return;
@@ -2591,11 +2595,10 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -          this.hide();
 -        }, this.hideDelay);
 -      }
--    };
+     };
    }
    connectedCallback() {
-     super.connectedCallback();
-@@ -172,43 +131,33 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -172,42 +131,32 @@
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -2638,7 +2641,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
      if (this.anchor) {
        this.removeFromAriaLabelledBy(this.anchor, this.id);
      }
-   }
+-  }
 -  firstUpdated(changedProperties) {
 -    this.body.hidden = !this.open;
 -    if (this.open) {
@@ -2646,11 +2649,10 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -      this.popup.reposition();
 -    }
 -    super.firstUpdated(changedProperties);
--  }
+   }
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
-     clearTimeout(this.hoverTimeout);
-@@ -240,41 +189,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -240,41 +189,47 @@
      }
    }
    async handleOpenChange() {
@@ -2680,6 +2682,15 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 -      if (waHideEvent.defaultPrevented) {
 -        this.open = true;
 -        return;
+-      }
+-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-      document.removeEventListener("click", this.handleDocumentClick);
+-      unregisterDismissible(this);
+-      await animateWithClass(this.popup.popup, "hide-with-scale");
+-      this.popup.active = false;
+-      this.body.hidden = true;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
 +    if (this.disabled) this.open = false;
 +    const previous = this.openTransition;
 +    const open = this.open;
@@ -2718,20 +2729,13 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
 +          // Reposition emits a synchronous public event that can revoke ownership.
 +          if (isCurrent()) this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
 +        })();
-       }
--      document.removeEventListener("keydown", this.handleDocumentKeyDown);
--      document.removeEventListener("click", this.handleDocumentClick);
--      unregisterDismissible(this);
--      await animateWithClass(this.popup.popup, "hide-with-scale");
--      this.popup.active = false;
--      this.body.hidden = true;
--      this.dispatchEvent(new WaAfterHideEvent());
-     }
++      }
++    }
 +    return this.openTransition.promise;
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -288,23 +243,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -288,23 +243,19 @@
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -2768,7 +2772,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
      }
      this.anchor = newAnchor;
    }
-@@ -314,26 +265,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -314,26 +265,19 @@
        this.popup.reposition();
      }
    }
@@ -2804,7 +2808,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
    }
    render() {
      return x`
-@@ -356,7 +300,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -356,7 +300,7 @@
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -2813,7 +2817,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
            <slot></slot>
          </div>
        </wa-popup>
-@@ -408,7 +352,7 @@ __decorateClass([
+@@ -408,7 +352,7 @@
    r()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -2822,7 +2826,7 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -416,9 +360,6 @@ __decorateClass([
+@@ -416,9 +360,6 @@
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -2833,10 +2837,9 @@ index 09aca15ec05df1d0b6df0a9510fdc40fc2614879..2e066839b8831f772665f509eb3885e5
    t("wa-tooltip")
  ], WaTooltip);
 diff --git a/dist-cdn/components/dropdown/dropdown.d.ts b/dist-cdn/components/dropdown/dropdown.d.ts
-index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f612449832dc01157 100644
 --- a/dist-cdn/components/dropdown/dropdown.d.ts
 +++ b/dist-cdn/components/dropdown/dropdown.d.ts
-@@ -29,11 +29,12 @@ import '../popup/popup.js';
+@@ -29,11 +29,12 @@
   */
  export default class WaDropdown extends WebAwesomeElement {
      static css: import("lit").CSSResult[];
@@ -2851,7 +2854,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      defaultSlot: HTMLSlotElement;
      private menu;
      private popup;
-@@ -51,6 +52,7 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -51,6 +52,7 @@
      distance: number;
      /** The offset of the dropdown menu along its trigger. */
      skidding: number;
@@ -2859,7 +2862,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      disconnectedCallback(): void;
      firstUpdated(changedProperties: PropertyValues<typeof this>): void;
      updated(changedProperties: PropertyValues<typeof this>): Promise<void>;
-@@ -60,22 +62,14 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -60,22 +62,14 @@
      private getSubmenuItems;
      /** Syncs item sizes with the dropdown's size property. */
      private syncItemSizes;
@@ -2886,7 +2889,7 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      /** Handles key down events when the menu is open */
      private handleDocumentKeyDown;
      /** Handles pointer down events when the dropdown is open. */
-@@ -90,10 +84,7 @@ export default class WaDropdown extends WebAwesomeElement {
+@@ -90,10 +84,7 @@
      private handleSubmenuOpening;
      /** Sets up submenu positioning with autoUpdate */
      private setupSubmenuPosition;
@@ -2898,10 +2901,9 @@ index 561ccfa258274c2c41cb728c0bfef26381c9f30c..7da1ccc5e1a55eeef5df886f61244983
      private positionSubmenu;
      /** Updates the safe triangle coordinates for a submenu */
 diff --git a/dist-cdn/components/dropdown-item/dropdown-item.d.ts b/dist-cdn/components/dropdown-item/dropdown-item.d.ts
-index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b81d972888 100644
 --- a/dist-cdn/components/dropdown-item/dropdown-item.d.ts
 +++ b/dist-cdn/components/dropdown-item/dropdown-item.d.ts
-@@ -35,6 +35,8 @@ import '../icon/icon.js';
+@@ -35,6 +35,8 @@
  export default class WaDropdownItem extends WebAwesomeElement {
      static css: import("lit").CSSResult;
      private readonly hasSlotController;
@@ -2910,7 +2912,7 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      submenuElement: HTMLDivElement;
      private linkElement;
      /** @internal The controller will set this property to true when the item is active. */
-@@ -91,6 +93,8 @@ export default class WaDropdownItem extends WebAwesomeElement {
+@@ -91,6 +93,8 @@
      private updateHasSubmenuState;
      /** Opens the submenu. */
      openSubmenu(): Promise<void>;
@@ -2920,10 +2922,9 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      private notifyParentOfOpening;
      /** Closes the submenu. */
 diff --git a/dist-cdn/components/select/select.d.ts b/dist-cdn/components/select/select.d.ts
-index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b464fb37c 100644
 --- a/dist-cdn/components/select/select.d.ts
 +++ b/dist-cdn/components/select/select.d.ts
-@@ -66,6 +66,8 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+@@ -66,6 +66,8 @@
      static get validators(): import("../../internal/webawesome-form-associated-element.js").Validator<WebAwesomeFormAssociatedElement>[];
      assumeInteractionOn: string[];
      private cachedOptions;
@@ -2932,7 +2933,7 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private readonly hasSlotController;
      private readonly localize;
      private selectionOrder;
-@@ -154,8 +156,6 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+@@ -154,8 +156,6 @@
      connectedCallback(): void;
      disconnectedCallback(): void;
      private updateDefaultValue;
@@ -2942,7 +2943,6 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private handleDocumentFocusIn;
      private handleDocumentKeyDown;
 diff --git a/dist-cdn/components/tooltip/tooltip.d.ts b/dist-cdn/components/tooltip/tooltip.d.ts
-index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f132a03f81 100644
 --- a/dist-cdn/components/tooltip/tooltip.d.ts
 +++ b/dist-cdn/components/tooltip/tooltip.d.ts
 @@ -1,4 +1,3 @@
@@ -2950,7 +2950,7 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
  import WebAwesomeElement from '../../internal/webawesome-element.js';
  import WaPopup from '../popup/popup.js';
  /**
-@@ -62,19 +61,14 @@ export default class WaTooltip extends WebAwesomeElement {
+@@ -62,19 +61,14 @@
      for: string | null;
      anchor: null | Element;
      private eventController;
@@ -2974,7 +2974,7 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      private hasTrigger;
      /** Adds the tooltip ID to the aria-labelledby attribute */
      private addToAriaLabelledBy;
-@@ -83,7 +77,6 @@ export default class WaTooltip extends WebAwesomeElement {
+@@ -83,7 +77,6 @@
      handleOpenChange(): Promise<void>;
      handleForChange(): void;
      handleOptionsChange(): Promise<void>;
@@ -2983,24 +2983,23 @@ index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f1
      show(): Promise<void>;
      /** Hides the tooltip */
 diff --git a/dist-cdn/custom-elements.json b/dist-cdn/custom-elements.json
-index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2edc59b9db 100644
 --- a/dist-cdn/custom-elements.json
 +++ b/dist-cdn/custom-elements.json
-@@ -18189,22 +18189,12 @@
+@@ -18389,22 +18389,12 @@
              },
              {
                "kind": "field",
 -              "name": "handleBlur",
--              "privacy": "private"
--            },
--            {
--              "kind": "field",
--              "name": "handleClick",
 +              "name": "openTransition",
                "privacy": "private"
              },
              {
                "kind": "field",
+-              "name": "handleClick",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
 -              "name": "handleFocus",
 -              "privacy": "private"
 -            },
@@ -3011,7 +3010,7 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
                "privacy": "private"
              },
              {
-@@ -18215,22 +18205,7 @@
+@@ -18415,22 +18405,7 @@
              },
              {
                "kind": "field",
@@ -3035,21 +3034,21 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
                "privacy": "private"
              },
              {
-@@ -18307,13 +18282,6 @@
-                 "text": "handleOptionsChange() => void"
-               }
+@@ -18509,13 +18484,6 @@
              },
--            {
--              "kind": "method",
+             {
+               "kind": "method",
 -              "name": "handleDisabledChange",
 -              "type": {
 -                "text": "handleDisabledChange() => void"
 -              }
 -            },
-             {
-               "kind": "method",
+-            {
+-              "kind": "method",
                "name": "show",
-@@ -18399,6 +18367,11 @@
+               "description": "Shows the tooltip.",
+               "type": {
+@@ -18599,6 +18567,11 @@
                  "name": "WebAwesomeElement",
                  "module": "internal/webawesome-element.js"
                }
@@ -3061,7 +3060,7 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
              }
            ],
            "events": [
-@@ -27985,13 +27958,13 @@
+@@ -28638,13 +28611,13 @@
                "privacy": "private"
              },
              {
@@ -3080,7 +3079,6 @@ index 48c83fbc1a4ab54cd027784a9750b73d52bd81c9..26d881a6d608917a2c2d763238e93f2e
              },
              {
 diff --git a/dist-cdn/internal/animate.d.ts b/dist-cdn/internal/animate.d.ts
-index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
 --- a/dist-cdn/internal/animate.d.ts
 +++ b/dist-cdn/internal/animate.d.ts
 @@ -1,9 +1,6 @@
