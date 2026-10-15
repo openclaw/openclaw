@@ -189,24 +189,14 @@ export async function deliverReplies(params: {
       textIsSlackPlainText?: boolean;
     }): Promise<SlackSendResult> => {
       return await sendMessageSlack(params.target, input.text, {
+        ...input,
         cfg: params.cfg,
         token: params.token,
-        threadTs: input.threadTs,
         accountId: params.accountId,
+        mediaLocalRoots,
         onDeliveryResult: (result) => {
           acceptedResults.push(result);
         },
-        ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}),
-        ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
-        ...(input.blocks ? { blocks: input.blocks } : {}),
-        ...(input.authoredTextPlacement
-          ? { authoredTextPlacement: input.authoredTextPlacement }
-          : {}),
-        ...(Object.hasOwn(input, "nativeDataFallbackBaseText")
-          ? { nativeDataFallbackBaseText: input.nativeDataFallbackBaseText }
-          : {}),
-        ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-        ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
         ...(params.eventScope
           ? {
               eventScope: params.eventScope,
