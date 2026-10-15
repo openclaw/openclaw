@@ -37,6 +37,9 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
+import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import type { RespondFn } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -273,6 +276,40 @@ describe("GitHub agent reader", () => {
     expect(JSON.stringify(result)).not.toContain("synthetic-unused-service-credential");
   });
 
+  it("shares the GitHub cooldown across tool invocations and the UI reader", async () => {
+    fixture = await createFixture();
+    const fetcher = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+    fixture.fetcher.mockImplementation((input, init) =>
+      requestUrl(input).includes("/issues/")
+        ? Promise.resolve(new Response(null, { status: 429, headers: { "retry-after": "120" } }))
+        : fetcher(input, init),
+    );
+    await expect(fixture.read()).rejects.toThrow(/rate limit/i);
+    fixture.fetcher.mockClear();
+    await expect(
+      fixture.read({ url: "https://github.com/octocat/reader/issues/2" }),
+    ).rejects.toThrow(/rate limit/i);
+    expect(fixture.fetcher).not.toHaveBeenCalled();
+
+    const respond = vi.fn<RespondFn>();
+    const config = fixture.config;
+    await expectDefined(
+      createControlUiHandlers()["controlUi.githubDetail"],
+      "UI reader",
+    )(
+      createControlUiRequestOptions(() => config)(
+        { owner: "octocat", repo: "reader", kind: "issue", number: 3, agentId: "reader" },
+        respond,
+      ),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringMatching(/rate limit/i), retryable: true }),
+    );
+    expect(fixture.fetcher).not.toHaveBeenCalled();
+  });
+
   it("omits the tool when policy denies it or its owner is deactivated", async () => {
     fixture = await createFixture();
     for (const denied of ["github_read", "github", "group:plugins"]) {
@@ -299,6 +336,7 @@ describe("GitHub agent reader", () => {
         if (requestUrl(input).endsWith("/issues/1")) {
           entered.resolve(expectDefined(init?.signal, "reader fetch signal"));
           await release.promise;
+          init?.signal?.throwIfAborted();
         }
         return fetcher(input, init);
       });
@@ -327,6 +365,11 @@ describe("GitHub agent reader", () => {
         expect(
           fixture.fetcher.mock.calls.some(([input]) => requestUrl(input).includes("/comments")),
         ).toBe(false);
+        if (change === "cancel") {
+          expect((await fixture.read({ refresh: false })).details).toMatchObject({
+            title: "Public reader issue",
+          });
+        }
       } finally {
         release.resolve();
         await pending.catch(() => {});

@@ -97,19 +97,12 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         caller.agentId,
         assertActive,
       );
-      // Fence each upstream effect, including fallback credentials and cached visibility reads.
-      const fetchCurrent: typeof fetch = (input, init) => {
-        assertSelected();
-        return fetch(input, {
-          ...init,
-          signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
-        });
-      };
       const document = await gitHubPublicApi.loadGitHubDetail(
         target,
         identity,
-        fetchCurrent,
+        undefined,
         params.refresh === true,
+        { assertActive: assertSelected, signal },
       );
       assertSelected();
       respond(true, document, undefined);

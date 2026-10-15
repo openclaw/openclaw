@@ -47,6 +47,7 @@ export type ControlUiGitHubPreviewIdentity = {
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   stale?: true;
+  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
