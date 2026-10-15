@@ -31,8 +31,7 @@ describe("ModelPicker", () => {
     await updatePickers(container);
     const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
-    trigger.click();
-    await picker.updateComplete;
+    await openPicker(picker);
     const group = picker.querySelector<HTMLButtonElement>(".picker-select__group-toggle")!;
     group.click();
     flush();
