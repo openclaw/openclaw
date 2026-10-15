@@ -264,7 +264,7 @@ async function readCatalogPageFromEntry(
       maxMessages: Math.min(before, limit + 1),
     });
     const projected = projectChatDisplayMessages(
-      page.events.map((entry) => sqliteMessageEventWithSeq(entry)),
+      page.events.map((event) => sqliteMessageEventWithSeq(event)),
       {
         maxChars: MAX_CATALOG_TEXT_CHARS,
         // Catalog assistant items contain text/model facts, not forwarded sender labels.

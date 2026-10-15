@@ -66,8 +66,8 @@ function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
 }
 
-function openClawMeta(message: unknown): Record<string, unknown> {
-  return (message as { __openclaw: Record<string, unknown> })["__openclaw"];
+function openClawMeta(entry: unknown): Record<string, unknown> {
+  return (entry as { __openclaw: Record<string, unknown> })["__openclaw"];
 }
 
 function historicalWindowIds(
