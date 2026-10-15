@@ -33,7 +33,8 @@ import {
   type ClawCatalogSource,
   type ClawAddReviewPlan,
 } from "./claws-catalog-client.ts";
-import { renderClawsCatalogDialog, type ClawsCatalogViewProps } from "./claws-catalog-view.tsx";
+import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
+import { renderClawsCatalogDialog } from "./claws-catalog-view.tsx";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 

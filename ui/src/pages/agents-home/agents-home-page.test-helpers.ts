@@ -23,6 +23,8 @@ import {
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { AgentsHomePage } from "./agents-home-page.tsx";
 
 const roster: AgentsListResult = {

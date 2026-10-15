@@ -10,7 +10,7 @@ import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
 import type { ClawAddReviewPlan } from "./claws-catalog-client.ts";
-import type { ClawsCatalogViewProps } from "./claws-catalog-view.tsx";
+import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { renderClawTrustWarning } from "./claws-trust-warning.tsx";
 
 registerEnglishCatalog(registerPluginConsentEnglish);
