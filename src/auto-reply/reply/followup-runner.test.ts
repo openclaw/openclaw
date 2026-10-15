@@ -161,6 +161,67 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it.each([false, true])(
+    "reports healthy completion separately from cancellation (aborted=%s)",
+    async (aborted) => {
+      const turn = createTurn();
+      const end = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => end }];
+      const execution = createSettledExecution();
+      if (aborted) execution.execution.outcome = { kind: "aborted", reason: "user" };
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(execution);
+      state.account.mockResolvedValue(undefined);
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      })(turn.queued);
+      expect(end).toHaveBeenCalledExactlyOnceWith({
+        visibleReplySent: false,
+        failed: false,
+        completed: !aborted,
+      });
+    },
+  );
+
+  it.each([
+    { kind: "pending", failed: false },
+    { kind: "pending", failed: true },
+    { kind: "source-retry", failed: false },
+    { kind: "source-retry", failed: true },
+  ] as const)(
+    "distinguishes transport handoff from source retry ($kind, failed=$failed)",
+    async ({ kind, failed }) => {
+      const turn = createTurn();
+      const end = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => end }];
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(
+        failed ? createRejectedExecution() : createSettledExecution(),
+      );
+      state.account.mockResolvedValue(undefined);
+      state.deliver.mockResolvedValue({ kind, payloads: [] });
+
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      })(turn.queued);
+
+      expect(end).toHaveBeenCalledExactlyOnceWith(
+        kind === "source-retry" && !failed
+          ? undefined
+          : {
+              visibleReplySent: false,
+              failed,
+              completed: !failed,
+              ...(kind === "pending" ? { transportPending: true } : {}),
+            },
+      );
+    },
+  );
+
   it.each([true, false])(
     "publishes admission notices only for consumed execution (admission succeeds=%s)",
     async (succeeds) => {

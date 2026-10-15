@@ -96,20 +96,6 @@ export function createFollowupRunner(
     withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
       inheritRequestScope: false,
     });
-  const deliverProgress = async (
-    turn: AdmittedFollowupTurn,
-    payloads: ReplyPayload[],
-    kind: "tool" | "block",
-  ) => {
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads },
-      turn,
-      defaults,
-      runId: turn.runId,
-      runFollowup,
-      kind,
-    });
-  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -119,13 +105,39 @@ export function createFollowupRunner(
     let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
+    let visibleReplySent = false;
+    let deliveryPending = false;
+    let sourceRetryPending = false;
+    const onObservedReplyDelivery = async () => {
+      if (visibleReplySent) {
+        return;
+      }
+      visibleReplySent = true;
+      await defaults.opts?.onObservedReplyDelivery?.();
+    };
+    const deliverProgress = async (
+      turn: AdmittedFollowupTurn,
+      payloads: ReplyPayload[],
+      kind: "tool" | "block",
+    ) => {
+      const delivery = await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads },
+        turn,
+        defaults,
+        runId: turn.runId,
+        runFollowup,
+        kind,
+        onObservedReplyDelivery,
+      });
+      deliveryPending ||= delivery.kind === "pending";
+    };
     let queuedFollowupAdmitted = false;
     const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
       : (queued.deliveryCorrelations ?? [])
           .map((correlation) => correlation.begin())
-          .filter((end): end is () => void => typeof end === "function");
+          .filter((end) => typeof end === "function");
     try {
       if (initiallyAborted) {
         disposition = { kind: "consumed" };
@@ -204,7 +216,7 @@ export function createFollowupRunner(
         execution.execution.outcome.kind === "settled" &&
         hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
       ) {
-        await defaults.opts?.onObservedReplyDelivery?.();
+        await onObservedReplyDelivery();
       }
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
@@ -238,9 +250,12 @@ export function createFollowupRunner(
         defaults,
         runId: execution.execution.runId,
         runFollowup,
+        onObservedReplyDelivery,
       });
       // Source recovery has its own queued callback; this execution still closes once.
-      terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      terminalPayloads = delivery.kind === "source-retry" ? [] : delivery.payloads;
+      deliveryPending ||= delivery.kind === "pending";
+      sourceRetryPending = delivery.kind === "source-retry";
     } catch (error) {
       let operatorAuthorityLost = false;
       try {
@@ -301,7 +316,19 @@ export function createFollowupRunner(
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
-          end();
+          end(
+            // Source-owned batches settle through their own owner, whose void callback is not a receipt.
+            disposition.kind === "consumed" &&
+              (!sourceRetryPending || visibleReplySent || completion.kind === "failed") &&
+              sourceDisposition?.kind !== "deliver"
+              ? {
+                  visibleReplySent,
+                  failed: !admittedTurn || completion.kind === "failed",
+                  completed: Boolean(admittedTurn) && completion.kind === "completed",
+                  ...(deliveryPending ? { transportPending: true } : {}),
+                }
+              : undefined,
+          );
         } catch (error) {
           defaultRuntime.error?.(
             `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(error)}`,

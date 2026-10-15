@@ -1,7 +1,7 @@
 import type { RichTextBlock } from "@slack/types";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -21,6 +21,7 @@ import {
 } from "./monitor.test-helpers.js";
 import { buildSlackSlashCommandMatcher } from "./monitor/commands.js";
 import { createSlackThreadTsResolver } from "./monitor/thread-resolution.js";
+import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 import type { SlackMessageEvent } from "./types.js";
 
 const mediaFetchMock = vi.hoisted(() =>
@@ -438,3 +439,80 @@ it.each([false, true])(
     expect(await resolver.resolve({ message, source: "message" })).toEqual(expected);
   },
 );
+
+const AUTH_FAILURE = "⚠️ Model login expired on the gateway.";
+
+async function dispatchEvent(overrides: Partial<SlackMessageEvent>): Promise<void> {
+  await run(
+    {
+      text: "ordinary follow-up",
+      ts: "100.000001",
+      channel_type: "channel",
+      ...overrides,
+    },
+    true,
+  );
+}
+
+async function threadReply(ts: string, threadTs: string, text = "ordinary follow-up") {
+  await dispatchEvent({ ts, thread_ts: threadTs, parent_user_id: "U1", text });
+}
+
+function mockReplySequence(...payloads: Array<{ text: string; isError?: boolean }>): void {
+  let runIndex = 0;
+  slackTestState.replyMock.mockImplementation(async (...args: unknown[]) => {
+    const options = args[1] as { onAgentRunStart?: (runId: string) => void } | undefined;
+    options?.onAgentRunStart?.(`slack-failure-notice-test-${runIndex}`);
+    return payloads[Math.min(runIndex++, payloads.length - 1)];
+  });
+}
+
+function configureFailureNotices(requireMention = true): void {
+  slackTestState.config = {
+    messages: { groupChat: { visibleReplies: "automatic" } },
+    channels: {
+      slack: {
+        dm: { enabled: true },
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "open",
+        requireMention,
+        replyToMode: "all",
+        channels: { C1: { allow: true, requireMention } },
+      },
+    },
+  };
+}
+
+describe("Slack thread failure notices", () => {
+  beforeEach(async () => {
+    resetInboundDedupe();
+    clearSlackThreadParticipationCache();
+    await resetSlackTestState();
+    configureFailureNotices();
+  });
+
+  it("retains each queued message's mention policy after the originating Slack dispatch closes", async () => {
+    const sources: NonNullable<GetReplyOptions["queuedDeliveryCorrelations"]>[number][] = [];
+    mockReplySequence({ text: "Ready" });
+    await dispatchEvent({ text: "<@bot-user> please help", ts: "109.000000" });
+    slackTestState.replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as GetReplyOptions;
+      sources.push(...(opts.queuedDeliveryCorrelations ?? []));
+      return undefined;
+    });
+    await threadReply("109.000001", "109.000000");
+    await threadReply("109.000002", "109.000000");
+    await threadReply("109.000003", "109.000000", "<@bot-user> retry please");
+    expect(sources).toHaveLength(3);
+    const failure = { text: AUTH_FAILURE, isError: true };
+    for (const [index, source] of sources.entries()) {
+      const end = source.begin();
+      expect(source.shouldSuppressReply?.(failure)).toBe(index === 1);
+      if (index !== 1) {
+        source.onReplyDelivered?.(failure);
+      }
+      end?.({ visibleReplySent: index !== 1, failed: true });
+    }
+  });
+});
