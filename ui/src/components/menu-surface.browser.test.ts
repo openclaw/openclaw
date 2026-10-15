@@ -1,11 +1,10 @@
-import { html, render } from "lit";
+import { render } from "lit";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -15,7 +14,6 @@ import "./agent-select-registration.ts";
 import "./menu-surface.ts";
 import { Menu } from "./solid/menu.tsx";
 import "./resizable-divider.ts";
-import "./web-awesome.ts";
 
 // Real-browser regression for the sidebar menu z-order bug: the nav column is
 // a stacking context (.shell-nav z-index 10) painted below the sidebar
@@ -30,7 +28,6 @@ import "./web-awesome.ts";
 const hasPopoverApi = typeof HTMLElement.prototype.showPopover === "function";
 const originalTheme = document.documentElement.getAttribute("data-theme");
 const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
-const originalClasses = document.documentElement.className;
 
 afterEach(async () => {
   cleanupSolid();
@@ -47,7 +44,6 @@ afterEach(async () => {
   } else {
     document.documentElement.setAttribute("data-theme-mode", originalThemeMode);
   }
-  document.documentElement.className = originalClasses;
 });
 
 // The default browser-lane viewport (414px) triggers the mobile drawer
@@ -263,16 +259,23 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     await expect.poll(() => document.activeElement).toBe(parent);
     if (input === "keyboard") {
       await userEvent.keyboard("{ArrowRight}");
+      await expect.poll(() => document.activeElement).toBe(child);
     } else {
       await page.elementLocator(parent).hover();
       await page.elementLocator(child).hover();
+      await expect.poll(() => child.hasAttribute("data-highlighted")).toBe(true);
+      expect(document.activeElement).toBe(parent);
     }
-    await expect.poll(() => document.activeElement).toBe(child);
     await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
     // A loaded WebKit worker can sample the color transition just before the poll expires.
     await Promise.all(parent.getAnimations().map((animation) => animation.finished));
     expect(getComputedStyle(parent).backgroundColor).toBe(highlight);
 
+    if (input === "pointer") {
+      // Hover preserves keyboard focus; ArrowRight transfers it into the submenu.
+      await userEvent.keyboard("{ArrowRight}");
+      await expect.poll(() => document.activeElement).toBe(child);
+    }
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => document.activeElement).toBe(parent);
     await userEvent.keyboard("{ArrowDown}");
@@ -289,8 +292,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   function useTheme(theme: "dark" | "light") {
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.themeMode = theme;
-    document.documentElement.classList.toggle("wa-dark", theme === "dark");
-    document.documentElement.classList.toggle("wa-light", theme === "light");
     const swatch = document.createElement("div");
     swatch.style.backgroundColor = "var(--bg-hover)";
     document.body.append(swatch);

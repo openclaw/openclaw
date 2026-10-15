@@ -1,5 +1,3 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { bindOverlayAnchor } from "./overlay-anchor.ts";
 import type { Overlay } from "./overlay-lifecycle.ts";
 
@@ -50,22 +48,6 @@ export class TextareaTokenAnchor {
   private stylesDirty = true;
   private lineHeight = 0;
   constructor(private readonly onOutOfView: () => void) {}
-
-  /** Call after rendering the popup, then when the token or textarea value changes. */
-  update(popup: WaPopup, textarea: HTMLTextAreaElement, tokenStart: number): void {
-    this.updateSurface(popup, textarea, tokenStart, (anchor) => {
-      configureAnchoredPopup(popup, anchor, "top", "start");
-      return {
-        activate: () => {
-          popup.active = true;
-          popup.reposition();
-        },
-        dispose: () => {
-          popup.active = false;
-        },
-      };
-    });
-  }
 
   /** Native menus share the same measured caret and CSS placement owner. */
   updateNative(overlay: Overlay, textarea: HTMLTextAreaElement, tokenStart: number): void {

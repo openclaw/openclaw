@@ -233,6 +233,10 @@ export function useMenuMachine(
     closeOnSelect: false,
     "aria-label": overlay.id,
     onOpenChange({ open }) {
+      // Keyboard entry must focus a submenu that pointer hover already opened.
+      if (open && overlay.open && focusFromKeyboard) {
+        focusItem(service.service);
+      }
       const restore = !open && containsComposed(overlay.surface, service.scope.getActiveElement());
       // Native sibling dismissal must not leave focus behind in the retired branch.
       const handoff =
