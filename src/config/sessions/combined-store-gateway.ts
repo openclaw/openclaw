@@ -67,10 +67,7 @@ import {
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-export type {
-  GatewayStoredSessionTarget,
-  GatewayStoredSessionTargets,
-} from "./combined-store-model-sources.js";
+export type { GatewayStoredSessionTarget } from "./combined-store-model-sources.js";
 export type {
   GatewaySessionStoreOptions,
   ResolvedGatewaySessionStoreTargets,

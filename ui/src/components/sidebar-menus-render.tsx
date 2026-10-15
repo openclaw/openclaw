@@ -333,7 +333,6 @@ export function renderSidebarSessionMenuForController(
             target: { key: session().key, agentId: session().agentId },
             sessionId: session().sessionId ?? null,
             isChild: session().isChild,
-            hasChildren: session().childSessionKeys.length > 0,
             pinned: host.sessionOrganizer.isPersonalSessionPin(session().key),
             pinnable: session().pinnable,
             unread: allUnread(),
@@ -499,9 +498,6 @@ export function renderSidebarSessionMenuForController(
                 break;
               case "move-to-top-level":
                 void host.sessionOrganizer.promoteSession(session());
-                break;
-              case "archive-tree":
-                void host.sessionOrganizer.archiveSessionTreeWithUndo(session());
                 break;
               case "move-to-group":
                 if (action.category === null || session().category !== action.category) {

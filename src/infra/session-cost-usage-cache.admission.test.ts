@@ -41,11 +41,13 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import {
-  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  pruneUsageCostRollupsForTest,
+  readSessionCostUsageRollupRows,
+} from "./session-cost-usage-cache.test-support.js";
 import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
@@ -114,7 +116,7 @@ it.each(["rollup", "prune"] as const)(
             ).toBe(true);
             break;
           case "prune":
-            await deleteSessionCostUsageRollupsExcept({
+            await pruneUsageCostRollupsForTest({
               agentId,
               databasePath,
               rows: before.rows,

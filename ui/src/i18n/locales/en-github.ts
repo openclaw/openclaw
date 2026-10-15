@@ -60,7 +60,7 @@ const enGitHub = {
   },
   chat: {
     pullRequests: {
-      linkLabel: "Pull request #{number}: {title}",
+      linkLabel: "Pull request {reference}: {title}",
       createPr: "Create PR",
       createPrLabel: "Create a pull request for {branch}",
       publishPr: "Publish PR",
@@ -70,7 +70,7 @@ const enGitHub = {
       openPublishedPr: "Open PR",
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
-      dismiss: "Dismiss pull request #{number}",
+      dismiss: "Dismiss pull request {reference}",
       dismissBranch: "Hide {branch} for this session",
       open: en.chat.pullRequests.open,
       draft: en.chat.pullRequests.draft,

@@ -2781,6 +2781,10 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
+Full refreshes submit pruning only when their metadata scan found stale rows;
+deletion still matches each observed row's checkpoint and update timestamp.
+Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
+legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway
