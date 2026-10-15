@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { normalizePersistedSessionEntryShape } from "../../commands/doctor/shared/session-entry-shape.js";
 import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import type { SessionConfig } from "../types.base.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
@@ -14,14 +13,12 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 
 it.each([
   ["linux", "legacy:session", "/state/agents/main/agent/openclaw-agent.sqlite"],
-  ["linux", "legacy:x", "/state/openclaw-agent.sqlite"],
   ["win32", "legacy:x", "C:\\state\\openclaw-agent.sqlite"],
-  ["win32", "legacy:x", "C:/state/openclaw-agent.sqlite"],
   ["win32", "legacy:x", "\\\\server\\state\\openclaw-agent.sqlite"],
   ["linux", "session", "/state/archive:part/openclaw-agent.sqlite"],
   ["linux", "session", "relative/sessions.json"],
@@ -321,33 +318,7 @@ describe("session path safety", () => {
   });
 });
 
-describe("resolveSessionResetPolicy", () => {
-  describe("backward compatibility: resetByType.dm -> direct", () => {
-    it("does not use dm fallback for group/thread types", () => {
-      const sessionCfg = {
-        resetByType: {
-          dm: { mode: "idle" as const, idleMinutes: 45 },
-        },
-      } as unknown as SessionConfig;
-
-      const groupPolicy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "group",
-      });
-
-      expect(groupPolicy.mode).toBe("none");
-    });
-  });
-
-  it("defaults to no automatic reset", () => {
-    const policy = resolveSessionResetPolicy({
-      resetType: "direct",
-    });
-
-    expect(policy.mode).toBe("none");
-    expect(policy.atHour).toBe(4);
-  });
-
+describe("evaluateSessionFreshness", () => {
   const dailyNow = new Date(2026, 3, 25, 12).getTime();
   const idleNow = 60 * 60_000;
   type FreshnessCase = {

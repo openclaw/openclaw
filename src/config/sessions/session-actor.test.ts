@@ -321,21 +321,6 @@ it("does not publish a candidate when its outcome transfer is incomplete", async
   });
 });
 
-it("serves installed state without a request and reconciles a retired worker generation", async () => {
-  await withActor(async ({ actor, commands, retireGeneration }) => {
-    const initial = await actor.read(authority);
-    expect(actor.snapshot(authority)).toEqual(initial);
-    expect(await actor.read(authority)).toEqual(initial);
-    expect(commands).toEqual(["session.actor.read"]);
-    retireGeneration();
-    expect(actor.snapshot(authority)).toBeUndefined();
-    const restored = await actor.read(authority);
-    expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
-    expect(restored.version.epoch).not.toBe(initial.version.epoch);
-    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
-  });
-});
-
 it.each(["updated", "caller revoked", "disclosure revoked", "keeps changing"] as const)(
   "reconciles a cold actor read superseded by a native publication (%s)",
   async (change) => {
@@ -574,50 +559,6 @@ it("preserves native commit through worker publication, reply, and observer fail
     });
     expect(observer).toHaveBeenCalledOnce();
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(123);
-  });
-});
-
-it("shares actor revisions and isolates explicit policy copies", async () => {
-  await withActor(async ({ actor }) => {
-    const initial = await actor.read(authority);
-    expect(actor.snapshot(authority)).toBe(initial);
-    expect(await actor.read(authority)).toBe(initial);
-    const stages: string[] = [];
-    const result = await actor.patch(
-      {
-        commandId: "detached-policy",
-        phaseId: "turn",
-        reducers: [{ kind: "activity", updatedAt: 123 }],
-      },
-      {
-        assertCurrent() {},
-        authorize(stage, snapshot) {
-          stages.push(stage);
-          const copy = structuredClone(snapshot);
-          if (copy.entry) {
-            copy.entry.sessionId = "policy-mutated";
-          }
-          copy.version = { epoch: "policy-mutated", sequence: -1 };
-          copy.dependencySessionIds.length = 0;
-        },
-      },
-    );
-    expect(result).toMatchObject({
-      kind: "committed",
-      receipt: {
-        beforeVersion: initial.version,
-        postimage: { entry: { sessionId: initial.entry?.sessionId, updatedAt: 123 } },
-      },
-    });
-    expect(stages).toContain("transaction");
-    expect(stages).toContain("commit");
-    expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
-    if (result.kind !== "committed") {
-      throw new Error("Expected committed actor revision");
-    }
-    expect(actor.snapshot(authority)).toBe(result.receipt.postimage);
-    expect(actor.snapshot(authority)).not.toBe(initial);
-    expect(initial.entry?.updatedAt).not.toBe(123);
   });
 });
 

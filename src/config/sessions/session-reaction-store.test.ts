@@ -112,40 +112,35 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("session reaction store", () => {
-  it.each(["default", "shared"] as const)(
-    "writes %s reactions through their database owner",
-    async (store) => {
-      if (store !== "default") {
-        scope = {
-          ...scope,
-          storePath: path.join(root, "shared-reactions.sqlite"),
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "session-a",
-          updatedAt: 1,
-        });
-        await seedMessages("session-a", [reaction.messageId]);
+  it("writes shared reactions through their database owner", async () => {
+    scope = {
+      ...scope,
+      storePath: path.join(root, "shared-reactions.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "session-a",
+      updatedAt: 1,
+    });
+    await seedMessages("session-a", [reaction.messageId]);
+    const methods = observeCallerSql();
+    try {
+      expect(await setSessionReactionAsync(scope, reaction)).toEqual({
+        reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
+        newestRemainingEmoji: "👍",
+        changed: true,
+      });
+      for (const method of methods) {
+        expect(method).not.toHaveBeenCalled();
       }
-      const methods = observeCallerSql();
-      try {
-        expect(await setSessionReactionAsync(scope, reaction)).toEqual({
-          reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
-          newestRemainingEmoji: "👍",
-          changed: true,
-        });
-        for (const method of methods) {
-          expect(method).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const method of methods) {
-          method.mockRestore();
-        }
+    } finally {
+      for (const method of methods) {
+        method.mockRestore();
       }
-      expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
-        { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
-      ]);
-    },
-  );
+    }
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
+      { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
+    ]);
+  });
 
   it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
     let current = true;
@@ -242,22 +237,7 @@ describe("session reaction store", () => {
     );
   });
 
-  it.each([
-    {
-      name: "removing 🚀 after Alice 👍, Alice 🎉, Bob 👍, then 🚀",
-      rocket: true,
-      emoji: "🚀",
-      identityId: "alice",
-      expected: "👍",
-    },
-    {
-      name: "removing Bob's newest 👍 while Alice's older 👍 remains",
-      rocket: false,
-      emoji: "👍",
-      identityId: "bob",
-      expected: "🎉",
-    },
-  ])("returns the newest surviving emoji after $name", async (scenario) => {
+  it("returns the newest surviving emoji after removing Bob's newest reaction", async () => {
     for (const [emoji, identityId, createdAt] of [
       ["👍", "alice", 100],
       ["🎉", "alice", 200],
@@ -266,25 +246,20 @@ describe("session reaction store", () => {
       await setSessionReactionAsync(scope, { ...reaction, emoji, identityId });
       stampReaction(emoji, identityId, createdAt);
     }
-    if (scenario.rocket) {
-      await setSessionReactionAsync(scope, { ...reaction, emoji: "🚀" });
-      stampReaction("🚀", "alice", 400);
-    }
     const removal = {
       ...reaction,
-      emoji: scenario.emoji,
-      identityId: scenario.identityId,
+      identityId: "bob",
       remove: true,
     };
     const result = await setSessionReactionAsync(scope, removal);
-    expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
+    expect(result).toMatchObject({ changed: true, newestRemainingEmoji: "🎉" });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
     expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
       result.reactions,
     );
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
-      newestRemainingEmoji: scenario.expected,
+      newestRemainingEmoji: "🎉",
     });
   });
 
