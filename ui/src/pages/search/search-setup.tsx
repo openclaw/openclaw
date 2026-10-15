@@ -12,8 +12,8 @@ import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { readConfigValue } from "./search-config.ts";
@@ -68,7 +68,7 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: Pick<GatewayPageController, "capture" | "isCurrent" | "epoch" | "connected">;
+    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected">;
     provider: SearchProvider;
   },
 ) {

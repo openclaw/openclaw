@@ -3,7 +3,7 @@ import { clawCatalogPackageNameFromPath, pathForRoute } from "../../app-route-pa
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { AgentsHomePage } from "../agents-home/agents-home-page.tsx";
-import "../agents-home/claws-catalog-dialog.tsx";
+import { ClawsCatalogDialog } from "../agents-home/claws-catalog-dialog.tsx";
 import type { ClawsRouteData } from "./route.ts";
 
 export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
@@ -32,15 +32,15 @@ export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
       }
     >
       {packageName() ? (
-        <openclaw-claws-catalog-dialog
-          prop:initialPackageName={packageName()!}
-          prop:pageMode={true}
-          prop:onClose={() =>
+        <ClawsCatalogDialog
+          initialPackageName={packageName()!}
+          pageMode
+          onClose={() =>
             context.navigate("agents-home", {
               pathname: pathForRoute("agents-home", context.basePath),
             })
           }
-          prop:onAdded={() => void context.agents.refreshList()}
+          onAdded={() => void context.agents.refreshList()}
         />
       ) : (
         <AgentsHomePage />

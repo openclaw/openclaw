@@ -5,7 +5,6 @@ import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
@@ -217,114 +216,124 @@ function ReviewWarning(props: { view: ClawsCatalogViewProps }) {
   );
 }
 
-function ClawsDetailContent(props: { view: ClawsCatalogViewProps | null }) {
+export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
   return (
-    <Show when={props.view?.selected}>
-      {(selected) => {
-        const view = () => props.view!;
-        const detail = () => view().detail;
-        const canAdd = () =>
-          view().canAdd &&
-          Boolean(detail()) &&
-          !view().detailLoading &&
-          !view().applying &&
-          !view().consentWarning &&
-          !view().reviewPlan &&
-          !view().addedAgentId;
-        return (
-          <SettingsPage wide carapace>
-            <PluginDetailShell
-              id="claw-catalog-detail"
-              name={detail()?.agentName ?? selected().displayName}
-              summary={detail()?.agentDescription ?? selected().summary}
-              backHref={pathForRoute("agents-home", view().basePath)}
-              backLabel="Agents"
-              onBack={view().onBack}
-              icon={<Icon name="box" />}
-              identity={renderPublisherIdentity({
-                name: "OpenClaw",
-                handle: t("clawsCatalog.publisher"),
-                official: selected().official,
-              })}
-              titleAction={
-                <span data-claws-confirm>
-                  <PluginInstallAction
-                    buttonClass="btn oc-action plugin-catalog-detail__install"
-                    primary
-                    disabled={!canAdd()}
-                    busy={view().applying}
-                    actionLabel={t("clawsCatalog.add")}
-                    busyLabel={t("clawsCatalog.adding")}
-                    onInstall={view().onConfirm}
-                  />
-                </span>
-              }
-              panel={
-                <>
-                  <Show when={view().detailError}>
-                    <div class="callout danger" role="alert">
-                      {view().detailError}
-                      <button type="button" class="btn btn--sm" onClick={view().onRetryDetail}>
-                        {t("clawsCatalog.retry")}
-                      </button>
-                    </div>
-                  </Show>
-                  <Show when={view().detailLoading}>
-                    <section
-                      class="claws-content-skeleton"
-                      role="status"
-                      aria-label={t("clawsCatalog.contentsLoading")}
-                    >
-                      <div class="claws-content-skeleton__title skeleton" />
-                      <For each={[0, 1, 2, 3]}>
-                        {() => <div class="claws-content-skeleton__row skeleton" />}
-                      </For>
-                    </section>
-                  </Show>
-                  <Show when={detail()}>
-                    <ClawContents view={view()} />
-                  </Show>
-                  <Show when={view().addError}>
-                    <div class="callout danger" role="alert">
-                      {view().addError}
-                      <Show when={view().addedAgentId}>
-                        <button type="button" class="btn btn--sm" onClick={view().onRetryOpenChat}>
-                          {t("clawsCatalog.openChat")}
-                        </button>
-                      </Show>
-                    </div>
-                  </Show>
-                  <Show when={!view().consentWarning}>
-                    <ReviewWarning view={view()} />
-                  </Show>
-                  <Show when={view().consentWarning}>
-                    <section class="claws-add-consent" aria-label={t("clawsCatalog.trustReview")}>
-                      {renderClawTrustWarning(view().consentWarning!)}
-                      <div class="claws-add-consent__actions">
-                        <button type="button" class="btn" onClick={view().onCancelConsent}>
-                          {t("common.cancel")}
-                        </button>
-                        <button
-                          type="button"
-                          class="btn primary"
-                          disabled={view().applying}
-                          onClick={view().onConfirmConsent}
-                        >
-                          {t("clawsCatalog.addAnyway")}
+    <openclaw-claws-detail-view>
+      <Show when={props.view.selected}>
+        {(selected) => {
+          const view = () => props.view!;
+          const detail = () => view().detail;
+          const canAdd = () =>
+            view().canAdd &&
+            Boolean(detail()) &&
+            !view().detailLoading &&
+            !view().applying &&
+            !view().consentWarning &&
+            !view().reviewPlan &&
+            !view().addedAgentId;
+          return (
+            <SettingsPage wide carapace>
+              <PluginDetailShell
+                id="claw-catalog-detail"
+                name={detail()?.agentName ?? selected().displayName}
+                summary={detail()?.agentDescription ?? selected().summary}
+                backHref={pathForRoute("agents-home", view().basePath)}
+                backLabel="Agents"
+                onBack={view().onBack}
+                icon={<Icon name="box" />}
+                identity={renderPublisherIdentity({
+                  name: "OpenClaw",
+                  handle: t("clawsCatalog.publisher"),
+                  official: selected().official,
+                })}
+                titleAction={
+                  <span data-claws-confirm>
+                    <PluginInstallAction
+                      buttonClass="btn oc-action plugin-catalog-detail__install"
+                      primary
+                      disabled={!canAdd()}
+                      busy={view().applying}
+                      actionLabel={t("clawsCatalog.add")}
+                      busyLabel={t("clawsCatalog.adding")}
+                      onInstall={view().onConfirm}
+                    />
+                  </span>
+                }
+                panel={
+                  <>
+                    <Show when={view().detailError}>
+                      <div class="callout danger" role="alert">
+                        {view().detailError}
+                        <button type="button" class="btn btn--sm" onClick={view().onRetryDetail}>
+                          {t("clawsCatalog.retry")}
                         </button>
                       </div>
-                    </section>
-                  </Show>
-                </>
-              }
-            />
-          </SettingsPage>
-        );
-      }}
-    </Show>
+                    </Show>
+                    <Show when={view().detailLoading}>
+                      <section
+                        class="claws-content-skeleton"
+                        role="status"
+                        aria-label={t("clawsCatalog.contentsLoading")}
+                      >
+                        <div class="claws-content-skeleton__title skeleton" />
+                        <For each={[0, 1, 2, 3]}>
+                          {() => <div class="claws-content-skeleton__row skeleton" />}
+                        </For>
+                      </section>
+                    </Show>
+                    <Show when={detail()}>
+                      <ClawContents view={view()} />
+                    </Show>
+                    <Show when={view().addError}>
+                      <div class="callout danger" role="alert">
+                        {view().addError}
+                        <Show when={view().addedAgentId}>
+                          <button
+                            type="button"
+                            class="btn btn--sm"
+                            onClick={view().onRetryOpenChat}
+                          >
+                            {t("clawsCatalog.openChat")}
+                          </button>
+                        </Show>
+                      </div>
+                    </Show>
+                    <Show when={!view().consentWarning}>
+                      <ReviewWarning view={view()} />
+                    </Show>
+                    <Show when={view().consentWarning}>
+                      <section class="claws-add-consent" aria-label={t("clawsCatalog.trustReview")}>
+                        {renderClawTrustWarning(view().consentWarning!)}
+                        <div class="claws-add-consent__actions">
+                          <button type="button" class="btn" onClick={view().onCancelConsent}>
+                            {t("common.cancel")}
+                          </button>
+                          <button
+                            type="button"
+                            class="btn primary"
+                            disabled={view().applying}
+                            onClick={view().onConfirmConsent}
+                          >
+                            {t("clawsCatalog.addAnyway")}
+                          </button>
+                        </div>
+                      </section>
+                    </Show>
+                  </>
+                }
+              />
+            </SettingsPage>
+          );
+        }}
+      </Show>
+    </openclaw-claws-detail-view>
   );
 }
 
-export const ClawsDetailView = defineSolidBridge("openclaw-claws-detail-view", ClawsDetailContent, {
-  properties: { view: { default: null, attribute: false } },
-});
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-claws-detail-view": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

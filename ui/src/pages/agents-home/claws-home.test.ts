@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   cleanupAgentsHomePageTest,
   createPage,
@@ -11,6 +13,27 @@ import { ClawsCatalogDialog } from "./claws-catalog-dialog.tsx";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
+
+function createDetail(
+  options: Parameters<typeof createPage>[0],
+  initialEntry: typeof workflowOperator | null = workflowOperator,
+) {
+  const fixture = createPage(options);
+  const [packageName, setPackageName] = createSignal<string>(workflowOperator.packageName);
+  const view = mountSolid(
+    () =>
+      createComponent(ClawsCatalogDialog, {
+        initialEntry,
+        get initialPackageName() {
+          return packageName();
+        },
+        pageMode: true,
+      }),
+    { wrapper: fixture.wrapper },
+  );
+  onTestFinished(view.unmount);
+  return { ...fixture, detail: view.container, setPackageName };
+}
 
 describe("Claws on Agents Home", () => {
   it("shows official Claws and opens their dedicated route", async () => {
@@ -44,11 +67,7 @@ describe("Claws on Agents Home", () => {
   });
 
   it("reads contents before Add and opens the newly added agent chat", async () => {
-    const { provider, request, navigate } = createPage({ clawsEnabled: true });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.initialEntry = workflowOperator;
-    detail.pageMode = true;
-    provider.append(detail);
+    const { detail, request, navigate } = createDetail({ clawsEnabled: true });
 
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
     expect(request).toHaveBeenCalledWith("claws.catalog.detail", {
@@ -73,16 +92,12 @@ describe("Claws on Agents Home", () => {
   });
 
   it("clears a selected Claw when the detail route changes", async () => {
-    const { provider, request } = createPage({ clawsEnabled: true });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.pageMode = true;
-    detail.initialPackageName = workflowOperator.packageName;
-    provider.append(detail);
+    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true }, null);
 
     await vi.waitFor(() =>
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
     );
-    detail.initialPackageName = "@openclaw/another-claw";
+    setPackageName("@openclaw/another-claw");
 
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("claws.catalog.search", {
@@ -99,11 +114,10 @@ describe("Claws on Agents Home", () => {
     const applyWait = new Promise<void>((resolve) => {
       finishApply = resolve;
     });
-    const { provider, request } = createPage({ clawsEnabled: true, applyWait });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.pageMode = true;
-    detail.initialPackageName = workflowOperator.packageName;
-    provider.append(detail);
+    const { detail, request, setPackageName } = createDetail(
+      { clawsEnabled: true, applyWait },
+      null,
+    );
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
@@ -115,9 +129,9 @@ describe("Claws on Agents Home", () => {
       expect(request.mock.calls.some(([method]) => method === "claws.add.apply")).toBe(true),
     );
 
-    detail.initialPackageName = "@openclaw/another-claw";
+    setPackageName("@openclaw/another-claw");
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());
-    detail.initialPackageName = workflowOperator.packageName;
+    setPackageName(workflowOperator.packageName);
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
         false,
@@ -127,15 +141,11 @@ describe("Claws on Agents Home", () => {
   });
 
   it("asks before acknowledging a ClawHub trust warning", async () => {
-    const { provider, request, navigate } = createPage({
+    const { detail, request, navigate } = createDetail({
       clawsEnabled: true,
       riskConsentRequired: true,
       clawHubTrustWarning: "Review this release before adding it.",
     });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.initialEntry = workflowOperator;
-    detail.pageMode = true;
-    provider.append(detail);
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
@@ -174,14 +184,10 @@ describe("Claws on Agents Home", () => {
   });
 
   it.each(["plugin", "skill"] as const)("asks before applying a %s review plan", async (kind) => {
-    const { provider, request, navigate } = createPage({
+    const { detail, request, navigate } = createDetail({
       clawsEnabled: true,
       reviewRequiredOnce: kind,
     });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.initialEntry = workflowOperator;
-    detail.pageMode = true;
-    provider.append(detail);
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
@@ -214,15 +220,11 @@ describe("Claws on Agents Home", () => {
   });
 
   it("requires both consents when trust and plugin review are needed", async () => {
-    const { provider, request, navigate } = createPage({
+    const { detail, request, navigate } = createDetail({
       clawsEnabled: true,
       riskConsentRequired: true,
       reviewRequiredOnce: "plugin",
     });
-    const detail = new ClawsCatalogDialog.Element();
-    detail.initialEntry = workflowOperator;
-    detail.pageMode = true;
-    provider.append(detail);
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
