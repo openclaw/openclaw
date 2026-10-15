@@ -4,8 +4,8 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 export const logbookPortProvider: DatabasePortProvider = {
   id: "logbook",
   async loadDescriptor() {
-    const { loadDescriptor } = await import("./logbook-port-descriptor.js");
-    return loadDescriptor();
+    const { loadLogbookPortDescriptor } = await import("./logbook-port-descriptor.js");
+    return loadLogbookPortDescriptor();
   },
   matchesSqlite: (tables) =>
     ["batches", "frames", "observations", "cards", "standups"].every((table) => tables.has(table)),

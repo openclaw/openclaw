@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { logbookDatabasePortApi } from "../../../extensions/logbook/database-port-api.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import metadata from "./logbook-port.generated.json" with { type: "json" };
 import { DatabasePortDataError, type PortDescriptor } from "./port-descriptor.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 
-export async function loadDescriptor(): Promise<PortDescriptor> {
+export async function loadLogbookPortDescriptor(): Promise<PortDescriptor> {
   const plugins = resolveBundledPluginsDir();
   if (!plugins) {
     throw new Error("Bundled logbook port descriptor is unavailable.");
@@ -38,6 +37,10 @@ export async function loadDescriptor(): Promise<PortDescriptor> {
 
 function api() {
   return loadBundledPluginPublicArtifactModuleSync<{
-    logbookDatabasePortApi: typeof logbookDatabasePortApi;
+    logbookDatabasePortApi: {
+      LogbookPortSchemaError: new (message?: string) => Error;
+      inspectLogbookPortSource: NonNullable<PortDescriptor["inspectSqliteSource"]>;
+      admitLogbookPort: NonNullable<PortDescriptor["admit"]>;
+    };
   }>({ dirName: "logbook", artifactBasename: "database-port-api.js" }).logbookDatabasePortApi;
 }
