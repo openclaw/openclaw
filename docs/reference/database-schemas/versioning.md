@@ -697,14 +697,15 @@ a helper-only test does not prove the owning migration's scope. Declare
 indexes. No existing migration is implicitly declared by its read set.
 
 Agent schema 27 declares `context_engine_turn_outbox` and both planner-statistics
-tables. Doctor verifies source integrity before taking this checkpoint, then
-commits and validates the version phase before entering general
-maintenance; its recovery inventory is completed at that boundary. Startup
-columns, same-version index and memory repair, session normalization, transcript
-repairs, deletion/orphan recovery, and plugin hooks run afterward under their
-existing owners. Destructive recovery and retained-content rewrites preserve
-their originals only when actual repair work exists. Ordinary metadata repairs
-remain transactional. An eligible clean version bump therefore needs no full agent image.
+tables. Doctor verifies source integrity before taking this checkpoint. If orphan
+history blocks admission, its recovery owner preserves the original before repair
+and checkpoint capture. Doctor then commits and validates the version phase before
+entering general maintenance; its recovery inventory is completed at that boundary.
+Startup columns, same-version index and memory repair, session normalization,
+transcript repairs, deletion recovery, and plugin hooks run afterward under their
+existing owners. Destructive recovery and retained-content rewrites preserve full
+originals only when actual repair work exists. Ordinary metadata repairs remain
+transactional. An eligible clean version bump therefore needs no full agent image.
 The version-phase fixture verifies that every undeclared table's schema and
 typed contents remain unchanged, including populated retained history.
 

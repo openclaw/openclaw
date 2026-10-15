@@ -6,6 +6,7 @@ import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -168,6 +169,7 @@ it("bounds the version phase and restores a committed member when a later migrat
 
 it("preserves orphan history before admitting a group of scoped version migrations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
     const migrations = ["healthy", "main"].map((agentId) => ({
       kind: "agent" as const,
       agentId,

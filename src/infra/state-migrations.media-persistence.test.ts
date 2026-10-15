@@ -755,7 +755,11 @@ describe("legacy media persistence doctor migration", () => {
       const before = readDatabaseSnapshot(databasePath);
       const result = await migrateLegacyMediaPersistence({ env });
       expect(result.warnings).toHaveLength(1);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings[0]).toContain(`Skipped agent database migration for ${databasePath}:`);
       expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
       expect(readDatabaseSnapshot(databasePath)).toEqual(before);
