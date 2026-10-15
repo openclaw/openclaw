@@ -13,8 +13,12 @@ import {
 import type { AgentDatabaseRegistryMutation } from "../../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import {
+  cloneEnvWithPlatformSemantics,
+  getPublishedConfigRuntimeEnvState,
+} from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { getRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { captureRuntimeConfig } from "../runtime-source-projection.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -307,17 +311,53 @@ function isCurrentRegistrySourceGeneration(
   }
 }
 
+type InventoryEnvironment = {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  serialized: NodeJS.ProcessEnv;
+};
+let publishedInventoryEnvironment:
+  | {
+      config: OpenClawConfig;
+      publication: ReturnType<typeof getPublishedConfigRuntimeEnvState>;
+      captured: InventoryEnvironment;
+    }
+  | undefined;
+
 /** Capture locators and bounded families without reading SQLite or assigning an owner. */
 export function prepareSessionStoreTargetInventory(
   cfg: OpenClawConfig,
   inputAgentIds: readonly string[],
-  inputEnv: NodeJS.ProcessEnv = process.env,
+  inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
-  const env = cloneEnvWithPlatformSemantics(inputEnv);
-  const stateDir = resolveStateDir(env);
-  env.OPENCLAW_STATE_DIR = stateDir;
   const config = captureRuntimeConfig(cfg);
+  const publication =
+    inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
+      ? getPublishedConfigRuntimeEnvState()
+      : undefined;
+  let environment =
+    publication &&
+    publishedInventoryEnvironment?.config === config &&
+    publishedInventoryEnvironment.publication === publication
+      ? publishedInventoryEnvironment.captured
+      : undefined;
+  if (!environment) {
+    const env = cloneEnvWithPlatformSemantics(inputEnv ?? process.env);
+    const stateDir = resolveStateDir(env);
+    env.OPENCLAW_STATE_DIR = stateDir;
+    // Windows path resolution needs the proxy; worker requests need a plain snapshot.
+    environment = {
+      env,
+      stateDir,
+      serialized: Object.freeze({ ...env, OPENCLAW_STATE_DIR: stateDir }),
+    };
+    if (publication) {
+      // Config publication and env rollback both replace their existing owner-held identities.
+      publishedInventoryEnvironment = { config, publication, captured: environment };
+    }
+  }
+  const { env, stateDir } = environment;
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -383,7 +423,7 @@ export function prepareSessionStoreTargetInventory(
     selection,
     config,
     agentIds,
-    env: { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
+    env: environment.serialized,
     paths,
     candidates: [...candidates.values()],
     ...(perAgent && retired.size > 0

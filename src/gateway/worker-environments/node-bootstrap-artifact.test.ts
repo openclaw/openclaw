@@ -26,9 +26,79 @@ vi.mock("./node-bootstrap-artifact-worker.js", async () => {
   return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
 });
 
-const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
+const { fixture, createProvider, tempDirs } = useNodeBootstrapArtifactFixtures();
 
 describe("node bootstrap distribution", () => {
+  it.each([false, true])(
+    "omits unselected plugin chunks while preserving selected imports (selected: %s)",
+    async (selected) => {
+      const { packageRoot, options, sourcePackage } = await fixture();
+      await write(packageRoot, "package.json", {
+        ...sourcePackage,
+        files: [...sourcePackage.files, "!dist/extensions/omitted-plugin/**"],
+      });
+      await write(packageRoot, "dist/extensions/omitted-plugin/index.js", "export {};\n");
+      await writeOwnedChunks(packageRoot, {
+        "omitted-owned.mjs": {
+          source: 'import "./extensions/omitted-plugin/index.js";\n',
+          extensions: ["omitted-plugin"],
+        },
+        "selected-owned.mjs": {
+          source: "export const selected = true;\n",
+          extensions: ["remote-runtime"],
+        },
+        "shared-owned.mjs": {
+          source: "export const shared = true;\n",
+          extensions: ["omitted-plugin", "remote-runtime"],
+        },
+        "selected-import.mjs": {
+          source: "export const reachable = true;\n",
+          extensions: ["omitted-plugin"],
+        },
+      });
+      await write(packageRoot, "dist/unowned.mjs", "export const unowned = true;\n");
+      if (selected) {
+        await write(
+          packageRoot,
+          "dist/extensions/remote-runtime/index.js",
+          'import "../../selected-owned.mjs"; import "../../shared-owned.mjs"; import "../../selected-import.mjs"; export { answer } from "../../shared.js";',
+        );
+      } else {
+        await write(packageRoot, "dist/entry.js", "export {};\n");
+      }
+      const provider = createProvider({ ...options, plugins: selected ? options.plugins : [] });
+      const artifact = await provider.prepare();
+      const entries: string[] = [];
+      await tar.list({
+        file: artifact.tarballPath,
+        onReadEntry: (entry) => entries.push(entry.path),
+      });
+      expect(entries).not.toContain("package/dist/omitted-owned.mjs");
+      expect(entries).not.toContain("package/dist/extensions/omitted-plugin/index.js");
+      expect(entries.includes("package/dist/shared-owned.mjs")).toBe(selected);
+      expect(entries.includes("package/dist/selected-owned.mjs")).toBe(selected);
+      expect(entries.includes("package/dist/selected-import.mjs")).toBe(selected);
+      expect(entries).toContain("package/dist/unowned.mjs");
+    },
+  );
+
+  it("rejects an incomplete omitted-plugin closure without ownership metadata", async () => {
+    const { packageRoot, options, sourcePackage } = await fixture();
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      files: [...sourcePackage.files, "!dist/extensions/omitted-plugin/**"],
+    });
+    await write(packageRoot, "dist/entry.js", "export {};\n");
+    await write(packageRoot, "dist/extensions/omitted-plugin/index.js", "export {};\n");
+    await write(
+      packageRoot,
+      "dist/omitted-owned.mjs",
+      'import "./extensions/omitted-plugin/index.js";\n',
+    );
+    const provider = createProvider({ ...options, plugins: [] });
+    await expect(provider.prepare()).rejects.toThrow("incomplete built import closure");
+  });
+
   it("packs and runs an installed CommonJS bundle with extensionless relative requires", async () => {
     const { root, packageRoot, provider, sourcePackage } = await fixture();
     const bundledName = "@fixture/undici";

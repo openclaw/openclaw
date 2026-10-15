@@ -104,7 +104,11 @@ export class LogbookService {
       throw new Error("Logbook service cannot be started again");
     }
     this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
+      const store = await LogbookStore.open(
+        this.deps.dataDir,
+        this.deps.workerModuleUrl,
+        this.deps.fullConfig,
+      );
       this.store = store;
       try {
         if (this.deps.scheduler.signal.aborted) {

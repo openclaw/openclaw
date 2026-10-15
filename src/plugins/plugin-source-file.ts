@@ -119,6 +119,23 @@ function copySmallPluginSourceFile(
     : undefined;
 }
 
+/**
+ * fs-safe copy admission compares an ordinary and a native realpath of its root, so a
+ * Windows 8.3 alias such as `C:\Users\RUNNER~1` always reads as a moved root.
+ * Rebase the admitted source onto the root's native spelling before handing it over.
+ */
+function resolveNativeCopySource(boundary: string, source: string) {
+  if (process.platform !== "win32") {
+    return { rootPath: boundary, absolutePath: source };
+  }
+  const rootPath = fs.realpathSync.native(boundary);
+  const relative = path.relative(boundary, source);
+  if (rootPath === boundary || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { rootPath: boundary, absolutePath: source };
+  }
+  return { rootPath, absolutePath: path.join(rootPath, relative) };
+}
+
 export function copyPluginSourceFile(
   source: string,
   boundary: string,
@@ -151,7 +168,7 @@ export function copyPluginSourceFile(
         }
         // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
         using copied = (options.copyFile ?? copyRootFileSync)({
-          source: { rootPath: boundary, absolutePath: source },
+          source: resolveNativeCopySource(boundary, source),
           destination: { rootPath: path.dirname(target), absolutePath: target },
           expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
           clone: "auto",

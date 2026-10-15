@@ -31,11 +31,19 @@ const TEAM_SCALE_COUNTS = {
 } as const;
 
 const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
+const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 
-type TeamScaleEvent =
-  | { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent }
-  | { event: "presence"; payload: PresencePayload };
+type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
+type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
+
+type TeamScaleLiveEvent = {
+  atMs: number;
+  kind: string;
+  event: string;
+  payload: unknown;
+  history?: { text?: string; message?: unknown };
+};
 
 type FixtureAsset = { body: string; contentType: string };
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
@@ -45,6 +53,7 @@ type FixtureOptions = {
   /** Supply the real canvas sandbox fixture for browser/widget measurements. */
   sandboxUrl?: string;
   sandboxPort?: number;
+  liveRun?: boolean;
 };
 
 function personId(index: number) {
@@ -140,8 +149,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  if (options.liveRun) {
+    Object.assign(pinnedRows[0]!, {
+      hasActiveRun: true,
+      status: "running",
+      activeRunIds: [TEAM_SCALE_LIVE_RUN_ID],
+    });
+  }
   for (const [index, person] of people.entries()) {
-    person.watchedSessions = [index < 8 ? selectedSessionKey : sessions[index]!.key];
+    person.watchedSessions = [
+      index < 8 ? selectedSessionKey : sessions[index === 119 ? 240 : index]!.key,
+    ];
   }
   const ownerSessionCounts = people.slice(0, counts.owners).map((person) => ({
     profileId: person.id,
@@ -225,7 +243,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     user: { id: person.id, identity: person.identity, name: person.name, email: person.email },
     watchedSessions: person.watchedSessions,
   }));
-  const catalogEvents: TeamScaleEvent[] = catalogs.flatMap((catalog) =>
+  const catalogEvents: TeamScaleCatalogEvent[] = catalogs.flatMap((catalog) =>
     catalog.hosts.map((host) => ({
       event: "sessions.catalog.host",
       payload: {
@@ -314,6 +332,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    ...(options.liveRun
+      ? {
+          inFlightRun: {
+            runId: TEAM_SCALE_LIVE_RUN_ID,
+            text: "Synthetic streaming progress 0",
+            startedAt: now,
+            events: [],
+          },
+        }
+      : {}),
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.list",
@@ -396,5 +424,146 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       },
     },
   };
-  return { scenario, selectedSessionKey, pinnedKeys, sidebarEntries, events, counts, assets };
+  // 125 frames over 20 seconds: streaming is mixed with unrelated Team activity.
+  const liveKinds = [
+    ...Array<string>(5).fill("presence.offscreen"),
+    ...Array<string>(2).fill("presence.visible"),
+    ...Array<string>(2).fill("sessions.changed.visible"),
+    ...Array<string>(2).fill("sessions.changed.hidden-held"),
+    ...Array<string>(2).fill("sessions.changed.outside-window"),
+    ...Array<string>(2).fill("session.message.open"),
+    ...Array<string>(5).fill("chat.delta.open"),
+    ...Array<string>(2).fill("catalog.host"),
+    "cron.unrelated",
+    ...Array<string>(2).fill("run-state.unrelated"),
+  ];
+  const livePresence = presenceEntries.map((entry) => Object.assign({}, entry));
+  const liveEvents: TeamScaleLiveEvent[] = Array.from({ length: 125 }, (_, index) => {
+    const kind = liveKinds[index % liveKinds.length]!;
+    const ts = now + (index + 1) * 160;
+    const runId = TEAM_SCALE_LIVE_RUN_ID;
+    let event: string;
+    let payload: unknown;
+    let history: TeamScaleLiveEvent["history"];
+    if (kind.startsWith("presence.")) {
+      event = "presence";
+      const target = kind === "presence.visible" ? 1 : 119;
+      livePresence[target] = {
+        ...livePresence[target]!,
+        ts,
+        lastActivityAt: ts,
+        lastInputSeconds: index % 2,
+        watchedSessions:
+          kind === "presence.visible" && index % 2
+            ? []
+            : [kind === "presence.visible" ? selectedSessionKey : sessions[240]!.key],
+      };
+      payload = { presence: livePresence.map((entry) => Object.assign({}, entry)) };
+    } else if (kind.startsWith("sessions.changed.") || kind === "run-state.unrelated") {
+      event = "sessions.changed";
+      const row =
+        sessions[
+          kind === "sessions.changed.visible"
+            ? 0
+            : kind === "sessions.changed.hidden-held"
+              ? 160
+              : 240
+        ]!;
+      payload = {
+        sessionKey: row.key,
+        agentId: "main",
+        reason: kind === "run-state.unrelated" ? "agent.run.started" : "patch",
+        ts,
+        updatedAt: row.updatedAt,
+        sessionId: row.sessionId,
+        lastMessagePreview: `Synthetic live activity ${index + 1}`,
+        session: {
+          ...row,
+          snapshotAt: ts,
+          ...(kind === "run-state.unrelated" ? { hasActiveRun: index % 2 === 0 } : {}),
+          lastMessagePreview: `Synthetic live activity ${index + 1}`,
+        },
+        ancestorSessions: [],
+      };
+    } else if (kind === "session.message.open") {
+      event = "session.message";
+      const message = {
+        role: "user",
+        content: [{ type: "text", text: `Synthetic live checkpoint ${index + 1}` }],
+        timestamp: ts,
+        __openclaw: { id: `team-scale-live-message-${index}` },
+      };
+      history = { message };
+      payload = {
+        sessionKey: selectedSessionKey,
+        clientRunId: runId,
+        messageId: `team-scale-live-message-${index}`,
+        messageSeq: counts.transcriptMessages + index + 1,
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        message,
+      };
+    } else if (kind === "chat.delta.open") {
+      event = "chat";
+      history = { text: `Synthetic streaming progress ${index + 1}` };
+      payload = {
+        sessionKey: selectedSessionKey,
+        runId,
+        seq: index + 1,
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: history.text }],
+        },
+      };
+    } else if (kind === "catalog.host") {
+      event = "sessions.catalog.host";
+      const source = catalogEvents[index % catalogEvents.length]!;
+      payload = {
+        ...source.payload,
+        catalog: {
+          ...source.payload.catalog,
+          hosts: source.payload.catalog.hosts.map((host) =>
+            Object.assign({}, host, {
+              sessions: host.sessions.map((row, rowIndex) =>
+                rowIndex === 0
+                  ? Object.assign({}, row, {
+                      updatedAt: ts,
+                      name: `Synthetic live catalog ${index + 1}`,
+                    })
+                  : row,
+              ),
+            }),
+          ),
+        },
+      };
+    } else {
+      event = "cron";
+      payload = { jobId: "team-scale-unrelated-job", action: "started", runAtMs: ts };
+    }
+    return { atMs: (index + 1) * 160, kind, event, payload, history };
+  });
+  return {
+    scenario,
+    selectedSessionKey,
+    pinnedKeys,
+    sidebarEntries,
+    events,
+    liveEvents,
+    liveHistory: options.liveRun
+      ? {
+          sessionId: pinnedRows[0]!.sessionId,
+          sessionInfo: pinnedRows[0]!,
+          messages: historyMessages,
+          inFlightRun: {
+            runId: TEAM_SCALE_LIVE_RUN_ID,
+            text: "Synthetic streaming progress 0",
+            startedAt: now,
+            events: [],
+          },
+        }
+      : undefined,
+    counts,
+    assets,
+  };
 }

@@ -6,7 +6,7 @@ import {
   SessionCommunicationDeniedError,
 } from "../agents/tools/sessions-send-communication.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
-import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
@@ -55,7 +55,7 @@ export async function recoverSessionSendDeliveries(
   let blockedCount = 0;
   for (const target of targets) {
     assertCurrent();
-    const entries = await readSessionEntrySummariesInWorker(target);
+    const entries = await readPendingInputRecoveryEntriesInWorker(target);
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,

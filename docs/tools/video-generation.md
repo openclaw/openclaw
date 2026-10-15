@@ -200,6 +200,9 @@ Repeated references keep their positions, so the same image can supply both
 <ParamField path="resolution" type="string">Resolution hint such as `360P`, `480P`, `540P`, `720P`, `768P`, `1080P`, `4K`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.</ParamField>
 <ParamField path="durationSeconds" type="number">
   Target duration in seconds (rounded to nearest provider-supported value).
+  Explicit values must round to a positive safe integer (1–9007199254740991 seconds);
+  invalid values fail instead of being clamped to one second. Omission preserves
+  the provider default.
 </ParamField>
 <ParamField path="size" type="string">Size hint when the provider supports it.</ParamField>
 <ParamField path="audio" type="boolean">

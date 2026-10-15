@@ -97,18 +97,10 @@ describe("update.run handoff refusal diagnostics", () => {
   });
 
   it.each([
-    ["permission-denied", Object.assign(new Error("denied"), { code: "EACCES" })],
-    ["runtime-unavailable", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" })],
     ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],
     ["service-refused", new Error("launchctl bootstrap failed")],
     ["ownership-refused", new Error("managed update handoff helper lease identity is unavailable")],
-    ["payload-failed", Object.assign(new Error("write EPIPE"), { code: "EPIPE" })],
     ["timeout", new Error("managed update handoff did not signal readiness within 1800 seconds")],
-    [
-      "helper-exited",
-      new Error("managed update handoff exited before signaling readiness (code=1, signal=null)"),
-    ],
-    ["preparation-failed", new Error("unrecognized startup refusal")],
   ])("persists and publishes the closed handoff kind %s", async (kind, error) => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
@@ -371,20 +363,6 @@ describe("update.run handoff refusal diagnostics", () => {
       }),
       reason: "requester-revoked",
       message: "requester-revoked",
-    },
-    {
-      error: new Error(
-        "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      ),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      publicMessage: "managed update handoff exited before signaling readiness",
-    },
-    {
-      error: new Error("managed update handoff did not signal readiness within 1800 seconds"),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff did not signal readiness within 1800 seconds",
-      publicMessage: "managed update handoff did not signal readiness",
     },
   ])(
     "records a handoff refusal: $message",

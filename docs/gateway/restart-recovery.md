@@ -38,6 +38,11 @@ During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
 
+After the HTTP listener binds, interrupted main-session marking overlaps session
+projection preparation. Both settle before channels start and the Gateway reports
+ready. Post-ready recovery reuses the completed store checks instead of repeating
+that scan.
+
 ## What survives a restart
 
 | State                          | Storage                                            | Behavior across restart                                                 |
@@ -1093,8 +1098,8 @@ existing restart delivery and continuation behavior.
   boots. Recovery preserves channels that an operator manually stopped and any
   separate development-mode suppression. Gateway logs look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Start a channel manually with: openclaw gateway call
-channels.start --params '{"channel":"<id>"}'`
+  start for <channel>… Start a channel manually with: openclaw gateway call
+  channels.start --params '{"channel":"<id>"}'`
 
   Safe mode also pauses main-session restart recovery. Interrupted entries and
   transcripts stay unchanged: the pause does not charge an attempt, settle a

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 // Audited npm artifacts: runtime exports use compiled JS. Mistral's optional
 // "source" condition is not enabled by the desktop runtime. Re-audit on upgrades.
 const developmentFiles = {
-  openai: { versions: ["7.28.0"], sources: ["src"], trees: [] },
+  openai: { versions: ["7.30.0"], sources: ["src"], trees: [] },
   zod: { versions: ["4.6.5"], sources: ["src"], trees: [] },
   "@anthropic-ai/sdk": { versions: ["0.131.0"], sources: ["src"], trees: [] },
   "@mistralai/mistralai": {

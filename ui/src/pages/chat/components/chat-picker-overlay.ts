@@ -28,7 +28,7 @@ const nativePickers = new WeakMap<HTMLDetailsElement, Overlay>();
 let nextPickerId = 0;
 
 /** Keep native details selectors while the shared overlay owns visibility and dismissal. */
-export function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
+function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
   const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
   const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
@@ -255,13 +255,6 @@ export function closeOtherChatComposerPickers(source: HTMLElement): void {
     if (picker !== source && !picker.contains(source)) {
       closeComposerPicker(picker);
     }
-  }
-}
-
-export function handleChatComposerDetailsToggle(event: Event): void {
-  const details = event.currentTarget;
-  if (details instanceof HTMLDetailsElement && details.open) {
-    closeOtherChatComposerPickers(details);
   }
 }
 

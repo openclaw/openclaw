@@ -1,6 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -26,6 +25,11 @@ import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
+import type {
+  LegacyDirectiveResult,
+  LegacyTemplateResult,
+  emptyLegacyContent,
+} from "../../../lit/solid-content.tsx";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
@@ -157,9 +161,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
-  composerControls?: TemplateResult | typeof nothing;
+  composerControls?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   footerContent?: JSX.Element;
-  composerRecovery?: TemplateResult | typeof nothing;
+  composerRecovery?: LegacyTemplateResult | typeof emptyLegacyContent;
   notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

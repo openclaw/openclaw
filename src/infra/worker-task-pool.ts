@@ -18,7 +18,7 @@ export class WorkerTaskPool<Input, Output> {
   constructor(options: WorkerTaskPoolOptions<Output>) {
     this.core = new WorkerTaskPoolCore<Input, Output>(
       options,
-      createWorkerTaskHost(undefined, options.workerClass),
+      createWorkerTaskHost({ databaseAccess: options.databaseAccess }, options.workerClass),
       {
         close: (error) => this.close(error),
         getSnapshot: () => this.getSnapshot(),
@@ -58,7 +58,10 @@ export function createOwnedWorkerTaskPool<Input, Output>(
 ) {
   const core = new WorkerTaskPoolCore<Input, Output>(
     options,
-    createWorkerTaskHost(ownerOptions, options.workerClass),
+    createWorkerTaskHost(
+      { databaseAccess: options.databaseAccess, ...ownerOptions },
+      options.workerClass,
+    ),
     undefined,
     ownerOptions,
   );

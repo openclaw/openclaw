@@ -133,15 +133,13 @@ export function useSessionMenuView(
   );
 
   const Submenu = (props: SubmenuProps) => {
-    const shortcut = () =>
-      props.view === "archive" ? "a" : !state.compact && props.view === "icon" ? "i" : undefined;
+    const shortcut = () => (!state.compact && props.view === "icon" ? "i" : undefined);
     return (
       <SessionMenuItem
         slot={props.inline === false ? "submenu" : undefined}
         class={[
           "session-menu__item",
           {
-            "session-menu__item--compact-details": state.compact && props.view === "archive",
             "people-menu__submenu": !state.compact && props.view === "assign-owner",
             "session-menu__advanced": !state.compact && props.view === "advanced",
           },
@@ -162,14 +160,7 @@ export function useSessionMenuView(
         </span>
         <span class="session-menu__text">{props.label}</span>
         <Show when={shortcut()}>
-          <Show when={state.compact} fallback={<SessionMenuShortcut shortcut={shortcut() ?? ""} />}>
-            <span class="session-menu__compact-details" aria-hidden="true">
-              <SessionMenuShortcut
-                shortcut={shortcut() ?? ""}
-                alias={sessionArchiveShortcut(state)}
-              />
-            </span>
-          </Show>
+          <SessionMenuShortcut shortcut={shortcut() ?? ""} />
         </Show>
         <Show when={state.compact} fallback={<Body view={props.view} />}>
           <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true">
@@ -180,42 +171,25 @@ export function useSessionMenuView(
     );
   };
 
-  const Archive = (props: Inline & { choice?: boolean }) => (
-    <Show
-      when={!props.choice && !batch() && state.session.hasChildren && !state.session.archived}
-      fallback={
-        <Item
-          kind="toggle-archived"
-          label={t(
-            state.session.archiving
-              ? "sessionsView.archiving"
-              : batch()
-                ? state.session.archived
-                  ? "sessionsView.restoreSessionCount"
-                  : "sessionsView.archiveSessionCount"
-                : state.session.archived
-                  ? "sessionsView.restoreSession"
-                  : props.choice
-                    ? "sessionsView.archiveSessionOnly"
-                    : "sessionsView.archiveSession",
-            { count: count() },
-          )}
-          icon={state.session.archived ? "archiveRestore" : "archive"}
-          inline={props.inline}
-          shortcut="a"
-        />
-      }
-    >
-      <Submenu
-        view="archive"
-        label={t(
-          state.session.archiving ? "sessionsView.archiving" : "sessionsView.archiveSession",
-        )}
-        icon="archive"
-        disabled={disabled("toggle-archived")}
-        title={state.actionDisabledReasons["toggle-archived"]}
-      />
-    </Show>
+  const Archive = (props: Inline) => (
+    <Item
+      kind="toggle-archived"
+      label={t(
+        state.session.archiving
+          ? "sessionsView.archiving"
+          : batch()
+            ? state.session.archived
+              ? "sessionsView.restoreSessionCount"
+              : "sessionsView.archiveSessionCount"
+            : state.session.archived
+              ? "sessionsView.restoreSession"
+              : "sessionsView.archiveSession",
+        { count: count() },
+      )}
+      icon={state.session.archived ? "archiveRestore" : "archive"}
+      inline={props.inline}
+      shortcut="a"
+    />
   );
 
   const Involvement = (props: Inline) => (
@@ -404,15 +378,6 @@ export function useSessionMenuView(
     <Switch>
       <Match when={props.view === "advanced"}>
         <AdvancedBody inline={props.inline ?? false} />
-      </Match>
-      <Match when={props.view === "archive"}>
-        <Archive inline={props.inline ?? false} choice />
-        <Item
-          kind="archive-tree"
-          label={t("sessionsView.archiveSessionTree")}
-          icon="archive"
-          inline={props.inline ?? false}
-        />
       </Match>
       <Match when={props.view === "snooze"}>
         <SessionSnoozeOptions actions={actions} state={state} inline={props.inline ?? false} />

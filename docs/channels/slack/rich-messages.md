@@ -150,7 +150,7 @@ patterns when opening a Slack modal:
 
 - Set `callback_id` to `openclaw:<namespace>:<payload>`.
 - Or keep an existing `callback_id` and put `pluginInteractiveData:
-"<namespace>:<payload>"` in the modal `private_metadata`.
+  "<namespace>:<payload>"` in the modal `private_metadata`.
 
 The handler receives `ctx.interaction.kind` as `view_submission` or
 `view_closed`, normalized `inputs`, and the full raw `stateValues` object from

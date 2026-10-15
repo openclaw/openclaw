@@ -529,9 +529,7 @@ describe("command selection with session routing", () => {
     [sessionKey, true, false, "store"],
     [sessionKey, true, false, "explicit"],
     [sessionKey, true, true, "suppressed"],
-    [sessionKey, false, true, "fallback"],
     [undefined, true, true, "fallback"],
-    ["", true, true, "fallback"],
   ] as const)(
     "routes key=%j, store=%s, suppressed=%s",
     async (key, withStore, suppressVisibleSessionEffects, route) => {

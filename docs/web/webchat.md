@@ -47,7 +47,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - In the Control UI, assistant images and attachments appear in message order, between their surrounding paragraphs. Before/after labels stay beside the corresponding images.
 - Attachment directives owned by the current WebChat reply stay hidden in live transcript events while files are prepared. User prompts, fenced examples, and references outside that reply's attachment pipeline remain unchanged.
 - WebChat excludes reasoning-flagged reply payloads (`isReasoning: true`) from assistant content, transcript replay text, and audio content blocks. Thinking-only payloads therefore do not surface as visible assistant messages or playable audio.
-- `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
+- `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). When session keys share a transcript, such as a cron base key and its isolated run key, the note is appended under the transcript's owner. The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
 - Aborted runs can keep partial assistant output visible in the UI. Gateway persists that partial text into transcript history when buffered output exists, and marks the entry with abort metadata.
 
 ### Transcript and delivery model
@@ -109,7 +109,11 @@ each utterance, the current chat session's agent answers it, and the browser pla
 the Gateway's generated speech. This uses the configured agent model, including
 local models. Output uses `talk.provider` when set, otherwise `tts`.
 The browser pauses capture while generating and playing the answer. Stop ends
-capture and playback and cancels that call's active chat run. Split Talk requires
+capture and playback and cancels that call's active chat run. A Talk failure,
+including the two-minute answer timeout, ends capture and playback but leaves the
+accepted chat run to finish in the conversation. The timeout message tells you to
+look for the answer in chat. Leaving the chat or switching away from Talk also
+leaves accepted work running. Split Talk requires
 both transcription and speech output to be configured. Dictation in an existing
 conversation uses that conversation's agent credentials; the catalog remains an
 advisory view of the configured Talk agent.

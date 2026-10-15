@@ -362,6 +362,13 @@ describe("runEmbeddedAttempt tool boundaries", () => {
     it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
       const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
       const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
+      const systemPromptReport = await import("../../system-prompt-report.js");
+      const { buildSystemPromptReport } = await vi.importActual<
+        typeof import("../../system-prompt-report.js")
+      >("../../system-prompt-report.js");
+      vi.spyOn(systemPromptReport, "buildSystemPromptReport").mockImplementation(
+        buildSystemPromptReport,
+      );
       const { log } = await import("../logger.js");
       let clock = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => clock);

@@ -194,17 +194,14 @@ export async function runCodeModeExec(params: {
       result,
     });
   } catch (error) {
-    inlineHost.onFailure?.(error, bridgeDispatch.started ? "bridge" : "host");
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const failurePhase = code === "invalid_input" ? "input" : "host";
+    inlineHost.onFailure?.(error, failurePhase);
     return output.takeResult(
       {
         status: "failed" as const,
         code,
-        failurePhase: bridgeDispatch.started
-          ? ("bridge" as const)
-          : code === "invalid_input"
-            ? ("input" as const)
-            : ("host" as const),
+        failurePhase,
         bridgeDispatchStarted: bridgeDispatch.started,
         replaySafe: params.restartSafe,
         telemetry: telemetry(runtime),
@@ -287,7 +284,11 @@ function createInlineHost(
     onWorkerAssigned: (workerId) => {
       params.bridgeDispatch.workerId = workerId;
     },
-    onFailure: (error, failurePhase, workerId = params.bridgeDispatch.workerId) =>
+    onFailure: (error, failurePhase, workerId = params.bridgeDispatch.workerId) => {
+      // The bridge already recorded the original cause before guest projection.
+      if (failurePhase === "bridge") {
+        return;
+      }
       logCodeModeFailure(error, {
         sessionId: params.ctx.sessionId,
         sessionKey: params.ctx.sessionKey,
@@ -297,7 +298,8 @@ function createInlineHost(
         workerId,
         failurePhase,
         bridgeDispatchStarted: params.bridgeDispatch.started,
-      }),
+      });
+    },
     onInputConsumed,
     onNetworkContent: () => params.runtime.observeNetworkContent(params.parentToolCallId),
     onBoundary: async (boundary, context) => {
@@ -713,6 +715,8 @@ export async function runWait(params: {
     });
   } catch (error) {
     const aborted = signal.aborted;
+    const code = aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const failurePhase = code === "invalid_input" ? "input" : "host";
     logCodeModeFailure(error, {
       sessionId: state.ctx.sessionId,
       sessionKey: state.ctx.sessionKey,
@@ -720,7 +724,7 @@ export async function runWait(params: {
       toolCallId: params.toolCallId,
       codeModeRunId: state.runId,
       workerId: state.bridgeDispatch.workerId,
-      failurePhase: "bridge",
+      failurePhase,
       bridgeDispatchStarted: state.bridgeDispatch.started,
     });
     await state.owner.close();
@@ -728,8 +732,8 @@ export async function runWait(params: {
     return state.output.takeResult(
       {
         status: "failed" as const,
-        code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
-        failurePhase: "bridge" as const,
+        code,
+        failurePhase,
         bridgeDispatchStarted: state.bridgeDispatch.started,
         replaySafe: state.replaySafe,
         telemetry: telemetry(state.runtime),

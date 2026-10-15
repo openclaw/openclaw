@@ -109,7 +109,7 @@ with `Goal error: goal already exists` until the current one is cleared.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
 - `usage_limited`: reserved for a future usage-limit stop state. `/goal
-resume` restarts pursuit the same way.
+  resume` restarts pursuit the same way.
 - `complete`: the goal was achieved. It stays complete until you explicitly use
   `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
   Resuming preserves its identity, creation time, and conversation history. Token

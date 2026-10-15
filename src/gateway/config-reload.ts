@@ -100,7 +100,14 @@ function settleCandidateApplications(
   status: RuntimeConfigWriteApplicationStatus,
 ) {
   for (const application of candidateApplications(candidate)) {
-    application.settle(status);
+    // A canonical reread may already contain an external writer's replacement.
+    application.settle(
+      status === "applied" &&
+        candidate &&
+        application.isCarriedBy?.(candidate.compareConfig) === false
+        ? "superseded"
+        : status,
+    );
   }
 }
 

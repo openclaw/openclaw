@@ -371,7 +371,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
-  @viewState() presentationTitle: string | undefined;
   @viewState() narrow = false;
   @viewState() mergedChrome = false;
   @viewState() navDrawerOpen = false;

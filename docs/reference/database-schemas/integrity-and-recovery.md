@@ -217,9 +217,10 @@ Cleanup that needs another connection uses ordinary admission and invalidates
 the seal before writing again. A forced exit during a write still requires the admission gate.
 This changes no schema, update, or rollback contract.
 
-Native execution workers borrow host proof while another handle retains it, or
-reuse a matching seal after final close. The receiving opener rechecks the physical
-file identity and shared revocation cell; final close releases in-memory proof.
+Native execution workers borrow the physical store's process-lifetime admission
+proof, including after the final handle closes. A matching seal can restore proof
+after a process restart. The receiving opener checks the physical file identity
+and shared revocation cell; final close preserves in-memory proof.
 When native execution establishes the first runtime proof, it returns that proof
 through its existing admission so later cleanup workers can reuse it without a
 host SQLite open. The host accepts it only for the admitted physical file and
@@ -244,7 +245,8 @@ above, or override explicit process-local revocation. Older readers can
 ignore the nullable column; backup and rollback retain its existing row lifetime.
 
 Database replacement, quarantine, and failed admission discard applicable
-verification. Ordinary native close can preserve it in the clean-close seal.
+verification. Ordinary native close preserves process-local proof and can also
+save it in the clean-close seal for the next process.
 Doctor maintenance discards remembered runtime verification after
 draining agent connections and before raw maintenance can run. Pending migrations
 still run full checks, and required-index
@@ -673,7 +675,9 @@ The shared-state writer maintains SQLite planner statistics once during its
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
-connection has not queried. Contention skips that attempt;
+connection has not queried. On supported SQLite versions before 3.46, the cached
+native admission version selects bounded `ANALYZE main` because their optimizer
+cannot discover all missing or stale statistics. Contention skips that attempt;
 later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
@@ -796,6 +800,13 @@ artifact-preserving reader. Retirement closes the native database borrow before
 a later request opens a replacement actor. An actor that returns from an
 operation with a tracked reader still active fails settlement and retires
 immediately.
+
+At the broker's 64-client limit, new opens can retire an owner-confirmed idle
+shared-state client before its normal deadline. Accepted scopes, pending commands,
+maintenance clients, and clients from another runtime generation are protected.
+Retirement joins native cleanup before admission resumes, and later use reopens
+the retired client transparently. If no client is eligible, the capacity refusal
+remains; the limit and stored data do not change.
 
 Observations belong to the open database handle in the Gateway process. They
 reset when that handle is replaced or the Gateway restarts. Status and Doctor

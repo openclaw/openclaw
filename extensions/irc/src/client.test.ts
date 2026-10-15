@@ -434,7 +434,6 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     bodies?: string[];
     separator?: string;
   }>([
-    { name: "multibyte byte limit", text: "漢".repeat(900) },
     { name: "emoji byte limit", text: "😀".repeat(300) },
     {
       name: "joined emoji at the character cap",

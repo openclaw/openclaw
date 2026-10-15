@@ -1,12 +1,8 @@
 // Shared camera, photo, and file entry points for chat and New Session.
-import { html, nothing } from "lit";
-import "../../../components/web-awesome.ts";
-import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
-import "./chat-camera-capture.tsx";
 
-function clickComposerInput(target: HTMLElement, selector: string) {
+export function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target
     .closest(".agent-chat__composer-shell, .new-session-page__composer")
@@ -14,7 +10,7 @@ function clickComposerInput(target: HTMLElement, selector: string) {
     ?.click();
 }
 
-function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
+export function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
   const input = e.target;
   if (!(input instanceof HTMLInputElement)) {
     return;
@@ -22,47 +18,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   const files = [...(input.files ?? [])];
   input.value = "";
   appendChatAttachmentFiles(files, props);
-}
-
-export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
-  if (!uploadsEnabled(props.uploadConfig)) {
-    return nothing;
-  }
-  const openInput = (kind: "camera" | "photo") => (source: HTMLElement) => {
-    if (!props.disabled) {
-      clickComposerInput(source, `.agent-chat__${kind}-input`);
-    }
-  };
-  return html`
-    <openclaw-chat-camera-capture
-      .disabled=${Boolean(props.disabled) || props.cameraActive === false}
-      .readSignal=${props.readSignal ?? props.attachmentReads?.readSignal}
-      .onCapture=${(file: File) => {
-        if (!props.disabled) {
-          appendChatAttachmentFiles([file], props);
-        }
-      }}
-      .onNativeCapture=${openInput("camera")}
-      .onUpload=${openInput("photo")}
-    ></openclaw-chat-camera-capture>
-    ${(["file", "photo", "camera"] as const).map(
-      (kind) => html`
-        <input
-          type="file"
-          accept=${kind === "file" ? nothing : "image/*"}
-          ?multiple=${kind !== "camera"}
-          capture=${kind === "camera" ? "environment" : nothing}
-          class=${`agent-chat__${kind}-input`}
-          ?disabled=${props.disabled}
-          @change=${(event: Event) => {
-            if (!props.disabled) {
-              handleChatAttachmentFileSelect(event, props);
-            }
-          }}
-        />
-      `,
-    )}
-  `;
 }
 
 export function handleChatAttachmentMenuSelection(

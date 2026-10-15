@@ -787,7 +787,6 @@ export const en: TranslationMap & {
     advanced: "Advanced",
     copyDetails: "Copy details",
     copyLink: "Copy link",
-    archiveSessionOnly: "Session only",
     communication: {
       title: "Cross-session messaging",
       send: "Send messages",
@@ -3355,7 +3354,6 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary: "Gateway restarted. Resuming your interrupted request.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
@@ -3759,7 +3757,6 @@ export const en: TranslationMap & {
     },
     pendingInputs: {
       agentUpdate: {
-        queued: "Agent update received · waiting for delivery.",
         cancelled: "This agent update was cancelled before delivery.",
         interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
@@ -3978,6 +3975,14 @@ export const en: TranslationMap & {
       readFailed: "Could not attach: {names}{more}",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
+      compressToFit: "Compress to fit",
+      compressionHint:
+        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressing: "Compressing… {progress}%",
+      compressionUnsupported:
+        "This browser cannot compress this video with its audio. Try another browser or a smaller file.",
+      compressionTooLarge: "This video could not fit. Trim it or choose a smaller file.",
+      compressionFailed: "Could not compress this video. Try again or choose a smaller file.",
       showInTextField: "Show in text field",
       pastedText: "Pasted text",
       outsideAllowedFolders: "Outside allowed folders",
@@ -3998,6 +4003,8 @@ export const en: TranslationMap & {
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
+      replyTimedOut:
+        "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",

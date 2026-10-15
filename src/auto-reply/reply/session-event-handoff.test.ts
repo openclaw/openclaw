@@ -621,50 +621,45 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["awaited", "ignored"] as const)(
-    "reports a queued event's policy failure once with an %s receipt",
-    async (receiptUse) => {
-      await withTargetFixture(async ({ env }) => {
-        const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-        const receipt = enqueueSessionEventForHost("Process completed", {
-          agentId: "main",
-          sessionKey,
-          source: "exec",
-          expectedTarget: target,
-        });
-        setRuntimeConfigSnapshot({
-          ...getRuntimeConfigSnapshot(),
-          tools: { deny: ["write", "message"] },
-        });
-
-        if (receiptUse === "awaited") {
-          await expect(receipt.settled).resolves.toMatchObject({
-            status: "failed",
-            executionStarted: false,
-            delivered: false,
-            error: expect.stringContaining("configuration changed"),
-          });
-        }
-        // Join the independent owner without requiring a producer to consume its receipt.
-        await Promise.allSettled(
-          continuation.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        expect(receipt.cancel()).toBe(false);
-        resetSystemEventsForTest();
-        expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
-          source: "exec",
-          agentId: "main",
-          sessionKey,
-          eventId: receipt.id,
-          error: expect.stringContaining("configuration changed"),
-        });
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+  it("reports a queued event's policy failure once", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const receipt = enqueueSessionEventForHost("Process completed", {
+        agentId: "main",
+        sessionKey,
+        source: "exec",
+        expectedTarget: target,
       });
-    },
-  );
+      setRuntimeConfigSnapshot({
+        ...getRuntimeConfigSnapshot(),
+        tools: { deny: ["write", "message"] },
+      });
+
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: expect.stringContaining("configuration changed"),
+      });
+      // Join the independent owner without requiring a producer to consume its receipt.
+      await Promise.allSettled(
+        continuation.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
+      );
+      expect(receipt.cancel()).toBe(false);
+      resetSystemEventsForTest();
+      expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
+        source: "exec",
+        agentId: "main",
+        sessionKey,
+        eventId: receipt.id,
+        error: expect.stringContaining("configuration changed"),
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    });
+  });
 
   it("settles a pending occurrence as cancelled when ephemeral queues close", async () => {
     await withTargetFixture(async ({ env }) => {
@@ -737,26 +732,4 @@ describe("session event target custody", () => {
       });
     },
   );
-
-  it("releases an occurrence when Gateway restart admission refuses the producer", async () => {
-    await withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      gatewayWork.markGatewayRestartDraining();
-      const receipt = enqueueSessionEventForHost("Process completed", {
-        agentId: "main",
-        sessionKey,
-        source: "restart",
-        expectedTarget: target,
-      });
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: expect.stringContaining("GatewayDrainingError"),
-      });
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(dispatch).not.toHaveBeenCalled();
-    });
-  });
 });

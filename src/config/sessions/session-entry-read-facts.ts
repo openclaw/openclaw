@@ -144,7 +144,7 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
   };
 }
 
-/** The actor owner admits committed facts; callers keep their own live assertions. */
+/** Borrow immutable committed facts; callers own edits and live-authority assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
