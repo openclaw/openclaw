@@ -1528,6 +1528,7 @@ src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
+src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
