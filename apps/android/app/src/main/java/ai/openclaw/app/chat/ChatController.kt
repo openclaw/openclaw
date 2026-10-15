@@ -5863,7 +5863,7 @@ class ChatController internal constructor(
         }
 
         is GatewayRequestNotEnqueued -> {
-          persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
+          persist(ChatOutboxStatus.Queued, err.message)
           direct?.let { settleDirectSendRun(it, item.id) }
           if (direct == null || direct.gatewayScope == currentCacheScope()) _healthOk.value = false
           if (direct != null) publishOutbox()

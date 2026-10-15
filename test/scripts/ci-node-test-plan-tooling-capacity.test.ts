@@ -33,7 +33,8 @@ vi.mock("../vitest/vitest.unit-fast-paths.mjs", async (importOriginal) => ({
 }));
 vi.mock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
-  listTrackedTestFiles: (rootDir: string) => (rootDir === "test" ? fixture.files : []),
+  listTrackedTestFiles: (rootDir: string, suffix?: string) =>
+    rootDir === "test" ? fixture.files.filter((file) => file.endsWith(suffix || ".test.ts")) : [],
 }));
 vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),

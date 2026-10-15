@@ -47,6 +47,7 @@ import {
   observeRelayTranscriptFailures,
 } from "./index.test-support.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
+import { defineRelayOpeningGreetingTests } from "./opening-greeting.test-support.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
@@ -198,6 +199,7 @@ describe("talk realtime relay helpers", () => {
 });
 
 describe("talk realtime gateway relay", () => {
+  defineRelayOpeningGreetingTests(createTalkRealtimeRelaySession);
   const { cleanupIsolatedRelayState } = usePersistentRelayTestState(activeRelaySessions);
 
   it.each([

@@ -97,6 +97,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         hasCurrentClientAuthority,
       } = request;
       const requester = readGatewayRequestMutationAuthority(request);
+      const receivedAt = performance.now();
       const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
       const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
       const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
@@ -109,6 +110,23 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       sessionMutationAuthorization?.assertCurrent();
+      if (params.recovery !== undefined) {
+        if (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId) {
+          respondInvalidRequest(respond, "A recovery notice requires a new realtime relay session");
+          return;
+        }
+        if (params.greeting !== undefined) {
+          respondInvalidRequest(respond, "A recovery notice cannot include an opening greeting");
+          return;
+        }
+      }
+      if (
+        params.greeting !== undefined &&
+        (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId)
+      ) {
+        respondInvalidRequest(respond, "An opening greeting requires a new realtime relay session");
+        return;
+      }
       if (params.voiceChangeId && (mode !== "realtime" || transport !== "gateway-relay")) {
         respondInvalidRequest(respond, "A voice replacement requires a realtime relay session");
         return;
@@ -312,9 +330,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           });
           replacement?.assertCurrent(target);
         };
-        const initialItems = replacement
-          ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
-          : [];
+        const initialItems =
+          replacement || params.greeting !== undefined || params.recovery !== undefined
+            ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
+            : [];
         assertEnsuredTargetCurrent();
         const model =
           normalizeOptionalString(providerConfig.model) ?? resolution.provider.defaultModel;
@@ -345,6 +364,21 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               clientCapabilities: params.capabilities,
               voiceChangeId: params.voiceChangeId,
               initialItems,
+              ...(params.greeting !== undefined || params.recovery !== undefined
+                ? {
+                    ...(params.greeting !== undefined ? { greeting: params.greeting.trim() } : {}),
+                    ...(params.recovery !== undefined
+                      ? {
+                          recovery: {
+                            interruptedForMs: params.recovery.interruptedForMs,
+                            receivedAt,
+                          },
+                        }
+                      : {}),
+                    // Accepted audio outlives request snapshots and updates its own voice row.
+                    assertGreetingAllowed: () => target.assertCurrent(context.getRuntimeConfig()),
+                  }
+                : {}),
               voiceSelectionVoices: voices,
               instructions:
                 (controlSource === "delegation"

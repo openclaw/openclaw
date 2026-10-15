@@ -90,6 +90,7 @@ export function createTalkClientGatewayControlOwner(params: {
     "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
   >;
   assertConnectionOpen?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
   appendTranscript: (entry: {
@@ -432,6 +433,7 @@ export function createTalkClientGatewayControlOwner(params: {
     assertOpen: () => {
       signal.throwIfAborted();
       params.assertConnectionOpen?.();
+      params.operatorAuthority?.assertCurrent();
     },
     runAgentConsult,
     control: {

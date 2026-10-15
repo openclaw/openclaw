@@ -250,6 +250,42 @@ class VoiceWakeRuntimeTest {
   }
 
   @Test
+  fun activityBackgroundKeepsAnsweredIncomingCallCaptureUntilExplicitStop() {
+    val runtime = createTestRuntime()
+    val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    // Seed the post-Answer ownership boundary without a real Gateway or microphone.
+    writeField(runtime, "incomingCallCaptureId", "answered-call")
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = true
+
+    runtime.setForeground(false)
+
+    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
+    assertTrue(runtime.talkModeEnabled.value)
+    assertFalse(runtime.tryAcquireVoiceNoteMic())
+    runtime.setForeground(true)
+    assertTrue(runtime.talkModeEnabled.value)
+
+    runtime.setTalkModeEnabled(false)
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(runtime.talkModeEnabled.value)
+  }
+
+  @Test
+  fun activityBackgroundStillStopsOrdinaryTalkCapture() {
+    val runtime = createTestRuntime()
+    val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = true
+
+    runtime.setForeground(false)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(runtime.talkModeEnabled.value)
+  }
+
+  @Test
   fun stoppingNativePttKeepsMicOwnedUntilMainDestroysTheRetiredRecognizer() =
     runBlocking {
       val runtime = createTestRuntime()
