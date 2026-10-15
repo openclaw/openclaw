@@ -79,7 +79,9 @@ filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.
 Stopping a run blocks new commands and file operations while allowing its accepted
-workspace changes to finish checkpointing. Settlement still requires the original
+workspace changes to finish checkpointing. Accepted command cleanup retains the
+workspace owner until finalization finishes, even after the parent exits.
+Settlement still requires the original
 session and worktree binding and live Gateway ownership; a replacement session or
 unresolved checkpoint failure cannot be reported as a clean stop.
 Conflicts preserve both versions and block further
