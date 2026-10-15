@@ -1,11 +1,11 @@
 ---
 name: pr-simplify
-description: "Simplify a PR diff to its smallest complete fix. Use before a nontrivial PR's first review, after large repairs, or when asked to shrink a PR or clean up slop."
+description: "Simplify your own change to its smallest complete fix. Use before opening a PR, before pushing large repairs to one, or when asked to shrink a PR or clean up slop."
 ---
 
-# Simplify the PR
+# Simplify the change
 
-An editing pass by the PR owner, run before review and never in place of it. Inherit the task's scope and repair authority; a review-only request gets findings instead of edits. The chosen maintainer workflow owns publication, review and merge.
+An editing pass by the change's author: run it on your own branch before you open the PR, and again before you push large repairs. It precedes review and never replaces it. Inherit the task's scope and repair authority; a review-only request gets findings instead of edits. The chosen maintainer workflow owns publication, review and merge.
 
 **The diff is a proposal.** Passing tests show it works, not that its architecture or every added test is needed.
 
@@ -19,7 +19,11 @@ Read the user's outcome and latest scope, the complete diff against the target m
 
 Inspect the largest added modules, state, adapters and test scaffolding first. Read their direct callers and relevant history: apparently redundant behavior may protect a shipped configuration or an earlier regression. Scope is the changed system and the paths it replaces.
 
-Done when you can state the defect, the required invariant, and the smallest complete fix in one sentence each.
+Trace every changed hunk to the stated outcome. A hunk that serves another goal leaves this change: drop it or move it to its own PR.
+
+Count the non-mechanical changed lines. Above about 800, or about 500 for complex logic, name the smallest coherent stage that can land first and cut the change to that stage.
+
+Done when you can state the defect, the required invariant, and the smallest complete fix in one sentence each, and every remaining hunk serves that fix.
 
 ## 2. Remove unnecessary architecture
 
@@ -36,24 +40,24 @@ Apply each supported simplification in the diff:
   - shims, aliases, retries and fallbacks backed by a named shipped contract and removal plan;
   - naming, control flow, imports and formatting that match the surrounding file.
 
-Preserve the requested fix and supported behavior, not the proposal's accidental design. Keep real domain differences and justified public compatibility. Report new product decisions, breaking contracts, unrelated cleanup and destructive branch replacement as findings for the owner.
+Preserve the requested fix and supported behavior, not the proposal's accidental design. Keep real domain differences and justified public compatibility. When history (`git log -p -S <symbol>`) leaves a path's purpose unclear, keep it and report it. Report new product decisions, breaking contracts, unrelated cleanup and destructive branch replacement as findings for the owner.
 
 ## 3. Keep tests for failures
 
 For each added or changed test group and its setup helpers, name the distinct observable failure it catches.
 
-Keep regressions for the actual defect and distinct boundaries: ordering, cancellation, stale authority, restart, rejection, real errors and affected consumer differences. Keep static contract guards that independently protect a real boundary. Remove duplicate same-path cases, mock echoes, incidental field-copy or wording assertions, tests of obsolete implementations, and scaffolding or test-only production hooks left unused. Consolidate useful cases in an existing owner suite.
+Keep regressions for the actual defect and distinct boundaries: ordering, cancellation, stale authority, restart, rejection, real errors and affected consumer differences. Keep static contract guards that independently protect a real boundary. Remove duplicate same-path cases, mock echoes, incidental field-copy or wording assertions, assertions on statically defined values, tests that only prove removed logic is gone, tests of obsolete implementations, and scaffolding or test-only production hooks. Consolidate useful cases in an existing owner suite.
 
 Removing tests never weakens the assertions, coverage of real boundaries or baselines that remain.
 
 Done when every remaining test group has a named failure.
 
-## 4. Prove the smaller change and hand it back
+## 4. Prove the smaller change and hand it on
 
 Batch the edits, then rerun the reproduction and focused checks for the changed contracts and affected consumers. Reuse proof whose inputs are unchanged. A preserved restart, upgrade or transport claim needs applicable proof. The existing workflow selects broader checks.
 
 Done when the complete diff is inspected, every rule has a verdict for each changed file, supported simplifications are applied, superseded paths are unreachable and affected behavior still has proof. No change is a valid result when the existing shape is justified. Aim for net-negative code, not a deletion quota.
 
-Report in existing task evidence: the responsibility or machinery that disappeared, the behavior still protected, and production/test deltas against the PR base. Label a reduction against an earlier revision separately from the whole-PR delta. Name any necessary remaining growth or unresolved decision.
+Report in the PR body or existing task evidence: the responsibility or machinery that disappeared, the behavior still protected, and production/test deltas against the merge base. Label a reduction against an earlier revision separately from the whole-change delta. Name any necessary remaining growth or unresolved decision.
 
-After later repairs, simplify only the new changes and the owners they touch before the next review.
+Then open or update the PR. After later repairs, simplify only the new changes and the owners they touch before pushing them.
