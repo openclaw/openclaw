@@ -162,9 +162,10 @@ export function renderChatTypingIndicator(
                         ${repeat(
                           peers,
                           (actor) => actor.id,
-                          (actor) => html`<span class="agent-chat__typing-person">
-                            ${renderChatAuthorAvatar({ id: actor.id, name: actor.label, identity: { type: "profile", id: actor.id } })}
-                          </span>`,
+                          (actor) =>
+                            html`<span class="agent-chat__typing-person">
+                              ${renderChatAuthorAvatar({ id: actor.id, name: actor.label, identity: { type: "profile", id: actor.id } })}
+                            </span>`,
                         )}
                       </span>`
                 }

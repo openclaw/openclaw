@@ -1,8 +1,7 @@
 diff --git a/lib/client.d.ts b/lib/client.d.ts
-index aa8e43fe418defce5910d71a85d36cce1140ca93..d67db1bc6a5eb782e8bb688092b76ffa0679457a 100644
 --- a/lib/client.d.ts
 +++ b/lib/client.d.ts
-@@ -714,6 +714,7 @@ export declare enum ClientEvent {
+@@ -712,6 +712,7 @@
       * events received over context, search, or pagination APIs.
       *
       * The payload is the matrix event which caused this event to fire.
@@ -10,7 +9,7 @@ index aa8e43fe418defce5910d71a85d36cce1140ca93..d67db1bc6a5eb782e8bb688092b76ffa
       * @example
       * ```
       * matrixClient.on("event", function(event){
-@@ -806,7 +807,7 @@ type UserEvents = UserEvent.AvatarUrl | UserEvent.DisplayName | UserEvent.Presen
+@@ -804,7 +805,7 @@
  export type EmittedEvents = ClientEvent | RoomEvents | RoomStateEvents | CryptoEvents | MatrixEventEvents | RoomMemberEvents | UserEvents | CallEvent | CallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Outgoing | GroupCallEventHandlerEvent.Ended | GroupCallEventHandlerEvent.Participants | HttpApiEvent.SessionLoggedOut | HttpApiEvent.NoConsent | BeaconEvent;
  export type ClientEventHandlerMap = {
      [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
@@ -20,10 +19,9 @@ index aa8e43fe418defce5910d71a85d36cce1140ca93..d67db1bc6a5eb782e8bb688092b76ffa
      [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
      [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
 diff --git a/lib/client.js b/lib/client.js
-index aea41fc9b0877d28be090fdf57cec9d2d7b6a3cb..884da2764f927cb783a84e22b5c20a369a53b796 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -227,6 +227,7 @@ export let ClientEvent = /*#__PURE__*/function (ClientEvent) {
+@@ -226,6 +226,7 @@
     * events received over context, search, or pagination APIs.
     *
     * The payload is the matrix event which caused this event to fire.
@@ -31,7 +29,7 @@ index aea41fc9b0877d28be090fdf57cec9d2d7b6a3cb..884da2764f927cb783a84e22b5c20a36
     * @example
     * ```
     * matrixClient.on("event", function(event){
-@@ -1107,8 +1108,11 @@ export class MatrixClient extends TypedEventEmitter {
+@@ -1111,8 +1112,11 @@
      // attach the event listeners needed by RustCrypto
      this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
      this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
@@ -46,10 +44,9 @@ index aea41fc9b0877d28be090fdf57cec9d2d7b6a3cb..884da2764f927cb783a84e22b5c20a36
  
      // re-emit the events emitted by the crypto impl
 diff --git a/lib/sync.js b/lib/sync.js
-index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d011699c037c4 100644
 --- a/lib/sync.js
 +++ b/lib/sync.js
-@@ -955,7 +955,7 @@ export class SyncApi {
+@@ -955,7 +955,7 @@
            user.setPresenceEvent(presenceEvent);
            client.store.storeUser(user);
          }
@@ -58,7 +55,7 @@ index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d0116
        });
      }
  
-@@ -1070,7 +1070,7 @@ export class SyncApi {
+@@ -1070,7 +1070,7 @@
          room.recalculate();
        }
        stateEvents.forEach(function (e) {
@@ -67,7 +64,7 @@ index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d0116
        });
      }));
  
-@@ -1248,7 +1248,7 @@ export class SyncApi {
+@@ -1248,7 +1248,7 @@
          client.emit(ClientEvent.Room, room);
        }
        this.processEventsForNotifs(room, timelineEvents);
@@ -76,7 +73,7 @@ index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d0116
        // this fires a couple of times for some events. (eg state events are in the timeline and the state)
        // should this get a sync section as an additional event emission param (e, syncSection))?
        stateEvents.forEach(emitEvent);
-@@ -1283,16 +1283,16 @@ export class SyncApi {
+@@ -1288,16 +1288,16 @@
        }
        this.processEventsForNotifs(room, timelineEvents);
        stateEvents?.forEach(function (e) {
@@ -97,7 +94,7 @@ index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d0116
        });
      }));
  
-@@ -1310,7 +1310,7 @@ export class SyncApi {
+@@ -1315,7 +1315,7 @@
          room.recalculate();
        }
        stateEvents.forEach(function (e) {
@@ -107,10 +104,9 @@ index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d0116
      }));
  
 diff --git a/src/client.ts b/src/client.ts
-index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36baff86af 100644
 --- a/src/client.ts
 +++ b/src/client.ts
-@@ -1026,6 +1026,7 @@ export enum ClientEvent {
+@@ -1028,6 +1028,7 @@
       * events received over context, search, or pagination APIs.
       *
       * The payload is the matrix event which caused this event to fire.
@@ -118,7 +114,7 @@ index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36
       * @example
       * ```
       * matrixClient.on("event", function(event){
-@@ -1167,7 +1168,7 @@ export type EmittedEvents =
+@@ -1169,7 +1170,7 @@
  
  export type ClientEventHandlerMap = {
      [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
@@ -127,7 +123,7 @@ index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36
      [ClientEvent.ToDeviceEvent]: (event: MatrixEvent) => void;
      [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
      [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
-@@ -2073,8 +2074,11 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
+@@ -2082,8 +2083,11 @@
          // attach the event listeners needed by RustCrypto
          this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
          this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
@@ -142,10 +138,9 @@ index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36
  
          // re-emit the events emitted by the crypto impl
 diff --git a/src/sync.ts b/src/sync.ts
-index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b02750b7b1 100644
 --- a/src/sync.ts
 +++ b/src/sync.ts
-@@ -1131,7 +1131,7 @@ export class SyncApi {
+@@ -1131,7 +1131,7 @@
                          user.setPresenceEvent(presenceEvent);
                          client.store.storeUser(user);
                      }
@@ -154,7 +149,7 @@ index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b0
                  });
          }
  
-@@ -1254,7 +1254,7 @@ export class SyncApi {
+@@ -1254,7 +1254,7 @@
                      room.recalculate();
                  }
                  stateEvents.forEach(function (e) {
@@ -163,7 +158,7 @@ index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b0
                  });
              }),
          );
-@@ -1482,7 +1482,7 @@ export class SyncApi {
+@@ -1482,7 +1482,7 @@
  
                  this.processEventsForNotifs(room, timelineEvents);
  
@@ -172,7 +167,7 @@ index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b0
                  // this fires a couple of times for some events. (eg state events are in the timeline and the state)
                  // should this get a sync section as an additional event emission param (e, syncSection))?
                  stateEvents.forEach(emitEvent);
-@@ -1523,16 +1523,16 @@ export class SyncApi {
+@@ -1531,16 +1531,16 @@
                  this.processEventsForNotifs(room, timelineEvents);
  
                  stateEvents?.forEach(function (e) {
@@ -193,7 +188,7 @@ index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b0
                  });
              }),
          );
-@@ -1554,7 +1554,7 @@ export class SyncApi {
+@@ -1562,7 +1562,7 @@
                      room.recalculate();
                  }
                  stateEvents.forEach(function (e) {

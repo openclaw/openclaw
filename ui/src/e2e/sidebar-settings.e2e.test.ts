@@ -481,6 +481,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await page.bringToFront();
+      await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe("visible");
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
       const credential = page.getByLabel("Gateway secret", { exact: true });

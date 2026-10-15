@@ -17,6 +17,7 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -223,9 +224,7 @@ export function parseNodeDurationMs(value: string): number {
     parseOptionalNodeInteger(durationMs, "--duration");
     return durationMs;
   } catch {
-    throw new Error(
-      "--duration must be a positive duration (1–9007199254740991ms after rounding; e.g. 500ms, 10s, 1m).",
-    );
+    throw positiveDurationError("--duration", "ms");
   }
 }
 

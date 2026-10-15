@@ -260,6 +260,13 @@ describe("openrouter video generation provider", () => {
 
   afterEach(resetVideoMocks);
 
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ prompt: "a lobster", durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("declares explicit mode capabilities", () => {
     const provider = buildOpenRouterVideoGenerationProvider();
 

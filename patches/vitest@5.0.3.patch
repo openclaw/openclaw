@@ -1,8 +1,7 @@
-diff --git a/dist/chunks/cac.fSuRXrAx.js b/dist/chunks/cac.fSuRXrAx.js
-index 7b254fba15c5a1f7a0716aa22d943918dace605c..79971c50b0003a7f147264964471836c58e2649f 100644
---- a/dist/chunks/cac.fSuRXrAx.js
-+++ b/dist/chunks/cac.fSuRXrAx.js
-@@ -2318,7 +2318,12 @@ function parseCLI(argv, config = {}) {
+diff --git a/dist/chunks/cac.DfDGTQ9W.js b/dist/chunks/cac.DfDGTQ9W.js
+--- a/dist/chunks/cac.DfDGTQ9W.js
++++ b/dist/chunks/cac.DfDGTQ9W.js
+@@ -2318,7 +2318,12 @@
  	if (arrayArgs[0] !== "vitest") throw new Error(`Expected "vitest" as the first argument, received "${arrayArgs[0]}"`);
  	arrayArgs[0] = "/index.js";
  	arrayArgs.unshift("node");
@@ -16,11 +15,10 @@ index 7b254fba15c5a1f7a0716aa22d943918dace605c..79971c50b0003a7f147264964471836c
  	if (arrayArgs[2] === "watch" || arrayArgs[2] === "dev") options.watch = true;
  	if (arrayArgs[2] === "run" && !options.watch) options.run = true;
  	if (arrayArgs[2] === "related") {
-diff --git a/dist/chunks/index.D4dXTzh9.js b/dist/chunks/index.D4dXTzh9.js
-index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548cf9fcd1e5 100644
---- a/dist/chunks/index.D4dXTzh9.js
-+++ b/dist/chunks/index.D4dXTzh9.js
-@@ -16,6 +16,7 @@ import { Console } from 'node:console';
+diff --git a/dist/chunks/index.k8L_ZRzq.js b/dist/chunks/index.k8L_ZRzq.js
+--- a/dist/chunks/index.k8L_ZRzq.js
++++ b/dist/chunks/index.k8L_ZRzq.js
+@@ -17,6 +17,7 @@
  class BareModuleMocker {
  	options;
  	static pendingIds = [];
@@ -28,7 +26,7 @@ index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548c
  	spyModule;
  	primitives;
  	registries = /* @__PURE__ */ new Map();
-@@ -101,27 +102,35 @@ class BareModuleMocker {
+@@ -102,27 +103,35 @@
  			};
  		});
  	}
@@ -84,7 +82,7 @@ index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548c
  			}
  		}
  	}
-@@ -753,7 +762,7 @@ function startVitestModuleRunner(options) {
+@@ -756,7 +765,7 @@
  				const rawId = unwrapId(id);
  				resolvingModules.add(rawId);
  				try {
@@ -93,11 +91,10 @@ index 7f8ab40e591a03cffbb914d5bcd8f06702ae4619..70d5d27486c4c6a5561d5b6c7c39548c
  					if (!isImportActual) {
  						const resolvedMock = moduleRunner.mocker.getDependencyMockByUrl(id);
  						if (resolvedMock?.type === "manual" || resolvedMock?.type === "redirect") return {
-diff --git a/dist/chunks/index.DzobfTyw.js b/dist/chunks/index.DzobfTyw.js
-index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b4d8d955e 100644
---- a/dist/chunks/index.DzobfTyw.js
-+++ b/dist/chunks/index.DzobfTyw.js
-@@ -6367,7 +6367,9 @@ class ModuleFetcher {
+diff --git a/dist/chunks/index.DpLw24bj.js b/dist/chunks/index.DpLw24bj.js
+--- a/dist/chunks/index.DpLw24bj.js
++++ b/dist/chunks/index.DpLw24bj.js
+@@ -6372,7 +6372,9 @@
  		if ("code" in result) trace.setAttribute("vitest.fetched_module.code_length", result.code.length);
  	}
  	async getCachePath(environment, moduleGraphModule) {
@@ -108,15 +105,15 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		const moduleId = moduleGraphModule.id;
  		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
  		// undefined means there is no key in memory
-@@ -7121,6 +7123,7 @@ class FileSystemModuleCache {
+@@ -7159,6 +7161,7 @@
  	rootCache;
  	metadataFilePath;
- 	version = "1.0.0-beta.7";
+ 	version = "1.0.0-beta.8";
 +	lockfileHash;
  	fsCacheRoots = /* @__PURE__ */ new WeakMap();
  	fsEnvironmentHashMap = /* @__PURE__ */ new WeakMap();
- 	fsCacheKeyGenerators = /* @__PURE__ */ new Set();
-@@ -7150,6 +7153,9 @@ class FileSystemModuleCache {
+ 	fsCacheKeyGenerators = /* @__PURE__ */ new WeakMap();
+@@ -7193,6 +7196,9 @@
  		return false;
  	}
  	async clearCache(log = true) {
@@ -126,7 +123,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		const fsCachePaths = [this.rootCache, ...this.vitest.projects.map((r) => r.config.fsModuleCachePath || this.rootCache)];
  		const uniquePaths = Array.from(new Set(fsCachePaths));
  		await Promise.all(uniquePaths.map((directory) => rm(directory, {
-@@ -7228,6 +7234,11 @@ class FileSystemModuleCache {
+@@ -7274,6 +7280,11 @@
  	invalidateAllCachePaths(environment) {
  		debugFs?.(`the ${environment.name} environment cache is invalidated`);
  		this.fsCacheKeys.get(environment)?.clear();
@@ -138,7 +135,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	}
  	getMemoryCachePath(environment, id) {
  		const result = this.fsCacheKeys.get(environment)?.get(id);
-@@ -7285,7 +7296,7 @@ class FileSystemModuleCache {
+@@ -7331,7 +7342,7 @@
  				return value;
  			});
  			// everything in the key that does not depend on the module, as one digest
@@ -147,7 +144,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			this.fsEnvironmentHashMap.set(environment, environmentHash);
  		}
  		hashString += id + fileContent + environmentHash + coverageAffectsCache;
-@@ -7332,25 +7343,23 @@ class FileSystemModuleCache {
+@@ -7378,25 +7389,23 @@
  	// or a new version of vite/vitest is installed
  	// for the same reason we also cache config file content, but that won't catch changes made in external plugins
  	async ensureCacheIntegrity() {
@@ -159,6 +156,17 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
 -			debugFs?.(`fs metadata file was created with hash ${currentLockfileHash}`);
 -			await this.writeMetadata(currentLockfileHash);
 -			return;
+-		}
+-		// if lockfile didn't change, don't do anything
+-		if (metadata.lockfileHash === currentLockfileHash) return;
+-		// lockfile changed, let's clear all caches
+-		await this.clearCache(false);
+-		await this.writeMetadata(currentLockfileHash);
+-		this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
+-			timestamp: true,
+-			environment: y.yellow("[vitest]")
+-		});
+-		debugFs?.(`fs cache was cleared because lockfile has changed`);
 +		if ([this.vitest.getRootProject(), ...this.vitest.projects].some((p) => p.config.fsModuleCache)) {
 +			const metadata = await this.readMetadata();
 +			const currentLockfileHash = getLockfileHash(this.vitest.vite.config.root);
@@ -175,21 +183,11 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
 +				await this.writeMetadata(currentLockfileHash);
 +			}
 +			this.lockfileHash = currentLockfileHash;
- 		}
--		// if lockfile didn't change, don't do anything
--		if (metadata.lockfileHash === currentLockfileHash) return;
--		// lockfile changed, let's clear all caches
--		await this.clearCache(false);
--		await this.writeMetadata(currentLockfileHash);
--		this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
--			timestamp: true,
--			environment: y.yellow("[vitest]")
--		});
--		debugFs?.(`fs cache was cleared because lockfile has changed`);
++		}
  	}
  }
  /**
-@@ -10683,6 +10692,7 @@ var RunnerState = /* @__PURE__ */ function(RunnerState) {
+@@ -10753,6 +10762,7 @@
  	RunnerState["STARTING"] = "starting";
  	RunnerState["STARTED"] = "started";
  	RunnerState["START_FAILURE"] = "start_failure";
@@ -197,7 +195,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	RunnerState["STOPPING"] = "stopping";
  	RunnerState["STOPPED"] = "stopped";
  	return RunnerState;
-@@ -10740,7 +10750,7 @@ class PoolRunner {
+@@ -10810,7 +10820,7 @@
  		}), {
  			eventNames: ["onCancel"],
  			post: (request) => {
@@ -206,7 +204,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			},
  			on: (callback) => this._eventEmitter.on("rpc", callback),
  			timeout: -1
-@@ -10758,7 +10768,7 @@ class PoolRunner {
+@@ -10828,7 +10838,7 @@
  	postMessage(message) {
  		// Only send messages when runner is active (not fully stopped)
  		// Allow sending during STOPPING state for the 'stop' message itself
@@ -215,7 +213,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	}
  	startTracesSpan(name) {
  		const traces = this._traces;
-@@ -10790,7 +10800,7 @@ class PoolRunner {
+@@ -10860,7 +10870,7 @@
  		// Wait for any ongoing operation to complete
  		if (this._operationLock) await this._operationLock;
  		if (this._state === RunnerState.STARTED || this._state === RunnerState.STARTING) return;
@@ -224,7 +222,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		// Create operation lock to prevent concurrent start/stop
  		this._operationLock = createDefer();
  		let startSpan;
-@@ -10830,14 +10840,14 @@ class PoolRunner {
+@@ -10900,14 +10910,14 @@
  				}
  			});
  			await startPromise;
@@ -241,7 +239,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			startSpan?.recordException(error);
  			throw error;
  		} finally {
-@@ -10849,7 +10859,9 @@ class PoolRunner {
+@@ -10919,7 +10929,9 @@
  	async stop(options) {
  		// Wait for any ongoing operation to complete
  		if (this._operationLock) await this._operationLock;
@@ -252,7 +250,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		this._otel?.span.setAttribute("vitest.worker.files", this._otel.files);
  		if (this._state === RunnerState.IDLE) {
  			this._otel?.span.end();
-@@ -10872,12 +10884,13 @@ class PoolRunner {
+@@ -10942,12 +10954,13 @@
  							stopSpan.recordException(response.error);
  							this.project.vitest.state.catchError(response.error, "Teardown Error");
  						}
@@ -269,7 +267,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  					type: "stopped",
  					__vitest_worker_response__: true
  				});
-@@ -10887,21 +10900,21 @@ class PoolRunner {
+@@ -10957,21 +10970,21 @@
  					__vitest_worker_request__: true,
  					otelCarrier: this.getOTELCarrier()
  				});
@@ -279,27 +277,29 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
 +				// Deadline/error paths must also terminate and join the worker.
 +				await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
  			});
--			this._eventEmitter.removeAllListeners();
--			this._offCancel();
--			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
++			this._state = RunnerState.STOPPED;
++		} catch (error) {
++			// Ensure failed graceful shutdown cannot report a successful test run.
++			this.project.vitest.state.catchError(error, "Teardown Error");
++			this._state = RunnerState.STOPPED;
++			throw error;
++		} finally {
+ 			this._eventEmitter.removeAllListeners();
+ 			this._offCancel();
+ 			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
 -			// Stop the worker process (this sets _fork/_thread to undefined)
 -			// Worker's event listeners (error, message) are implicitly removed when worker terminates
 -			await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
- 			this._state = RunnerState.STOPPED;
- 		} catch (error) {
+-			this._state = RunnerState.STOPPED;
+-		} catch (error) {
 -			// Ensure we transition to stopped state even on error
-+			// Ensure failed graceful shutdown cannot report a successful test run.
-+			this.project.vitest.state.catchError(error, "Teardown Error");
- 			this._state = RunnerState.STOPPED;
- 			throw error;
- 		} finally {
-+			this._eventEmitter.removeAllListeners();
-+			this._offCancel();
-+			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+-			this._state = RunnerState.STOPPED;
+-			throw error;
+-		} finally {
  			this._lastTestFiles = [];
  			this._operationLock.resolve();
  			this._operationLock = null;
-@@ -10933,7 +10946,8 @@ class PoolRunner {
+@@ -11003,7 +11016,8 @@
  		const errorDetails = hasCode || signal ? `with ${hasCode ? `exit code ${code} ` : ""}${signal ? `signal ${signal} ` : ""}` : "";
  		const testFileDetails = this._lastTestFiles.length ? ` while running test file${this._lastTestFiles.length === 1 ? "" : "s"} ${this._lastTestFiles.join(", ")}` : "";
  		const error = /* @__PURE__ */ new Error(`Worker exited unexpectedly ${errorDetails}during ${this._state} state${testFileDetails}`);
@@ -309,13 +309,12 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		this._eventEmitter.emit("error", error);
  	};
  	waitForStart() {
-@@ -11041,10 +11055,22 @@ class ForksPoolWorker {
+@@ -11111,10 +11125,22 @@
  			this._fork.stderr.pipe(this.stderr, { end: false });
  		}
  	}
--	async stop() {
 +	waitForExit() {
- 		const fork = this.fork;
++		const fork = this.fork;
 +		return new Promise((resolve, reject) => {
 +			const onExit = (code, signal) => {
 +				if (code === 0 && signal == null) resolve();
@@ -325,7 +324,8 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
 +			else fork.once("exit", onExit);
 +		});
 +	}
-+	async stop() {
+ 	async stop() {
+-		const fork = this.fork;
 +		const fork = this._fork;
 +		if (!fork) return;
  		const waitForExit = new Promise((resolve) => {
@@ -334,7 +334,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			else fork.once("exit", resolve);
  		});
  		/*
-@@ -11053,10 +11079,12 @@ class ForksPoolWorker {
+@@ -11123,10 +11149,12 @@
  		* - https://github.com/jestjs/jest/blob/25a8785584c9d54a05887001ee7f498d489a5441/packages/jest-worker/src/workers/ChildProcessWorker.ts#L463-L477
  		* - https://github.com/tinylibs/tinypool/blob/40b4b3eb926dabfbfd3d0a7e3d1222d4dd1c0d2d/src/runtime/process-worker.ts#L56
  		*/
@@ -351,7 +351,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		if (fork.stdout) {
  			await streamFlushed(fork.stdout);
  			fork.stdout.unpipe(this.stdout);
-@@ -11474,7 +11502,7 @@ class Pool {
+@@ -11546,7 +11574,7 @@
  			await resolver.promise.catch((error) => span?.recordException(error)).finally(() => span?.end());
  			const index = this.activeTasks.indexOf(activeTask);
  			if (index !== -1) this.activeTasks.splice(index, 1);
@@ -360,16 +360,16 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  				this.sharedRunners.push(runner);
  				return this.schedule();
  			}
-@@ -11482,7 +11510,7 @@ class Pool {
+@@ -11554,7 +11582,7 @@
  			// Runner termination can also already start from task cancellation.
  			if (!runner.isTerminated) {
  				const id = setTimeout(() => this.logger.error(`[vitest-pool]: Timeout terminating ${task.worker} worker for test files ${formatFiles(task)}.`), this.options.teardownTimeout);
 -				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).then(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
 +				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).finally(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
  			}
- 			this.freeWorkerId(poolId);
+ 			workerIds.set(poolId, true);
  		} 
-@@ -11724,6 +11752,8 @@ function createPool(ctx) {
+@@ -11796,6 +11824,8 @@
  			const groupResults = await Promise.allSettled(promises);
  			results.push(...groupResults);
  		}
@@ -378,7 +378,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
  		if (errors.length > 0) throw new AggregateError(errors, "Errors occurred while running tests. For more information, see serialized error.");
  	}
-@@ -12002,6 +12032,7 @@ class TestProject {
+@@ -12074,6 +12104,7 @@
  	config;
  	viteConfig;
  	vite;
@@ -386,7 +386,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	hash;
  	/** @internal */ typechecker;
  	/** @internal */ _resolver;
-@@ -12015,13 +12046,18 @@ class TestProject {
+@@ -12087,13 +12118,18 @@
  	typecheckFilesList = null;
  	_globalSetups;
  	_provided = {};
@@ -406,7 +406,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		this.hash = generateHash(this.config.root + this.config.name);
  		this._provideObject(projectConfig.provide);
  	}
-@@ -12304,8 +12340,8 @@ class TestProject {
+@@ -12377,8 +12413,8 @@
  		}
  	}
  	/** @internal */
@@ -417,7 +417,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		project.runner = vitest.runner;
  		project._resolver = vitest._resolver;
  		project._fetcher = vitest._fetcher;
-@@ -12322,8 +12358,8 @@ class TestProject {
+@@ -12395,8 +12431,8 @@
  	*
  	* @internal
  	*/
@@ -428,7 +428,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		sibling.runner = parent.runner;
  		sibling._resolver = parent._resolver;
  		sibling._fetcher = parent._fetcher;
-@@ -12439,7 +12475,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
+@@ -12512,7 +12548,8 @@
  		debug?.(`no projects declared, the root config is the only project`);
  		baseEntries = [{
  			viteConfig: globalViteConfig,
@@ -438,7 +438,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		}];
  	}
  	// Ensure project names are unique across declared projects (and any
-@@ -12542,6 +12579,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -12615,6 +12652,28 @@
  	const fileProjects = [...configFiles, ...nonConfigDirectories];
  	const promises = [];
  	projectConfigs.forEach((options, index) => {
@@ -467,7 +467,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		const ownServerReason = getOwnServerReason(context, options);
  		if (ownServerReason === void 0) {
  			debug?.(`inline project ${inlineProjectLabel(options, index)} shares the Vite server of ${parentViteConfig.configFile ?? parentConfig.root}`);
-@@ -12571,10 +12630,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -12644,10 +12703,12 @@
  		// resolved pair: the root (or the container) also runs as a regular project
  		if (parentViteConfig.configFile === path) {
  			debug?.(`project at ${path} is the declaring config itself, reusing its resolved config`);
@@ -481,7 +481,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			}));
  			continue;
  		}
-@@ -12607,7 +12668,7 @@ async function flattenContainerEntries(context, entries) {
+@@ -12680,7 +12741,7 @@
  		// inline projects cannot declare `projects`; the declaring config's own
  		// entry (emitted when it references its own config file) is kept as-is —
  		// its `projects` are the definitions currently being resolved
@@ -490,7 +490,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			result.push(entry);
  			continue;
  		}
-@@ -12819,18 +12880,21 @@ function resolveSharedServerEntry(context, options, index) {
+@@ -12892,18 +12953,21 @@
  			moduleRunnerOptions: parentConfig._moduleRunnerOptions
  		}
  	});
@@ -514,7 +514,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	const captures = {};
  	// only inline entries (keyed by their index) extend another config;
  	// file-based projects own all of their values
-@@ -12864,7 +12928,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -12937,7 +13001,7 @@
  	for (const key in parentViteConfig.env) projectViteConfig.env[key] ??= parentViteConfig.env[key];
  	const mergedOptions = projectViteConfig.test ?? {};
  	// resolved after `viteResolveConfig` so a plugin can still set `test.name`
@@ -523,7 +523,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	const projectConfig = resolveTestConfig(harness.logger, mergedOptions, projectViteConfig, parentConfig);
  	projectViteConfig.test = projectConfig;
  	if (inheritsParentConfig && options.extends === void 0 && configFile) warnDuplicateInheritedPlugins(harness.logger, projectConfig, projectViteConfig, parentViteConfig, configFile, rootConfig.root);
-@@ -12882,6 +12946,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -12955,6 +13019,8 @@
  		viteConfig: projectViteConfig,
  		projectConfig,
  		inline: isInlineEntry,
@@ -532,7 +532,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		ancestors: context.ancestors.length ? [...context.ancestors] : void 0
  	};
  }
-@@ -12974,6 +13040,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
+@@ -13047,6 +13113,7 @@
  			result.push({
  				viteConfig,
  				projectConfig: clonedConfig,
@@ -540,7 +540,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  				ancestors: entry.ancestors
  			});
  		});
-@@ -13035,6 +13102,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
+@@ -13108,6 +13175,7 @@
  		result.push({
  			viteConfig: entry.viteConfig,
  			projectConfig: benchmarkConfig,
@@ -548,7 +548,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			ancestors: entry.ancestors,
  			sharedServer: entry.sharedServer
  		});
-@@ -13181,7 +13249,7 @@ function resolveDirectoryConfig(directory) {
+@@ -13254,7 +13322,7 @@
  	if (configFile) return resolve(directory, configFile);
  	return null;
  }
@@ -557,7 +557,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	let { label, color } = typeof name === "string" ? { label: name } : {
  		label: "",
  		...name
-@@ -13195,7 +13263,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
+@@ -13268,7 +13336,7 @@
  	}
  	// Projects declared by a container config are namespaced by the container's
  	// name: the "unit" project of an "app" container is named "app (unit)".
@@ -566,7 +566,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  	return {
  		label,
  		color
-@@ -13225,7 +13293,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13298,7 +13366,7 @@
  	}
  	const projects = [];
  	for (const entry of entries) {
@@ -575,7 +575,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		const primary = primaryByViteConfig.get(viteConfig);
  		if (primary) {
  			if (hidden) continue;
-@@ -13238,14 +13306,14 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13311,14 +13379,14 @@
  			// a shared-server project reuses only the Vite server
  			if (entry.sharedServer) {
  				debug?.(`project ${projectLabel(projectConfig.name)} reuses the Vite server of ${projectLabel(primary.name)} with its own module runner`);
@@ -592,7 +592,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			// Browser-instance siblings share the primary's single (browser) Vite
  			// server; each gets its own `ProjectBrowser` view onto it.
  			if (primary._parentBrowser) sibling.browser = primary._parentBrowser.spawn(sibling);
-@@ -13258,7 +13326,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13331,7 +13399,7 @@
  		debug?.(`creating a Vite server for project ${projectLabel(projectConfig.name)}`);
  		const children = childrenByViteConfig.get(viteConfig) ?? [];
  		const { server, parent } = await createClusterServer(vitest, viteConfig, projectConfig, children);
@@ -601,7 +601,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		// a shared entry can create the container's server on first use,
  		// but the server still belongs to the declaring config
  		project._sharedViteServer = !!entry.sharedServer;
-@@ -20622,6 +20690,7 @@ class Vitest {
+@@ -20696,6 +20764,7 @@
  		// populate will merge all configs into every project,
  		// we don't want that when just listing tags
  		if (!resolved.listTags) populateProjectsTags(this.coreWorkspaceProject, this.projects);
@@ -609,7 +609,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		this.reporters = await createReporters(resolved.reporters, this);
  		// API setup (watch mode only). Must run after the reporters array is built
  		// above, since `setup()` appends the UI/API WebSocket reporter to it. For a
-@@ -20638,7 +20707,6 @@ class Vitest {
+@@ -20712,7 +20781,6 @@
  				setup(this, browserServer);
  			}
  		}
@@ -617,7 +617,7 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  		await Promise.all([...this._onSetServer.map((fn) => fn()), this._traces.waitInit()]);
  	}
  	/** @internal */
-@@ -20679,7 +20747,7 @@ class Vitest {
+@@ -20753,7 +20821,7 @@
  		if (this.coverageProvider?.onFileTransform) this.clearAllCachePaths();
  	}
  	clearAllCachePaths() {
@@ -626,11 +626,10 @@ index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..7de72ebe6dc3449a6b9b380747495c6b
  			Object.values(vite.environments).forEach((environment) => this._fsCache.invalidateAllCachePaths(environment));
  		});
  	}
-diff --git a/dist/chunks/index.m3L2HgmY.js b/dist/chunks/index.m3L2HgmY.js
-index dadbf7ade257975994efc67f2cd2a6b48c46fc1a..bb1a15b797f8dde8ddeb5a4da51688bc94828d03 100644
---- a/dist/chunks/index.m3L2HgmY.js
-+++ b/dist/chunks/index.m3L2HgmY.js
-@@ -4964,12 +4964,12 @@ function requireFakeTimersSrc () {
+diff --git a/dist/chunks/index.C4tKZ0yW.js b/dist/chunks/index.C4tKZ0yW.js
+--- a/dist/chunks/index.C4tKZ0yW.js
++++ b/dist/chunks/index.C4tKZ0yW.js
+@@ -4978,12 +4978,12 @@
  	                    return this.refed;
  	                },
  	                refresh: function () {
@@ -644,11 +643,10 @@ index dadbf7ade257975994efc67f2cd2a6b48c46fc1a..bb1a15b797f8dde8ddeb5a4da51688bc
  	                    timer.order = uniqueTimerOrder++;
  	                    setTimer(clock, timer);
  	                    clock.timerHeap.push(timer);
-diff --git a/dist/chunks/init-forks.DgHqDQHC.js b/dist/chunks/init-forks.DgHqDQHC.js
-index b94d451557434b23c38737e23163ffed35d14257..cfe76caf7dd29928d737cb5bd17ce9f399086b65 100644
---- a/dist/chunks/init-forks.DgHqDQHC.js
-+++ b/dist/chunks/init-forks.DgHqDQHC.js
-@@ -13,7 +13,12 @@ processOn("error", onError);
+diff --git a/dist/chunks/init-forks.hzLs7kMZ.js b/dist/chunks/init-forks.hzLs7kMZ.js
+--- a/dist/chunks/init-forks.hzLs7kMZ.js
++++ b/dist/chunks/init-forks.hzLs7kMZ.js
+@@ -13,7 +13,12 @@
  function workerInit(options) {
  	const { runTests } = options;
  	init({
@@ -662,11 +660,10 @@ index b94d451557434b23c38737e23163ffed35d14257..cfe76caf7dd29928d737cb5bd17ce9f3
  		on: (cb) => processOn("message", cb),
  		off: (cb) => processOff("message", cb),
  		teardown: () => {
-diff --git a/dist/chunks/plugin.d.CN87HSxv.d.ts b/dist/chunks/plugin.d.CN87HSxv.d.ts
-index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26102ad4cd 100644
---- a/dist/chunks/plugin.d.CN87HSxv.d.ts
-+++ b/dist/chunks/plugin.d.CN87HSxv.d.ts
-@@ -1032,13 +1032,14 @@ declare class TestProject {
+diff --git a/dist/chunks/plugin.d.BsjqSb4-.d.ts b/dist/chunks/plugin.d.BsjqSb4-.d.ts
+--- a/dist/chunks/plugin.d.BsjqSb4-.d.ts
++++ b/dist/chunks/plugin.d.BsjqSb4-.d.ts
+@@ -1032,13 +1032,14 @@
  	config: ResolvedConfig;
  	viteConfig: ResolvedConfig$1;
  	vite: ViteDevServer;
@@ -682,7 +679,7 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	/**
  	* Provide a value to the test context. This value will be available to all tests with `inject`.
  	*/
-@@ -2694,6 +2695,8 @@ interface PoolWorker {
+@@ -2700,6 +2701,8 @@
  	send: (message: WorkerRequest) => void;
  	deserialize: (data: unknown) => unknown;
  	start: () => Promise<void>;
@@ -691,7 +688,7 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	stop: () => Promise<void>;
  	/**
  	* This is called on workers that already satisfy certain constraints:
-@@ -2759,6 +2762,8 @@ type WorkerResponse = {
+@@ -2765,6 +2768,8 @@
  	error?: unknown;
  } | {
  	type: "stopped";
@@ -700,7 +697,7 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	error?: unknown;
  } | {
  	type: "testfileFinished";
-@@ -4432,6 +4437,7 @@ interface ResolvedConfig extends Omit<Required<UserConfig>, "project" | "config"
+@@ -4440,6 +4445,7 @@
  interface ResolvedProjectEntry {
  	viteConfig: ResolvedConfig$1;
  	projectConfig: ResolvedConfig;
@@ -708,11 +705,10 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
  	/**
  	* When set, this entry exists only so browser-instance siblings can attach
  	* to a parent that owns the Vite server and (later) the browser provider.
-@@ -4489,6 +4495,16 @@ interface UserWorkspaceConfig extends UserConfig$1 {
- type UserProjectConfigFn = (env: ConfigEnv) => UserWorkspaceConfig | Promise<UserWorkspaceConfig>;
+@@ -4498,6 +4504,16 @@
  type UserProjectConfigExport = UserWorkspaceConfig | Promise<UserWorkspaceConfig> | UserProjectConfigFn;
- type TestProjectInlineConfiguration = (UserWorkspaceConfig & {
-+	/**
+ type TestProjectInlineConfiguration = UserWorkspaceConfig & {
+ 	/**
 +	* Load a file-backed project while allowing explicit project options such as `root`.
 +	* Unlike `extends`, the file owns its complete project config and is evaluated once.
 +	*/
@@ -722,14 +718,14 @@ index b31a948b64185b00819abf6820db864d95008082..8ea87c4e7588503a03b2d8f103ce8d26
 +	* When present, the file is treated as a standalone project.
 +	*/
 +	namePrefix?: string;
- 	/**
++	/**
  	* Relative path to the extendable config. All other options will be merged with this config.
  	* If `true`, the project will inherit all options from the root config.
-diff --git a/dist/chunks/run.C5UmxDPh.js b/dist/chunks/run.C5UmxDPh.js
-index d397cb801d96ed4387adec3f8ef09123ddc636fe..f103cbe65ad64dceddb733bdd2e2a0347c42c04f 100644
---- a/dist/chunks/run.C5UmxDPh.js
-+++ b/dist/chunks/run.C5UmxDPh.js
-@@ -3782,14 +3782,17 @@ function throttle(fn, ms) {
+ 	* Set to `false` to keep the project configuration completely separate from the root config.
+diff --git a/dist/chunks/run.BTlFXlnv.js b/dist/chunks/run.BTlFXlnv.js
+--- a/dist/chunks/run.BTlFXlnv.js
++++ b/dist/chunks/run.BTlFXlnv.js
+@@ -3784,14 +3784,17 @@
  	let pendingCall;
  	return function call(...args) {
  		const now = unixNow();
@@ -750,10 +746,9 @@ index d397cb801d96ed4387adec3f8ef09123ddc636fe..f103cbe65ad64dceddb733bdd2e2a034
  }
  // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
 diff --git a/dist/node.d.ts b/dist/node.d.ts
-index be99c57c695ce0524369adc790d76cefd6d843bc..4d434dab726c6279051c23e84a22abe2716f1add 100644
 --- a/dist/node.d.ts
 +++ b/dist/node.d.ts
-@@ -425,6 +425,7 @@ declare class ForksPoolWorker implements PoolWorker {
+@@ -425,6 +425,7 @@
  	stop(): Promise<void>;
  	deserialize(data: unknown): unknown;
  	private emitError;

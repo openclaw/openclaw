@@ -76,10 +76,11 @@ describe("Codex attempt subscription recovery", () => {
       );
     } finally {
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(await settledAttempt).toMatchObject({
-        message: `Codex session generation is no longer current: ${target.sessionId}`,
-      });
+      await settledAttempt;
     }
+    expect(await settledAttempt).toMatchObject({
+      message: `Codex session generation is no longer current: ${target.sessionId}`,
+    });
   });
 
   it("continues a confirmed interrupted thread while a sibling turn stays active", async () => {
