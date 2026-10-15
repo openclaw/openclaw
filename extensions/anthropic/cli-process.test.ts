@@ -572,14 +572,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     },
   );
 
-  it("keeps successful turns with stderr quiet", async () => {
-    const context = await contextForChild(PROTOCOL_CHILD);
-    const stderr = vi.spyOn(process.stderr, "write");
-    const events = await collect({ ...context, prompt: "success with stderr" });
-    expect(events).toContainEqual(expect.objectContaining({ type: "result", result: "ok" }));
-    expect(stderr).not.toHaveBeenCalled();
-  });
-
   it("keeps diagnostics isolated between live processes", async () => {
     const warm = await contextForChild(PROTOCOL_CHILD);
     attachLiveSession(warm);

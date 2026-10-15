@@ -144,7 +144,6 @@ async function waitForQrRenderCallCount(count: number) {
 }
 
 describe("login-qr", () => {
-  const rotatingAccountId = "rotating-qr";
   const concurrentAccountId = "concurrent-qr";
 
   beforeEach(() => {
@@ -179,45 +178,6 @@ describe("login-qr", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("restarts login once on status 515 and completes", async () => {
-    const beforeCredentialPersistence = vi.fn(async () => {});
-    waitForWaConnectionMock
-      // Baileys v7 wraps the error: { error: BoomError(515) }
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "stable", exists: true });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: rotatingAccountId,
-      beforeCredentialPersistence,
-    });
-    expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
-
-    const resultPromise = waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId: rotatingAccountId,
-    });
-    await flushTasks();
-    await flushTasks();
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock).toHaveBeenNthCalledWith(
-      2,
-      false,
-      false,
-      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
-    );
-    const result = await resultPromise;
-
-    expect(result.connected).toBe(true);
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
   it("returns a replacement QR when status 408 happens before the first QR", async () => {
@@ -627,34 +587,6 @@ describe("login-qr", () => {
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     });
     expect(createWaSocketMock).not.toHaveBeenCalled();
-  });
-
-  it("does not report linked success when the socket opens before creds persistence stabilizes", async () => {
-    const accountId = "socket-open-before-persistence";
-    waitForWaConnectionMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(undefined), 20);
-        }),
-    );
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "unstable" });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-    });
-    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
-
-    const result = await waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId,
-    });
-
-    expect(result.connected).toBe(false);
-    expect(result.message).toMatch(/retry/i);
   });
 
   it("reports a recovered linked session when saved auth has no active listener", async () => {

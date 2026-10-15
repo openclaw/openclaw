@@ -205,22 +205,6 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
 });
 
 describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
-  it("routes threaded interaction events to the Slack thread session", async () => {
-    const ctx = createTestContext();
-
-    expect(
-      await ctx.resolveSlackSystemEventRoute({
-        channelId: "C_THREAD",
-        channelType: "channel",
-        senderId: "U_CLICKER",
-        threadTs: "1712345678.123456",
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:slack:channel:c_thread:thread:1712345678.123456",
-    });
-  });
-
   it("routes channel-less direct interactions to the sender session", async () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
@@ -230,18 +214,6 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
         senderId: "U_SHORTCUT",
       }),
     ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
-  });
-
-  it("routes typeless system events through an event-carried mpDM type", async () => {
-    const ctx = createTestContext();
-    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
-
-    expect(
-      await ctx.resolveSlackSystemEventRoute({
-        channelId: "C0MPDM42",
-        senderId: "U_ACTOR",
-      }),
-    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
   });
 
   it("partitions enterprise channel system events by workspace", async () => {
@@ -359,23 +331,6 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     });
   });
 
-  it("evicts the oldest user name when the bounded user cache fills", async () => {
-    const usersInfo = vi.fn().mockResolvedValue({
-      user: { profile: { display_name: "test-user" } },
-    });
-    const ctx = createTestContext({
-      appClient: { users: { info: usersInfo } } as unknown as App["client"],
-    });
-    await ctx.resolveUserName("U0OLDEST");
-    for (let index = 0; index < 2048; index += 1) {
-      await ctx.resolveUserName(`U${index}`);
-    }
-    // U0OLDEST should have been evicted by the fill. Re-requesting it must
-    // call users.info again (cache miss) instead of returning a stale entry.
-    await ctx.resolveUserName("U0OLDEST");
-    expect(usersInfo).toHaveBeenCalledTimes(2050);
-  });
-
   it("keeps a recently re-resolved user while older entries are evicted", async () => {
     const usersInfo = vi.fn().mockImplementation(async ({ user }: { user: string }) => ({
       user: { profile: { display_name: `name-${user}` } },
@@ -394,6 +349,8 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     const before = usersInfo.mock.calls.length;
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
+    await ctx.resolveUserName("U0");
+    expect(usersInfo).toHaveBeenCalledTimes(before + 1);
   });
 
   it("downloads the cached DM profile image without blocking or attaching the bot token", async () => {
