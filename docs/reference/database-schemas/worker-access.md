@@ -665,6 +665,13 @@ worker when initializer rollback or harness cleanup is present; initializer
 rollback is consumed only after the committed receipt. Opaque harness cleanup is
 deprecated and runs after commit, with failures reported as warnings.
 
+Saved session-send recovery discovers current sessions with unconsumed queued or
+interrupted inputs in one metadata query per store through the existing session
+reader. It opens bounded input history only for those candidates. The history
+owner still reconciles lost queued-input custody, and delivery still checks
+current endpoints and communication permissions before dispatch. New inputs
+accepted after discovery belong to their ordinary live delivery owner.
+
 Released synchronous SDK readers and cross-store authorization checks remain
 explicitly counted. Incognito reads memory actor state without SQL. Cross-store checks protect
 visibility, membership, and conversation authority that the destination worker
