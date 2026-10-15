@@ -98,6 +98,8 @@ actor OutboxTransportState {
     var sendFailsAfterRecording = false
     var sendRejects = false
     var sendResponseErrors = false
+    var sendRestartRejections = false
+    var restartRejectedKeys: [String] = []
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
@@ -411,6 +413,14 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                 code: "INVALID_REQUEST",
                 message: "rejected",
                 details: nil)
+        }
+        if await self.state.sendRestartRejections {
+            await self.state.update { $0.restartRejectedKeys.append(idempotencyKey) }
+            throw GatewayResponseError(
+                method: "chat.send",
+                code: "UNAVAILABLE",
+                message: "Gateway is restarting",
+                details: ["reason": AnyCodable("gateway-restarting"), "retryable": AnyCodable(true)])
         }
         if await self.state.sendRoutingChanged {
             throw GatewayResponseError(
@@ -1867,6 +1877,45 @@ struct ChatViewModelOutboxTests {
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `restart admission rejection resumes the same send after reconnect`(liveSend: Bool) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: liveSend)
+        await transport.state.update { $0.sendRestartRejections = true }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        await MainActor.run {
+            vm.input = "survive the restart"
+            vm.send()
+        }
+        await waitForObservedState { !vm.isSubmittingDraft }
+        if !liveSend {
+            await transport.goOnline()
+        }
+        await transport.state.waitForState { !$0.restartRejectedKeys.isEmpty }
+        await waitForObservedState { !vm.healthOK && vm.outboxFlushTask == nil }
+
+        let queued = try #require(await store.loadCommands().first)
+        #expect(queued.status == .queued)
+        #expect(queued.retryCount == 0)
+        #expect(await transport.state.restartRejectedKeys == [queued.id])
+        #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+
+        let sendGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendRestartRejections = false
+            $0.sendGate = sendGate
+        }
+        await transport.goOnline()
+        try await finishOutboxFlush(vm, at: sendGate)
+        #expect(await transport.state.sentIdempotencyKeys == [queued.id])
+        #expect(await userTexts(vm) == ["survive the restart"])
+        #expect(await store.loadCommands().isEmpty)
     }
 
     @Test func `definitive live-send rejection restores draft without queueing`() async throws {
