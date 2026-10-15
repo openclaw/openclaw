@@ -17,6 +17,7 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import {
@@ -36,6 +37,7 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -73,21 +75,23 @@ describe("chat account selection", () => {
     };
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
-    const draw = () =>
+    const draw = () => {
+      const section = renderChatModelAccountControl({
+        owner: state,
+        client: state.client,
+        selection: state.chatAccountSelection,
+        model: "openai/gpt-5.5",
+        disabled: false,
+        ownsSelection: () => current,
+        onSelect,
+        onManage,
+        onRequestUpdate: () => draw(),
+      });
       renderPaneLegacyContent(
-        renderChatModelAccountControl({
-          owner: state,
-          client: state.client,
-          selection: state.chatAccountSelection,
-          model: "openai/gpt-5.5",
-          disabled: false,
-          ownsSelection: () => current,
-          onSelect,
-          onManage,
-          onRequestUpdate: () => draw(),
-        })?.render(0),
+        section ? solidContent(ChatModelAccountSectionView, section.viewProps(0)) : undefined,
         container,
       );
+    };
     draw();
     return {
       container,
@@ -376,9 +380,12 @@ describe("chat pane composer controls", () => {
       agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
-    const view = mountSolid(() => createComponent(ChatPermissionPicker, controls.permissionPicker), {
-      container,
-    });
+    const view = mountSolid(
+      () => createComponent(ChatPermissionPicker, controls.permissionPicker),
+      {
+        container,
+      },
+    );
     onTestFinished(() => {
       view.unmount();
       container.remove();
