@@ -2063,7 +2063,10 @@ export const en: TranslationMap & {
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
-    unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    unsupportedGateway:
+      "This Gateway does not offer openclaw.chat. Update the Gateway and reconnect to continue setup.",
+    accessRequired:
+      "Setup requires openclaw.chat with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
     autoSetup: {
       title: "AI setup",
       connecting: "Connecting your AI...",

@@ -363,9 +363,9 @@ describe("Discord native plugin command dispatch", () => {
     vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(
       (params) =>
         createRouteState({
-          sessionKey: params.isDirectMessage
-            ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
-            : `agent:main:discord:channel:${params.conversationId}`,
+          sessionKey: params.channelContext.isDirectMessage
+            ? `agent:main:discord:dm:${params.interaction.user?.id ?? "owner"}`
+            : `agent:main:discord:channel:${params.conversationId ?? params.channelContext.rawChannelId}`,
           accountId: params.accountId,
         }),
     );

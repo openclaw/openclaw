@@ -1,14 +1,12 @@
+import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, untrack } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveUiSelectedGlobalAgentId } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
-import {
-  prepareWelcomeRecentSessions,
-  renderWelcomeState,
-} from "../chat/components/chat-welcome.ts";
+import { prepareWelcomeRecentSessions } from "../chat/components/chat-welcome.ts";
+import { ChatWelcome, type ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 
 type WelcomeSessions = {
   readonly state: { readonly result: SessionsListResult | null };
@@ -17,7 +15,8 @@ type WelcomeSessions = {
 
 export function DraftWelcome(props: {
   sessions: WelcomeSessions | undefined;
-  options: Parameters<typeof renderWelcomeState>[0];
+  options: Omit<ChatWelcomeProps, "composer">;
+  composer?: JSX.Element;
 }) {
   const source = createMemo(() => props.sessions);
   const sessions = projectSource(untrack(source), {
@@ -54,5 +53,5 @@ export function DraftWelcome(props: {
       selected.defaultAgentId,
     );
   }, presented);
-  return <LitContent value={renderWelcomeState(options(), recents())} />;
+  return <ChatWelcome {...options()} composer={props.composer} preparedRecents={recents()} />;
 }

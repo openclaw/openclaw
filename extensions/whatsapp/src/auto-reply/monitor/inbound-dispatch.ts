@@ -19,10 +19,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  requireWhatsAppInboundAdmission,
-  resolveWhatsAppAdmissionChannelIngress,
-} from "../../inbound/admission.js";
+import { resolveWhatsAppAdmissionChannelIngress } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -333,7 +330,7 @@ export async function prepareWhatsAppInboundContext(params: {
   suppressMessageReceivedHooks?: boolean;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const eventId = params.msg.event.id ?? `${conversationId}:${newConnectionId()}`;
@@ -471,7 +468,7 @@ export function resolveWhatsAppDmRouteTarget(params: {
   senderE164?: string;
   normalizeE164: (value: string) => string | null;
 }): string | undefined {
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const conversationId = admission.conversation.id;
   if (admission.conversation.kind === "group") {
     return undefined;

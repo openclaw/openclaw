@@ -598,42 +598,41 @@ describe("ollama plugin", () => {
     expect(modelsMock).not.toHaveBeenCalled();
   });
 
-  it("skips ambient discovery when plugin discovery is disabled", async () => {
-    const provider = registerProvider({ discovery: { enabled: false } });
-    const result = await runCatalog(
-      provider,
-      { apiKey: "", discoveryApiKey: "" },
-      discoveryConfig(false),
-    );
-    expect(result).toBeNull();
-    expect(discoveryMock).not.toHaveBeenCalled();
-  });
-
-  it("uses live plugin config to re-enable discovery after startup disable", async () => {
-    const provider = registerProvider({ discovery: { enabled: false } });
-    mockDiscovery([{ id: "llama3.2", name: "Llama 3.2" }]);
-    const result = await runCatalog(
-      provider,
-      { apiKey: "profile-key", discoveryApiKey: "profile-key" },
-      discoveryConfig(true),
-      { OLLAMA_API_KEY: "cloud-key" },
-    );
-    expect(discoveryMock).toHaveBeenCalledOnce();
-    expect(discoveryMock).toHaveBeenCalledWith(undefined, {
-      onListedModels: expect.any(Function),
-      discoveryMode: "strict",
-      apiKey: "profile-key",
-    });
-    expect(result).toEqual({
-      outcomes: [{ provider: "ollama", status: "ready" }],
-      provider: {
-        baseUrl: localBaseUrl,
-        api: "ollama",
-        models: [{ id: "llama3.2", name: "Llama 3.2" }],
+  it.each([false, true])(
+    "uses live discovery enabled=%s after startup disable",
+    async (enabled) => {
+      const provider = registerProvider({ discovery: { enabled: false } });
+      mockDiscovery([{ id: "llama3.2", name: "Llama 3.2" }]);
+      const result = await runCatalog(
+        provider,
+        enabled
+          ? { apiKey: "profile-key", discoveryApiKey: "profile-key" }
+          : { apiKey: "", discoveryApiKey: "" },
+        discoveryConfig(enabled),
+        { OLLAMA_API_KEY: "cloud-key" },
+      );
+      if (!enabled) {
+        expect(result).toBeNull();
+        expect(discoveryMock).not.toHaveBeenCalled();
+        return;
+      }
+      expect(discoveryMock).toHaveBeenCalledOnce();
+      expect(discoveryMock).toHaveBeenCalledWith(undefined, {
+        onListedModels: expect.any(Function),
+        discoveryMode: "strict",
         apiKey: "profile-key",
-      },
-    });
-  });
+      });
+      expect(result).toEqual({
+        outcomes: [{ provider: "ollama", status: "ready" }],
+        provider: {
+          baseUrl: localBaseUrl,
+          api: "ollama",
+          models: [{ id: "llama3.2", name: "Llama 3.2" }],
+          apiKey: "profile-key",
+        },
+      });
+    },
+  );
 
   it("preserves explicit api for configured dynamic Ollama models", async () => {
     const provider = registerProvider();
@@ -952,43 +951,46 @@ describe("ollama plugin", () => {
     await expect(provider.prepareDynamicModel?.(context as never)).resolves.toBeUndefined();
   });
 
-  it("skips implicit localhost discovery when a custom remote Ollama provider is configured", async () => {
-    const provider = registerProvider();
-    const result = await runCatalog(
-      provider,
-      { apiKey: "ollama-live" },
-      createModelProviderConfig({
-        "ollama-cloud": {
-          api: "ollama",
-          baseUrl: cloudBaseUrl,
-          models: [createModel("kimi-k2.6", "Kimi K2.6")],
-        },
-      }),
-      { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
-    );
-    expect(result).toBeNull();
-    expect(discoveryMock).not.toHaveBeenCalled();
-  });
-
-  it("treats custom 127/8 Ollama provider [::ffff:7f00:2] as loopback for implicit discovery", async () => {
-    const hostname = "[::ffff:7f00:2]";
-    const provider = registerProvider();
-    mockDiscovery([]);
-    const result = await runCatalog(
-      provider,
-      { apiKey: "ollama-live" },
-      createModelProviderConfig({
-        "ollama-alt-local": {
-          api: "ollama",
-          baseUrl: `http://${hostname}:11434`,
-          models: [createModel("llama3.2", "Llama 3.2")],
-        },
-      }),
-      { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
-    );
-    const resultProvider = result?.provider;
-    expect(resultProvider.baseUrl).toBe(localBaseUrl);
-  });
+  it.each([
+    {
+      name: "remote",
+      providerId: "ollama-cloud",
+      baseUrl: cloudBaseUrl,
+      model: "kimi-k2.6",
+      modelName: "Kimi K2.6",
+    },
+    {
+      name: "mapped 127/8 loopback",
+      providerId: "ollama-alt-local",
+      baseUrl: "http://[::ffff:7f00:2]:11434",
+      model: "llama3.2",
+      modelName: "Llama 3.2",
+    },
+  ])(
+    "resolves implicit discovery with a custom $name provider",
+    async ({ name, providerId, baseUrl, model, modelName }) => {
+      const provider = registerProvider();
+      mockDiscovery([]);
+      const result = await runCatalog(
+        provider,
+        { apiKey: "ollama-live" },
+        createModelProviderConfig({
+          [providerId]: {
+            api: "ollama",
+            baseUrl,
+            models: [createModel(model, modelName)],
+          },
+        }),
+        { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+      );
+      if (name === "remote") {
+        expect(result).toBeNull();
+        expect(discoveryMock).not.toHaveBeenCalled();
+      } else {
+        expect(result?.provider.baseUrl).toBe(localBaseUrl);
+      }
+    },
+  );
 
   it.each([
     {
@@ -1024,53 +1026,48 @@ describe("ollama plugin", () => {
     }
   });
 
-  it("uses Ollama Cloud auth for live catalog discovery", async () => {
-    const provider = registerOllamaCloudProvider();
-    mockDiscovery([buildOllamaModelDefinition("glm-5.2")], cloudBaseUrl);
-    const result = await runCatalog(provider, {
-      apiKey: "OLLAMA_API_KEY",
-      discoveryApiKey: "cloud-key",
-    });
-    expect(discoveryMock).toHaveBeenCalledWith(cloudBaseUrl, {
-      apiKey: "cloud-key",
-      discoveryMode: "strict",
-    });
-    expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
-    expect(result?.provider.models).toContainEqual(
-      expect.objectContaining({ id: "glm-5.2", name: "glm-5.2" }),
-    );
-  });
-
-  it("confirms GLM-5.2 with authenticated show when cloud tags omit it", async () => {
-    const provider = registerOllamaCloudProvider();
-    mockDiscovery([buildOllamaModelDefinition("kimi-k2.6")], cloudBaseUrl);
-    mockShow(["completion", "thinking", "tools"], 1_000_000);
-    const result = await runCatalog(
-      provider,
-      {
-        apiKey: "secretref-managed",
-        discoveryApiKey: "cloud-key",
-      },
-      {
-        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2" } } },
-      },
-    );
-    expect(discoveryMock).toHaveBeenCalledWith(cloudBaseUrl, {
-      apiKey: "cloud-key",
-      discoveryMode: "strict",
-    });
-    expect(showMock).toHaveBeenCalledWith(cloudBaseUrl, "glm-5.2", {
-      apiKey: "cloud-key",
-    });
-    expect(result?.provider.models).toContainEqual(
-      expect.objectContaining({
-        id: "glm-5.2",
-        contextWindow: 1_000_000,
-        maxTokens: 8192,
-        reasoning: true,
-      }),
-    );
-  });
+  it.each([true, false])(
+    "authenticates cloud catalog discovery with GLM-5.2 listed=%s",
+    async (listed) => {
+      const provider = registerOllamaCloudProvider();
+      mockDiscovery([buildOllamaModelDefinition(listed ? "glm-5.2" : "kimi-k2.6")], cloudBaseUrl);
+      if (!listed) {
+        mockShow(["completion", "thinking", "tools"], 1_000_000);
+      }
+      const result = await runCatalog(
+        provider,
+        {
+          apiKey: listed ? "OLLAMA_API_KEY" : "secretref-managed",
+          discoveryApiKey: "cloud-key",
+        },
+        {
+          agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2" } } },
+        },
+      );
+      expect(discoveryMock).toHaveBeenCalledWith(cloudBaseUrl, {
+        apiKey: "cloud-key",
+        discoveryMode: "strict",
+      });
+      if (listed) {
+        expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
+        expect(result?.provider.models).toContainEqual(
+          expect.objectContaining({ id: "glm-5.2", name: "glm-5.2" }),
+        );
+        return;
+      }
+      expect(showMock).toHaveBeenCalledWith(cloudBaseUrl, "glm-5.2", {
+        apiKey: "cloud-key",
+      });
+      expect(result?.provider.models).toContainEqual(
+        expect.objectContaining({
+          id: "glm-5.2",
+          contextWindow: 1_000_000,
+          maxTokens: 8192,
+          reasoning: true,
+        }),
+      );
+    },
+  );
 
   it("lists and resolves GLM-5.2 from the offline cloud catalog", async () => {
     const provider = registerOllamaCloudProvider();

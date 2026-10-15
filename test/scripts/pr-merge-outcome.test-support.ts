@@ -247,6 +247,8 @@ export function createMergeOutcomeFixtureHarness() {
       settlementSleeps: [] as number[],
       clockStep: 0,
       mainProofDelaySeconds: 0,
+      mainProofDelayMain: "",
+      mainProofDelayAfterObservations: 2,
       mainProofDelayedAt: null as number | null,
       observations: [] as Array<{
         pr?: Record<string, unknown>;
@@ -855,7 +857,7 @@ verify_crabbox_admin_merge_bypass() {
 # CAS, or reject later receipt writes. Successful object/ref operations are real.
 pr_git() {
   if [ "$1" = merge-tree ] && [ "\${2:-}" = --write-tree ] &&
-    [ "$(command jq -r '.mainProofDelaySeconds > 0 and .observationReads == 2' "$FIXTURE_STATE")" = true ]; then
+    [ "$(command jq -r --arg main "\${3:-}" '.mainProofDelaySeconds > 0 and (if .mainProofDelayMain == "" then .observationReads == .mainProofDelayAfterObservations else .mainProofDelayMain == $main end)' "$FIXTURE_STATE")" = true ]; then
     command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));const clock=process.env.FIXTURE_CLOCK;const now=Number(fs.readFileSync(clock,"utf8"));state.mainProofDelayedAt=now;fs.writeFileSync(clock,String(now+state.mainProofDelaySeconds)+"\\n");state.mainProofDelaySeconds=0;fs.writeFileSync(path,JSON.stringify(state));'
   fi
   if [ "$1" = --no-lazy-fetch ] && [ "\${3:-}" = '--batch-check=%(objectname) %(objecttype)' ] &&

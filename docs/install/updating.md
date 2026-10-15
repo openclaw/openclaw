@@ -473,6 +473,12 @@ After the candidate takes ownership of finalization, optional diagnostics with
 complete lint coverage can run after verified readiness. Their warnings and retry
 commands remain in the update report while the Gateway serves. Missing diagnostic
 selectors cause the checks to run before startup instead.
+If post-plugin lint execution cannot finish because of lock contention, a timeout,
+or an inspection failure, the verified core update continues with a recorded warning
+and the original lint diagnostics. Run `openclaw update repair` to retry those
+checks, stopping the Gateway first when the repair asks for exclusive state
+access. Concrete readiness findings and unverified process cleanup still block
+completion.
 The final report records downtime through convergence and final verification,
 plus verification results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.

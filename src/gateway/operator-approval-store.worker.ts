@@ -97,6 +97,21 @@ export const operatorApprovalOperations = {
     input: Input<typeof store.listPendingOperatorApprovalsInDatabase>,
     context,
   ) => transact(input, context, store.listPendingOperatorApprovalsInDatabase),
+  "operatorApprovals.prepareReplay": (
+    input: Input<typeof store.listPendingOperatorApprovalsInDatabase>,
+    context,
+  ) =>
+    transact(input, context, (params) => {
+      const expired = transitions.expireDueOperatorApprovalsInDatabase(params);
+      if (expired.affected > 0) {
+        // Release the store before terminal reconciliation can reenter the approval owner.
+        return { outcome: "expired" as const, records: expired.records };
+      }
+      return {
+        outcome: "pending" as const,
+        records: store.listPendingOperatorApprovalsInDatabase(params),
+      };
+    }),
   "operatorApprovals.resolve": (
     input: Input<typeof transitions.resolveOperatorApprovalInDatabase>,
     context,

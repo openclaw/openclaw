@@ -111,7 +111,8 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 Failure-alert webhooks stay **Unknown** when the request may have reached the
 receiver but its response is lost. An explicit HTTP rejection or a failure proven
 to precede sending records **Not delivered** and allows the in-app fallback
-notification. An unknown outcome does not trigger that fallback.
+notification, including when Gateway work admission refuses an alert before its
+transport starts. An unknown outcome does not trigger that fallback.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 

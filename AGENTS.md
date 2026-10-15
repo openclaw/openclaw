@@ -52,7 +52,7 @@ Update instructions at owner; no competing rules here.
 3. **Cutover:** migrate all affected internal/bundled callers together; remove superseded code, duplicate policy/state, wrappers, registrations, exports, tests, docs. Retained paths need cited contract; workers sharing owner agree on one interface and plan.
 4. **Proof:** exercise user flow and relevant siblings; trace references to confirm retired paths unreachable. Done = one owner serves flow, old paths removed or justified, results or gaps recorded in task/PR evidence. Helper tests or wrappers around competing implementations insufficient.
 
-- Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together; record unrelated work as follow-ups.
+- Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together; record unrelated work as follow-ups. Run [pr-simplify](.agents/skills/pr-simplify/SKILL.md) on your own change before opening a PR and before pushing large repairs.
 - Delegate independent lanes when saving time or improving verification; each needs clear responsibility and completion condition. Simple or tightly coupled work stays with lead; lead stays hands-on, verifies consequential conclusions, owns shared-checkout safety.
 - Retained compatibility needs explicit user request or public API/config/SDK/data, stable-tag upgrade, security/migration, dependency, or observed-production contract, plus migration/removal path. Main, beta, nightly code ≠ shipped contracts.
 
