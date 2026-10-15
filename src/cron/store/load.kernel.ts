@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import {
   deleteCronJobRowInDatabase,
@@ -17,7 +17,7 @@ import type { CronJobReadRow } from "./schema.js";
 import type { LoadedCronStore } from "./types.js";
 
 type CronLoadWriter = {
-  write<T>(operation: (db: DatabaseSync) => T, operationLabel: string): T;
+  write<T>(operation: (db: EngineConnection) => T, operationLabel: string): T;
   committed(): void;
 };
 
@@ -34,7 +34,7 @@ function isRetiredCollectionReview(row: CronJobReadRow): boolean {
 }
 
 export function loadCronStoreFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
   writer?: CronLoadWriter,
 ): LoadedCronStore {

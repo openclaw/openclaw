@@ -369,13 +369,6 @@ export const SessionMoveTargetSchema = Type.Union([
   SessionMoveDeviceTargetSchema,
 ]);
 
-/** Durable operator-visible progress for one placement move intent. */
-export const SessionPlacementMoveSchema = closedObject({
-  target: SessionMoveTargetSchema,
-  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
-});
-
 const SessionsMoveTargetCorrelationSchema = Type.Union([
   Type.Object({ target: SessionMoveGatewayTargetSchema }),
   Type.Object(
@@ -386,14 +379,31 @@ const SessionsMoveTargetCorrelationSchema = Type.Union([
   ),
 ]);
 
+const SessionMoveRequestProperties = {
+  expected: SessionMoveExpectedSourceSchema,
+  target: SessionMoveTargetSchema,
+  abandonSource: Type.Optional(Type.Literal(true)),
+};
+
+/** Durable progress and the original request facts needed after a failed move. */
+export const SessionPlacementMoveSchema = closedObject({
+  target: SessionMoveTargetSchema,
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+  retry: Type.Optional(
+    Type.Object(SessionMoveRequestProperties, {
+      additionalProperties: false,
+      allOf: [SessionsMoveTargetCorrelationSchema],
+    }),
+  ),
+});
+
 /** Requests one exact-source placement move without replaying active work. */
 export const SessionsMoveParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
-    expected: SessionMoveExpectedSourceSchema,
-    target: SessionMoveTargetSchema,
-    abandonSource: Type.Optional(Type.Literal(true)),
+    ...SessionMoveRequestProperties,
   },
   {
     additionalProperties: false,

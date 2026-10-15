@@ -258,6 +258,7 @@ describe("stuck session diagnostics threshold", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(0);
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
     events = [];

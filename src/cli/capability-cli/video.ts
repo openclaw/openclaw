@@ -216,6 +216,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           model: result.model,
           attempts: result.attempts,
           outputs,
+          ignoredOverrides: result.ignoredOverrides,
         } satisfies CapabilityEnvelope;
       }),
     );

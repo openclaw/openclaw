@@ -579,6 +579,14 @@ describe("Control UI Vite config", () => {
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
+    const comparisonAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/session-key-comparison",
+    );
+    expect(aliases[comparisonAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/session-key-comparison",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/session-key-comparison.ts"),
+    });
+    expect(comparisonAliasIndex).toBeLessThan(rootAliasIndex);
     expect(aliases[resultAliasIndex]).toEqual({
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),

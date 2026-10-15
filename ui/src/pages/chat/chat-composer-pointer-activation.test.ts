@@ -4,7 +4,8 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -47,7 +48,7 @@ describe("chat composer pointer activation", () => {
     const container = renderComposer({ draft: "Keep this draft" });
     const input = textarea(container);
     const focus = vi.spyOn(input, "focus");
-    const menu = container.querySelector("wa-dropdown.agent-chat__capability-menu")!;
+    const menu = container.querySelector(".agent-chat__capability-menu .oc-menu")!;
     const label = document.createElement("span");
     menu.append(label);
     label.addEventListener("click", () => label.remove());

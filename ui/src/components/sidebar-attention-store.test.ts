@@ -960,6 +960,7 @@ describe("sidebar attention source publication", () => {
     ).toBe(true);
     store = createStore(harness.gateway);
     store.activate(SidebarAttentionStoreController);
+    await import("../pages/chat/chat-outbox-owner.ts");
     await waitForFast(() =>
       expect(store?.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]),
     );

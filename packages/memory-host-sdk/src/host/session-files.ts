@@ -21,8 +21,6 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isIncognitoOpenClawAgentSqlitePath,
-  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
@@ -485,7 +483,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Removed at the next Plugin SDK major; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -549,28 +547,14 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
-  source?: {
-    memoryEntry(
-      absPath: string,
-      options: BuildSessionEntryOptions,
-    ): Promise<SessionFileEntry | null>;
-  },
 ): Promise<SessionFileEntry | null> {
-  if (source) {
-    return source.memoryEntry(absPath, opts);
-  }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
   const incognito = identity && captureIncognitoMemoryReader(identity);
   if (incognito) {
     return incognito.memoryEntry(absPath, opts);
   }
   const prepare = async () => {
-    // Unbound private stores retain their native owner until the atomic cutover.
-    if (
-      identity &&
-      !isIncognitoSessionKey(opts.sessionKey) &&
-      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
-    ) {
+    if (identity) {
       const { onTranscriptMessage, parseYieldEveryLines, ...options } = { ...opts, ...identity };
       if (onTranscriptMessage || parseYieldEveryLines !== undefined) {
         const snapshot = await readSessionEntrySnapshotInWorker(
@@ -613,9 +597,7 @@ export async function buildSessionEntries(
       identity &&
       !incognito &&
       !options.onTranscriptMessage &&
-      options.parseYieldEveryLines === undefined &&
-      !isIncognitoSessionKey(options.sessionKey) &&
-      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
+      options.parseYieldEveryLines === undefined
     ) {
       workerInputs.push({ absPath: input.absPath, options: { ...options, ...identity } });
       workerIndexes.push(index);

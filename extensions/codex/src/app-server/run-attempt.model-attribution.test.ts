@@ -50,7 +50,7 @@ setupRunAttemptTestHooks();
 describe("registered Codex harness model attribution", () => {
   it("attributes completed models and refreshes their selection on warm reuse", async () => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createTestParams();
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({

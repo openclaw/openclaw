@@ -44,6 +44,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
 }): string {
   const { provider, model } = resolveSessionSelectedModelRef({
     ...params,
+    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     source: {
       entry: params.entry,
       readSourceEntry: params.readSourceEntry,
@@ -126,11 +127,13 @@ export async function readWorkerPlacementModelSource(
     "cfg" | "agentId" | "sessionKey" | "assertCurrent"
   > & {
     initialTarget?: GatewaySessionStoreTargetWithStore;
-    onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
   },
   key: string,
 ): Promise<SessionEntry | undefined> {
-  const metadata = captureSessionEntryMetadataRead({ sessionKey: key, agentId: params.agentId });
+  const metadata = captureSessionEntryMetadataRead(
+    { sessionKey: key, agentId: params.agentId },
+    () => params.assertCurrent?.(),
+  );
   if (metadata) {
     return metadata.readCurrent();
   }
@@ -154,20 +157,8 @@ export async function readWorkerPlacementModelSource(
       ],
       ([read]) => {
         params.assertCurrent?.();
-        const entry = read!.result.entries.find((row) => row.sessionKey === key)?.entry;
-        params.onSelected?.({
-          agentId: target.agentId,
-          storePath: read!.database.path,
-          canonicalKey: key,
-          storeKeys: [key],
-          store: entry ? { [key]: entry } : {},
-          readSource: read!.result.source,
-          capturedReadSource: read!.result.source,
-          capturedReadSources: read!.result.source ? [read!.result.source] : [],
-        });
-        return entry;
+        return read!.result.entries.find((row) => row.sessionKey === key)?.entry;
       },
-      { ordered: params.onSelected !== undefined },
     );
   }
   const agentId = parseAgentSessionKey(key)?.agentId ?? params.agentId;
@@ -183,7 +174,6 @@ export async function readWorkerPlacementModelSource(
     key: storedKey,
     preserveQualifiedAddress: true,
     assertActive: params.assertCurrent,
-    onSelected: params.onSelected,
   });
   const entry = stored.store[storedKey];
   if (entry || isIncognitoSessionKey(storedKey)) {
@@ -202,7 +192,6 @@ export async function readWorkerPlacementModelSource(
     agentId: params.agentId,
     key,
     assertActive: params.assertCurrent,
-    onSelected: params.onSelected,
   });
   return aliased.store[aliased.canonicalKey];
 }
@@ -290,14 +279,6 @@ export function resolveDefaultWorkerPlacementExecutionMode(params: {
     sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
   });
   return resolveWorkerPlacementExecutionMode(runtime);
-}
-
-export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(
-  params: Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
-) {
-  return resolveWorkerPlacementCapabilities(
-    await resolveWorkerPlacementSessionRuntimeAsync(params),
-  );
 }
 
 export function projectWorkerPlacementAgentRuntime(

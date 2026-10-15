@@ -26,6 +26,7 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "../auth-profiles/oauth-refresh-marker.js";
+import { resolveAuthStorePathForDisplayAsync } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -218,16 +219,14 @@ class SqliteAuthStorageBackend implements StorageBackend {
 
   read(): string {
     this.assertSynchronousAccess("reloadAsync");
-    const store = this.scope.read();
-    const content = JSON.stringify(
-      projectAuthoritativeAuthStorageData(store, this.resolveMaterializedRuntimeStores()),
-    );
-    this.captureCredentialSources(store);
-    return content;
+    return this.projectRead(this.scope.read());
   }
 
   async readAsync(): Promise<string> {
-    const store = await this.scope.readAsync();
+    return this.projectRead(await this.scope.readAsync());
+  }
+
+  private projectRead(store: RuntimeAuthProfileStore): string {
     const content = JSON.stringify(
       projectAuthoritativeAuthStorageData(store, this.resolveMaterializedRuntimeStores()),
     );
@@ -348,6 +347,9 @@ class InMemoryAuthStorageBackend implements StorageBackend {
  * Provider-keyed credential facade backed by the canonical auth-profile store.
  */
 export class AuthStorage {
+  /** Resolve the selected auth store's display path without loading credentials. */
+  static resolvePathForDisplayAsync = resolveAuthStorePathForDisplayAsync;
+
   private data: AuthStorageData = {};
   private credentialSources = new Map<string, AuthProfileCredentialSource>();
   private runtimeOverrides: Map<string, string> = new Map();
@@ -360,11 +362,11 @@ export class AuthStorage {
     if (data) {
       this.setData(data);
     } else {
-      this.reload();
+      this.loadFromStorage();
     }
   }
 
-  /** @deprecated Use forAgentAsync. Retained until removal in a later stable release after deprecation ships. */
+  /** @deprecated Use forAgentAsync. Supported through 2026-12-31. */
   static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
     warnSynchronousAuthStorage("forAgent", "forAgentAsync");
     const scope = createAuthProfileStoreReadScope(agentDir, config);
@@ -387,8 +389,8 @@ export class AuthStorage {
 
   /**
    * @deprecated Use AuthStorage.forAgentAsync(agentDir). The path-taking compatibility
-   * form is eligible for removal after 2026-10-01 and a clean published-plugin
-   * reader sweep; it no longer reads or writes JSON.
+   * form remains supported through 2026-12-31; removal ships in the first
+   * January 2027 stable. It no longer reads or writes JSON.
    */
   static create(authPath?: string): AuthStorage {
     warnSynchronousAuthStorage("create", "forAgentAsync");
@@ -462,9 +464,13 @@ export class AuthStorage {
     );
   }
 
-  /** @deprecated Use reloadAsync. Retained until removal in a later stable release after deprecation ships. */
+  /** @deprecated Use reloadAsync. Supported through 2026-12-31. */
   reload(): void {
     warnSynchronousAuthStorage("reload", "reloadAsync");
+    this.loadFromStorage();
+  }
+
+  private loadFromStorage(): void {
     try {
       const content = this.storage.read
         ? this.storage.read()
@@ -506,7 +512,7 @@ export class AuthStorage {
 
   private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
     if (this.loadError) {
-      this.reload();
+      this.loadFromStorage();
     }
 
     if (this.loadError) {
@@ -525,15 +531,7 @@ export class AuthStorage {
       this.loadError = null;
       this.setData(persistedData);
     } catch (error) {
-      const persistenceError =
-        error instanceof AuthStoragePersistenceError
-          ? error
-          : new AuthStoragePersistenceError(
-              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
-              error,
-            );
-      this.recordError(persistenceError);
-      throw persistenceError;
+      this.failProviderChange(provider, error);
     }
   }
 
@@ -550,16 +548,20 @@ export class AuthStorage {
       this.loadError = null;
       this.setData(persistedData);
     } catch (error) {
-      const persistenceError =
-        error instanceof AuthStoragePersistenceError
-          ? error
-          : new AuthStoragePersistenceError(
-              `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
-              error,
-            );
-      this.recordError(persistenceError);
-      throw persistenceError;
+      this.failProviderChange(provider, error);
     }
+  }
+
+  private failProviderChange(provider: string, error: unknown): never {
+    const persistenceError =
+      error instanceof AuthStoragePersistenceError
+        ? error
+        : new AuthStoragePersistenceError(
+            `Failed to persist auth storage update for provider "${provider}": ${error instanceof Error ? error.message : String(error)}`,
+            error,
+          );
+    this.recordError(persistenceError);
+    throw persistenceError;
   }
 
   get(provider: string): AuthCredential | undefined {
@@ -567,7 +569,7 @@ export class AuthStorage {
     return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
   }
 
-  /** @deprecated Use setAsync. Retained until removal in a later stable release after deprecation ships. */
+  /** @deprecated Use setAsync. Supported through 2026-12-31. */
   set(provider: string, credential: AuthCredential): void {
     warnSynchronousAuthStorage("set", "setAsync");
     this.persistProviderChange(provider, credential);
@@ -577,7 +579,7 @@ export class AuthStorage {
     return this.persistProviderChangeAsync(provider, credential);
   }
 
-  /** @deprecated Use removeAsync. Retained until removal in a later stable release after deprecation ships. */
+  /** @deprecated Use removeAsync. Supported through 2026-12-31. */
   remove(provider: string): void {
     warnSynchronousAuthStorage("remove", "removeAsync");
     this.persistProviderChange(provider, undefined);
@@ -656,7 +658,7 @@ export class AuthStorage {
     await this.setAsync(providerId, { type: "oauth", ...credentials });
   }
 
-  /** @deprecated Use logoutAsync. Retained until removal in a later stable release after deprecation ships. */
+  /** @deprecated Use logoutAsync. Supported through 2026-12-31. */
   logout(provider: string): void {
     warnSynchronousAuthStorage("logout", "logoutAsync");
     this.remove(provider);

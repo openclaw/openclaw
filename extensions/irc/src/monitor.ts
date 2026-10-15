@@ -129,7 +129,7 @@ export async function monitorIrcProvider(
     if (stopped || abortSignal.aborted || reconnectTimer) {
       return undefined;
     }
-    opts.statusSink?.({ lifecycle: "recovering" });
+    opts.statusSink?.({ connected: false, lifecycle: "recovering" });
     const delayMs = reconnectBackoff.nextDelayMs();
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -139,6 +139,7 @@ export async function monitorIrcProvider(
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error(`[${account.accountId}] IRC reconnect failed: ${message}`);
+        opts.statusSink?.({ lastError: message });
         scheduleReconnect();
       });
     }, delayMs);
@@ -171,6 +172,7 @@ export async function monitorIrcProvider(
             activeConnectionEpoch = null;
           }
           client = null;
+          opts.statusSink?.({ lastDisconnect: { at: Date.now() } });
           const delayMs = scheduleReconnect();
           if (delayMs !== undefined) {
             logger.warn?.(

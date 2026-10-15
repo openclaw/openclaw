@@ -1,7 +1,7 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
 export type PersonActivityData = Readonly<
@@ -23,10 +23,10 @@ function sourceFor(context: ApplicationContext): PersonActivitySource {
 }
 
 /** Publishes the existing roster owner's facts after its update, without copying state. */
-export class PersonActivityDataController implements ReactiveController {
+export class PersonActivityDataController implements SolidController {
   private source: PersonActivitySource | undefined;
   constructor(
-    private readonly host: ReactiveControllerHost & { readonly isConnected: boolean },
+    private readonly host: SolidControllerHost & { readonly isConnected: boolean },
     private readonly context: () => ApplicationContext | undefined,
     private readonly data: PersonPresenceData,
   ) {}

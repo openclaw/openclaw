@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as downloads from "../../lib/download.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageJsonExport } from "./types.ts";
 import {
   cacheSnapshot,
@@ -116,7 +117,7 @@ it.each([
   );
   const menu = page.querySelector(".usage-export-menu")!;
   for (const value of ["sessions-csv", "json"]) {
-    expect(menu.querySelector(`[value="${value}"]`)!.hasAttribute("disabled")).toBe(
+    expect(menu.querySelector(`[data-value="${value}"]`)!.hasAttribute("disabled")).toBe(
       expected.length === 0,
     );
   }
@@ -125,7 +126,7 @@ it.each([
     return;
   }
   for (const [index, value] of ["sessions-csv", "json", "daily-csv"].entries()) {
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+    await selectUsageExport(menu, value);
     await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(index + 1));
     const sent = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
     expect(sent).toMatchObject(

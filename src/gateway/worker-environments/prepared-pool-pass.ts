@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import {
+  readWorkerPreparation,
+  workerPreparationSourceKey,
+} from "./preparation-identity.schema.js";
 import type { Generations, PassContext, PoolOptions } from "./prepared-pool-admission.js";
 import * as pool from "./prepared-pool-admission.js";
 import { isSupersededPresenceReserve } from "./prepared-pool-presence.js";
@@ -128,7 +131,9 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       continue;
     }
     try {
-      generation.retention = await options.prepareRetention(generation.source, signal);
+      generation.retention = await options.prepareRetention(generation.source, signal, (reason) =>
+        pool.skipRefill(ctx, generation.source, reason),
+      );
       signal.throwIfAborted();
       if (!generation.retention) {
         eligible.delete(key);
@@ -146,29 +151,40 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
     }
     const { source } = generation;
     const limits = pool.poolPolicy(options, source.profileId, source.providerId);
-    const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
-    const slots = store.preparedCapacity({
+    const project = readWorkerProjectSnapshot(source.profileSnapshot.project);
+    const capacity = {
       profileId: source.profileId,
-      projectKey: project.key,
+      projectKey: workerPreparationSourceKey(source.profileSnapshot)!,
       ...limits,
+    };
+    const slots = store.preparedCapacity({
+      ...capacity,
       maxTotal: Math.max(0, limits.maxTotal - plannedTotal),
     });
     if (
-      slots === 0 ||
       generation.expiresAtMs <= now() ||
       (!presence.isPresent() &&
         demand &&
         generation.preparationKey === demand.preparationKey &&
         !generation.activationEligible)
     ) {
+      pool.skipRefill(ctx, source, "demand expired or authenticated presence ended");
+      continue;
+    }
+    if (slots === 0) {
+      if (store.preparedCapacity({ ...capacity, maxTotal: Number.MAX_SAFE_INTEGER }) > 0) {
+        pool.skipRefill(ctx, source, "shared prepared capacity reached");
+      }
       continue;
     }
     try {
-      const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
+      const preparation = readWorkerPreparation(source.profileSnapshot)!;
       const intent = await options.prepareIntent(source.profileId, {
-        ...("source" in project
-          ? { projectRepository: project }
-          : { projectPath: project.root, projectCommit: project.baseCommit }),
+        ...(project
+          ? "source" in project
+            ? { projectRepository: project }
+            : { projectPath: project.root, projectCommit: project.baseCommit }
+          : { emptyWorkspace: true }),
         ...readWorkerProfileSelection(source.profileSnapshot),
         setupAuthorized:
           preparation.setupRecipe !== undefined && preparation.runSetupScript !== false,
@@ -177,6 +193,7 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       });
       signal.throwIfAborted();
       if (intent.providerId !== source.providerId || intent.preparationKey !== preparation.key) {
+        pool.skipRefill(ctx, source, "refill intent no longer matches the activated preparation");
         eligible.delete(key);
         continue;
       }
@@ -185,8 +202,8 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       plannedTotal += slots;
     } catch (error) {
       signal.throwIfAborted();
-      options.warn(
-        `Prepared worker refill deferred (${source.profileId}): ${boundedWorkerError(error)}`,
+      ctx.reportRefill(
+        `Prepared worker refill deferred (${source.profileId}, ${source.environmentId}): ${boundedWorkerError(error)}`,
       );
     }
   }
@@ -205,7 +222,6 @@ async function launchReserves(
       continue;
     }
     const limits = pool.poolPolicy(options, source.profileId, source.providerId);
-    const project = readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
     for (let index = 0; index < generation.slots!; index += 1) {
       signal.throwIfAborted();
       const admitted = await store.ensurePreparedIntent({
@@ -216,7 +232,7 @@ async function launchReserves(
           profileSnapshot: intent.profileSnapshot,
           preparation: { purpose: "reserve", key: intent.preparationKey!, demandAtMs, expiresAtMs },
         },
-        projectKey: project.key,
+        projectKey: workerPreparationSourceKey(intent.profileSnapshot)!,
         ...limits,
         assertCurrent: () => pool.assertGenerationCurrent(ctx, generation),
       });
@@ -233,6 +249,7 @@ export async function runPreparedPoolPass(
   presence: PassContext["presence"],
   preparations: Map<string, AbortController>,
   isAdmitted: () => boolean,
+  reportRefill: (message: string) => void,
 ): Promise<void> {
   const { store, signal } = options;
   await store.ready();
@@ -249,6 +266,7 @@ export async function runPreparedPoolPass(
     presenceDeferred,
     inventory,
     oldestFirst: inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs),
+    reportRefill,
   };
   const eligible = pool.admitSources(ctx);
   // Expiry and disabled/surplus capacity need no source or artifact admission.

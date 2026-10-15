@@ -91,9 +91,137 @@ describe("parseCliJsonl", () => {
 
     expect(result).toEqual({
       text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      rawFinalText: "TEST DONE",
       sessionId: "session-reparse",
       usage: undefined,
     });
+  });
+
+  const stopHookFeedback = {
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: "Stop hook feedback:\nRewrite." }] },
+    parent_tool_use_id: null,
+  };
+  const stopHookNotification = {
+    type: "system",
+    subtype: "notification",
+    key: "stop-hook-error",
+  };
+  const toolRoundTrip = (id: string) => [
+    claudeMessageStart(`tool-message-${id}`),
+    claudeStreamEvent({
+      type: "content_block_start",
+      content_block: { type: "tool_use", id, name: "Read" },
+    }),
+    claudeStreamEvent({ type: "message_stop" }),
+    {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: id, content: "ok" }],
+      },
+    },
+  ];
+
+  it.each([
+    {
+      name: "Stop-hook rejection before a tool",
+      feedback: [stopHookFeedback, stopHookNotification],
+      rewrite: "B",
+      expected: "B",
+    },
+    {
+      name: "rewrite without a tool",
+      feedback: [stopHookFeedback, stopHookNotification],
+      rewrite: "B",
+      expected: "B",
+      tool: false,
+    },
+    { name: "notification", feedback: [stopHookNotification], rewrite: "B", expected: "B" },
+    {
+      name: "silent rewrite with both feedback records",
+      feedback: [stopHookFeedback, stopHookNotification],
+      rewrite: "NO_REPLY",
+      expected: "NO_REPLY",
+    },
+    {
+      name: "ordinary tool split",
+      feedback: [],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+    {
+      name: "replayed user steering",
+      feedback: [
+        {
+          type: "user",
+          isReplay: true,
+          parent_tool_use_id: null,
+          message: { role: "user", content: [{ type: "text", text: "Check README.md too." }] },
+        },
+      ],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+    {
+      name: "user text without a rejection notification",
+      feedback: [stopHookFeedback],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+    {
+      name: "subagent feedback and unrelated notification",
+      feedback: [
+        { ...stopHookFeedback, parent_tool_use_id: "subagent-1" },
+        { ...stopHookNotification, parent_tool_use_id: "subagent-1" },
+        { ...stopHookNotification, key: "tool-progress" },
+      ],
+      rewrite: "B",
+      expected: "A\n\nB",
+    },
+  ])(
+    "selects the final reply across Claude stream boundaries ($name)",
+    ({ feedback, rewrite, expected, tool = true }) => {
+      const result = parseCliJsonl(
+        joinJsonlFrames(
+          claudeMessageStart("draft"),
+          claudeTextDelta("A"),
+          claudeStreamEvent({ type: "message_stop" }),
+          ...feedback,
+          ...(tool ? toolRoundTrip("read-1") : []),
+          claudeMessageStart("rewrite"),
+          claudeTextDelta(rewrite),
+          claudeStreamEvent({ type: "message_stop" }),
+          { type: "result", result: rewrite },
+        ),
+      );
+
+      expect(result.text).toBe(expected);
+    },
+  );
+
+  it("discards each rejected segment across repeated Stop-hook bounces", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        claudeMessageStart("first-draft"),
+        claudeTextDelta("A"),
+        claudeStreamEvent({ type: "message_stop" }),
+        stopHookFeedback,
+        stopHookNotification,
+        ...toolRoundTrip("read-1"),
+        claudeMessageStart("second-draft"),
+        claudeTextDelta("B"),
+        claudeStreamEvent({ type: "message_stop" }),
+        stopHookFeedback,
+        stopHookNotification,
+        ...toolRoundTrip("read-2"),
+        claudeMessageStart("rewrite"),
+        claudeTextDelta("C"),
+        { type: "result", result: "C" },
+      ),
+    );
+
+    expect(result.text).toBe("C");
   });
 
   it("continues transcript reparses past an interim result", () => {
@@ -269,6 +397,33 @@ describe("parseCliJsonl", () => {
     );
 
     expect(result).toEqual(expected);
+  });
+
+  it.each([
+    { name: "no tool call", tool: false, final: true, expected: "Checking tools.Done." },
+    { name: "text after a tool call", tool: true, final: true, expected: "Done." },
+    { name: "a tool-only ending", tool: true, final: false, expected: "" },
+  ])("records only the final Gemini message ($name)", ({ tool, final, expected }) => {
+    const message = (content: string) => ({ type: "message", role: "assistant", content });
+    const result = parseCliJsonl(
+      joinJsonlFrames(
+        { type: "init", session_id: "gemini-final" },
+        message("Checking tools."),
+        ...(tool
+          ? [
+              { type: "tool_use", tool_name: "read_file", tool_id: "tool-1", parameters: {} },
+              { type: "tool_result", tool_id: "tool-1", status: "success", output: "ok" },
+            ]
+          : []),
+        ...(final ? [message("Done.")] : []),
+        { type: "result", status: "success", stats: { total_tokens: 2 } },
+      ),
+      { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" },
+      "google-gemini-cli",
+    );
+
+    // rawFinalText is omitted when the final message equals the reply text.
+    expect(result?.rawFinalText ?? result?.text.trim()).toBe(expected);
   });
 
   it("preserves Claude cache creation tokens instead of flattening them to zero", () => {

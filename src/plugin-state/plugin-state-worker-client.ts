@@ -32,6 +32,7 @@ import {
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
 import {
+  beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
 } from "./plugin-state-publication.js";
@@ -133,6 +134,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   const description = pluginStateWorkerOperations[command.type];
   let operationStarted = false;
   let order: PluginStateCommandOrder | undefined;
+  let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
   try {
@@ -149,6 +151,16 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
+    if (
+      order?.finish ||
+      (typedCommand.type === "pluginState.executeOperation" &&
+        typedCommand.input.writeStores.length > 0)
+    ) {
+      publication = beginPluginStatePublication(
+        () => context.admission.identity.key,
+        context.assertPublicationCurrent ?? context.admission.assertCurrent,
+      );
+    }
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
@@ -200,8 +212,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
               typedCommand.input,
               cached[0]!,
             );
+            const cachedObservation = {
+              ...observation,
+              row: cached[0]!.row,
+            };
             // SAFETY: This branch handles only the observe command's observation output.
-            return observation as PluginStateWorkerRequests[Key]["output"];
+            return cachedObservation as PluginStateWorkerRequests[Key]["output"];
           }
           const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
             try {
@@ -334,7 +350,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       databasePath,
     );
   } finally {
-    order?.finish?.();
+    try {
+      publication?.finish("completed");
+    } finally {
+      order?.finish?.();
+    }
   }
 }
 
@@ -399,14 +419,14 @@ export const registerPluginStateInWorker = createOperation("pluginState.register
 export const replacePluginStateInWorker = createOperation("pluginState.replace");
 export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
-const observePluginState = createOperation(
+export const observePluginStateRowInWorker = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
   ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
 export async function observePluginStateInWorker(params: Input<"pluginState.observe">) {
-  const { value, comparison } = await observePluginState(params);
+  const { value, comparison } = await observePluginStateRowInWorker(params);
   return { value, comparison };
 }
 export const comparePluginStateUpdateInWorker = createOperation(

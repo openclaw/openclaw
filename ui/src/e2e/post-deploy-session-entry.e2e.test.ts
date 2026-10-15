@@ -1,0 +1,411 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { chromium, type Browser, type Page, type Request } from "playwright";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import * as documentTransport from "../../../src/gateway/control-ui-static.js";
+import { createGatewayHttpServer } from "../../../src/gateway/server-http.js";
+import { createGatewayRequestContext } from "../../../src/gateway/server-request-context.js";
+import { makeContextParams } from "../../../src/gateway/server-request-context.test-support.js";
+import { bindSessionRowProjection } from "../../../src/gateway/session-row-projection-access.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../../../src/gateway/session-row-projection.js";
+import { ensureCanonicalUserProfileForEmail } from "../../../src/state/user-profile-writes.js";
+import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  buildProductionControlUiE2e,
+  captureControlUiE2eFailureDiagnostics,
+  controlUiE2eWaitTimeoutMs,
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
+
+const buildA = "session-entry-build-a";
+const buildB = "session-entry-build-b";
+const publicPath = "/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001";
+const publicScope = {
+  agentId: "main",
+  sessionKey: "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001",
+  sessionId: "public-browser-instance",
+};
+const unrelatedScope = {
+  agentId: "main",
+  sessionKey: "agent:main:unrelated-publication",
+  sessionId: "unrelated-browser-instance",
+};
+const publishedMessage = "Synthetic published conversation.";
+const operatorEmail = "reload-operator@example.test";
+type HttpSample = { path: string; status: number };
+
+// Real HTTP authentication, session publication, HTML delivery and built workers;
+// only the unrelated WS services use the existing deterministic UI fixture.
+describe("public-session post-deploy app handoff", () => {
+  let browser: Browser | undefined;
+  let fixture: string | undefined;
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+  let projection: SessionRowProjection | undefined;
+  let listener:
+    | Awaited<
+        ReturnType<typeof reserveTestPortListener<ReturnType<typeof createGatewayHttpServer>>>
+      >
+    | undefined;
+  let baseUrl: string;
+  let root: { kind: "resolved"; path: string };
+  const requests: HttpSample[] = [];
+  let publication = 2;
+
+  beforeAll(async () => {
+    fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
+    await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
+    await buildProductionControlUiE2e(path.join(fixture, buildB), buildB);
+    const indexes = await Promise.all(
+      [buildA, buildB].map((build) => readFile(path.join(fixture!, build, "index.html"), "utf8")),
+    );
+    expect(indexes[0]).toContain(`"buildId":"${buildA}"`);
+    expect(indexes[1]).toContain(`"buildId":"${buildB}"`);
+    expect(indexes[0]).not.toBe(indexes[1]);
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: "post-deploy-session-entry",
+    });
+    const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      gateway: {
+        publicOrigin: "https://threads.example.test",
+        auth: { mode: "trusted-proxy", trustedProxy },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: { root: path.join(fixture, buildA) },
+        cliAgents: { enabled: false },
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { agents: "*", sessions: { others: "view" }, scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const owner = await ensureCanonicalUserProfileForEmail(operatorEmail);
+    await upsertSessionEntryCore(publicScope, {
+      sessionId: publicScope.sessionId,
+      updatedAt: 1,
+      displayName: "Synthetic public session",
+      createdActor: { type: "human", source: "profile", id: owner.id },
+      publicShare: { id: "a".repeat(48), sessionId: publicScope.sessionId, createdAt: 1 },
+    });
+    await replaceTranscriptEvents(publicScope, [
+      { type: "session", version: 3, id: publicScope.sessionId },
+      {
+        type: "message",
+        id: "published-message",
+        message: { role: "user", content: publishedMessage },
+      },
+    ]);
+    await upsertSessionEntryCore(unrelatedScope, {
+      sessionId: unrelatedScope.sessionId,
+      updatedAt: 2,
+    });
+    projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const context = createGatewayRequestContext(makeContextParams());
+    context.resolveGatewayContext = () => context;
+    bindSessionRowProjection(context, () => projection);
+    root = { kind: "resolved", path: path.join(fixture, buildA) };
+    const auth = { mode: "trusted-proxy" as const, trustedProxy, allowTailscale: false };
+    listener = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => {
+        const server = createGatewayHttpServer({
+          clients: new Set(),
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: root,
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth: auth,
+          getResolvedAuth: () => auth,
+          getRuntimeConfig: () => cfg,
+          getGatewayRequestContext: () => context,
+          httpRequestLifetime: context,
+          isTerminalEnabled: () => false,
+        });
+        server.prependListener("request", (req, res) => {
+          // Model Access: canonical links bypass login; the protected handoff
+          // receives identity only from an authenticated synthetic proxy session.
+          req.headers.host = "threads.example.test";
+          req.headers["x-forwarded-for"] = "203.0.113.42";
+          req.headers["x-forwarded-proto"] = "https";
+          req.headers["x-openclaw-scopes"] = "operator.read";
+          delete req.headers["x-forwarded-user"];
+          if (!req.url?.startsWith("/chat/") && req.headers.cookie?.includes("operator=1")) {
+            req.headers["x-forwarded-user"] = operatorEmail;
+          }
+          const requestPath = req.url ?? "/";
+          res.once("finish", () => requests.push({ path: requestPath, status: res.statusCode }));
+        });
+        return server;
+      },
+    });
+    baseUrl = `http://127.0.0.1:${listener.claim.port}`;
+    browser = await chromium.launch({
+      executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+    });
+  }, 180_000);
+
+  afterAll(async () => {
+    vi.restoreAllMocks();
+    try {
+      await browser?.close();
+    } finally {
+      try {
+        listener?.listener.closeAllConnections();
+        await listener?.releaseListener();
+        await listener?.claim.release();
+      } finally {
+        projection?.dispose();
+        await state?.cleanup();
+        if (fixture) {
+          await rm(fixture, { force: true, recursive: true });
+        }
+      }
+    }
+  });
+
+  function holdAppDelivery() {
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const delivered = createDeferred<number>();
+    const send = documentTransport.sendControlUiHtmlBody;
+    const spy = vi
+      .spyOn(documentTransport, "sendControlUiHtmlBody")
+      .mockImplementationOnce(async (...args) => {
+        const [, res, body, isCurrent] = args;
+        expect(body).toContain("<openclaw-app");
+        expect(isCurrent?.()).toBe(true);
+        res.once("finish", () => delivered.resolve(res.statusCode));
+        entered.resolve();
+        await resume.promise;
+        await send(...args);
+      });
+    return {
+      entered: entered.promise,
+      delivered: delivered.promise,
+      resume: resume.resolve,
+      restore: () => spy.mockRestore(),
+    };
+  }
+
+  async function prepareOnlineLoopback(page: Page) {
+    // Network-isolated runners can report offline despite this loopback server.
+    const protocol = await page.context().newCDPSession(page);
+    await protocol.send("Network.overrideNetworkState", {
+      offline: false,
+      latency: 1,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      connectionType: "ethernet",
+    });
+    expect(await page.evaluate(() => navigator.onLine)).toBe(true);
+  }
+
+  async function openAcrossPublication(
+    page: Page,
+    navigate: () => Promise<unknown>,
+    signal: AbortSignal,
+    expectedBuild: string,
+    maxDocuments: number,
+    gateway: MockGatewayControls,
+  ) {
+    const documents: string[] = [];
+    const observeDocument = (request: Request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents.push(request.url());
+      }
+    };
+    page.on("request", observeDocument);
+    const start = requests.length;
+    const held = holdAppDelivery();
+    const navigation = navigate();
+    // Observe rejection immediately while the HTML owner remains intentionally held.
+    void navigation.catch(() => {});
+    try {
+      await withinTest(held.entered, signal);
+      if (expectedBuild === buildB) {
+        await upsertSessionEntryCore(unrelatedScope, {
+          sessionId: unrelatedScope.sessionId,
+          updatedAt: ++publication,
+          visibility: publication % 2 ? "read-only" : "draft",
+        });
+        await projection!.ensureMaterialized();
+      }
+      held.resume();
+      // The old global sharing fence redirects here even though this target's
+      // permission is unchanged, restarting the reader/probe/entry waterfall.
+      const deliveryStatus = await withinTest(held.delivered, signal);
+      await navigation;
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().ready === true,
+        undefined,
+        {
+          timeout: controlUiE2eWaitTimeoutMs,
+        },
+      );
+      await page.locator("openclaw-app").waitFor({ state: "visible" });
+      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase)).toBe(
+        "connected",
+      );
+      expect(await page.getByRole("region", { name: "Conversation", exact: true }).count()).toBe(0);
+      const connect = (await gateway.getRequests("connect")).at(-1);
+      expect(connect?.params).toMatchObject({ client: { buildId: expectedBuild } });
+      const entries = requests
+        .slice(start)
+        .filter(({ path: requestPath }) => requestPath.startsWith("/__openclaw__/session-entry?"));
+      console.info("Synthetic post-deploy handoff counts:", {
+        expectedBuild,
+        deliveryStatus,
+        documents: documents.length,
+        probes: entries.filter(({ path: requestPath }) => requestPath.includes("probe=1")).length,
+        entries: entries.filter(({ path: requestPath }) => !requestPath.includes("probe=1")).length,
+        statuses: entries.map(({ status }) => status),
+      });
+      expect(deliveryStatus).toBe(200);
+      expect(documents.length).toBeLessThanOrEqual(maxDocuments);
+      expect(
+        entries.filter(({ path: requestPath }) => !requestPath.includes("probe=1")),
+      ).toHaveLength(1);
+      expect(
+        entries.filter(({ path: requestPath }) => requestPath.includes("probe=1")),
+      ).toHaveLength(maxDocuments === 1 ? 0 : 1);
+      expect(entries.every(({ status }) => status === 200 || status === 204)).toBe(true);
+      expect(new URL(page.url()).pathname).toBe(publicPath);
+      expect(new URL(page.url()).searchParams.has("openclaw_mount_recovery")).toBe(false);
+    } catch (error) {
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "post-deploy-session-entry",
+        });
+      }
+      throw error;
+    } finally {
+      held.resume();
+      await Promise.allSettled([navigation]);
+      held.restore();
+      page.off("request", observeDocument);
+    }
+  }
+
+  for (const scenarioKind of ["no worker", "controlled reload", "fresh controlled tab"] as const) {
+    it(`connects after an unrelated publication and build switch: ${scenarioKind}`, async ({
+      signal,
+    }) => {
+      root.path = path.join(fixture!, buildA);
+      const context = await browser!.newContext({
+        serviceWorkers: scenarioKind === "no worker" ? "block" : "allow",
+        locale: "en-US",
+      });
+      await context.addCookies([{ name: "operator", value: "1", url: baseUrl }]);
+      const page = await context.newPage();
+      await prepareOnlineLoopback(page);
+      const scenario = {
+        serverBuildId: buildA,
+        sessionKey: publicScope.sessionKey,
+        terminalEnabled: false,
+      };
+      const gateway = await installMockGateway(page, scenario);
+      try {
+        await openAcrossPublication(
+          page,
+          () => page.goto(baseUrl + publicPath),
+          signal,
+          buildA,
+          2,
+          gateway,
+        );
+        if (scenarioKind !== "no worker") {
+          await page.evaluate(async () => {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.update();
+          });
+          await page.waitForFunction(
+            () => navigator.serviceWorker.controller?.state === "activated",
+          );
+          expect(
+            await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL),
+          ).toContain(`v=${buildA}`);
+        }
+        if (scenarioKind === "fresh controlled tab") {
+          // The worker outlives the original tab; a new tab has no handoff or
+          // mount-recovery history when it meets the replacement deployment.
+          await page.close();
+          root.path = path.join(fixture!, buildB);
+          const fresh = await context.newPage();
+          await prepareOnlineLoopback(fresh);
+          const freshGateway = await installMockGateway(fresh, {
+            ...scenario,
+            serverBuildId: buildB,
+          });
+          await openAcrossPublication(
+            fresh,
+            () => fresh.goto(baseUrl + publicPath),
+            signal,
+            buildB,
+            1,
+            freshGateway,
+          );
+          await fresh.close();
+        } else {
+          root.path = path.join(fixture!, buildB);
+          await gateway.setServerBuildId(buildB);
+          await openAcrossPublication(
+            page,
+            () => page.reload(),
+            signal,
+            buildB,
+            scenarioKind === "no worker" ? 2 : 1,
+            gateway,
+          );
+        }
+      } finally {
+        await context.close();
+      }
+    }, 60_000);
+  }
+
+  it("keeps an unauthenticated public-session reload in the reader", async () => {
+    root.path = path.join(fixture!, buildB);
+    const context = await browser!.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    let documents = 0;
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents += 1;
+      }
+    });
+    try {
+      const probe = page.waitForResponse(
+        (response) =>
+          response.url().includes("session-entry?") && response.url().includes("probe=1"),
+      );
+      expect((await page.goto(baseUrl + publicPath))?.status()).toBe(200);
+      expect((await probe).status()).toBe(401);
+      await page.getByText(publishedMessage, { exact: true }).waitFor();
+      expect(await page.locator("openclaw-app").count()).toBe(0);
+      expect(documents).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+});

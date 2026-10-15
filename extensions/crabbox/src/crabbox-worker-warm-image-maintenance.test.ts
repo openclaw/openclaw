@@ -220,10 +220,11 @@ describe("Crabbox idle image maintenance", () => {
       const profile = {
         ...PROFILE,
         setup: "echo configured",
-        setupEnv: ["MISSING_MAINTENANCE_SETUP_VALUE"],
+        setupSecrets: {
+          MAINTENANCE_INPUT: { source: "store", provider: "default", id: "NOT_LOADED" },
+        },
         warmImage: false,
       };
-      vi.stubEnv("MISSING_MAINTENANCE_SETUP_VALUE", undefined);
 
       await provider.maintain!({ ...context(), profiles: [profile] });
 

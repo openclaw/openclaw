@@ -21,7 +21,7 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
   document.body.append(card);
   await card.updateComplete;
   const trigger = card.querySelector<HTMLButtonElement>(".more")!;
-  const dropdown = card.querySelector("wa-dropdown")!;
+  const dropdown = card.querySelector<HTMLElement>('[role="menu"]')!;
   const copy = card.querySelector<HTMLElement>('[value="copy-url"]')!;
   const open = card.querySelector<HTMLElement>('[value="open-new-tab"]')!;
   const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -44,17 +44,17 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
   await userEvent.keyboard("{ArrowUp}");
   await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Escape}");
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await expect.poll(() => document.activeElement).toBe(trigger);
 
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => writeText.mock.calls).toEqual([[url]]);
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await page.elementLocator(trigger).click();
   await page.elementLocator(open).click();
   expect(openWindow).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await expect.poll(() => document.activeElement).toBe(trigger);
 });

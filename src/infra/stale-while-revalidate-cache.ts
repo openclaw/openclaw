@@ -97,6 +97,14 @@ export function createStaleWhileRevalidateCache<T>(options: {
       }
       return { value: await refresh, stale: false };
     },
+    deleteValue(value: T) {
+      // Retire these facts without superseding an already-running replacement.
+      for (const [key, entry] of values) {
+        if (entry.kind === "value" && entry.value === value) {
+          values.delete(key);
+        }
+      }
+    },
     clear() {
       // Existing loads may settle, but only into the retired maps they captured.
       values = new Map();

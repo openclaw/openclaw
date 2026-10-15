@@ -22,11 +22,15 @@ import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
 import { ChatQuickActionItem, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
+export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
+
 export type ChatPaneLayoutMenuProps = {
   paneId: string;
   narrow: boolean;
+  mobile?: boolean;
+  onOpenDetails?: (source: HTMLElement) => void;
   actionsDisabled?: boolean;
-  panelMenuActions?: (HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo })[];
+  panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
   sidebarLayout?: SidebarLayout;
   panelDefinitions?: SidebarPanelDefinition[];
@@ -39,7 +43,7 @@ export type ChatPaneLayoutMenuProps = {
   onClosePane?: (paneId: string) => void;
 };
 
-function layoutModel(props: ChatPaneLayoutMenuProps) {
+function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
   const layout = props.sidebarLayout;
   const definitions = props.panelDefinitions ?? [];
   const side = layout ? sidebarActivePanel(layout) : undefined;
@@ -143,7 +147,19 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       });
     }
   }
-  const panelActions = props.panelMenuActions ?? [];
+  const panelActions: ChatQuickAction[] = [
+    ...(props.mobile && props.onOpenDetails
+      ? [
+          {
+            id: "details",
+            label: t("chat.sessionDetails.title"),
+            icon: icons.listChecks,
+            onActivate: openDetails,
+          },
+        ]
+      : []),
+    ...(props.panelMenuActions ?? []),
+  ];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
@@ -155,7 +171,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
 }
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const [opened, setOpened] = createSignal(false);
-  const model = createMemo(() => layoutModel(props));
+  let trigger!: HTMLButtonElement;
+  const model = createMemo(() => layoutModel(props, () => props.onOpenDetails?.(trigger)));
   let menu!: WaDropdown;
   let pendingAction: (() => void) | undefined;
   return (
@@ -164,7 +181,10 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
         ref={(element) => {
           menu = element;
         }}
-        class="chat-pane__layout-menu chat-panel-layout-menu"
+        class={[
+          "chat-pane__layout-menu chat-panel-layout-menu",
+          { "chat-panel-layout-menu--mobile": props.mobile },
+        ]}
         placement="bottom-end"
         onWa-show={() => setOpened(true)}
         onWa-select={(event) => {
@@ -194,26 +214,35 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
         }}
       >
         <button
+          ref={(element) => {
+            trigger = element;
+          }}
           slot="trigger"
           class="btn btn--ghost chat-pane__layout-trigger"
           type="button"
-          aria-label={t("chat.sessionHeader.layout")}
+          aria-label={t(props.mobile ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout")}
         >
           <span aria-hidden="true">
-            <Icon name="columns2" />
+            <Icon name={props.mobile ? "panelRightOpen" : "columns2"} />
           </span>
-          {t("chat.sessionHeader.layout")}
+          <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
         </button>
         <Show when={opened()}>
-          <For each={model().actions} keyed={(action) => action.id}>
+          <For
+            each={props.mobile ? model().panelActions : model().actions}
+            keyed={(action) => action.id}
+          >
             {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
           </For>
-          <Show when={model().panelActions.length > 0}>
+          <Show when={model().panelActions.length > 0 && model().actions.length > 0}>
             <div class="session-menu__separator" role="separator" />
-            <For each={model().panelActions} keyed={(action) => action.id}>
-              {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
-            </For>
           </Show>
+          <For
+            each={props.mobile ? model().actions : model().panelActions}
+            keyed={(action) => action.id}
+          >
+            {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
+          </For>
           <LitContent value={model().mainHeaderAction} />
           <LitContent value={model().sideHeaderAction} />
         </Show>

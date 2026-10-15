@@ -26,9 +26,9 @@ import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.j
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
-  authorizeSessionSharingTarget,
+  authorizeResolvedSessionMutationAsync,
   resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
 import {
   sharingPolicyClient as client,
@@ -73,12 +73,14 @@ describe("session sharing group mutations", () => {
         const refs = new Map(readSessionGroupMembership(cfg, process.env).groups).get("Research");
         expect(refs).toEqual([{ sessionKey, agentId: discoveryAgent }]);
         const ref = expectDefined(refs?.[0], "shared-store group member");
-        const resolveTarget = () => resolveSessionSharingTarget({ cfg, ...ref });
+        const resolveTarget = () => resolveSessionSharingTargetAsync({ cfg, ...ref });
         if (retiredOwner) {
-          const target = expectDefined(resolveTarget(), "shared-store sharing target");
-          expect(authorizeSessionSharingTarget({ cfg, client: viewer, target })).toBeNull();
+          expectDefined(await resolveTarget(), "shared-store sharing target");
+          expect(
+            await authorizeResolvedSessionMutationAsync({ cfg, client: viewer, ...ref }),
+          ).toBeNull();
         } else {
-          expect(resolveTarget).toThrow(AgentSelectionRequiredError);
+          await expect(resolveTarget()).rejects.toThrow(AgentSelectionRequiredError);
         }
         const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
         await initializeSessionReadContext(context);

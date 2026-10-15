@@ -130,6 +130,7 @@ describe("memory manager reindex recovery", () => {
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     resetPluginStateStoreForTests();
     clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -547,7 +548,8 @@ describe("memory manager reindex recovery", () => {
     const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
     await memoryManager.sync({ reason: "baseline", force: true });
     const harness = memoryManager as unknown as ReindexHarness; // SAFETY: this fixture owns the manager and provider.
-    const databasePath = harness.db.location();
+    const db = harness.db;
+    const databasePath = db.location();
     if (!databasePath) {
       throw new Error("Expected the fixture's file-backed memory index");
     }
@@ -581,7 +583,7 @@ describe("memory manager reindex recovery", () => {
       expect(closed).toBe(false);
       reservation.release();
       await Promise.all([sync, close, reservation.done]);
-      expect(harness.db.isOpen).toBe(false);
+      expect(db.isOpen).toBe(false);
       using reader = new DatabaseSync(databasePath, { readOnly: true });
       expect(reader.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "Accepted sync survives close." },

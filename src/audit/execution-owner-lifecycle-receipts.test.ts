@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -260,7 +261,7 @@ describe("owner-native execution lifecycle receipts", () => {
     {
       stage: "cron",
       cursor: "c:0:0",
-      addSuccessor: (db: DatabaseSync) => {
+      addSuccessor: (db: EngineConnection) => {
         db.prepare(
           `INSERT INTO cron_run_receipts (
              receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
@@ -273,7 +274,7 @@ describe("owner-native execution lifecycle receipts", () => {
            ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
         ).run();
       },
-      deleteAnchor: (db: DatabaseSync) => {
+      deleteAnchor: (db: EngineConnection) => {
         db.prepare(
           "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
         ).run();

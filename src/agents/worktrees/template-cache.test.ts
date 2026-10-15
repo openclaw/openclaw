@@ -48,36 +48,140 @@ describe("worktree template custody", () => {
     };
   });
 
-  it("builds once for concurrent callers and retains all readers through collection and replacement", async () => {
+  it.each(["cold", "idle"])(
+    "prepares a %s template once for concurrent readers through collection and replacement",
+    async (state) => {
+      if (state === "idle") {
+        const seeded = await prepareWorktreeTemplate(params);
+        await seeded?.release();
+      }
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
+      const prepare = vi.fn(async (...args: Parameters<typeof params.prepare>) => {
+        entered.resolve();
+        await finish.promise;
+        await params.prepare(...args);
+      });
+      const validate = vi.fn(async (...args: Parameters<typeof params.validate>) => {
+        entered.resolve();
+        await finish.promise;
+        return await params.validate(...args);
+      });
+      const first = prepareWorktreeTemplate({ ...params, prepare, validate });
+      await entered.promise;
+      const attempted = createDeferred();
+      const retain = templateRegistry.retainTemplateReaderAsync;
+      vi.spyOn(templateRegistry, "retainTemplateReaderAsync").mockImplementation(
+        async (...args) => {
+          const result = await retain(...args);
+          if ("selection" in args[1]) {
+            attempted.resolve();
+          }
+          return result;
+        },
+      );
+      const second = prepareWorktreeTemplate({ ...params, prepare, validate });
+      await attempted.promise;
+      finish.resolve();
+      const [left, right] = await Promise.all([first, second]);
+      expect(left?.id).toBe(right?.id);
+      expect(prepare).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
+      expect(validate).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(left?.status).toBe("ready");
+      expect(right?.status).toBe("ready");
+      if (!left || !right) {
+        throw new Error("Both callers must acquire the prepared template");
+      }
+      await collectWorktreeTemplates(env, 101, options);
+      expect(await fs.readFile(path.join(left.path, "source"), "utf8")).toBe("source");
+      expect(await prepareWorktreeTemplate({ ...params, contentKey: "commit-2" })).toBeUndefined();
+      await left.release();
+      await collectWorktreeTemplates(env, 101, options);
+      expect(await listTemplatesAsync(env)).toHaveLength(1);
+      await right.release();
+      await collectWorktreeTemplates(env, 101, options);
+      expect(await listTemplatesAsync(env)).toEqual([]);
+      await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["owner", "waiter"])(
+    "keeps the other caller live when the preparation %s aborts",
+    async (canceled) => {
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const controller = new AbortController();
+      const prepare = async (...args: Parameters<typeof params.prepare>) => {
+        entered.resolve();
+        await finish.promise;
+        await params.prepare(...args);
+      };
+      const first = prepareWorktreeTemplate({
+        ...params,
+        prepare,
+        options: canceled === "owner" ? { ...options, signal: controller.signal } : options,
+      });
+      await entered.promise;
+      const attempted = createDeferred();
+      const retain = templateRegistry.retainTemplateReaderAsync;
+      vi.spyOn(templateRegistry, "retainTemplateReaderAsync").mockImplementation(
+        async (...args) => {
+          const result = await retain(...args);
+          if ("selection" in args[1]) {
+            attempted.resolve();
+          }
+          return result;
+        },
+      );
+      const second = prepareWorktreeTemplate({
+        ...params,
+        prepare,
+        options: canceled === "waiter" ? { ...options, signal: controller.signal } : options,
+      });
+      await attempted.promise;
+      const rejected = expect(canceled === "owner" ? first : second).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+      });
+      controller.abort();
+      finish.resolve();
+      await rejected;
+      const prepared = await (canceled === "owner" ? second : first);
+      expect(prepared?.status).toBe("ready");
+      expect(await fs.readFile(path.join(prepared!.path, "source"), "utf8")).toBe("source");
+      await prepared?.release();
+      await collectWorktreeTemplates(env, 101, options);
+      expect(await listTemplatesAsync(env)).toEqual([]);
+    },
+  );
+
+  it("preserves recovery guidance when a shared preparation exhausts the caller wait budget", async () => {
     const entered = createDeferred();
     const finish = createDeferred();
-    const prepare = vi.fn(async (...args: Parameters<typeof params.prepare>) => {
-      entered.resolve();
-      await finish.promise;
-      await params.prepare(...args);
+    const first = prepareWorktreeTemplate({
+      ...params,
+      prepare: async (...args) => {
+        entered.resolve();
+        await finish.promise;
+        await params.prepare(...args);
+      },
     });
-    const first = prepareWorktreeTemplate({ ...params, prepare });
     await entered.promise;
-    const second = prepareWorktreeTemplate({ ...params, prepare });
-    finish.resolve();
-    const [left, right] = await Promise.all([first, second]);
-    expect(left?.id).toBe(right?.id);
-    expect(prepare).toHaveBeenCalledTimes(1);
-    expect(left?.status).toBe("ready");
-    expect(right?.status).toBe("ready");
-    if (!left || !right) {
-      throw new Error("Both callers must acquire the prepared template");
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 0 ? AbortSignal.abort(new DOMException("Expired", "TimeoutError")) : timeout(ms),
+    );
+    const waitBudget = { remainingMs: 0 };
+    try {
+      await expect(
+        prepareWorktreeTemplate({ ...params, options: { ...options, waitBudget } }),
+      ).rejects.toThrow(/timed out.*openclaw worktrees list.*openclaw worktrees gc/);
+      expect(waitBudget.remainingMs).toBe(0);
+    } finally {
+      finish.resolve();
+      await (await first)?.release();
     }
-    await collectWorktreeTemplates(env, 101, options);
-    expect(await fs.readFile(path.join(left.path, "source"), "utf8")).toBe("source");
-    expect(await prepareWorktreeTemplate({ ...params, contentKey: "commit-2" })).toBeUndefined();
-    await left.release();
-    await collectWorktreeTemplates(env, 101, options);
-    expect(await listTemplatesAsync(env)).toHaveLength(1);
-    await right.release();
-    await collectWorktreeTemplates(env, 101, options);
-    expect(await listTemplatesAsync(env)).toEqual([]);
-    await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reuses a retained ready generation and revalidates it once readers settle", async () => {

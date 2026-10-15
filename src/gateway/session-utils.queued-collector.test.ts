@@ -44,7 +44,7 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as sessionStoreWorker from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const {
   parentKey,
@@ -404,7 +404,7 @@ describe("queued collector session projection", () => {
         onStartFailure: () => true,
       });
       const session = expectDefined(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
+        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
         "created session",
       );
       const claim = expectDefined(
@@ -432,7 +432,10 @@ describe("queued collector session projection", () => {
   it("rejects stale copies, replaced owners, and lost reservations without losing compact status", async () => {
     const { entry, registration } = await createQueuedReservation();
     await replaceSessionEntry(
-      { sessionKey: parentKey, storePath: loadGatewaySessionEntryReadOnly(parentKey).storePath },
+      {
+        sessionKey: parentKey,
+        storePath: (await loadGatewaySessionEntryReadOnlyAsync(parentKey)).storePath,
+      },
       { sessionId: "parent-session", updatedAt: Date.now() },
     );
     const afterStaleGrace = Date.now() + 3 * 60 * 60_000;
@@ -836,7 +839,7 @@ describe("queued collector session projection", () => {
         expect
           .soft(admission.activeRunAbort.entry?.abortStopReason)
           .toBe(stopped ? (method === "chat.send" ? "stop" : "rpc") : undefined);
-        const session = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const session = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
         const events = await loadTranscriptEvents({
           agentId: "main",
           storePath: session.storePath,

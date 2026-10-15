@@ -37,11 +37,11 @@ import * as configEnv from "../config-env-vars.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -51,9 +51,48 @@ import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
+
+it("prepares and commits a session while its original creating reference is held", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "fresh", path: state.statePath("fresh.sqlite"), env: state.env };
+    const creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+    });
+    const reader = new OpenClawAgentDatabaseReadOnlyScope();
+    const sessionKey = "agent:fresh:first-session";
+    try {
+      await prepareSessionEntryReplacementDatabase(options, () => {});
+      await expect(
+        applySessionEntryCanonicalReplacements({
+          agentId: options.agentId,
+          storePath: options.path,
+          env: options.env,
+          sessionKeys: [sessionKey],
+          update: () => ({
+            result: "committed",
+            replacements: [
+              {
+                sessionKey,
+                previousSessionKeys: [],
+                entry: { sessionId: "first-session", updatedAt: 1, label: "created" },
+              },
+            ],
+          }),
+        }),
+      ).resolves.toBe("committed");
+      expect(
+        reader.read((database) => readExactSessionEntryRow(database, sessionKey)?.entry, options),
+      ).toMatchObject({ found: true, value: { sessionId: "first-session", label: "created" } });
+    } finally {
+      reader.close();
+      await creator.release();
+    }
+  });
+});
 
 it.each([false, true])(
   "retains prepared maintenance protection through replacement settlement (revoke: %s)",

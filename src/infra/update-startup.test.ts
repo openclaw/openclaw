@@ -9,7 +9,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createGatewaySchedulerClock,
@@ -20,7 +19,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
-import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -29,7 +27,10 @@ import {
 } from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
-import { createDevGitStatus } from "./update-startup-git.test-support.js";
+import {
+  createDevGitStatus,
+  writeDevGitInstallReceipt,
+} from "./update-startup-git.test-support.js";
 
 const {
   cancelManagedServiceUpdateHandoffMock,
@@ -641,7 +642,6 @@ describe("update-startup", () => {
   it("announces and applies a dev git campaign without consulting npm", async () => {
     mockDevGitStatus({
       branch: "HEAD",
-      upstreamSource: "tracking",
       repositoryUrl: "https://github.com/example/openclaw",
     });
     const longSubject = "x".repeat(140);
@@ -781,25 +781,13 @@ describe("update-startup", () => {
     expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
   });
 
-  it("continues automatic dev campaigns from a failed handoff receipt", async () => {
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "error",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "git",
-          reason: "managed-service-handoff-failed",
-          root: "/opt/openclaw",
-          after: {
-            sha: "current-sha",
-            version: "1.0.0",
-            upstreamRef: "origin/main",
-          },
-        },
-      });
+  it("continues automatic dev campaigns despite a failed handoff receipt", async () => {
+    writeDevGitInstallReceipt({
+      status: "error",
+      ts: Date.now() - 60_000,
+      reason: "managed-service-handoff-failed",
     });
-    mockDevGitStatus({ branch: "HEAD", upstreamSource: "receipt" });
+    mockDevGitStatus({ branch: "HEAD" });
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
     await runGatewayUpdateCheck({
@@ -814,7 +802,11 @@ describe("update-startup", () => {
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
-      gitUpstreamFallback: { currentSha: "current-sha", upstreamRef: "origin/main" },
+      gitSourceHint: expect.objectContaining({
+        root: "/opt/openclaw",
+        sha: "current-sha",
+        upstreamRef: "origin/main",
+      }),
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     await clock.advanceBy(60_000);
@@ -832,18 +824,7 @@ describe("update-startup", () => {
   it("reports current checkout metadata from its matching receipt", async () => {
     const installedAtMs = Date.now() - 60 * 60 * 1000;
     const commitAtMs = installedAtMs - 24 * 60 * 60 * 1000;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "ok",
-        ts: installedAtMs,
-        stats: {
-          mode: "git",
-          root: "/opt/openclaw",
-          after: { sha: "current-sha", version: "1.0.0", upstreamRef: "origin/main" },
-        },
-      });
-    });
+    writeDevGitInstallReceipt({ status: "ok", ts: installedAtMs });
     mockDevGitStatus({ behind: 0, commitAtMs });
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev" } },
@@ -877,11 +858,10 @@ describe("update-startup", () => {
       expected: { status: "unavailable", reason: "no-upstream" },
     },
     {
-      name: "missing receipt-backed upstream ref",
+      name: "missing configured upstream ref",
       git: {
         branch: "HEAD",
         upstream: "origin/missing",
-        upstreamSource: "receipt" as const,
         upstreamSha: null,
         ahead: null,
         behind: null,

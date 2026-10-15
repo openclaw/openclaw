@@ -43,7 +43,6 @@ function fixture(filename = ":memory:") {
   admitSqliteSchema(db);
   const read = () => runSqliteReadOperationSync(db, () => readSessionNodesGeneration(db));
   const token = () => runSqliteReadOperationSync(db, () => readSessionEntryCacheValidityToken(db));
-  expect(read()).toBe(0);
   return { db, read, token };
 }
 
@@ -89,35 +88,29 @@ describe("session entry revision facts", () => {
     }
   });
 
-  it("reads connection-owned generations without SQL after reads and row writes", () => {
+  it("reads writer receipts without SQL on first use or after row writes", () => {
     const { db, read } = fixture();
-    // The first read installs TEMP triggers; admit that schema before observing warm reads.
-    expect(read()).toBe(0);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
-      expect(read()).toBe(0);
+      const initial = read();
+      expect(read()).toBe(initial);
       db.exec("UPDATE session_nodes SET updated_at = 2");
       const changed = read();
-      expect(changed).toBeGreaterThan(0);
+      expect(changed).toBeGreaterThan(initial);
       expect(read()).toBe(changed);
       runSqliteDeferredTransactionSync(db, () => {
         expect(read()).toBe(changed);
         expect(read()).toBe(changed);
       });
       expect(read()).toBe(changed);
-      expect(observation.queries.filter((sql) => /\bdata_version\b/iu.test(sql))).toEqual([]);
-      expect(
-        observation.queries.filter((sql) =>
-          sql.includes('"openclaw_session_nodes_cache_generation"'),
-        ),
-      ).toHaveLength(0);
+      expect(observation.queries).toEqual([]);
     } finally {
       observation.restore();
     }
   });
 
   it("invalidates entry and participant snapshots after writes and rollback", () => {
-    const { db, read } = fixture();
+    const { db, read, token } = fixture();
     db.exec("UPDATE session_nodes SET updated_at = 2");
     const updated = read();
     expect(updated).toBeGreaterThan(0);
@@ -145,18 +138,10 @@ describe("session entry revision facts", () => {
     const rolledBack = read();
     expect(rolledBack).toBeGreaterThan(uncommitted);
     expect(read()).toBe(rolledBack);
+    const beforeSchema = token();
     db.exec("ALTER TABLE session_nodes ADD COLUMN revision_probe TEXT");
     admitSqliteSchema(db);
-    expect(read()).toBeGreaterThan(rolledBack);
-    const insideBatch: number[] = [];
-    db.function("capture_generation", () => {
-      insideBatch.push(read());
-      return null;
-    });
-    db.exec(`BEGIN; UPDATE session_nodes SET updated_at = 5;
-      SELECT capture_generation(); ROLLBACK; SELECT capture_generation();`);
-    expect(insideBatch[1]).toBeGreaterThan(insideBatch[0]!);
-    expect(read()).toBeGreaterThan(insideBatch[1]!);
+    expect(token().schemaVersion).toBeGreaterThan(beforeSchema.schemaVersion);
   });
 
   it("observes sibling receipts while native reads retain their explicit snapshot", () => {
@@ -181,21 +166,22 @@ describe("session entry revision facts", () => {
   });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "refuses generation reuse when an authorizer revokes schema admission",
+    "refuses cached receipts when an authorizer revokes schema admission",
     () => {
-      const { db, read } = fixture();
+      const { db, token } = fixture();
+      const initial = token();
       db.setAuthorizer((action, table) =>
-        action === constants.SQLITE_READ && table === "openclaw_session_nodes_cache_generation"
+        action === constants.SQLITE_READ && table === "session_nodes"
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
       );
       try {
-        expect(read).toThrow("SQLite session entry caching requires admitted schema facts");
+        expect(token).toThrow("SQLite session entry caching requires admitted schema facts");
       } finally {
         db.setAuthorizer(null);
       }
       admitSqliteSchema(db);
-      expect(read()).toBe(0);
+      expect(token()).toEqual(initial);
     },
   );
 });

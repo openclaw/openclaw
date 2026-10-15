@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -9,6 +8,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import {
@@ -20,7 +20,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-r
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const trace = vi.hoisted(() => ({
-  execute: vi.fn<(database: DatabaseSync, sql: string) => void>(),
+  execute: vi.fn<(database: EngineConnection, sql: string) => void>(),
   isVersionProbe: (sql: string) =>
     /^PRAGMA data_version\b|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
 }));

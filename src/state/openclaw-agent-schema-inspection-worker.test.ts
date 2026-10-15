@@ -57,6 +57,9 @@ DatabaseSync.prototype.exec = function(sql) {
         undefined,
         pathname,
       );
+      if (!result) {
+        throw new Error("Expected the supplied snapshot to be inspectable");
+      }
       expect(result.schemas).toEqual({ incompatible: [], indeterminate: [] });
       const ddl = fs.readFileSync(ddlLog, "utf8");
       if (attempt === 0) {

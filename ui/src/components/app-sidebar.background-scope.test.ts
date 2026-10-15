@@ -14,6 +14,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
@@ -28,9 +29,8 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mountSessionRoster(request: GatewayRequestHandler) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
@@ -332,7 +332,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       invalidate: false,
       filter: "involving-me",
     },
-  ])("keeps only required filtered reads during $name", async (scenario) => {
+  ])("paints filtered sessions before group metadata during $name", async (scenario) => {
     const { holdSecondSlot, invalidate, filter } = scenario;
     const matchesFilter = (query: Record<string, unknown> | null | undefined) =>
       filter === "involving-me"
@@ -429,17 +429,14 @@ describe("AppSidebar initial managed-list hydration", () => {
         })
       : Promise.resolve();
     const provider = createApplicationContextProvider(context);
-    const sidebar = document.createElement("openclaw-app-sidebar");
-    if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-      throw new Error("Expected registered sidebar");
-    }
+    const sidebar = await createSidebarElement();
     if (filter !== "self") {
       storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
         ownerId: filter === "owner" ? "synthetic-operator" : null,
         involvingMe: filter === "involving-me",
       });
     }
-    provider.append(sidebar);
+    provider.append(sidebar.hostElement);
     document.body.append(provider);
     await settleLitElement(sidebar);
     const heldLater = invalidate
@@ -451,29 +448,26 @@ describe("AppSidebar initial managed-list hydration", () => {
     try {
       sidebar.connected = true;
       await settleLitElement(sidebar);
-      expect(listQueries).toHaveLength(1);
+      expect(listQueries).toHaveLength(holdSecondSlot ? 1 : 2);
       expect(listQueries[0]).toMatchObject({ ownerFirst: true, agentId: "main" });
-      expect(order.includes("groups:start")).toBe(!holdSecondSlot);
+      expect(order).not.toContain("groups:start");
 
       order.push("primary:resolve");
       primary.resolve(primaryResult);
-      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       await vi.waitFor(() =>
         expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
       );
-      if (holdSecondSlot) {
-        expect(listQueries).toHaveLength(1);
-      }
-
-      order.push("groups:resolve");
-      groups.resolve(emptyGroups);
-      await vi.waitFor(() => expect(order).toContain("filtered:start"));
       expect(listQueries).toHaveLength(2);
       expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
       expect(matchesFilter(listQueries[1])).toBe(true);
 
       order.push("filtered:resolve");
       filtered.resolve(filteredResult);
+      await vi.waitFor(() => expect(sidebar.textContent).toContain("My session"));
+      await vi.waitFor(() => expect(order).toContain("groups:start"));
+      order.push("groups:resolve");
+      groups.resolve(emptyGroups);
       if (invalidate) {
         await vi.waitFor(() => expect(order).toContain("later:start"));
         expect(sidebar.textContent).toContain("My session");

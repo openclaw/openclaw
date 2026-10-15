@@ -14,7 +14,10 @@ import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import {
+  readMemorySearchManagerStatus,
+  type MemorySearchManager,
+} from "../memory-host-sdk/host/types.js";
 import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -65,7 +68,7 @@ export type GatewayProbeSnapshot = {
 
 type StatusMemorySearchManager = Pick<
   MemorySearchManager,
-  "probeVectorStoreAvailability" | "probeVectorAvailability" | "status" | "close"
+  "probeVectorStoreAvailability" | "probeVectorAvailability" | "status" | "statusAsync" | "close"
 >;
 
 type StatusMemorySearchManagerResolver = (params: {
@@ -431,7 +434,7 @@ async function resolveMemoryManagerStatusSnapshot(
   }
   try {
     try {
-      const currentStatus = manager.status();
+      const currentStatus = await readMemorySearchManagerStatus(manager);
       if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
         // Built-in vector store has a store-level probe that avoids conflating index absence with plugin failure.
         await manager.probeVectorStoreAvailability();
@@ -439,7 +442,7 @@ async function resolveMemoryManagerStatusSnapshot(
         await manager.probeVectorAvailability();
       }
     } catch {}
-    const status = manager.status();
+    const status = await readMemorySearchManagerStatus(manager);
     return { agentId, ...status };
   } finally {
     // Status probes must not leak plugin resources such as SQLite handles.

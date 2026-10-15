@@ -224,8 +224,8 @@ describe("registered native command routing through the message pipeline", () =>
         ...runtime,
         state: {
           ...runtime.state,
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-            const store = runtime.state.openKeyedStore<T>(options);
+          openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const store = runtime.state.openKeyedStoreV2<T>(options);
             if (options.namespace !== TELEGRAM_THREAD_BINDINGS_NAMESPACE) {
               return store;
             }

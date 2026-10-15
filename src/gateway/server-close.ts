@@ -8,6 +8,7 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
@@ -164,9 +165,9 @@ export type GatewayCloseParams = {
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeAllBundleLspRuntimes: () => Promise<void>;
+  drainWorktreeRunEnd: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
   stopGmailWatcher: () => Promise<void>;
-  disposeAllCodeModeRuns: () => Promise<void> | void;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
@@ -196,6 +197,7 @@ export type GatewayCloseParams = {
 };
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
+  disposeAllCodeModeRuns: () => Promise<void> | void;
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
@@ -220,8 +222,8 @@ export async function prepareGatewayClose(
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const restart = restartExpectedMs !== null;
-  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   const cleanupWork = new AsyncWorkScope();
+  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
   // Debug-level: the signal handler already announced the stop/restart at
@@ -250,25 +252,46 @@ export async function prepareGatewayClose(
     );
   };
 
+  const prepareRuns = async () => {
+    const admissions = await measureCloseStep("reply-drain", () =>
+      prepareGatewayRunShutdown({
+        ...params,
+        restart,
+        timeoutMs:
+          typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
+            ? Math.max(0, Math.floor(opts.drainTimeoutMs))
+            : 0,
+        warnings,
+      }),
+    );
+    // Track settlement immediately: ordinary-stop hooks may still be running
+    // when an admission releases or its cancellation callback fails.
+    const settlement = cleanupWork.track(() =>
+      measureCloseStep("session-admissions", () => admissions.released),
+    );
+    void settlement.catch((error: unknown) => {
+      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "session-admissions");
+    });
+  };
+
   try {
+    // Ordinary stop already spent its grace period. Cancel received work before
+    // hooks can join it; restart hooks run before recovery marking instead.
+    if (!restart) {
+      await prepareRuns();
+    }
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
     await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     if (restart) {
       await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
-    const drainTimeoutMs =
-      typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
-        ? Math.max(0, Math.floor(opts.drainTimeoutMs))
-        : 0;
-    await measureCloseStep("reply-drain", () =>
-      prepareGatewayRunShutdown({
-        ...params,
-        restart,
-        timeoutMs: drainTimeoutMs,
-        warnings,
-      }),
-    );
+    if (restart) {
+      await prepareRuns();
+    }
+    // Cancel code cells before received work joins their pending bridge calls.
+    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
     await shutdownStep("acp-session-manager", () => disposeAcpSessionManager("gateway-shutdown"));
     // Memory owns database borrows independent of stalled model/tool finalizers.
@@ -382,7 +405,6 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
-    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -514,6 +536,9 @@ async function closeGatewayResources(
   } catch (error) {
     closeFailure = { error };
   } finally {
+    // Runtime shutdown releases run leases; join their final writes before
+    // registry retirement can close the workers needed to persist them.
+    await measureCloseStep("worktree-run-end", params.drainWorktreeRunEnd);
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
     await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
@@ -551,6 +576,7 @@ async function closeGatewayResources(
               );
               await measureCloseStep("metadata-retirement", retire);
               await measureCloseStep("retirement-cleanup", () => cleanupWork.runWhenIdle(() => {}));
+              await measureCloseStep("incognito-sessions", () => memorySessionActorOwners.reset());
               // Releasing agent leases still writes shared state; keep its owner alive until then.
               await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
               await measureCloseStep("debug-proxy", () =>

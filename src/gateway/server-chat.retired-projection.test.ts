@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -17,7 +18,10 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 
 const sessionFixture = vi.hoisted(() => ({ updatedAt: 50 }));
 
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: Session owners are synthetic; the fixture must not load operator configuration.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({ agents: { entries: { main: {}, delivery: {} } } }),
+}));
 vi.mock("../infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: () => ({ showOk: false, showAlerts: true, useIndicator: true }),
 }));
@@ -35,20 +39,17 @@ describe("retired execution event projection", () => {
     const chatRunState = createChatRunState();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe("selected", "agent:delivery:late");
+    const entry = {
+      sessionId: "session",
+      verboseLevel: "off" as const,
+      updatedAt: sessionFixture.updatedAt,
+    };
     const projection = createSessionRowProjectionFixture({
-      cfg: { agents: { entries: { main: {}, delivery: {} } } },
+      cfg: getRuntimeConfig(),
       agentId: "delivery",
-      store: {
-        global: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
-        "agent:delivery:late": {
-          sessionId: "session",
-          verboseLevel: "off",
-          updatedAt: sessionFixture.updatedAt,
-        },
-      },
+      store: { global: entry, "agent:delivery:late": entry },
     });
     const handler = createAgentEventHandler({
-      getSessionRowProjection: () => projection,
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers: () => true,
@@ -64,6 +65,7 @@ describe("retired execution event projection", () => {
       },
       loadGatewaySessionLifecycleSnapshotForEvent: () => ({ row: null }),
       persistGatewaySessionLifecycleEventForEvent: async () => {},
+      getSessionRowProjection: () => projection,
     });
     const unsubscribe = subscribeAgentEvents(async (event) => {
       await handler(event);

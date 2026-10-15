@@ -213,8 +213,7 @@ describe("applySessionModelSelection — placement guard", () => {
     const initial = structuredClone(sessionEntry);
     const localPlacement = createPlacement(sessionEntry.sessionId, "local");
     const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
-    // First read (pre-write guard) sees a local placement; the synchronous commit boundary
-    // then sees an activation that overtook the directive's first read.
+    // The prepared owner sees local placement; its commit assertion observes activation.
     placementMocks.getMany
       .mockReturnValueOnce(new Map([["placement-race-1", localPlacement]]))
       .mockReturnValueOnce(new Map([["placement-race-1", activePlacement]]));
@@ -228,8 +227,7 @@ describe("applySessionModelSelection — placement guard", () => {
 
     expect(result).toMatchObject({
       status: "rejected",
-      message:
-        "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
+      message: "Session placement changed; retry model selection.",
     });
     // The durable write was fenced: the stored entry is unchanged.
     const stored = loadSessionEntryReadOnly({ sessionKey, storePath });

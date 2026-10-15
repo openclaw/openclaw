@@ -12,7 +12,6 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProjectCheckout } from "../../projects/project-checkout.js";
@@ -25,16 +24,16 @@ import type {
   PreparedSessionMutationFacts,
   SessionSharingTarget,
 } from "../session-sharing-policy.js";
+import { withSessionSharingTarget } from "../session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
+import { prepareSessionSharingProfiles } from "../session-sharing-read.js";
 import {
-  authorizeSessionSharingTarget,
+  prepareProjectedSessionSharing,
   createSessionListEntryFilter,
-  resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -83,21 +82,33 @@ async function authorizeSuggestedTaskSource(params: {
   taskId: string;
 }): Promise<{ ok: true; agentId: string } | { ok: false; error: ErrorShape }> {
   const suggestion = getTaskSuggestion(params.taskId);
-  const target = suggestion
-    ? await resolveSessionSharingTargetAsync({
-        cfg: params.cfg,
-        sessionKey: suggestion.sessionKey,
-        agentId: suggestion.agentId,
-      })
-    : null;
-  if (!target) {
+  if (!suggestion) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion was not found"),
     };
   }
-  const error = authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
-  return error ? { ok: false, error } : { ok: true, agentId: target.agentId };
+  const profiles = await prepareSessionSharingProfiles(params.client);
+  return withSessionSharingTarget(
+    { cfg: params.cfg, sessionKey: suggestion.sessionKey, agentId: suggestion.agentId },
+    ({ target, members, assertCurrent }) => {
+      assertCurrent();
+      if (!target) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion was not found"),
+        };
+      }
+      const sharing = prepareProjectedSessionSharing({
+        cfg: params.cfg,
+        client: params.client,
+        profiles,
+        isMember: (_target, id) => members.some((member) => member.identityId === id),
+      });
+      const error = sharing.authorizeTarget(target);
+      return error ? { ok: false, error } : { ok: true, agentId: target.agentId };
+    },
+  );
 }
 
 async function captureSuggestedTaskResponse(
@@ -299,30 +310,19 @@ async function deliverSuggestedTaskToSourceSession(
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
-  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
-  let nativeSource: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;
+  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts>;
   try {
-    if (captureIncognitoSessionSource({ sessionKey: params.suggestion.sessionKey, agentId })) {
-      sourceFacts = await prepareSessionMutationFacts({
-        cfg: params.options.context.getRuntimeConfig(),
-        sessionKey: params.suggestion.sessionKey,
-        agentId,
-        allowMissing: true,
-      });
-    } else {
-      nativeSource = await loadGatewaySessionEntryReadOnlyInWorker({
-        cfg: params.options.context.getRuntimeConfig(),
-        key: params.suggestion.sessionKey,
-        agentId,
-      });
-    }
+    sourceFacts = await prepareSessionMutationFacts({
+      cfg: params.options.context.getRuntimeConfig(),
+      sessionKey: params.suggestion.sessionKey,
+      agentId,
+      allowMissing: true,
+    });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
   try {
-    const source = sourceFacts
-      ? sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target
-      : nativeSource;
+    const source = sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target;
     if (!source?.entry?.sessionId) {
       return fail(
         errorShape(
@@ -349,7 +349,7 @@ async function deliverSuggestedTaskToSourceSession(
       sessionKey: params.suggestion.sessionKey,
     });
   } finally {
-    sourceFacts?.release();
+    sourceFacts.release();
   }
 }
 
@@ -371,39 +371,53 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const needsVisibilityFilter = hasOperatorBoundary(client, cfg);
       const suggestions = listTaskSuggestions({
         ...params,
         ...(sessionOwner ? { agentId: sessionOwner.agentId } : {}),
       });
-      const targets = needsVisibilityFilter
-        ? await Promise.all(
-            suggestions.map((suggestion) =>
-              resolveSessionSharingTargetAsync({
-                cfg,
-                sessionKey: suggestion.sessionKey,
-                agentId: suggestion.agentId,
-              }),
-            ),
-          )
-        : undefined;
-      const currentCfg = context.getRuntimeConfig();
-      const visibilityFilter = hasOperatorBoundary(client, currentCfg)
-        ? createSessionListEntryFilter({ client, cfg: currentCfg })
-        : undefined;
-      respond(
-        true,
-        {
-          suggestions: suggestions.filter((_, index) => {
-            const target = targets?.[index];
-            return (
-              !visibilityFilter ||
-              Boolean(target && visibilityFilter(target.storeKey, target.entry))
+      if (!hasOperatorBoundary(client, cfg) || !createSessionListEntryFilter({ client, cfg })) {
+        respond(true, { suggestions }, undefined);
+        return;
+      }
+      const reads = new Map<string, SessionFactsRead<PreparedSessionMutationFacts> | null>();
+      const sourceKey = (suggestion: TaskSuggestion) =>
+        JSON.stringify([suggestion.agentId, suggestion.sessionKey]);
+      try {
+        for (const suggestion of suggestions) {
+          const key = sourceKey(suggestion);
+          if (!reads.has(key)) {
+            const requestedAgent = resolveRequestedSessionAgentId(
+              cfg,
+              suggestion.sessionKey,
+              suggestion.agentId,
             );
-          }),
-        },
-        undefined,
-      );
+            reads.set(
+              key,
+              requestedAgent.ok
+                ? await prepareSessionMutationFacts({
+                    cfg,
+                    sessionKey: suggestion.sessionKey,
+                    agentId: requestedAgent.agentId,
+                    allowMissing: true,
+                  })
+                : null,
+            );
+          }
+        }
+        const currentConfig = context.getRuntimeConfig();
+        const visibilityFilter = createSessionListEntryFilter({ client, cfg: currentConfig });
+        const visible = visibilityFilter
+          ? suggestions.filter((suggestion) => {
+              const target = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig).target;
+              return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+            })
+          : suggestions;
+        respond(true, { suggestions: visible }, undefined);
+      } finally {
+        for (const read of reads.values()) {
+          read?.release();
+        }
+      }
     },
   ),
   "taskSuggestions.create": defineValidatedGatewayHandler(

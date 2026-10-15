@@ -6,8 +6,8 @@ import {
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  createNativeSessionBindingAuthority,
-  prepareNativeSessionGenerationAuthority,
+  retainNativeSessionGenerationAuthority,
+  type RetainedNativeSessionGenerationAuthority,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -226,19 +226,29 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
+  let generationAuthority: RetainedNativeSessionGenerationAuthority | undefined;
+  let generationAuthorityTransferred = false;
+  using captures = new DisposableStack();
+  captures.defer(() => {
+    if (!generationAuthorityTransferred) {
+      generationAuthority?.release();
+    }
+  });
   // Only a durable session row authorizes stable-key ownership. Caller-owned
   // transcripts omit a store target, so classify them against the default store too.
   if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const { state: authority } = await prepareNativeSessionGenerationAuthority({
+    generationAuthority = await retainNativeSessionGenerationAuthority({
       config: params.config,
       storePath: params.sessionTarget?.storePath,
       target: bindingIdentity,
       createSupersededError: createCodexSessionGenerationSupersededError,
     });
-    if (authority === "superseded") {
+    if (generationAuthority.state === "superseded") {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
-    if (authority === "ephemeral") {
+    if (generationAuthority.state === "ephemeral") {
+      generationAuthority.release();
+      generationAuthority = undefined;
       // Stable-key fences protect only durable session rows. Ephemeral callers rotate
       // physical ids, so sharing that owner would strand every run after the first.
       const logicalIdentity = bindingIdentity;
@@ -259,25 +269,36 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
     | undefined;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
-  const { binding: admittedBinding, authority: bindingAuthority } =
-    await resolveCodexSessionBinding({
-      reclaimStale: true,
-      bindingStore,
-      identity: bindingIdentity,
-      config: params.config,
-      storePath: params.sessionTarget?.storePath,
-      assertCurrent: params.hostCapabilities.assertActive,
-      signal: params.abortSignal,
-      assertBinding: params.expectedSessionRuntimeOwnership
-        ? (binding) =>
-            assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
-        : undefined,
-    });
+  generationAuthorityTransferred = true;
+  const {
+    binding: admittedBinding,
+    authority: bindingAuthority,
+    release: releaseBindingAuthority,
+  } = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    generationAuthority,
+    bindingStore,
+    identity: bindingIdentity,
+    config: params.config,
+    storePath: params.sessionTarget?.storePath,
+    assertCurrent: params.hostCapabilities.assertActive,
+    signal: params.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
+  let bindingAuthorityTransferred = false;
+  captures.defer(() => {
+    if (!bindingAuthorityTransferred) {
+      releaseBindingAuthority();
+    }
+  });
   const assertCurrent = () => {
     bindingAuthority.assertCurrent();
     assertModelExecutionCurrent();
   };
-  const authority = createNativeSessionBindingAuthority(bindingAuthority.lineage, assertCurrent);
+  const authority = bindingAuthority.withLiveness(assertCurrent);
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -548,6 +569,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     assertCurrent();
     // Host capabilities are identity-keyed; carry generation proof separately.
     sandboxTransferred = true;
+    bindingAuthorityTransferred = true;
     return {
       params,
       prepareInputAttachments: async (
@@ -600,6 +622,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       },
       assertCurrent,
       authority,
+      releaseBindingAuthority,
       withCurrent: authority.withCurrent,
       assertLegacyCurrent: authority.assertLegacyCurrent,
       assertModelExecutionCurrent,

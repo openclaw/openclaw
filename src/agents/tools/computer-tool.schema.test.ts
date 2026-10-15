@@ -6,6 +6,7 @@ import { getImageMetadata } from "../../media/image-ops.js";
 import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { COMPUTER_TOOL_ACTIONS } from "./computer-tool-schema.js";
 import {
   callGatewayToolMock,
   COMPUTER_ACT_COMMAND,
@@ -99,6 +100,9 @@ describe("createComputerTool v2 execution", () => {
       .mockResolvedValueOnce([macComputerNode({ computerUse: initial })])
       .mockResolvedValue([macComputerNode({ computerUse: upgraded })]);
     const tool = createVisionComputerTool();
+    const untouched = createVisionComputerTool();
+    const initialSchema = tool.parameters;
+    expect(untouched.parameters).toBe(initialSchema);
     await tool.execute("before-upgrade", {
       action: "screenshot",
       node: "mac-1",
@@ -106,6 +110,10 @@ describe("createComputerTool v2 execution", () => {
     });
     expect(readActionEnum(tool)).toContain("list_windows");
     expect(readActionEnum(tool)).not.toContain("launch_app");
+    const selectedSchema = tool.parameters;
+    expect(selectedSchema).not.toBe(initialSchema);
+    expect(untouched.parameters).toBe(initialSchema);
+    expect(readActionEnum(untouched)).not.toContain("list_windows");
 
     await tool.execute("after-upgrade", { action: "screenshot", node: "mac-1" });
     expect(listNodesMock).toHaveBeenLastCalledWith(
@@ -114,6 +122,13 @@ describe("createComputerTool v2 execution", () => {
     );
     expect(readActionEnum(tool)).toContain("launch_app");
     expect(readActionEnum(tool)).not.toContain("list_windows");
+    expect(tool.parameters).not.toBe(selectedSchema);
+    expect(selectedSchema).toHaveProperty("properties.action.enum", [
+      "screenshot",
+      "list_windows",
+      "wait",
+      "take_control",
+    ]);
     await tool.execute("new-action", { action: "launch_app", app: "Fixture" });
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
@@ -632,6 +647,47 @@ describe("createComputerTool v2 execution", () => {
 });
 
 describe("createComputerTool schema", () => {
+  it("reuses schemas by action values and isolates later capability edits", () => {
+    const capabilities = v2Descriptor(["list_windows"]);
+    const transport = {
+      computerUse: capabilities,
+      resolveNode: async () => ({ nodeId: "session-desktop" }),
+      invoke: async () => undefined,
+    };
+    const first = createComputerTool({ transport });
+    const next = createComputerTool({
+      transport: {
+        ...transport,
+        computerUse: v2Descriptor(["list_windows"], {
+          provider: { ...capabilities.provider, generation: "generation-2" },
+        }),
+      },
+    });
+    expect(next.parameters).toBe(first.parameters);
+    expect(Reflect.set(readActionEnum(first), "0", "launch_app")).toBe(false);
+
+    capabilities.actions.push("launch_app");
+    const changed = createComputerTool({ transport });
+    expect(changed.parameters).not.toBe(first.parameters);
+    expect(readActionEnum(first)).toEqual(["list_windows"]);
+    expect(readActionEnum(changed)).toEqual(["list_windows", "launch_app"]);
+  });
+
+  it("separates paired and session schemas with the same advertised actions", () => {
+    const paired = createComputerTool();
+    const session = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor([...COMPUTER_TOOL_ACTIONS]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    expect(readActionEnum(session)).toEqual(readActionEnum(paired));
+    expect(session.parameters).not.toBe(paired.parameters);
+    expect(paired.parameters).toHaveProperty("properties.target");
+    expect(session.parameters).not.toHaveProperty("properties.target");
+  });
+
   it("loads paired capabilities only for an exposed ordinary paired surface", async () => {
     const sessionTransport = {
       resolveNode: async () => ({ nodeId: "session-desktop" }),

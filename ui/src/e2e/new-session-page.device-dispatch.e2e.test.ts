@@ -164,7 +164,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page.locator(`[data-value="${value}"]`).click();
       await page.locator(".new-session-page__message").fill("run on the paired device");
-      expect(await page.locator('wa-dropdown-item[value="start-terminal"]').count()).toBe(0);
+      expect(await page.locator('[data-value="start-terminal"]').count()).toBe(0);
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -287,9 +287,7 @@ suite.define(() => {
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
           {
-            surface: page.locator(
-              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
-            ),
+            surface: page.locator(".oc-popover.new-session-page__where-popover"),
             content: [selectedDevice, automaticDevice],
           },
         );

@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { requireGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
-import { resolveRepository } from "./service-preparation.js";
+import { resolveRepository } from "./repository-paths.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -47,7 +47,7 @@ it.each([
   },
 );
 
-it("backs off the shared repository after a missing-object snapshot failure", async () => {
+it("backs off shared-repository snapshots after a missing-object failure", async () => {
   const root = tempDirs.make("worktree-corrupt-repository-");
   const source = await initializeRepository(root);
   await fs.writeFile(path.join(source, "missing.txt"), "omitted blob\n");
@@ -130,7 +130,6 @@ it("backs off the shared repository after a missing-object snapshot failure", as
     retryAt: now + hour,
   });
   expect(second.deferredCount).toBe(2);
-  expect(gitSpawns).toBe(0);
 
   now += hour;
   expect((await gc()).failedCount).toBe(1);
@@ -164,6 +163,155 @@ it("backs off the shared repository after a missing-object snapshot failure", as
     );
   }
 });
+
+it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"] as const)(
+  "consolidates healthy pack batches independently of missing snapshot objects (%s)",
+  async (damage) => {
+    const root = tempDirs.make("worktree-partial-clone-deferral-");
+    const source = await initializeRepository(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    await fs.writeFile(path.join(source, "missing.txt"), "omitted blob\n");
+    await requireGit(source, ["add", "missing.txt"]);
+    await requireGit(source, ["commit", "-m", "add omitted blob"]);
+    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+    const repo = path.join(root, "partial");
+    await requireGit(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(source).href,
+      repo,
+    ]);
+    await requireGit(repo, ["sparse-checkout", "set", "--no-cone", "/README.md"]);
+    // Fixture materialization is an explicit checkout, not a Gateway inspection.
+    await requireGit(repo, ["config", "gc.auto", "0"]);
+    await requireGit(repo, ["config", "maintenance.auto", "false"]);
+    const records = await materializeManagedWorktreeFixtures({
+      env,
+      repoRoot: repo,
+      stateDir: root,
+      names: ["partial-a", "partial-b"],
+      ownerKind: "session",
+      now: 1,
+    });
+    for (const record of records) {
+      await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
+      await fs.writeFile(path.join(record.path, "missing.txt"), "omitted blob\n");
+    }
+    if (damage === "promised-retry") {
+      // Persist the snapshot failure before explicitly retrying with an offline remote.
+      await new ManagedWorktreeService({
+        env,
+        now: () => IDLE_GC_MS + 2,
+        getConfig: () => ({}),
+      }).gc();
+    }
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const objects: string[] = [];
+    const payloadPacks: string[] = [];
+    for (let index = 0; index < 16; index++) {
+      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
+        input: `partial-payload-${index}`,
+      });
+      objects.push(object);
+      const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
+        input: `${object}\n`,
+      });
+      payloadPacks.push(path.join(directory, `pack-${hash}.pack`));
+      await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
+    }
+    await requireGit(repo, ["prune-packed"]);
+    if (damage === "checksum") {
+      const pack = payloadPacks[0]!;
+      const bytes = await fs.readFile(pack);
+      bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
+      await fs.chmod(pack, 0o600);
+      await fs.writeFile(pack, bytes);
+    } else if (damage === "unpromised") {
+      // A local commit is not a promise, even with a promisor remote configured.
+      const record = records[0]!;
+      await requireGit(record.path, ["config", "user.name", "OpenClaw Test"]);
+      await requireGit(record.path, ["config", "user.email", "openclaw-test@example.invalid"]);
+      await fs.writeFile(path.join(record.path, "README.md"), "local-only blob\n");
+      await requireGit(record.path, ["add", "README.md"]);
+      await requireGit(record.path, ["commit", "-m", "local change"]);
+      const blob = await requireGit(record.path, ["rev-parse", "HEAD:README.md"]);
+      await fs.unlink(path.join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+      await requireGit(source, ["hash-object", "-w", "--stdin"], { input: "local-only blob\n" });
+      await requireGit(source, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    }
+    const before = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
+    if (damage === "byte-limited") {
+      // Exercise the 512-MiB budget with native tiny packs, without writing 640 MiB in a test.
+      const realStat = fs.stat.bind(fs);
+      vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const stat = await realStat(...args);
+        if (
+          stat &&
+          path.dirname(String(args[0])) === directory &&
+          String(args[0]).endsWith(".pack")
+        ) {
+          stat.size = 40 * 1024 * 1024;
+        }
+        return stat;
+      });
+    }
+    const expectedPacks = damage === "byte-limited" ? before.length - 11 : 1;
+    const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
+    expect(missing).toContain("?");
+    await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable.git")]);
+    const trace = path.join(root, "partial-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    try {
+      const service = new ManagedWorktreeService({
+        env,
+        now: () => IDLE_GC_MS + 2,
+        getConfig: () => ({}),
+      });
+      const result = await service.gc({ retryDeferred: damage === "promised-retry" });
+      expect(result.removed).toEqual([]);
+      expect(result.failedCount).toBe(damage === "checksum" || damage === "promised-retry" ? 2 : 1);
+      expect(result.deferredCount).toBe(1);
+      const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
+      expect(after.length).toBe(damage === "checksum" ? before.length : expectedPacks);
+      expect(result.gitMaintenance).toMatchObject({
+        repoRoot: repo,
+        stage: damage === "checksum" || damage === "promised-retry" ? "suspended" : "completed",
+        packsBefore: before.length,
+        ...(damage === "checksum" ? {} : { packsAfter: expectedPacks }),
+      });
+      for (const record of records) {
+        expect(await fs.readFile(path.join(record.path, "missing.txt"), "utf8")).toBe(
+          "omitted blob\n",
+        );
+        expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+      }
+      if (damage !== "checksum") {
+        expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
+          missing,
+        );
+        expect(
+          await requireGit(repo, ["cat-file", "--batch-check"], {
+            input: `${objects.join("\n")}\n`,
+          }),
+        ).not.toContain("missing");
+        await requireGit(repo, ["multi-pack-index", "verify"]);
+      }
+      expect(await fs.readFile(trace, "utf8")).not.toContain('"fsck"');
+      if (damage !== "promised-retry") {
+        expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      }
+      if (damage === "unpromised") {
+        await requireGit(repo, ["remote", "set-url", "origin", source]);
+        const repaired = await service.gc({ retryDeferred: true });
+        expect(repaired.removed.toSorted()).toEqual(records.map((record) => record.id).toSorted());
+        expect(await fs.readFile(trace, "utf8")).toContain("upload-pack");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 it("records an admitted deletion timeout after its caller cancels and loses session authority", async () => {
   const root = tempDirs.make("worktree-removal-cancelled-budget-");

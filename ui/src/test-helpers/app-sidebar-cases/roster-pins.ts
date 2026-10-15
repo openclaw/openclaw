@@ -176,7 +176,11 @@ describe("AppSidebar agent roster pins", () => {
     expect(toggle).not.toBeNull();
     toggle?.click();
     await settleRoster(sidebar);
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      sidebar
+        .querySelector(`[data-agent-group="working"] [data-child-session-toggle="${parentKey}"]`)
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
     expect(sessionKeys(sidebar)).toEqual([parentKey, childKey, "agent:working:notes"]);
     const child = sidebar.querySelector(`[data-session-key="${childKey}"]`)!;
     expect(child.closest('[data-agent-group="working"]')).not.toBeNull();

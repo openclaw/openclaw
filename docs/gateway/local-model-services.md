@@ -27,6 +27,8 @@ OpenClaw waits for any idle shutdown already in progress when it closes local se
 
 Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
 
+Final exit observation starts after bounded tree-termination helpers finish. On Windows, this lets `taskkill` complete without reporting an already-closed service as a shutdown failure.
+
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
 
 For its pinned managed installation, llama.cpp checks for orphaned servers before

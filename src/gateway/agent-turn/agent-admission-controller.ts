@@ -284,6 +284,8 @@ export function createAgentAdmissionController(params: {
     setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => {
       admittedRunAbort = value;
     },
-    release: () => admission?.release(),
+    release: () => {
+      admission?.release();
+    },
   };
 }

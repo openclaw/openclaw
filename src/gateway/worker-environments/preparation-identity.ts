@@ -1,100 +1,58 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { z } from "zod";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
-import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
+import type { EnvironmentRecipe } from "./environment-recipe.js";
+import {
+  WorkerPreparationTargetSchema,
+  type WorkerPreparationArtifacts,
+  type WorkerProjectPreparationIdentity,
+} from "./preparation-identity.schema.js";
 import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
-const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const Artifacts = z
-  .object({
-    nodeBootstrapSha256: Digest,
-    enabledPluginIds: z.array(z.string().min(1).max(256)).max(256),
-    workerBundleHash: Digest,
-    workerArchiveSha256: Digest,
-    openclawVersion: z.string().min(1).max(128),
-    protocolFeatures: z.array(z.string().min(1).max(128)).max(64),
-  })
-  .strict();
-const Target = z
-  .object({
-    machineClass: z.string().min(1).max(256),
-    platform: z.string().min(1).max(64),
-    arch: z.string().min(1).max(64).optional(),
-    profileKey: Digest.optional(),
-  })
-  .strict();
-const Preparation = z
-  .object({
-    key: Digest,
-    cacheKey: Digest,
-    // Persisted v1 allocations remain readable for replay and cleanup.
-    contractVersion: z.union([z.literal(1), z.literal(2)]),
-    setupRecipe: z
-      .string()
-      .regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u)
-      .optional(),
-    runSetupScript: z.boolean().optional(),
-    recipe: EnvironmentRecipeSchema.optional(),
-    target: Target,
-    artifacts: Artifacts,
-  })
-  .strict();
-
-export type WorkerPreparationArtifacts = z.infer<typeof Artifacts>;
-export type WorkerProjectPreparationIdentity = z.infer<typeof Preparation>;
 export type WorkerProviderPreparedIntent = {
   providerId: string;
   profileSnapshot: WorkerProfile;
   preparationKey?: string;
 };
 
-/** Immutable artifact facts are separate from the reserve's demand/expiry/consumption tuple. */
-export function readWorkerProjectPreparation(
-  project: unknown,
-): WorkerProjectPreparationIdentity | undefined {
-  if (!isRecord(project) || project.preparation === undefined) {
-    return undefined;
-  }
-  const parsed = Preparation.safeParse(project.preparation);
-  if (!parsed.success) {
-    throw new Error("Worker project preparation identity is invalid");
-  }
-  return parsed.data;
-}
-
-export function createWorkerProjectPreparationIdentity(params: {
+export function createWorkerPreparationIdentity(params: {
   namespace: string;
   providerId: string;
   profileId: string;
   profileSnapshot: WorkerProfile;
-  project: WorkerProjectSnapshot;
+  project?: WorkerProjectSnapshot;
   target: WorkerProjectPreparationIdentity["target"];
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
   runSetupScript?: boolean;
   recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
-  const artifacts = Artifacts.parse(params.artifacts);
-  artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
-  artifacts.protocolFeatures = [...new Set(artifacts.protocolFeatures)].toSorted();
+  const artifacts = {
+    ...params.artifacts,
+    enabledPluginIds: [...new Set(params.artifacts.enabledPluginIds)].toSorted(),
+    protocolFeatures: [...new Set(params.artifacts.protocolFeatures)].toSorted(),
+  };
   // Skipping an executable recipe owns a separate cache; absent recipes do no setup.
   const facts = {
     contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
-    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
+    ...(params.recipe ? { recipe: params.recipe } : {}),
     ...(params.setupRecipe && params.runSetupScript === false
       ? { runSetupScript: false as const }
       : {}),
-    target: Target.parse(params.target),
+    target: WorkerPreparationTargetSchema.parse(params.target),
     artifacts,
   };
   // Source root is transport location only: linked worktrees share Git identity.
   // The explicit contract version also invalidates Gateway-owned setup semantics.
   // The provider-resolved target owns OS identity, including an omitted default.
-  const { os: _requestedOs, ...profile } = params.profileSnapshot;
+  const {
+    os: _requestedOs,
+    project: _project,
+    runtimePreparation: _runtime,
+    ...profile
+  } = params.profileSnapshot;
   const compatibility = {
     contractVersion: facts.contractVersion,
     setupRecipe: facts.setupRecipe,
@@ -105,7 +63,7 @@ export function createWorkerProjectPreparationIdentity(params: {
     // Providers own the disk fingerprint; unknown providers conservatively retain
     // their settings. Installation and execution mode belong to runtime readiness.
     profile: facts.target.profileKey ?? params.profileSnapshot.settings,
-    project: { key: params.project.key },
+    project: params.project ? { key: params.project.key } : { source: "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
   const digest = (value: unknown) =>
@@ -122,7 +80,10 @@ export function createWorkerProjectPreparationIdentity(params: {
         machineClass: facts.target.machineClass,
         executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
       },
-      project: { ...compatibility.project, baseCommit: params.project.baseCommit },
+      project: {
+        ...compatibility.project,
+        ...(params.project ? { baseCommit: params.project.baseCommit } : {}),
+      },
     }),
     cacheKey: digest(compatibility),
     ...facts,

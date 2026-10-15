@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { createOverlayAnchor, type OverlayAnchorBinding } from "./overlay-anchor.ts";
+import {
+  createOverlayAnchor,
+  hideOverlayAnchor,
+  showOverlayAnchor,
+  type OverlayAnchorBinding,
+} from "./overlay-anchor.ts";
 import { createOverlay, type Overlay } from "./overlay-lifecycle.ts";
 
 const owners: Overlay[] = [];
@@ -89,6 +94,69 @@ function spatialSource(surface: HTMLElement) {
 }
 
 describe("native cross-root anchor geometry", () => {
+  it("samples frames only while the active binding crosses roots", () => {
+    const local = anchor(document.body);
+    const remote = anchor(shadow("closed"));
+    const current = popup(document.body);
+    current.binding.update(local);
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame");
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+    try {
+      showOverlayAnchor(current.surface);
+      expect(requestFrame).not.toHaveBeenCalled();
+      current.binding.update(remote);
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      const temporary = createOverlayAnchor(current.surface);
+      bindings.push(temporary);
+      temporary.update(local);
+      expect(cancelFrame).toHaveBeenCalledTimes(1);
+      temporary.dispose();
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      hideOverlayAnchor(current.surface);
+      expect(cancelFrame).toHaveBeenCalledTimes(2);
+    } finally {
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+    }
+  });
+
+  it("opens an anchor bound in an inert template after document adoption", async () => {
+    const template = document.createElement("template");
+    template.innerHTML =
+      '<button>Open adopted menu</button><div popover="manual"><button>Adopted action</button></div>';
+    const trigger = template.content.querySelector("button")!;
+    const surface = template.content.querySelector("div")!;
+    trigger.style.cssText = "position:absolute;left:140px;top:110px;width:90px;height:30px";
+    surface.style.cssText =
+      "position:fixed;inset:auto;position-area:bottom;margin:6px 0 0;padding:0;border:0;width:120px;height:40px";
+    const owner = createOverlay(`anchor-proof-${++nextId}`);
+    owner.bindSurface(surface);
+    owner.bindTrigger(trigger);
+    owners.push(owner);
+    const binding = createOverlayAnchor(surface);
+    binding.update(trigger, "bottom");
+    bindings.push(binding);
+    document.body.append(template.content);
+    nodes.push(trigger, surface);
+    await open(owner);
+    expectAnchored(surface, trigger);
+    expect(spatialSource(surface).ownerDocument).toBe(document);
+    const action = surface.querySelector("button")!;
+    let openOnClick = false;
+    action.addEventListener("click", () => (openOnClick = owner.open));
+    await userEvent.click(action);
+    expect(openOnClick).toBe(true);
+    expect(owner.open).toBe(true);
+    await userEvent.click(trigger);
+    expect(owner.open).toBe(true);
+    const outside = document.createElement("button");
+    outside.textContent = "Outside adopted menu";
+    document.body.append(outside);
+    nodes.push(outside);
+    await userEvent.click(outside);
+    expect(owner.open).toBe(false);
+  });
+
   it.each([
     { direction: "shadow-anchor", svg: false, mode: "open" },
     { direction: "shadow-anchor", svg: true, mode: "open" },

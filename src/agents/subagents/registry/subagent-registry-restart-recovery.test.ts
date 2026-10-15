@@ -25,6 +25,36 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
 
+  it.each([false, true])(
+    "does not replay cleaned interruption effects with requester wake=%s",
+    async (pendingWake) => {
+      const entry = run({
+        terminalOwner: "interrupted-recovery",
+        endedAt: 200,
+        endedReason: "subagent-error",
+        outcome: { status: "error", error: "interrupted" },
+        cleanupCompletedAt: 300,
+        cleanupHandled: true,
+        delivery: { status: "delivered", deliveredAt: 250 },
+        ...(pendingWake
+          ? { requesterSettleWake: { status: "pending" as const, attemptCount: 0 } }
+          : {}),
+      });
+      const before = structuredClone(entry);
+      const { sweeper, runs, finalizeInterruptedSubagentRun, resumeRequesterSettleWake } =
+        createSubagentSweeperHarness({ current: gatewayRuntime }, entry);
+
+      await sweeper.recoverInterruptedRuns();
+      await sweeper.sweepOnce();
+
+      expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(resumeRequesterSettleWake).toHaveBeenCalledTimes(pendingWake ? 1 : 0);
+      expect(runs.get(entry.runId)).toEqual(before);
+    },
+  );
+
   it("diagnoses a retained unresolved owning agent once without attempting recovery", async () => {
     const entry = run({ childSessionKey: "global", childAgentId: undefined });
     const before = structuredClone(entry);
@@ -605,7 +635,6 @@ describe("interrupted requester-settle continuation ownership", () => {
     "rearmed",
     "unstarted",
     "consumed",
-    "missing member",
     "different session",
     "different agent",
     "different store",
@@ -634,9 +663,6 @@ describe("interrupted requester-settle continuation ownership", () => {
     }
     if (scenario === "consumed") {
       child.requesterSettleWake = undefined;
-    }
-    if (scenario === "missing member") {
-      child.requesterSettleWake!.batchRunIds!.push("missing");
     }
     if (scenario === "different session") {
       child.completionRequesterSessionId = "replacement";
@@ -679,6 +705,15 @@ describe("interrupted requester-settle continuation ownership", () => {
       status: "terminal",
       error: expect.stringContaining("Gateway restart"),
     });
+  });
+
+  it("keeps the dispatched surviving cohort owned after a member retires", async () => {
+    const { child, worker } = cohort();
+    child.requesterSettleWake!.batchRunIds!.push("retired-member");
+
+    expect(await recover(worker)).toEqual({ status: "handled" });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
   });
 
   it.each(["yielded", "finished", "same-task replacement"] as const)(

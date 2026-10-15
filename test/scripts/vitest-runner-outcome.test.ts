@@ -8,6 +8,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 
 const lifecycle = vi.hoisted(() => ({
   prepare: vi.fn(),
+  prepareE2e: vi.fn(),
   prepareWorkers: vi.fn(),
   dispose: vi.fn(),
   spawn: vi.fn(),
@@ -17,6 +18,7 @@ const lifecycle = vi.hoisted(() => ({
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
   prepareVitestRuntime: lifecycle.prepare,
+  prepareE2eVitestRuntime: lifecycle.prepareE2e,
 }));
 vi.mock("../../scripts/lib/vitest-runtime-selection.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/vitest-runtime-selection.mts")>()),
@@ -61,6 +63,7 @@ beforeEach(() => {
   process.exitCode = 0;
   outcome = { code: 1, signal: null, groupJoined: true };
   lifecycle.prepare.mockReset().mockResolvedValue(0);
+  lifecycle.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
   lifecycle.prepareWorkers.mockReset().mockResolvedValue(undefined);
   lifecycle.dispose.mockReset().mockResolvedValue(undefined);
   lifecycle.reports.mockReset().mockResolvedValue(null);
@@ -74,6 +77,42 @@ beforeEach(() => {
 afterEach(() => {
   process.exitCode = originalExitCode ?? 0;
   vi.restoreAllMocks();
+});
+
+it("settles a single E2E runtime before shared assets and readers", async () => {
+  const started = createDeferred();
+  const prepared = createDeferred<NodeJS.ProcessEnv>();
+  lifecycle.prepareE2e.mockImplementation(() => {
+    started.resolve();
+    return prepared.promise;
+  });
+  const running = runVitestCli("test", (exit) =>
+    runVitest(
+      exit,
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+        "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
+      ],
+      environment,
+    ),
+  );
+  try {
+    await Promise.race([started.promise, running]);
+    expect(lifecycle.prepareE2e).toHaveBeenCalledOnce();
+    expect(lifecycle.prepare).not.toHaveBeenCalled();
+    expect(lifecycle.spawn).not.toHaveBeenCalled();
+  } finally {
+    prepared.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+    await running;
+  }
+  expect(lifecycle.prepare).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" }),
+  );
+  expect(lifecycle.prepare).toHaveBeenCalledOnce();
+  expect(lifecycle.spawn).toHaveBeenCalledOnce();
 });
 
 // Both public dispatch paths must reserve assertion exit 1 for a settled runner.

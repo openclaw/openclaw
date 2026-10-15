@@ -564,7 +564,7 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
         writerConclusion: null,
         writerRef: workflowRef,
         writerFullRef: workflowFullRef,
-        writerPath: ".github/workflows/linux-app-release.yml",
+        writerPath: ".github/workflows/linux-app-mirror.yml",
         writerEvent: "workflow_dispatch",
       },
     } satisfies State),
@@ -694,7 +694,9 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
       value.authority.writerPath =
         mode === "finalize-core"
           ? ".github/workflows/openclaw-release-publish.yml"
-          : ".github/workflows/linux-app-release.yml";
+          : mode === "publish"
+            ? ".github/workflows/linux-app-release.yml"
+            : ".github/workflows/linux-app-mirror.yml";
       value.authority.writerEvent = mode === "publish" ? "workflow_run" : "workflow_dispatch";
     });
     if (mode === "publish") {
@@ -833,19 +835,6 @@ it("reuses complete public Linux assets without local build inputs", () => {
   const advanced = f.bytes(nextTag, "OpenClaw-2026.9.4-linux.json");
   expect(f.bytes(channel, "latest.json")).toEqual(advanced);
   expect(f.bytes(nextTag, "latest.json")).toEqual(advanced);
-});
-
-it("reuses immutable publication bytes without local build inputs on replay", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const original = f.bytes(tag, "OpenClaw-2026.9.3-linux.json");
-  f.update((state) => {
-    state.calls = [];
-  });
-  succeeded(f.run("publish", tag, undefined, true));
-  expect(f.bytes(channel, "latest.json")).toEqual(original);
-  expect(f.bytes(tag, "OpenClaw-2026.9.3-linux.json")).toEqual(original);
-  expect(f.mutations()).toEqual([]);
 });
 
 it("retains partial canonical replacement when the executing writer is cancelled after deletion", () => {
@@ -994,6 +983,64 @@ it("publishes Windows with regular Linux bundles and reuses its immutable bytes"
   const writes = f.mutations().length;
   succeeded(f.run("publish", tag, undefined, true));
   expect(f.mutations()).toHaveLength(writes);
+});
+
+it("completes an interrupted Windows publication only from matching signed local inputs", () => {
+  const f = fixture(toolingRef, false, true);
+  succeeded(f.run("publish"));
+  f.addRelease(nextTag, true);
+  // Canonical readback lag stops the publisher after the bundles and canonical
+  // manifest land, before the Windows manifest and legacy mirror are written.
+  f.update((state) => {
+    state.staleAfterUpload = {
+      tag: channel,
+      name: "latest.json",
+      bytes: f.bytes(channel, "latest.json").toString("base64"),
+      remaining: 100,
+    };
+  });
+  failed(f.run("publish", nextTag), "Public asset digest mismatch");
+  f.update((state) => {
+    delete state.staleDownloads;
+    state.calls = [];
+  });
+  const bundles = releaseFrom(f.state(), nextTag).assets;
+  expect(bundles.map((entry) => entry.name)).not.toContain("latest-windows.json");
+  failed(f.run("publish", nextTag, undefined, true), "Public Windows updater manifest is missing");
+
+  const exe = join(f.inputs(nextTag), "OpenClaw-2026.9.4-windows-x86_64.exe");
+  const signed = readFileSync(exe);
+  writeFileSync(exe, "rebuilt bytes\n");
+  failed(f.run("publish", nextTag), "Bundle checksum inventory mismatch");
+  writeFileSync(
+    join(f.inputs(nextTag), "SHA256SUMS.linux-app.txt"),
+    readdirSync(f.inputs(nextTag))
+      .filter((name) => !name.endsWith(".json") && !name.endsWith(".txt"))
+      .map((name) => `${hash(readFileSync(join(f.inputs(nextTag), name)))}  ./${name}`)
+      .join("\n"),
+  );
+  failed(f.run("publish", nextTag), "Immutable asset conflict");
+  expect(f.mutations()).toEqual([]);
+
+  writeFileSync(exe, signed);
+  writeFileSync(
+    join(f.inputs(nextTag), "SHA256SUMS.linux-app.txt"),
+    f.bytes(nextTag, "SHA256SUMS.linux-app.txt"),
+  );
+  succeeded(f.run("publish", nextTag));
+  expect(
+    f.mutations().filter((call) => call.action === "upload" && !call.name?.endsWith(".json")),
+  ).toEqual([]);
+  for (const entry of bundles) {
+    expect(releaseFrom(f.state(), nextTag).assets).toContainEqual(entry);
+  }
+  expect(f.bytes(nextTag, "latest-windows.json")).toEqual(
+    readFileSync(join(f.inputs(nextTag), "latest-windows.json")),
+  );
+  expect(f.bytes("windows-stable", "latest-windows.json")).toEqual(
+    f.bytes(nextTag, "latest-windows.json"),
+  );
+  expect(f.bytes(nextTag, "latest.json")).toEqual(f.bytes(channel, "latest.json"));
 });
 
 it("rejects an invalid Windows updater signature before publishing bundles", () => {

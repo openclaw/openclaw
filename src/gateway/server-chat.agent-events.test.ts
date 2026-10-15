@@ -73,17 +73,13 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
 }));
 
 // mock-isolation: Session projection fixtures own their entries without native database admission.
-vi.mock("./session-utils.js", () => {
-  const loadSessionEntry = vi.fn(emptySessionLookup);
-  return {
-    loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: loadSessionEntry,
-  };
-});
+const loadSessionEntryAsync = vi.hoisted(() =>
+  vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
+);
 
 // mock-isolation: Reuse controlled session state without admitting a worker database.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async () => loadSessionEntry("session-1"),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
 import { getRuntimeConfig } from "../config/io.js";
@@ -108,7 +104,6 @@ import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -128,7 +123,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
-    vi.mocked(loadSessionEntry).mockReset().mockReturnValue(emptySessionLookup());
+    vi.mocked(loadSessionEntryAsync).mockReset().mockResolvedValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
@@ -159,10 +154,10 @@ describe("agent event handler", () => {
   }
 
   function mockSessionEntry(
-    entry: ReturnType<typeof loadSessionEntry>["entry"],
+    entry: Awaited<ReturnType<typeof loadSessionEntryAsync>>["entry"],
     canonicalKey = "session-1",
   ) {
-    vi.mocked(loadSessionEntry).mockReturnValue({
+    vi.mocked(loadSessionEntryAsync).mockResolvedValue({
       cfg: {},
       agentId: "main",
       storePath: "/tmp/sessions.json",
@@ -1297,7 +1292,7 @@ describe("agent event handler", () => {
         });
       }
       await stop.drain();
-      expect(loadSessionEntry).not.toHaveBeenCalled();
+      expect(loadSessionEntryAsync).not.toHaveBeenCalled();
       expect(h.broadcast).not.toHaveBeenCalled();
       expect(h.nodeSendToSession).not.toHaveBeenCalled();
       const delivered = h.targetedAgent();
@@ -1337,10 +1332,14 @@ describe("agent event handler", () => {
   });
 
   it("uses newer session verbose state for in-flight tool events", async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
     lineageProjection = createSessionRowProjectionFixture({
-      cfg: {},
+      cfg,
       agentId: "main",
-      store: { "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 } },
+      store: {
+        "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
+      },
     });
     const h = createHarness({
       now: 1_000,

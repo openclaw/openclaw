@@ -14,6 +14,8 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
+  prediction?: { text: string | null; dismiss: () => void };
+  acceptPrediction?: () => void;
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
@@ -33,6 +35,8 @@ type ComposerKeyDownDeps = {
 };
 
 export function createComposerKeyDownHandler({
+  prediction,
+  acceptPrediction,
   state,
   props,
   skillMenuHost,
@@ -88,6 +92,25 @@ export function createComposerKeyDownHandler({
         handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
     ) {
       return;
+    }
+
+    if (prediction?.text && !target.value) {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        acceptPrediction?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        prediction.dismiss();
+        return;
+      }
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {

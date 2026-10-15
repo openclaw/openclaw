@@ -11,6 +11,42 @@ import { runPostActivationInspections } from "./update-command-post-activation-i
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("includes nondefault inspections in the retry command after advisory findings", async () => {
+  const root = tempDirs.make("doctor-advisory-retry-");
+  await fs.mkdir(path.join(root, "dist"));
+  await fs.writeFile(
+    path.join(root, "dist/index.js"),
+    `process.stdout.write(JSON.stringify({
+      ok: false, checksRun: 1,
+      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks." }]
+    })); process.exitCode = 1;`,
+  );
+  const observed = await runPostActivationInspections({
+    root,
+    gatewayReady: true,
+    nodeRunner: process.execPath,
+    result: {
+      status: "ok",
+      mode: "npm",
+      durationMs: 0,
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "doctor --fix",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          deferredInspectionCheckIds: ["core/doctor/hooks-model"],
+        },
+      ],
+    },
+  });
+  expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)?.advisory?.message).toContain(
+    "openclaw doctor --lint --all --severity-min info",
+  );
+});
+
 it("passes selectors as literal arguments and reports checks the target did not run", async () => {
   const root = tempDirs.make("doctor-unrun-selectors-");
   const argvPath = path.join(root, "argv.json");
@@ -91,7 +127,7 @@ process.exitCode = 13;
     "✅ OpenClaw updated to 2026.10.6 (from 2026.10.5); 1 warning needs attention.",
   );
   expect(report.lines[0]).toMatch(
-    /^Warning: Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --severity-min info`/s,
+    /^Warning: Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --all --severity-min info`/s,
   );
 });
 
@@ -127,23 +163,51 @@ it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selec
   },
 );
 
-it("does not turn a reported empty deferred set into an unfiltered lint pass", async () => {
-  const result: UpdateRunResult = {
-    status: "ok",
-    mode: "git",
-    durationMs: 0,
-    steps: [
-      {
-        name: "openclaw doctor",
-        command: "doctor --fix",
-        cwd: "/synthetic/candidate",
-        durationMs: 0,
-        exitCode: 0,
-        deferredInspectionCheckIds: [],
-      },
-    ],
-  };
-  await expect(
-    runPostActivationInspections({ root: "/synthetic/candidate", gatewayReady: true, result }),
-  ).resolves.toEqual(result);
-});
+it.each(["doctor", "inline lint"])(
+  "does not turn an empty deferred set from %s into an unfiltered lint pass",
+  async (receiptOwner) => {
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      durationMs: 0,
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "doctor --fix",
+          cwd: "/synthetic/candidate",
+          durationMs: 0,
+          exitCode: 0,
+          deferredInspectionCheckIds: receiptOwner === "doctor" ? [] : null,
+        },
+      ],
+    };
+    if (receiptOwner === "inline lint") {
+      result.postUpdate = {
+        plugins: {
+          status: "ok",
+          changed: false,
+          sync: {
+            changed: false,
+            switchedToBundled: [],
+            switchedToNpm: [],
+            warnings: [],
+            errors: [],
+          },
+          npm: { changed: false, outcomes: [] },
+          integrityDrifts: [],
+          doctorLint: {
+            name: "post-plugin-doctor-lint",
+            command: "doctor --lint --all",
+            cwd: "/synthetic/candidate",
+            durationMs: 0,
+            exitCode: 0,
+            deferredInspectionCheckIds: [],
+          },
+        },
+      };
+    }
+    await expect(
+      runPostActivationInspections({ root: "/synthetic/candidate", gatewayReady: true, result }),
+    ).resolves.toEqual(result);
+  },
+);

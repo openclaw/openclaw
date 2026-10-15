@@ -1626,42 +1626,58 @@ jobs:
         run: |
           set -euo pipefail
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifacts.json"
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]]}' > "$artifacts_json"
-          jq \
-            --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
-            '[
-              .artifacts[]
-              | select(.expired == false and (.name | startswith($prefix)))
-              | (
-                  try (
-                    .name
-                    | ltrimstr($prefix)
-                    | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
-                  ) catch null
-                ) as $binding
-              | select(
-                  $binding != null and
-                  $binding.run_id == $run_id and
-                  ($binding.attempt | tonumber) <= $consumer_attempt
-                )
-              | . + {
-                  producer_attempt: ($binding.attempt | tonumber),
-                  publish_route: $binding.route
-                }
-            ]
-            | sort_by(.producer_attempt)
-            | if length == 0 then
-                []
-              else
-                (last.producer_attempt) as $latest_attempt
-                | map(select(.producer_attempt == $latest_attempt))
-              end' \
-            "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
-          artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          # Sibling jobs upload while this list paginates, so a page can repeat or skip an
+          # artifact. Dedupe by id and re-list before treating a non-unique match as a failure.
+          list_publication_artifacts() {
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
+              jq -s '{artifacts: ([.[].artifacts[]] | unique_by(.id))}' > "$artifacts_json"
+          }
+          match_publication_artifacts() {
+            jq \
+              --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
+              '[
+                .artifacts[]
+                | select(.expired == false and (.name | startswith($prefix)))
+                | (
+                    try (
+                      .name
+                      | ltrimstr($prefix)
+                      | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
+                    ) catch null
+                  ) as $binding
+                | select(
+                    $binding != null and
+                    $binding.run_id == $run_id and
+                    ($binding.attempt | tonumber) <= $consumer_attempt
+                  )
+                | . + {
+                    producer_attempt: ($binding.attempt | tonumber),
+                    publish_route: $binding.route
+                  }
+              ]
+              | sort_by(.producer_attempt)
+              | if length == 0 then
+                  []
+                else
+                  (last.producer_attempt) as $latest_attempt
+                  | map(select(.producer_attempt == $latest_attempt))
+                end' \
+              "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
+          }
+          for listing_attempt in 1 2 3 4 5; do
+            list_publication_artifacts
+            match_publication_artifacts
+            artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+            if [[ "$artifact_count" == "1" ]]; then
+              break
+            fi
+            if (( listing_attempt < 5 )); then
+              sleep 15
+            fi
+          done
           [[ "$artifact_count" == "1" ]] || {
             echo "Expected one current or prior immutable publication artifact for ${PACKAGE_NAME}@${PACKAGE_VERSION}; found ${artifact_count}." >&2
             exit 1

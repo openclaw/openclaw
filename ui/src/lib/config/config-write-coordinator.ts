@@ -364,9 +364,14 @@ export function createConfigWriteCoordinator({
     publish,
     reconcileDraft: reconcileAutoSaveDraftConnection,
   });
+  let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
+    const nextPluginGeneration = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged =
+      nextPluginGeneration !== undefined && nextPluginGeneration !== pluginGeneration;
+    pluginGeneration = nextPluginGeneration;
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
@@ -413,6 +418,9 @@ export function createConfigWriteCoordinator({
           void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
         }
       }
+    } else if (pluginsChanged && state.connected && state.configSnapshot) {
+      // Plugin activation changes config validation and schema even without a config write.
+      void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
     }
     publish();
   });

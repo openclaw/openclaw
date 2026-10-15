@@ -120,8 +120,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(".sidebar-identity-card").click();
-      const menu = page.locator("wa-dropdown.sidebar-identity-menu");
-      const pair = menu.locator('wa-dropdown-item[value="command:pair-mobile"]');
+      const menu = page.locator(".sidebar-identity-menu");
+      const pair = menu.locator('[data-value="command:pair-mobile"]');
       await pair.waitFor();
       if (captureUiProofEnabled) {
         const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [pair], {
@@ -557,7 +557,18 @@ suite.define(() => {
             await page.locator(".device-pair-setup__close").click();
           }
         }
-        expect(await setup.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        // The body scrolls while completion actions stay outside it in the pinned footer.
+        const scrollBody = setup.locator(".device-pair-setup__body");
+        await scrollBody.hover();
+        await page.mouse.wheel(0, 1000);
+        await expect
+          .poll(() => scrollBody.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
+        const footerBounds = await setup.locator(".device-pair-setup__footer").boundingBox();
+        expect(footerBounds).not.toBeNull();
+        expect(footerBounds!.y + footerBounds!.height).toBeLessThanOrEqual(
+          page.viewportSize()!.height,
+        );
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "node",
           includeQr: false,

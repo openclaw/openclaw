@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -28,10 +27,7 @@ import type {
   WorktreeSourceStage,
 } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -48,6 +44,7 @@ import {
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
+import type { ProjectRegistryRecord } from "../projects/project-registry.types.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type {
@@ -58,7 +55,7 @@ import { invalidSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
 export async function resolveSessionProjectRoot(
@@ -70,6 +67,13 @@ export async function resolveSessionProjectRoot(
   if (!project) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
+  return resolveSessionProjectRootForRecord(project, worktree);
+}
+
+async function resolveSessionProjectRootForRecord(
+  project: ProjectRegistryRecord,
+  worktree: boolean,
+): Promise<Result<string, ErrorShape>> {
   try {
     const checkout = worktree ? await resolveProjectCheckout(project.repoRoot) : undefined;
     const root = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
@@ -83,10 +87,51 @@ export async function resolveSessionProjectRoot(
     return err(
       errorShape(
         ErrorCodes.UNAVAILABLE,
-        `project ${projectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
+        `project ${project.id} is unavailable (${detail}); update the agent workspace path or re-register the project`,
       ),
     );
   }
+}
+
+function selectSessionWorktreeProjectSource(projectId: string | undefined, signal?: AbortSignal) {
+  return projectId && !projectId.startsWith("workspace:")
+    ? selectStoredProjectRegistry(projectId, { signal })
+    : undefined;
+}
+
+/** Advisory discovery shares source custody classification with managed creation. */
+export async function resolveSessionProjectCheckoutOptions(params: {
+  cfg: OpenClawConfig;
+  projectId: string;
+  targetAgentId: string;
+  resolveSandboxRequired: () => boolean;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}): Promise<{ current: boolean; worktree: boolean }> {
+  params.assertCurrent();
+  const pendingSource = selectSessionWorktreeProjectSource(params.projectId, params.signal);
+  const source = pendingSource ? await pendingSource : undefined;
+  params.assertCurrent();
+  const project = source?.project ?? resolveWorkspaceProject(params.cfg, params.projectId);
+  if (!project) {
+    return { current: false, worktree: false };
+  }
+  const [direct, managed] = await Promise.all([
+    resolveSessionProjectRootForRecord(project, false),
+    resolveSessionProjectRootForRecord(project, true),
+  ]);
+  params.assertCurrent();
+  const current =
+    direct.ok &&
+    prepareSessionCreateFilesystemRoot({
+      cfg: params.cfg,
+      requestedProjectId: params.projectId,
+      targetAgentId: params.targetAgentId,
+      sessionCwd: direct.value,
+      enforceSandboxContainment: true,
+      sandboxRequired: params.resolveSandboxRequired(),
+    }).ok;
+  return { current, worktree: managed.ok && (current || source !== undefined) };
 }
 
 type AcceptedWorktreeSource = NonNullable<
@@ -117,7 +162,7 @@ async function resolveSpawnParentWorktreeSource(
 }
 
 async function prepareSpawnParentWorktreeSource(
-  parent: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  parent: GatewaySessionEntryRead,
   agentId: string,
   options: { signal?: AbortSignal },
 ): Promise<SpawnParentWorktreeSource | undefined> {
@@ -140,27 +185,17 @@ async function prepareSpawnParentWorktreeSource(
   };
   const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
   const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
-  const metadata = captureSessionEntryMetadataRead(scope);
+  const assertHostCurrent = () => {
+    options.signal?.throwIfAborted();
+    assertRouting(getRuntimeConfig());
+  };
   const parentSource = captureSessionEntrySourceAssertion({
     scope,
     readSource: parent.capturedReadSource,
     expected: parent.entry,
     fields,
-    assertCurrent: () => {
-      const current = metadata
-        ? metadata.readCurrent()
-        : loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId }).entry;
-      if (
-        !current ||
-        fields.some((field) => !isDeepStrictEqual(current?.[field], parent.entry?.[field]))
-      ) {
-        refuse();
-      }
-    },
-    assertHostCurrent: () => {
-      options.signal?.throwIfAborted();
-      assertRouting(getRuntimeConfig());
-    },
+    assertCurrent: assertHostCurrent,
+    assertHostCurrent,
     refuse,
   });
   if (!parent.entry.worktree) {
@@ -382,10 +417,8 @@ export async function prepareSessionWorktree(params: {
         target.projectId ??
         target.entry?.projectId ??
         (params.acceptedSource?.kind === "project" ? params.acceptedSource.id : undefined);
-      const selected =
-        projectId && !projectId.startsWith("workspace:")
-          ? await selectStoredProjectRegistry(projectId, { signal: params.signal })
-          : undefined;
+      const pendingSource = selectSessionWorktreeProjectSource(projectId, params.signal);
+      const selected = pendingSource ? await pendingSource : undefined;
       if (selected) {
         const expectedRoot = fs.realpathSync(workspace);
         withSource = async (run) =>

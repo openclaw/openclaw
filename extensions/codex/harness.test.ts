@@ -1,5 +1,5 @@
 import path from "node:path";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import {
   getSessionEntry,
   patchSessionEntry,
@@ -663,7 +663,7 @@ describe("Codex session runtime ownership", () => {
           clientId: binding.clientId,
           error: "synthetic invalid image",
         },
-        createNativeSessionBindingAuthority([], () => {}),
+        createNativeSessionBindingScope(() => {}),
         expected ? { model: "native", auth: "host" } : undefined,
       );
 

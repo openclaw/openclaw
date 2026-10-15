@@ -68,6 +68,29 @@ describe("syncMemoryWikiImportedSources", () => {
     refreshIndexesMock.mockResolvedValue(refreshResult);
   });
 
+  it("does not share a deferred flight with a refreshing one", async () => {
+    const config = createConfig();
+    const bridgeGate = deferred<typeof bridgeResult>();
+    const bridgeStarted = deferred();
+    syncBridgeMock.mockImplementationOnce(() => {
+      bridgeStarted.resolve();
+      return bridgeGate.promise;
+    });
+
+    const deferredSync = syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+    });
+    await bridgeStarted.promise;
+    const refreshing = syncMemoryWikiImportedSources({ config, appConfig });
+    bridgeGate.resolve(bridgeResult);
+
+    await expect(refreshing).resolves.toMatchObject({ indexesRefreshed: true });
+    await expect(deferredSync).resolves.toMatchObject({ indexesRefreshed: false });
+    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces separately resolved equivalent configs for one vault", async () => {
     const vaultPath = path.join(os.tmpdir(), `memory-wiki-source-sync-${vaultCounter++}`);
     const firstConfig = createConfig("bridge", vaultPath);

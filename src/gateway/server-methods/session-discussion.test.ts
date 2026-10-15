@@ -31,9 +31,13 @@ vi.mock("../../agents/utility-model.js", () => ({
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title persistence is captured by this fixture without opening a database.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.updateSessionEntry,
-  loadSessionEntry: () => mocks.loadSessionTarget()?.entry,
+}));
+// mock-isolation: Discussion title tests supply current entry facts without opening SQLite.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
 // mock-isolation: The title owner reads the same synthetic session through its worker API.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({

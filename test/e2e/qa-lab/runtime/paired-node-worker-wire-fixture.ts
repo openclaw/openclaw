@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -36,7 +37,7 @@ import type { NodeWorkerContainerEngine } from "../../../../src/node-host/node-w
 import type { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import type { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
 import { VERSION } from "../../../../src/version.js";
-import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +59,62 @@ async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
 
 export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
+
+export function createWireWorkspaceSettlementWaiter() {
+  const waiting = new Map<string, { resolve: () => void; refresh: () => Promise<void> }>();
+  const settled = (placement: unknown) =>
+    isRecord(placement) &&
+    placement.state === "active" &&
+    placement.workspaceResultReconciling !== true;
+  return {
+    onEvent: (event: WireGatewayEvent) => {
+      if (event.event !== "sessions.changed" || !isRecord(event.payload)) {
+        return;
+      }
+      const session = event.payload.session;
+      const key = event.payload.sessionKey ?? (isRecord(session) ? session.key : undefined);
+      if (isRecord(session)) {
+        if (settled(session.placement) && typeof key === "string") {
+          waiting.get(key)?.resolve();
+        }
+      } else {
+        // Preparation failures publish a refresh notice instead of a session snapshot.
+        const entries = typeof key === "string" ? [waiting.get(key)] : waiting.values();
+        for (const entry of entries) {
+          void entry?.refresh();
+        }
+      }
+    },
+    async wait(
+      client: { request<T>(method: string, params: unknown): Promise<T> },
+      key: string,
+      signal: AbortSignal,
+    ) {
+      const changed = createDeferred();
+      const refresh = async () => {
+        try {
+          const current = await client.request<{ session: { placement?: unknown } }>(
+            "sessions.describe",
+            { key },
+          );
+          if (settled(current.session.placement)) {
+            changed.resolve();
+          }
+        } catch (error) {
+          changed.reject(error);
+        }
+      };
+      // Register before the current read so fast reconciliation needs no later event.
+      waiting.set(key, { resolve: changed.resolve, refresh });
+      try {
+        void refresh();
+        await withinTest(changed.promise, signal);
+      } finally {
+        waiting.delete(key);
+      }
+    },
+  };
+}
 export type WireNodeRead = {
   nodeId: string;
   approvalState?: string;

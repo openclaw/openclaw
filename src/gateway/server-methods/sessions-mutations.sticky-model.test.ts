@@ -70,6 +70,7 @@ import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.n
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
+import * as sessionPatchErrors from "./sessions-patch-errors.js";
 
 const defaultAgents: Record<string, AgentEntryConfig> = {
   main: {},
@@ -490,6 +491,21 @@ describe("sessions.patch personal model-account ownership", () => {
         return catalog.promise;
       });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
+      const failures: Array<{ name: string; frames: string[] }> = [];
+      const unexpectedPatchError = sessionPatchErrors.unexpectedPatchError;
+      vi.spyOn(sessionPatchErrors, "unexpectedPatchError").mockImplementation((key, error) => {
+        failures.push({
+          name: error instanceof Error ? error.name : typeof error,
+          frames:
+            error instanceof Error
+              ? (error.stack ?? "")
+                  .split("\n")
+                  .slice(1, 6)
+                  .map((frame) => frame.split(/[\\/]/).at(-1) ?? "")
+              : [],
+        });
+        return unexpectedPatchError(key, error);
+      });
       const pending = patchSession(
         {
           key: sessionKey,
@@ -503,8 +519,15 @@ describe("sessions.patch personal model-account ownership", () => {
       try {
         await Promise.race([
           catalogEntered.promise,
-          pending.then(() => {
-            throw new Error("Session patch completed before loading the model catalog");
+          pending.then((response) => {
+            throw new Error(
+              `Session patch completed before loading the model catalog: ${JSON.stringify({
+                loss,
+                ok: response[0],
+                error: response[2],
+                failures,
+              })}`,
+            );
           }),
         ]);
         expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();

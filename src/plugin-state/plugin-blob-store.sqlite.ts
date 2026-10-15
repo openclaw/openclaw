@@ -1,5 +1,5 @@
 // SQLite persistence for plugin-owned byte blobs and JSON metadata.
-import type { DatabaseSync } from "node:sqlite";
+
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { InferResult, Insertable } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   coerceRequiredSqliteNumber as sqliteNumber,
   normalizeSqliteNumber,
@@ -82,7 +83,7 @@ export function wrapPluginBlobError(
 
 function readBlobInDatabase<T>(
   operation: "lookup" | "entries",
-  db: DatabaseSync,
+  db: EngineConnection,
   read: () => T,
   env?: NodeJS.ProcessEnv,
   pathname?: string,
@@ -111,7 +112,7 @@ function readBlobInDatabase<T>(
   }
 }
 
-function kysely(db: DatabaseSync) {
+function kysely(db: EngineConnection) {
   return getNodeSqliteKysely<PluginBlobDatabase>(db);
 }
 
@@ -146,7 +147,7 @@ function decodeBlobInfo<TMetadata>(
 }
 
 function blobKeyExists(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): boolean {
   return (
@@ -162,7 +163,7 @@ function blobKeyExists(
   );
 }
 
-function blobInfoQuery(db: DatabaseSync, params: { pluginId: string; namespace: string }) {
+function blobInfoQuery(db: EngineConnection, params: { pluginId: string; namespace: string }) {
   return kysely(db)
     .selectFrom("plugin_blob_entries")
     .select(["entry_key", "metadata_json", "created_at", "expires_at"])
@@ -172,7 +173,7 @@ function blobInfoQuery(db: DatabaseSync, params: { pluginId: string; namespace: 
 }
 
 function selectEvictionCandidates(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string; now: number },
 ) {
   return iterateSqliteQuerySync(
@@ -190,7 +191,7 @@ function selectEvictionCandidates(
   );
 }
 
-function readStoredUsage(db: DatabaseSync, params: { pluginId: string; namespace: string }) {
+function readStoredUsage(db: EngineConnection, params: { pluginId: string; namespace: string }) {
   // Expired rows retain cleanup metadata, so physical accounting includes them.
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -219,7 +220,7 @@ function readStoredUsage(db: DatabaseSync, params: { pluginId: string; namespace
 }
 
 function readStoredKeySize(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): number | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -235,7 +236,7 @@ function readStoredKeySize(
 }
 
 function deleteKey(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): number {
   const result = executeSqliteQuerySync(
@@ -250,7 +251,7 @@ function deleteKey(
 }
 
 function deleteKeys(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; keys: readonly string[] },
 ): void {
   // Stay below conservative SQLite bind-variable limits while avoiding one
@@ -279,7 +280,7 @@ function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreEr
 }
 
 function assertProjectedLimits(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   write: BlobWriteParams;
   existingBytes?: number;
 }): void {
@@ -307,7 +308,7 @@ function assertProjectedLimits(params: {
 }
 
 function deleteOldestUntilWithinLimits(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   write: BlobWriteParams;
   now: number;
 }): void {
@@ -362,7 +363,7 @@ function deleteOldestUntilWithinLimits(params: {
   });
 }
 
-function upsertBlob(db: DatabaseSync, params: BlobWriteParams, now: number): void {
+function upsertBlob(db: EngineConnection, params: BlobWriteParams, now: number): void {
   const expiresAt = (() => {
     if (params.ttlMs === undefined) {
       return null;
@@ -403,7 +404,7 @@ function upsertBlob(db: DatabaseSync, params: BlobWriteParams, now: number): voi
   );
 }
 
-function writeBlob(db: DatabaseSync, params: BlobWriteParams, ifAbsent: boolean): boolean {
+function writeBlob(db: EngineConnection, params: BlobWriteParams, ifAbsent: boolean): boolean {
   const now = Date.now();
   if (ifAbsent && blobKeyExists(db, params)) {
     // Expired rows retain the metadata their owner needs for external cleanup.
@@ -420,12 +421,12 @@ function writeBlob(db: DatabaseSync, params: BlobWriteParams, ifAbsent: boolean)
   return true;
 }
 
-export function pluginBlobRegisterInDatabase(db: DatabaseSync, params: BlobWriteParams): void {
+export function pluginBlobRegisterInDatabase(db: EngineConnection, params: BlobWriteParams): void {
   writeBlob(db, params, false);
 }
 
 export function pluginBlobRegisterIfAbsentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: BlobWriteParams,
 ): boolean {
   return writeBlob(db, params, true);
@@ -441,7 +442,7 @@ type BlobReadKey = {
 type BlobReadNamespace = Omit<BlobReadKey, "key">;
 
 export function pluginBlobLookupInDatabase<TMetadata>(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: BlobReadKey,
 ): PluginBlobEntry<TMetadata> | undefined {
   return readBlobInDatabase(
@@ -466,7 +467,7 @@ export function pluginBlobLookupInDatabase<TMetadata>(
 }
 
 export function pluginBlobEntriesInDatabase<TMetadata>(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: BlobReadNamespace,
 ): PluginBlobEntryInfo<TMetadata>[] {
   return (
@@ -490,14 +491,14 @@ export function pluginBlobEntriesInDatabase<TMetadata>(
 }
 
 export function pluginBlobDeleteInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): boolean {
   return deleteKey(db, params) > 0;
 }
 
 export function pluginBlobDeleteExpiredKeyInDatabase<TMetadata>(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string; env?: NodeJS.ProcessEnv },
 ): PluginBlobEntryInfo<TMetadata> | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -517,7 +518,7 @@ export function pluginBlobDeleteExpiredKeyInDatabase<TMetadata>(
 }
 
 export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; env?: NodeJS.ProcessEnv },
 ): PluginBlobEntryInfo<TMetadata>[] {
   const now = Date.now();
@@ -544,7 +545,7 @@ export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
 }
 
 export function pluginBlobClearInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string },
 ): void {
   executeSqliteQuerySync(

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -132,5 +133,44 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
     expect(f.stageAttachments).toHaveBeenCalledOnce();
     expect(f.staged).toHaveLength(expected.length);
     expect(f.staged).toEqual(expect.arrayContaining(expected));
+  });
+});
+
+describe("device-folder media policy", () => {
+  beforeEach(setupWorkerTurnLauncherTest);
+  afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("refuses current attachments and does not restage a refused one from history", async () => {
+    const saved = await saveMediaBuffer(Buffer.from("Refused note"), "text/plain", "inbound");
+    const fact: MediaFact = { path: saved.path, contentType: "text/plain" };
+    const stageAttachments = vi.fn<NonNullable<WorkerTunnelHandle["stageAttachments"]>>();
+    const prepare = async (media: MediaFact[], history: AgentMessage[]) =>
+      await prepareWorkerTurnMedia({
+        turn: { ...turn("device-folder-media"), prompt: "Continue", media },
+        workspace: { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
+        remoteWorkspaceDir: "/srv/project",
+        history,
+        tunnel: {
+          environmentId: "device-folder-environment",
+          ownerEpoch: 1,
+          stageAttachments,
+          syncWorkspace: vi.fn(),
+          reconcileWorkspace: vi.fn(),
+          quiesceWorkspace: vi.fn(),
+          runWorkspaceCommand: vi.fn(),
+          stop: vi.fn(),
+        },
+        signal: new AbortController().signal,
+        isAuthorized: () => true,
+      });
+    await expect(prepare([fact], [])).rejects.toThrow("Attachments are not supported");
+    const refused = {
+      role: "user",
+      content: [{ type: "text", text: "Read the note" }],
+      timestamp: 1,
+      __openclaw: { media: [fact] },
+    } as AgentMessage;
+    await expect(prepare([], [refused])).resolves.toBeDefined();
+    expect(stageAttachments).not.toHaveBeenCalled();
   });
 });

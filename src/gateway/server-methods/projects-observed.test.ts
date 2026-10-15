@@ -16,12 +16,18 @@ const seededSessions = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Supply observed session rows without opening real session stores.
-vi.mock("./projects-session-store.js", () => ({
+vi.mock("./projects-session-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./projects-session-store.js")>()),
   loadProjectSessionStore: () => ({
     store: seededSessions.store,
     agentId: () => undefined,
     assertCurrent() {},
   }),
+}));
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileAliases: (profileId: string) => new Set([profileId]),
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({

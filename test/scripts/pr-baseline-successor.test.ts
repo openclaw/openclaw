@@ -36,6 +36,7 @@ describePosix("native successor source admission entry", () => {
     f.git(f.worktree, "add", "docs/later-fixup.md");
     f.git(f.worktree, "commit", "-qm", "fix: reviewed post-refresh correction");
     f.approve();
+    f.publish();
     for (const label of ["second upstream", "third upstream"]) {
       const prior = f.git(f.worktree, "rev-parse", "HEAD");
       const baseline = f.advanceMain(label, [f.product[0]!]);
@@ -56,6 +57,7 @@ describePosix("native successor source admission entry", () => {
       expect(f.git(f.repo, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     }
     expect(archives()).toMatchObject(retained);
+    f.publish();
   });
   it.each(["branch", "closed", "head", "work", "branch-after-live", "closed-after-live"])(
     "preserves transition custody when %s authority changes during replay",

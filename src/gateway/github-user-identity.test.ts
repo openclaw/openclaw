@@ -8,16 +8,13 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
-import {
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "../state/user-profiles.js";
+import { ensureProfileForTailscaleIdentity } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { ControlUiGitHubError } from "./github-public-api.js";

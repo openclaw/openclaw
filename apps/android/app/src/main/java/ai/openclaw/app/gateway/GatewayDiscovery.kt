@@ -38,8 +38,6 @@ import org.xbill.DNS.Type
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -289,7 +287,7 @@ class GatewayDiscovery(
   ): GatewayEndpoint =
     GatewayEndpoint(
       stableId = stableId(serviceName, domain),
-      name = BonjourEscapes.decode(readTxt("displayName") ?: serviceName),
+      name = readTxt("displayName") ?: serviceName,
       host = host,
       port = port,
       lanHost = readTxt("lanHost"),
@@ -381,7 +379,7 @@ class GatewayDiscovery(
           records(msg, Section.ANSWER).mapNotNull { it as? TXTRecord }
         }
       val instanceName = BonjourEscapes.decode(decodeInstanceName(instanceFqdn, domain))
-      val endpoint = discoveredEndpoint(instanceName, domain, host, port) { txtValue(txt, it) }
+      val endpoint = discoveredEndpoint(instanceName, domain, host, port) { gatewayDnsTxtValue(txt, it) }
       next[endpoint.stableId] = endpoint
     }
 
@@ -528,23 +526,11 @@ class GatewayDiscovery(
         .toList()
     if (servers.isEmpty()) return null
 
-    return try {
-      val resolvers =
-        servers.mapNotNull { addr ->
-          try {
-            SimpleResolver().apply {
-              setAddress(InetSocketAddress(addr, 53))
-              setTimeout(Duration.ofSeconds(3))
-            }
-          } catch (_: Throwable) {
-            null
-          }
-        }
-      if (resolvers.isEmpty()) return null
-      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(Duration.ofSeconds(3)) }
-    } catch (_: Throwable) {
-      null
-    }
+    val resolvers =
+      servers.map { address ->
+        SimpleResolver(InetSocketAddress(address, 53)).apply { setTimeout(Duration.ofSeconds(3)) }
+      }
+    return ExtendedResolver(resolvers).apply { setTimeout(Duration.ofSeconds(3)) }
   }
 
   private suspend fun rawQuery(
@@ -576,44 +562,6 @@ class GatewayDiscovery(
       )
     }
 
-  private fun txtValue(
-    records: List<TXTRecord>,
-    key: String,
-  ): String? {
-    val prefix = "$key="
-    for (r in records) {
-      val strings: List<String> =
-        try {
-          r.strings
-        } catch (_: Throwable) {
-          emptyList()
-        }
-      for (s in strings) {
-        val trimmed = decodeDnsTxtString(s).trim()
-        if (trimmed.startsWith(prefix)) {
-          return trimmed.removePrefix(prefix).trim().ifEmpty { null }
-        }
-      }
-    }
-    return null
-  }
-
-  private fun decodeDnsTxtString(raw: String): String {
-    // dnsjava treats TXT as opaque bytes and decodes as ISO-8859-1 to preserve bytes.
-    // Our TXT payload is UTF-8 (written by the gateway), so re-decode when possible.
-    val bytes = raw.toByteArray(Charsets.ISO_8859_1)
-    val decoder =
-      Charsets.UTF_8
-        .newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
-    return try {
-      decoder.decode(ByteBuffer.wrap(bytes)).toString()
-    } catch (_: Throwable) {
-      raw
-    }
-  }
-
   private suspend fun resolveHostUnicast(hostname: String): String? {
     val a =
       records(lookupUnicastMessage(hostname, Type.A), Section.ANSWER)
@@ -626,4 +574,20 @@ class GatewayDiscovery(
 
     return a.firstOrNull() ?: aaaa.firstOrNull()
   }
+}
+
+internal fun gatewayDnsTxtValue(
+  records: List<TXTRecord>,
+  key: String,
+): String? {
+  val prefix = "$key="
+  for (record in records) {
+    // The default getter escapes DNS presentation text instead of decoding the advertised UTF-8 value.
+    val strings: List<String> = record.getStrings(false)
+    for (value in strings) {
+      val trimmed = value.trim()
+      if (trimmed.startsWith(prefix)) return trimmed.removePrefix(prefix).trim().ifEmpty { null }
+    }
+  }
+  return null
 }

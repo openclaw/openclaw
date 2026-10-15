@@ -9,9 +9,9 @@ import {
   type SessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { createExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets-discovery.native.js";
 import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
 import {
-  createExistingAgentSessionStoreTargetResolver,
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
@@ -232,30 +232,34 @@ function observeSourcePath(key: string, memo: SourceMemo, pathname: string): voi
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(directory, (filename) => {
-          if (!memo.current || memo.observedThisTurn) {
-            return;
-          }
-          if (
-            filename === undefined ||
-            (process.platform === "win32"
-              ? filename.toLowerCase() === name.toLowerCase()
-              : filename === name)
-          ) {
-            // One fallback sweep can notify every ancestor of the same source.
-            memo.observedThisTurn = true;
-            queueMicrotask(() => {
-              memo.observedThisTurn = false;
-            });
-            try {
-              if (memo.pathsCurrent && !memo.pathsCurrent()) {
+        observeOwnedDirectory(
+          directory,
+          (filename) => {
+            if (!memo.current || memo.observedThisTurn) {
+              return;
+            }
+            if (
+              filename === undefined ||
+              (process.platform === "win32"
+                ? filename.toLowerCase() === name.toLowerCase()
+                : filename === name)
+            ) {
+              // One fallback sweep can notify every ancestor of the same source.
+              memo.observedThisTurn = true;
+              queueMicrotask(() => {
+                memo.observedThisTurn = false;
+              });
+              try {
+                if (memo.pathsCurrent && !memo.pathsCurrent()) {
+                  retireSourcePreparation(key, memo);
+                }
+              } catch {
                 retireSourcePreparation(key, memo);
               }
-            } catch {
-              retireSourcePreparation(key, memo);
             }
-          }
-        }),
+          },
+          { recoveryIntervalMs: 30_000 },
+        ),
       );
     }
     child = directory;

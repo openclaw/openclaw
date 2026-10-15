@@ -432,7 +432,7 @@ suite.define(() => {
         .waitFor();
       expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
       expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator('[data-navigation-view="sessions"]').click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
       await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);

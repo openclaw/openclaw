@@ -188,6 +188,29 @@ describe("Codex desktop generation service", () => {
     expect(harness.readFingerprint).not.toHaveBeenCalled();
   });
 
+  it.each(["change", "error"])(
+    "ignores watcher %s callbacks after scheduler admission closes",
+    async (event) => {
+      vi.useFakeTimers();
+      const harness = createHarness("desktop-closing");
+      current = harness;
+      await startAndSettle(harness);
+      harness.context.scheduler.beginClose();
+
+      const registration = harness.registrations[0]!;
+      expect(() => {
+        if (event === "change") {
+          registration.listener("rename", "ChatGPT.app");
+        } else {
+          registration.watcher.emit("error", new Error("watch lost during shutdown"));
+        }
+      }).not.toThrow();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(harness.watchAttempts).toBe(2);
+      expect(harness.readFingerprint).toHaveBeenCalledOnce();
+    },
+  );
+
   it("joins an admitted fingerprint read before service retirement completes", async () => {
     vi.useFakeTimers();
     const harness = createHarness("desktop-in-flight");

@@ -25,6 +25,7 @@ import {
   buildUsageAgentMetaFields,
   normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
+  resolveFinalMessageRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
@@ -65,6 +66,7 @@ export function prepareEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
+  rateLimitRetriesExhausted?: number;
 }) {
   const { runParams, attempt } = input;
   const replyDeliveryState = resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
@@ -172,6 +174,14 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(answerAssistant) ?? attemptFinalText)
     : undefined;
+  // Diagnostics record only the model's own latest message. The latest
+  // current-attempt message outranks the last completed one so a later partial
+  // answer is not hidden; a message that ended in a tool call has no final text.
+  // Harnesses that expose no message keep finalAssistantRawText.
+  const latestModelMessage = attempt.currentAttemptAssistant ?? terminalAssistant;
+  const finalAssistantMessageRawText = latestModelMessage
+    ? (resolveFinalMessageRawText(latestModelMessage) ?? "")
+    : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
     terminalReceipt: {
@@ -196,6 +206,7 @@ export function prepareEmbeddedRunTerminal(input: {
       ? attempt.lastAssistant
       : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
+    rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
     ...attempt,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     lastAssistant: payloadAssistant,
@@ -310,6 +321,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,
+    finalAssistantMessageRawText,
     payloads,
     payloadsWithToolMedia,
     timedOutDuringPrompt,

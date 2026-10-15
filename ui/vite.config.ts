@@ -31,6 +31,7 @@ import {
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
@@ -382,6 +383,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "result"),
+    sourcePackageAlias("normalization-core", "session-key-comparison"),
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
@@ -556,13 +558,19 @@ export async function refreshControlUiBuildOutput(
   fs.writeFileSync(swPath, updated);
 }
 
-function controlUiBuildOutputPlugin(buildInfo: ControlUiBuildInfo): Plugin {
+function controlUiBuildOutputPlugin(
+  buildInfo: ControlUiBuildInfo,
+  copiedInputs: Set<string>,
+): Plugin {
   let publicDir: string | false = false;
   return {
     name: "control-ui-build-output",
     apply: "build",
     configResolved(config) {
       publicDir = (config.build.copyPublicDir && config.publicDir) || false;
+      for (const file of config.configFileDependencies) {
+        copiedInputs.add(file);
+      }
     },
     transformIndexHtml: {
       order: "post",
@@ -610,7 +618,7 @@ function controlUiBuildOutputPlugin(buildInfo: ControlUiBuildInfo): Plugin {
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      const inputs = [...this.getModuleIds()]
+      const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
         .map((file) => file.split("?")[0])
         .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
         .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
@@ -676,6 +684,7 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const copiedInputs = new Set<string>();
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -777,8 +786,9 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
+      controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
-      controlUiBuildOutputPlugin(buildInfo),
+      controlUiBuildOutputPlugin(buildInfo, copiedInputs),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

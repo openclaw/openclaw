@@ -4,6 +4,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
@@ -40,7 +41,7 @@ import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
 import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environments/placement-session-runtime-preparation.js";
 import { resolveWorkerPlacementCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
-import { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
+import type { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -140,7 +141,7 @@ function resolveActivePlacementModelSelectionError(
     entry: SessionEntry;
     readRuntimeCapabilities: () => ReturnType<typeof resolveWorkerPlacementCapabilities>;
   },
-  prepared?: {
+  prepared: {
     placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
   },
 ): string | undefined {
@@ -148,10 +149,7 @@ function resolveActivePlacementModelSelectionError(
   if (!sessionId) {
     return undefined;
   }
-  const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
-  const placement = prepared
-    ? prepared.placement
-    : placementService?.getMany([sessionId]).get(sessionId);
+  const placement = prepared.placement;
   if (!placement || placement.state === "local") {
     return undefined;
   }
@@ -252,6 +250,11 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??
@@ -266,53 +269,62 @@ export async function applySessionModelSelectionInternal(
   const nextEntry = { ...startingEntry };
   const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir,
     entry: nextEntry,
     currentProvider: params.currentProvider,
     selection: request,
     explicitDefaultSelection: request.isDefault,
     profileOverride: request.profileOverride,
+    recordedProvider,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
   const selectionChanged = modelChange.updated || runtimeChange.updated;
-  using placementRuntime = await prepareWorkerPlacementSessionRuntime({
+  const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
+  if (nextEntry.sessionId && placementService && !placementService.prepareRuntimeRefresh) {
+    return {
+      status: "rejected",
+      reason: "invalid-runtime",
+      message: "Session runtime is unavailable; retry model selection.",
+    };
+  }
+  const placementAuthority = nextEntry.sessionId
+    ? await placementService?.prepareRuntimeRefresh?.(nextEntry.sessionId)
+    : undefined;
+  using _ = { [Symbol.dispose]: () => placementAuthority?.release() };
+  const placement = placementAuthority?.placement;
+  const placementRuntime = await prepareWorkerPlacementSessionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
   const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime.read(params.cfg, nextEntry));
-  const placement = await readSessionWorkerPlacementAsync({
-    context: resolveSessionWorkerPlacementContext(),
-    sessionId: nextEntry.sessionId,
-  });
-  const placementError = resolveActivePlacementModelSelectionError(
-    {
-      entry: nextEntry,
-      readRuntimeCapabilities,
-    },
-    {
-      placement,
-    },
-  );
-  if (placementError) {
-    return { status: "rejected", reason: "invalid-runtime", message: placementError };
-  }
+    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
-  // The pre-persistence read above can be overtaken by placement activation before the
-  // durable write commits. Revalidate placement inside the synchronous commit boundary so an
-  // override that became incompatible during that window is rejected without mutating state.
-  const validateCommit = () =>
-    params.validateAuthProfileSelection?.() ??
-    prepared.validateRuntimeSelection?.() ??
-    resolveActivePlacementModelSelectionError({
-      entry: nextEntry,
-      readRuntimeCapabilities,
-    });
+  let placementError: string | undefined;
+  const validateCommit = () => {
+    try {
+      placementAuthority?.assertCurrent();
+    } catch {
+      placementError = "Session placement changed; retry model selection.";
+      return placementError;
+    }
+    placementError = resolveActivePlacementModelSelectionError(
+      {
+        entry: nextEntry,
+        readRuntimeCapabilities,
+      },
+      { placement },
+    );
+    return (
+      params.validateAuthProfileSelection?.() ??
+      prepared.validateRuntimeSelection?.() ??
+      placementError
+    );
+  };
   if (params.storePath) {
     const persistence = await persistReplySessionEntry({
       storePath: params.storePath,
@@ -338,7 +350,11 @@ export async function applySessionModelSelectionInternal(
       return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
     }
     if (persistence.status === "commit-rejected") {
-      return { status: "rejected", reason: "not-allowed", message: persistence.error };
+      return {
+        status: "rejected",
+        reason: placementError ? "invalid-runtime" : "not-allowed",
+        message: persistence.error,
+      };
     }
     if (
       persistence.status !== "current" ||
@@ -359,7 +375,11 @@ export async function applySessionModelSelectionInternal(
   } else {
     const commitError = validateOperatorSelection() ?? validateCommit();
     if (commitError) {
-      return { status: "rejected", reason: "not-allowed", message: commitError };
+      return {
+        status: "rejected",
+        reason: placementError ? "invalid-runtime" : "not-allowed",
+        message: commitError,
+      };
     }
     // Both metadata and placement preparation can yield. Fence the in-memory
     // write here, where persisted sessions enforce their lock and identity.

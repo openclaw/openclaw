@@ -16,7 +16,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
@@ -240,10 +240,11 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+        ".sidebar-agent-menu .sidebar-agent-menu__agent-switch",
       ),
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
+    await sidebar.updateComplete;
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith("chat", {
@@ -269,7 +270,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await sidebar.updateComplete;
     sidebar
-      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:research"]')!
       .click();
     await sidebar.updateComplete;
 
@@ -307,9 +308,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-    const settingsAgent = menu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="agent:settings"]',
-    );
+    const settingsAgent = menu?.querySelector<HTMLElement>('[data-value="agent:settings"]');
     expect(settingsAgent).not.toBeNull();
     settingsAgent!.click();
     await sidebar.updateComplete;
@@ -355,9 +354,9 @@ describe("AppSidebar agent chip", () => {
     card?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-    const retry = menu?.querySelector('wa-dropdown-item[value="command:retry-connect"]');
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
-    expect(onRetryConnect).toHaveBeenCalledOnce();
+    const retry = menu?.querySelector<HTMLElement>('[data-value="command:retry-connect"]');
+    retry?.click();
+    await vi.waitFor(() => expect(onRetryConnect).toHaveBeenCalledOnce());
 
     sidebar.connectionStatus = null;
     await sidebar.updateComplete;
@@ -371,7 +370,7 @@ describe("AppSidebar agent chip", () => {
     const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
     sidebar.connected = true;
     const defaults = { modelProvider: null, model: null, contextTokens: null };
-    harness.publishList({
+    const researchSnapshot = {
       result: {
         ts: 2,
         path: "",
@@ -388,8 +387,8 @@ describe("AppSidebar agent chip", () => {
         ],
       },
       agentId: "research",
-    });
-    harness.publishList({
+    } satisfies Parameters<typeof harness.publishList>[0];
+    const mainSnapshot = {
       result: {
         ts: 3,
         path: "",
@@ -398,7 +397,9 @@ describe("AppSidebar agent chip", () => {
         sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
       },
       agentId: "main",
-    });
+    } satisfies Parameters<typeof harness.publishList>[0];
+    harness.publishList(researchSnapshot);
+    harness.publishList(mainSnapshot);
     await sidebar.updateComplete;
 
     // No per-agent sections: the card switcher owns agent switching now, and
@@ -410,10 +411,12 @@ describe("AppSidebar agent chip", () => {
       sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
     ).not.toBeNull();
 
-    // Mid-switch (selected agent != loaded result agent) the list renders the
-    // target agent's cached rows instead of flashing empty until refresh.
-    // Chip switch and chat-pane both sync agentSelection with the route.
-    context.agentSelection.state.selectedId = "research";
+    // Retire the previous agent scope through its owner before seeding the new
+    // scope's cached rows. A still-loaded Main result must not hide Research.
+    context.agentSelection.set("research");
+    await sidebar.updateComplete;
+    harness.publishList(researchSnapshot);
+    harness.publishList(mainSnapshot);
     sidebar.sessionKey = "agent:research:one";
     await sidebar.updateComplete;
     const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];

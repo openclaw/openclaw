@@ -126,9 +126,7 @@ class NodeWorkerSupervisor {
       return this.initializationPromise;
     }
     const initialization = (async () => {
-      if (this.containerLifecycle) {
-        await this.containerLifecycle.initialize();
-      }
+      await this.containerLifecycle?.initialize();
       await this.capacity.initialize(async (receipt) => {
         await this.recoverRunning(receipt, false);
       });
@@ -224,6 +222,7 @@ class NodeWorkerSupervisor {
           admissionSignal,
           workspace?.homeDir,
           idleRetention,
+          workspace?.assertCurrent,
         );
       } finally {
         workspace?.release();
@@ -251,6 +250,7 @@ class NodeWorkerSupervisor {
     signal: AbortSignal,
     homeDir?: string,
     idleRetention?: boolean,
+    assertWorkspaceCurrent?: () => void,
   ): Promise<NodeWorkerLaunchReceipt> {
     await this.initialize();
     const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
@@ -315,7 +315,14 @@ class NodeWorkerSupervisor {
         signal.throwIfAborted();
         continue;
       }
-      return await this.children.startTurn(owner, descriptor, claimInput, signal, idleRetention);
+      return await this.children.startTurn(
+        owner,
+        descriptor,
+        claimInput,
+        signal,
+        idleRetention,
+        assertWorkspaceCurrent,
+      );
     }
     const claim = await this.capacity.claim(claimInput, supervisor, signal, () =>
       this.children.reclaimIdle(),
@@ -329,9 +336,15 @@ class NodeWorkerSupervisor {
       throw new Error("node worker turn receipt expired; request a fresh turn");
     }
     try {
+      assertWorkspaceCurrent?.();
       await this.turns.claim(
         { claim: claimInput, ownerLaunchId: input.launchId, supervisor },
-        { assertCurrent: () => signal.throwIfAborted() },
+        {
+          assertCurrent: () => {
+            signal.throwIfAborted();
+            assertWorkspaceCurrent?.();
+          },
+        },
       );
     } catch (error) {
       await this.capacity.finish({
@@ -353,12 +366,14 @@ class NodeWorkerSupervisor {
     signal?.addEventListener("abort", cancelClaimed, { once: true });
     const startup = this.children.startChild({
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
+      homeDir,
       input,
       descriptor,
       supervisor,
       signal,
       claim: claimInput,
       idleRetention,
+      assertWorkspaceCurrent,
     });
     this.starting.set(input.launchId, startup);
     if (signal?.aborted) {

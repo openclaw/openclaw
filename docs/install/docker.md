@@ -251,7 +251,11 @@ Gateway; a custom entrypoint bypasses this activation step.
 This includes agent database schema upgrades, shared-state audit migrations, and
 legacy workspace setup imports. Before advancing database schemas, Doctor saves
 verified SQLite copies beside the originals as
-`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+`<database>.pre-startup-migration-<id>.bak`. Fully declared table migrations may
+instead use `.scoped.bak` archives; restore those with
+`openclaw database restore-migration-backup`, never by replacing the database file.
+See [declared migration scopes](/reference/database-schemas/versioning#declared-migration-backup-scopes).
+The shared database and affected agent
 databases use the same backup ID. Config backups and retired workspace-file
 archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
@@ -286,7 +290,7 @@ Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
 agent remains isolated while healthy agents can serve requests.
 
-Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
 database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,

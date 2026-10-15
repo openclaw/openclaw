@@ -11,6 +11,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "models.list",
   "progressCard.get",
   "projects.list",
+  "projects.checkoutOptions",
   "session.suggestions.list",
   "session.reactions.list",
   "sessions.groups.list",
@@ -41,6 +42,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "themes.get",
   "themes.list",
   "users.prefs.get",
+  "users.prefs.set",
   "users.self",
 ]);
 
@@ -70,6 +72,10 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
+  // Selecting a device filesystem requires the broader operator capability.
+  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+    return undefined;
+  }
   if (SESSION_READ_METHODS.has(method)) {
     return "operator.sessions.read";
   }

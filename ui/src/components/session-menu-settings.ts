@@ -1,7 +1,7 @@
-import type { ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   selectSessionCommunication,
   type SessionCommunicationMenuAction,
@@ -30,10 +30,10 @@ export class SessionMenuSettings {
   }
 
   constructor(
-    host: ReactiveControllerHost,
+    host: SolidControllerHost,
     private readonly options: SessionMenuSettingsOptions,
   ) {
-    this.settingsDetails = new SessionDetailsController(host, {
+    this.settingsDetails = new SessionDetailsController(() => host.requestUpdate(), {
       captureScope: () => {
         const context = this.options.context();
         const connection = context?.sessions.captureConnectionScope();
@@ -61,6 +61,7 @@ export class SessionMenuSettings {
     });
 
     host.addController({
+      hostDisconnected: () => this.settingsDetails.reset(),
       hostUpdate: () => {
         if (this.settingsActive) {
           this.settingsDetails.synchronize();

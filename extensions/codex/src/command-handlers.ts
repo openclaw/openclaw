@@ -154,6 +154,14 @@ export async function handleCodexSubcommand(
         };
       }
       let appServerScope: ReturnType<typeof resolveCommandAppServerScope> | undefined;
+      await using _ = {
+        [Symbol.asyncDispose]: async () => {
+          await appServerScope?.then(
+            (scope) => scope.release(),
+            () => {},
+          );
+        },
+      };
       const getAppServerScope = () =>
         (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
       return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
@@ -308,6 +316,7 @@ export async function handleCodexSubcommand(
     }
     if (normalized === "mcp" || normalized === "skills") {
       const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      using _ = { [Symbol.dispose]: scope.release };
       const response = await deps.codexControlRequest(
         options.pluginConfig,
         normalized === "mcp"
@@ -322,6 +331,7 @@ export async function handleCodexSubcommand(
     }
     if (normalized === "account") {
       const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      using _ = { [Symbol.dispose]: scope.release };
       const requestScope = { config: ctx.config, ...scope };
       const [account, limits] = await Promise.all([
         deps.safeCodexControlRequest(

@@ -428,6 +428,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         supportsCurrentConversationBinding: true,
         bindingStore: "adapter",
         defaultTopLevelPlacement,
+        // Released synchronous runtime setters dispatch here through 2026-12-31.
         setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
           setMatrixThreadBindingIdleTimeoutBySessionKey({
             targetSessionKey,

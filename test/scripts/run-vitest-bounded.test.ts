@@ -200,7 +200,7 @@ it("trailer fixture", async () => {
         // Both fixture configs use the same real Vitest test and cleanup boundary.
         const config = `import fs from "node:fs";
 import os from "node:os";
-import { getVitestWorkerDescriptor } from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"))};
+import { getVitestWorkerDescriptor } from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-descriptor.mts"))};
 fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({
   pid: process.pid, namespace: os.tmpdir(), generation: getVitestWorkerDescriptor()?.directory,
 }));
@@ -336,6 +336,8 @@ cp.spawn = (bin, args, options) => {
   }
   return spawn(bin, args, options);
 };
+const existsSync = fs.existsSync;
+fs.existsSync = file => file === ${JSON.stringify(metadataPath)} || existsSync(file);
 const readFileSync = fs.readFileSync;
 fs.readFileSync = (file, ...args) => {
   if (file === ${JSON.stringify(metadataPath)}) {

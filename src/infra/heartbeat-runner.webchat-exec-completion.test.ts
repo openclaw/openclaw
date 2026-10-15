@@ -129,6 +129,7 @@ function runProjectionWake(
   getReplyFromConfig: HeartbeatDeps["getReplyFromConfig"],
   wake: "exec-event" | "manual" | "cron" = "exec-event",
 ) {
+  setRuntimeConfigSnapshot(scenario.cfg);
   return runHeartbeatOnce({
     cfg: scenario.cfg,
     agentId: "main",

@@ -6,6 +6,29 @@ import {
 } from "./group-mentions.js";
 
 describe("Matrix group policy", () => {
+  it.each(["!trusted:example.org", "#trusted:example.org", "Trusted Room"])(
+    "ignores the room display name %s when resolving policy",
+    (groupChannel) => {
+      const params = {
+        cfg: {
+          channels: {
+            matrix: {
+              groups: {
+                [groupChannel]: { requireMention: false, tools: { allow: ["exec"] } },
+                "*": { requireMention: true, tools: { deny: ["exec"] } },
+              },
+            },
+          },
+        },
+        groupId: "!other:example.org",
+        groupChannel,
+      };
+
+      expect(resolveMatrixGroupToolPolicy(params)).toEqual({ deny: ["exec"] });
+      expect(resolveMatrixGroupRequireMention(params)).toBe(true);
+    },
+  );
+
   it("resolves room tool policy from the case-preserved Matrix room id", () => {
     const policy = resolveMatrixGroupToolPolicy({
       accountId: "default",

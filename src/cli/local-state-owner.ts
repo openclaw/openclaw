@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -44,6 +45,8 @@ export async function runWithLocalStateOwner<T>(params: {
   params: Record<string, unknown> | ((signal: AbortSignal) => Promise<Record<string, unknown>>);
   target: string;
   recoveryCommand?: string;
+  /** Internal manifest-bound recovery; never routed to or borrowed from a running owner. */
+  databasePortRecovery?: DatabasePortRecoveryIntent;
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
@@ -57,6 +60,9 @@ export async function runWithLocalStateOwner<T>(params: {
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
   localOwnerAssertion.getStore()?.();
+  const databasePortRecovery = params.databasePortRecovery
+    ? Object.freeze({ ...params.databasePortRecovery })
+    : undefined;
   const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
@@ -241,18 +247,26 @@ export async function runWithLocalStateOwner<T>(params: {
     assertTargetCurrent();
     const hosted = captureGatewayStateOwner(databasePath);
     if (hosted) {
+      if (databasePortRecovery) {
+        return refuse(new Error("Database port recovery requires exclusive offline ownership"));
+      }
       return await runLocal(hosted.assertCurrent);
     }
-    const owner = await discover();
+    const owner = databasePortRecovery ? undefined : await discover();
     if (owner) {
       return await route(owner);
     }
     let lock;
     try {
       // A losing acquisition has not entered the domain or opened a writable database.
-      lock = await acquireGatewayLock({ env, role: "agent-embedded", allowInTests: true });
+      lock = await acquireGatewayLock({
+        env,
+        role: "agent-embedded",
+        allowInTests: true,
+        databasePortRecovery,
+      });
     } catch (error) {
-      if (isGatewayLifecycleContentionError(error)) {
+      if (!databasePortRecovery && isGatewayLifecycleContentionError(error)) {
         const winner = await discover();
         if (winner) {
           return await route(winner);

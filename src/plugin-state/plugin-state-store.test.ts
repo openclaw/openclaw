@@ -6,6 +6,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { ok } from "@openclaw/normalization-core/result";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
@@ -20,6 +21,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -29,6 +31,7 @@ import { withPluginStateDatabaseReadOnly } from "./plugin-state-store.database.j
 import {
   getPluginStateCapacity,
   createCorePluginStateKeyedStore,
+  createCorePluginStateKeyedStoreV2,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -265,6 +268,9 @@ describe("plugin-state-store", () => {
       };
       const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>(options);
       const asyncStore = createCorePluginStateKeyedStore<{ stopped: boolean }>(options);
+      const workerStore = createCorePluginStateKeyedStoreV2<{ stopped: boolean }>(options, {
+        assertCurrent: () => {},
+      });
       expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
       closePluginStateDatabase();
       await expect(asyncStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
@@ -272,6 +278,16 @@ describe("plugin-state-store", () => {
         asyncStore.update("telegram:personal", () => ({ stopped: false })),
       ).resolves.toBe(true);
       expect(store.lookup("telegram:personal")).toEqual({ stopped: false });
+      const observation = await workerStore.observe("telegram:personal");
+      store.register("telegram:personal", { stopped: true });
+      await expect(
+        workerStore.compareAndApply("telegram:personal", observation.comparison, {
+          operation: "delete",
+          action: "delete",
+        }),
+      ).resolves.toMatchObject({ status: "conflict" });
+      await expect(workerStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      store.register("telegram:personal", { stopped: false });
       await expect(
         asyncStore.deleteIf("telegram:personal", (current) => !current.stopped),
       ).resolves.toBe(true);
@@ -403,7 +419,7 @@ describe("plugin-state-store", () => {
         maxEntries: 10,
       });
       store.register("key", 1);
-      const { db } = openOpenClawStateDatabase();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
         sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "reads" : null,
       );
@@ -451,7 +467,7 @@ describe("plugin-state-store", () => {
       store.register("binding:0000", { generation: 2 });
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       const ownerAssertions: boolean[] = [];
-      const assertOwnedInTransaction = (database: DatabaseSync) => {
+      const assertOwnedInTransaction = (database: EngineConnection) => {
         ownerAssertions.push(database.isTransaction);
       };
       try {

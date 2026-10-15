@@ -275,18 +275,6 @@
   padding-right: 4px;
 }
 
-.side-panel__action-group {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--rail-header-action-gap);
-}
-
-.side-panel__action-group + .side-panel__action-group--close {
-  padding-left: 5px;
-  border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
 openclaw-chat-detail-panel,
 .side-panel__panel
   > :is(
@@ -305,7 +293,7 @@ openclaw-chat-detail-panel,
   flex: 1 1 0;
 }
 
-.side-panel-type-menu::part(menu) {
+.side-panel-type-menu__panel {
   width: max-content;
   min-width: 0;
   max-width: min(208px, calc(100vw - 24px));
@@ -321,6 +309,12 @@ openclaw-chat-detail-panel,
   background: color-mix(in srgb, var(--text) 3%, transparent);
   font-size: calc(13px * var(--control-ui-text-scale));
   white-space: nowrap;
+}
+
+.side-panel-type-menu__item > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .side-panel-type-menu__item + .side-panel-type-menu__item {

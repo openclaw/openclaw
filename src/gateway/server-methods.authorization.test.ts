@@ -147,7 +147,7 @@ describe("gateway method authorization", () => {
     { phase: "before response", change: "replacement" },
     { phase: "before response", change: "reassignment" },
   ] as const)("rejects a session $change $phase", async ({ phase, change }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:commit-bound-authorization";
       await upsertSessionEntryCore(
@@ -304,7 +304,7 @@ describe("gateway method authorization", () => {
   });
 
   it("authorizes lifecycle targets from each method's protocol shape", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:lifecycle-authorization-target";
       await upsertSessionEntryCore(

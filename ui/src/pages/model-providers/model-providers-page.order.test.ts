@@ -10,6 +10,7 @@ import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.t
 import type { ConfigPatchAck } from "../../lib/config/config-draft-model.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import "../../lib/toast-host.ts";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
@@ -427,6 +428,8 @@ describe("ModelProvidersPage installed agents", () => {
     expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
     expect(agentRow(page, "qwen")?.textContent).toContain("Use Qwen Code");
     expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
+    expect(page.renderRoot.textContent).not.toContain("Saving");
+    expect(requestCount(request, "config.patch")).toBe(0);
     expect(page.querySelector(".model-providers__provider-list")).toBeNull();
 
     settingsAgentSelection.state.selectedId = "writer";
@@ -822,6 +825,12 @@ describe("Models account recovery", () => {
       await waitForSolid(() =>
         expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
       );
+      const close = [
+        ...page.querySelectorAll<HTMLButtonElement>(".model-setup-wizard button"),
+      ].find((button) => button.textContent?.trim() === "Close");
+      expect(close).toBeDefined();
+      close!.click();
+      await page.updateComplete;
       expect(page.querySelector("[data-models-account-recovery]")).not.toBeNull();
       expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
         agents: { entries: { writer: { model: `${modelRef}@example:original` } } },

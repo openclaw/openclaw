@@ -22,7 +22,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
@@ -189,7 +189,7 @@ async function withAuthRefreshHarness(
           setActivePluginRegistry(registration.registry, undefined, "default", stateDir);
 
           const agentDir = path.join(stateDir, "agents", "main", "agent");
-          upsertAuthProfile({
+          await upsertAuthProfileAsync({
             agentDir,
             profileId: PROFILE_ID,
             credential: {

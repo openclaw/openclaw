@@ -39,8 +39,9 @@ async function withStateDirEnv<T>(
   });
 }
 
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
@@ -145,7 +146,7 @@ describe("single gateway session row child projections", () => {
         { sessionId: "research-main", updatedAt: 42 },
       );
       const key = "agent:research:main";
-      expect(loadGatewaySessionEntryReadOnly(key)).toMatchObject({
+      expect(await loadGatewaySessionEntryReadOnlyAsync(key)).toMatchObject({
         agentId: "research",
         canonicalKey: "global",
         entry: { sessionId: "research-main" },
@@ -194,7 +195,7 @@ describe("single gateway session row child projections", () => {
         );
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const metadata = loadSessionEntry("main", {
+          const metadata = await loadSessionEntryAsync("main", {
             agentId: MAIN_AGENT_ID,
             clone,
             projection: "list",
@@ -210,20 +211,22 @@ describe("single gateway session row child projections", () => {
           expect(parse.mock.calls.some(([value]) => value.includes("saved skill prompt"))).toBe(
             false,
           );
-          expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
+          expect(
+            await loadSessionEntryAsync("main", { agentId: MAIN_AGENT_ID, clone }),
+          ).toMatchObject({
             agentId: metadata.agentId,
             canonicalKey: metadata.canonicalKey,
             storePath: metadata.storePath,
             entry: visible,
           });
 
-          expect(loadSessionEntry(hidden.sessionKey, { clone }).entry).toBeUndefined();
+          expect((await loadSessionEntryAsync(hidden.sessionKey, { clone })).entry).toBeUndefined();
           expect(
-            loadSessionEntry(hidden.sessionKey, { clone, projection: "list" }).entry,
+            (await loadSessionEntryAsync(hidden.sessionKey, { clone, projection: "list" })).entry,
           ).toBeUndefined();
-          expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
-            hidden.sessionId,
-          );
+          expect(
+            (await loadGatewaySessionEntryReadOnlyAsync(hidden.sessionKey)).entry?.sessionId,
+          ).toBe(hidden.sessionId);
           expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
             hidden.sessionId,
           );

@@ -154,22 +154,21 @@ describe("memory index schema admission", () => {
         publishedAdmitted = true;
         await manager.sync({ reason: "test", force: true });
         expect.soft(schemaSql.splice(0), "shadow admission").toEqual([]);
-        expect(manager.status()).toMatchObject({
+        expect(await manager.statusAsync()).toMatchObject({
           files: 1,
           fts: { available: true },
           custom: { indexIdentity: { status: "valid" } },
         });
-        if (vectorEnabled) {
-          const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-          expect(tableExists(db, "memory_index_chunks_vec")).toBe(true);
-          expect.soft(schemaSql.splice(0), "vector schema publication").toEqual([]);
-        }
         expect(await manager.search("Zebra")).toEqual([
           expect.objectContaining({ path: "memory/2026-01-12.md" }),
         ]);
         expect.soft(schemaSql, "search after vector publication").toEqual([]);
       } finally {
         observed.restore();
+      }
+      if (vectorEnabled) {
+        const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+        expect(tableExists(db, "memory_index_chunks_vec")).toBe(true);
       }
     },
   );

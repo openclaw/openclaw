@@ -10,11 +10,15 @@ import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { assertEnvironmentRecipeSecretsMapped } from "./environment-recipe.js";
 import {
-  createWorkerProjectPreparationIdentity,
-  readWorkerProjectPreparation,
+  createWorkerPreparationIdentity,
   type WorkerProviderPreparedIntent,
 } from "./preparation-identity.js";
+import {
+  readWorkerPreparation,
+  readWorkerProjectPreparation,
+} from "./preparation-identity.schema.js";
 import {
   readWorkerProjectEnvironmentRecipe,
   readWorkerProjectSnapshot,
@@ -49,6 +53,8 @@ export type WorkerProviderIntentPreparationOptions = {
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
   projectCommit?: string;
+  /** Refill only: the retained source already admitted an empty committed workspace. */
+  emptyWorkspace?: true;
   repository?: { agentId: string; url: string; ref?: string; baseCommit?: string };
   projectRepository?: RepositoryWorkerProjectSnapshot;
   runSetupScript?: boolean;
@@ -61,7 +67,7 @@ function allocationSnapshot(
   { machineClass, os, executionMode }: WorkerProviderIntentPreparationOptions,
 ): WorkerProfile {
   // A new allocation admits its own project, even when it inherits provider settings.
-  const { project: _project, ...snapshot } = profile;
+  const { project: _project, runtimePreparation: _runtimePreparation, ...snapshot } = profile;
   return {
     ...snapshot,
     ...(machineClass === undefined ? {} : { machineClass }),
@@ -177,17 +183,29 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       | undefined;
     const profile = requireWorkerProfile(profileSnapshot.settings);
     if (
-      [projectPath, createOptions.repository, createOptions.projectRepository].filter(Boolean)
-        .length > 1
+      [
+        projectPath,
+        createOptions.repository,
+        createOptions.projectRepository,
+        createOptions.emptyWorkspace,
+      ].filter(Boolean).length > 1
     ) {
       throw serviceError(
         "invalid_profile",
         "Worker preparation must have exactly one project source",
       );
     }
+    const supportsProjectPreparation = provider.supportsProjectPreparation?.(
+      profile,
+      machineClass,
+      os,
+    );
     if (
-      (projectPath || createOptions.repository || createOptions.projectRepository) &&
-      provider.supportsProjectPreparation?.(profile, machineClass, os)
+      (projectPath ||
+        createOptions.repository ||
+        createOptions.projectRepository ||
+        (createOptions.emptyWorkspace && supportsProjectPreparation)) &&
+      (supportsProjectPreparation || provider.runSetupCommand)
     ) {
       if (!options.projectNamespace) {
         throw serviceError("invalid_state", "Worker project preparation namespace is unavailable");
@@ -223,7 +241,6 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
                 isDeepStrictEqual(cached, admittedProject)
               ) {
                 return {
-                  project: cached,
                   setupRecipe: preparation.setupRecipe,
                   recipe: preparation.recipe,
                 };
@@ -233,24 +250,26 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           },
         });
       }
-      const project =
-        repositoryAdmission?.project ??
-        (projectPath
-          ? await prepareWorkerProjectSnapshot({
-              localPath: projectPath,
-              namespace: options.projectNamespace,
-              baseCommit: createOptions.projectCommit,
-              signal,
-            })
-          : undefined);
+      const project = createOptions.emptyWorkspace
+        ? null
+        : (repositoryAdmission?.project ??
+          (projectPath
+            ? await prepareWorkerProjectSnapshot({
+                localPath: projectPath,
+                namespace: options.projectNamespace,
+                baseCommit: createOptions.projectCommit,
+                signal,
+              })
+            : undefined));
       signal?.throwIfAborted();
-      if (project) {
+      if (project !== undefined) {
         const target = provider.resolvePreparationTarget?.(profile, machineClass, os);
-        const recipe = target
+        const recipe = project
           ? "source" in project
             ? repositoryAdmission?.recipe
             : await readWorkerProjectEnvironmentRecipe(project, signal)
           : undefined;
+        assertEnvironmentRecipeSecretsMapped(recipe, profile.setupSecrets);
         const setupRecipe = recipe?.identity;
         signal?.throwIfAborted();
         // An executable recipe does not authorize itself. Non-admin callers retain
@@ -265,25 +284,27 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         ) {
           const prepared = await options.prepareNodeArtifacts(profileSnapshot, signal);
           signal?.throwIfAborted();
-          const preparation = createWorkerProjectPreparationIdentity({
+          const preparation = createWorkerPreparationIdentity({
             namespace: options.projectNamespace,
             providerId,
             profileId,
             profileSnapshot,
-            project,
+            project: project ?? undefined,
             target,
             artifacts: prepared.artifacts,
             setupRecipe,
             recipe,
             runSetupScript: createOptions.runSetupScript,
           });
-          profileSnapshot = { ...profileSnapshot, project: { ...project, preparation } };
-        } else {
+          profileSnapshot = project
+            ? { ...profileSnapshot, project: { ...project, preparation } }
+            : { ...profileSnapshot, runtimePreparation: { source: "empty", ...preparation } };
+        } else if (project && supportsProjectPreparation) {
           profileSnapshot = { ...profileSnapshot, project };
         }
       }
     }
-    const preparation = readWorkerProjectPreparation(profileSnapshot.project);
+    const preparation = readWorkerPreparation(profileSnapshot);
     const intent = {
       providerId,
       profileSnapshot,
@@ -301,11 +322,19 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
   // Retention checks immutable contents against local policy/runtime facts.
   // Unknown observations throw; only confirmed incompatibility returns undefined/false.
   // This closure cannot authorize an allocation or claim private source.
-  const prepareRetention = async (record: WorkerEnvironmentRecord, signal?: AbortSignal) => {
-    const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
-    const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
-    if (!project || !preparation || !options.prepareNodeArtifacts || !options.projectNamespace) {
+  const prepareRetention = async (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+    onInvalid?: (reason: string) => void,
+  ) => {
+    const invalid = (reason: string) => {
+      onInvalid?.(reason);
       return undefined;
+    };
+    const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
+    const preparation = readWorkerPreparation(record.profileSnapshot);
+    if (!preparation || !options.prepareNodeArtifacts || !options.projectNamespace) {
+      return invalid("preparation runtime is unavailable");
     }
     const createOptions: WorkerProviderIntentPreparationOptions = {
       machineClass:
@@ -337,11 +366,11 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         allocationSnapshot(record.profileSnapshot, createOptions),
       )
     ) {
-      return undefined;
+      return invalid("configured profile changed");
     }
     const isSourceOwnerCurrent = () => {
       const sourceConfig = options.getConfig();
-      if ("source" in project) {
+      if (project && "source" in project) {
         const { agent, identity } = project.source.owner;
         const agentIdentity = resolveConfiguredGitHubToolIdentity({
           config: sourceConfig,
@@ -368,13 +397,14 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       return true;
     };
     if (!isSourceOwnerCurrent()) {
-      return undefined;
+      return invalid("repository owner changed");
     }
     if (
+      project &&
       "source" in project &&
       !(await matchesAgentLifecycleBindingAsync(options.getConfig, project.source.owner.agent))
     ) {
-      return undefined;
+      return invalid("repository agent changed");
     }
     const resolved = resolveProfile(record.profileId, createOptions);
     const { provider, providerId, profileSnapshot } = resolved;
@@ -391,17 +421,18 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       !provider.requiresNodeEnrollment ||
       !provider.supportsProjectPreparation?.(profile, createOptions.machineClass, createOptions.os)
     ) {
-      return undefined;
+      return invalid("provider preparation target changed");
     }
     const prepared = await options.prepareNodeArtifacts(profileSnapshot, signal);
     const isCurrent = () =>
       isSourceOwnerCurrent() &&
-      (!("source" in project) ||
+      (!project ||
+        !("source" in project) ||
         matchesAgentLifecycleBinding(options.getConfig(), project.source.owner.agent));
     if (!isCurrent()) {
-      return undefined;
+      return invalid("repository owner changed during retention");
     }
-    const observed = createWorkerProjectPreparationIdentity({
+    const observed = createWorkerPreparationIdentity({
       namespace: options.projectNamespace,
       providerId,
       profileId: record.profileId,
@@ -413,7 +444,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       recipe: preparation.recipe,
       runSetupScript: preparation.runSetupScript,
     });
-    return isDeepStrictEqual(observed, preparation) ? { isCurrent } : undefined;
+    return isDeepStrictEqual(project ? observed : { source: "empty", ...observed }, preparation)
+      ? { isCurrent }
+      : invalid("runtime artifacts or preparation identity changed");
   };
 
   const createWithProfile = async (
@@ -483,6 +516,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             !isDeepStrictEqual(
               projectReplayIdentity(existing.profileSnapshot.project),
               projectReplayIdentity(requested.profileSnapshot.project),
+            ) ||
+            !isDeepStrictEqual(
+              existing.profileSnapshot.runtimePreparation,
+              requested.profileSnapshot.runtimePreparation,
             )
           ) {
             throw serviceError(
@@ -498,6 +535,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
               !isDeepStrictEqual(existing.profileSnapshot, {
                 ...inherited.profileSnapshot,
                 ...(existingProject ? { project: existing.profileSnapshot.project } : {}),
+                ...(existing.profileSnapshot.runtimePreparation
+                  ? { runtimePreparation: existing.profileSnapshot.runtimePreparation }
+                  : {}),
               }))) ||
           (inherited === undefined &&
             (existing.profileSnapshot.machineClass !== machineClass ||
@@ -523,10 +563,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         }));
       signal?.throwIfAborted();
       assertPreparedIntentCurrent(profileId, admitted);
-      if (
-        admitted.preparationKey !==
-        readWorkerProjectPreparation(admitted.profileSnapshot.project)?.key
-      ) {
+      if (admitted.preparationKey !== readWorkerPreparation(admitted.profileSnapshot)?.key) {
         throw serviceError(
           "invalid_profile",
           "Prepared worker intent no longer matches its profile",

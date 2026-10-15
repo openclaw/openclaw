@@ -75,6 +75,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
+Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
+
 Details: [Session management](/concepts/session).
 
 ## Prompt bodies and history context
@@ -187,6 +189,11 @@ appears in session history and live updates; it does not mirror to an inherited
 external channel. External reactions still require the normal channel routing and
 external message ID.
 
+Runs without a current prompt, such as heartbeats and internal events, cannot add
+prompt reactions. A prompt-targeted attempt fails locally rather than asking you
+to configure an external channel. To react externally, pass an explicit
+`channel`, `target`, and `messageId`.
+
 Queued turns bind the reaction to their own committed prompt when execution
 begins. Steering updates the current prompt only after the new input is committed
 and consumed by the running agent; pending or rejected input does not retarget a
@@ -208,7 +215,7 @@ Token-only uppercase fragments from `NO_` through `NO_REPL` are also suppressed 
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
+- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; explicit mentions and authorized commands still require a response. Slack follow-ups admitted only through a reply to the bot or its participation in the thread can finish silently under that policy.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally; they do not need a silent token to keep that result private.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

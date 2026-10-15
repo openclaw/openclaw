@@ -24,7 +24,7 @@ export const page = definePage({
     );
   },
   component: () =>
-    import("./usage-page.ts").then((module) => ({
+    import("./usage-page.tsx").then((module) => ({
       header: true,
       renderSolid: (props: SolidRouteProps<UsageRouteData>) =>
         createComponent(ShellLayoutBoundary, {

@@ -102,6 +102,17 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   margin-top: 4px;
 }
 
+/* Child tasks lead; the parent's totals support them without a second glyph. */
+.chat-working-indicator--supporting {
+  min-height: 0;
+  margin-top: 4px;
+  margin-inline-start: 26px;
+}
+
+.chat-working-indicator--supporting .chat-working-indicator__status {
+  font-size: var(--control-ui-text-xs);
+}
+
 .chat-turn-recap {
   display: inline-flex;
   flex-wrap: wrap;

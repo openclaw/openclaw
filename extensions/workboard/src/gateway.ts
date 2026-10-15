@@ -2,6 +2,7 @@ import type { WorkboardCard, WorkboardSessionsBoardView } from "@openclaw/workbo
 import { readStringParam } from "openclaw/plugin-sdk/core";
 import { captureLocalStateMutationGuard } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
 import {
@@ -28,6 +29,7 @@ import {
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const cardsListFilterSchema = z.object({ sessionKey: z.string().trim().min(1).optional() });
 const CLI_OWNER_METHODS = new Set([
   "workboard.cards.list",
   "workboard.cards.create",
@@ -227,12 +229,14 @@ export function registerWorkboardGatewayMethods(params: {
   const dispatchCards = createWorkboardDispatchHandler({ api, store });
 
   register("workboard.cards.list", READ_SCOPE, async ({ params: input }) => {
-    const result = await store.listCards(input.boardId);
+    const { sessionKey } = cardsListFilterSchema.parse(input);
+    const result = await store.listCards(input.boardId, sessionKey);
     const since = input.sinceRevision;
     return isRecord(since) &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
-      since.boardId === result.revision.boardId
+      since.boardId === result.revision.boardId &&
+      since.sessionKey === result.revision.sessionKey
       ? { unchanged: true, revision: result.revision }
       : result;
   });

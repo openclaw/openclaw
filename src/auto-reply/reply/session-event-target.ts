@@ -50,7 +50,15 @@ function assertCapturedEventSource(source: CapturedEventSource | undefined) {
     identity.birthtime !== source.identity.birthtime ||
     !isSessionStoreReadCandidateCurrent(source.selectedStore)
   ) {
-    throw new Error("Session event destination storage changed after capture");
+    throw new Error(
+      `Session event destination storage changed after capture (${JSON.stringify({
+        capturedFile: source.identity.key.startsWith("file:"),
+        currentFile: identity.key.startsWith("file:"),
+        sameIdentity: identity.key === source.identity.key,
+        sameBirthtime: identity.birthtime === source.identity.birthtime,
+        sameCandidate: isSessionStoreReadCandidateCurrent(source.selectedStore),
+      })})`,
+    );
   }
 }
 

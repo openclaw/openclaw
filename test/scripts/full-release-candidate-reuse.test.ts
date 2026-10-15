@@ -541,23 +541,33 @@ cat "$FAKE_GH_PAYLOAD"
     expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
   });
 
-  it("marks bounded candidate evaluation unavailable when older candidates remain", async () => {
-    const root = tempDirs.make("full-release-candidate-evaluation-");
-    const bin = join(root, "bin");
-    const responses = join(root, "responses");
-    const callLogPath = join(root, "gh-calls");
-    const inputPath = join(root, "request-input.json");
-    const outputPath = join(root, "github-output");
-    const artifactListingPath = join(root, "artifacts.json");
-    mkdirSync(bin);
-    mkdirSync(responses);
-    const ghPath = join(bin, "gh");
-    writeFileSync(
-      ghPath,
-      `#!/bin/sh
+  it.each([false, true])(
+    "marks bounded candidate evaluation unavailable when older candidates remain (100-job pages 502: %s)",
+    async (largePage502) => {
+      const root = tempDirs.make("full-release-candidate-evaluation-");
+      const bin = join(root, "bin");
+      const responses = join(root, "responses");
+      const callLogPath = join(root, "gh-calls");
+      const inputPath = join(root, "request-input.json");
+      const outputPath = join(root, "github-output");
+      const artifactListingPath = join(root, "artifacts.json");
+      mkdirSync(bin);
+      mkdirSync(responses);
+      const ghPath = join(bin, "gh");
+      writeFileSync(
+        ghPath,
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_CALL_LOG"
 case "$*" in
   *"actions/artifacts?name="*) cat "$FAKE_GH_ARTIFACT_LISTING" ;;
+  *"/jobs?filter=all&per_page=100")
+    if [ -n "$FAKE_GH_LARGE_PAGE_502" ]; then
+      echo "gh: Server Error (HTTP 502)" >&2
+      exit 1
+    fi
+    run_id="$(printf '%s' "$*" | sed -E 's#.*actions/runs/([0-9]+)/jobs.*#\\1#')"
+    cat "$FAKE_GH_RESPONSES/jobs-$run_id.json"
+    ;;
   *"/jobs?filter=all"*)
     run_id="$(printf '%s' "$*" | sed -E 's#.*actions/runs/([0-9]+)/jobs.*#\\1#')"
     cat "$FAKE_GH_RESPONSES/jobs-$run_id.json"
@@ -572,62 +582,73 @@ case "$*" in
     ;;
 esac
 `,
-    );
-    chmodSync(ghPath, 0o755);
-    const now = Date.now();
-    const { manifest, metadata } = await fixture(now);
-    const artifacts = Array.from({ length: 6 }, (_, index) => {
-      const runId = 80 + index;
-      const jobs = workflowJobs(manifest, { runId });
-      jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
-      writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
-      writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
-      return {
-        ...metadata,
-        created_at: new Date(now - index * 1000).toISOString(),
-        id: 400 + index,
-        workflow_run: {
-          head_repository_id: 1,
-          head_sha: manifest.request.toolingSha,
-          id: runId,
-          repository_id: 1,
+      );
+      chmodSync(ghPath, 0o755);
+      const now = Date.now();
+      const { manifest, metadata } = await fixture(now);
+      const artifacts = Array.from({ length: 6 }, (_, index) => {
+        const runId = 80 + index;
+        const jobs = workflowJobs(manifest, { runId });
+        jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
+        writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
+        writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
+        return {
+          ...metadata,
+          created_at: new Date(now - index * 1000).toISOString(),
+          id: 400 + index,
+          workflow_run: {
+            head_repository_id: 1,
+            head_sha: manifest.request.toolingSha,
+            id: runId,
+            repository_id: 1,
+          },
+        };
+      });
+      writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
+      writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
+      const result = spawnSync(
+        testNodeExecPath,
+        [SCRIPT, "discover", "--request-input", inputPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
+            FAKE_GH_CALL_LOG: callLogPath,
+            FAKE_GH_LARGE_PAGE_502: largePage502 ? "1" : "",
+            FAKE_GH_RESPONSES: responses,
+            GH_TOKEN: "test-token",
+            GITHUB_OUTPUT: outputPath,
+            PATH: `${bin}:${process.env.PATH}`,
+          },
+          timeout: 10_000,
         },
-      };
-    });
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
-    writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
-    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
-        FAKE_GH_CALL_LOG: callLogPath,
-        FAKE_GH_RESPONSES: responses,
-        GH_TOKEN: "test-token",
-        GITHUB_OUTPUT: outputPath,
-        PATH: `${bin}:${process.env.PATH}`,
-      },
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(outputPath, "utf8")).toContain(
-      "reuse_reason=candidate evaluation exceeded the bounded scan",
-    );
-    expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
-    expect(readFileSync(outputPath, "utf8")).not.toContain("state=miss");
-    expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
-    const candidateCalls = readFileSync(callLogPath, "utf8")
-      .trim()
-      .split("\n")
-      .filter((line) => line.includes("actions/runs/"));
-    expect(candidateCalls).toEqual(
-      [80, 81, 82, 83, 84].flatMap((runId) => [
-        `api repos/${REPOSITORY}/actions/runs/${runId}`,
-        `api --paginate --slurp repos/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=100`,
-      ]),
-    );
-    expect(candidateCalls.join("\n")).not.toContain("actions/runs/85");
-  });
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(outputPath, "utf8")).toContain(
+        "reuse_reason=candidate evaluation exceeded the bounded scan",
+      );
+      expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
+      expect(readFileSync(outputPath, "utf8")).not.toContain("state=miss");
+      expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
+      const candidateCalls = readFileSync(callLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.includes("actions/runs/"));
+      expect(candidateCalls).toEqual(
+        [80, 81, 82, 83, 84].flatMap((runId) =>
+          // A 5xx at 100 rereads the complete listing once at 50, without a same-size retry.
+          [`api repos/${REPOSITORY}/actions/runs/${runId}`].concat(
+            (largePage502 ? [100, 50] : [100]).map(
+              (perPage) =>
+                `api --paginate --slurp repos/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=${perPage}`,
+            ),
+          ),
+        ),
+      );
+      expect(candidateCalls.join("\n")).not.toContain("actions/runs/85");
+    },
+  );
 
   it("marks a selected candidate with a missing constituent unavailable", async () => {
     const root = tempDirs.make("full-release-candidate-selected-missing-");

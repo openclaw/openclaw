@@ -63,7 +63,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
@@ -84,7 +84,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .locator('[data-value="cloud:aws"]')
             .isDisabled(),
         )
@@ -94,7 +94,7 @@ suite.define(() => {
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Local" })
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
@@ -162,7 +162,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
@@ -396,7 +396,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");

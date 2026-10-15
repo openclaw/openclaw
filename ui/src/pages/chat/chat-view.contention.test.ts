@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
-import * as chatMessage from "./components/chat-message-stream.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -11,7 +10,6 @@ import {
 
 beforeEach(() => {
   installTranscriptDomMocks();
-  vi.spyOn(chatMessage, "renderStreamGroup");
 });
 
 afterEach(() => {
@@ -52,7 +50,7 @@ describe("chat view state contention", () => {
       onAbort,
       onSend,
     });
-    expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]?.startupLabel).toBe(
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Temporarily busy—retrying…",
     );
     expect(container.querySelector(".chat-error")).toBeNull();
@@ -62,4 +60,35 @@ describe("chat view state contention", () => {
     expect(onAbort).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it("shows preparation rather than generic work before the first status arrives", () => {
+    const container = renderChatView({ runActive: true, stream: "" });
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Preparing this turn…",
+    );
+  });
+
+  it.each(["answer", "finishing"] as const)(
+    "hides %s activity without releasing the active run or Stop",
+    (phase) => {
+      const onAbort = vi.fn();
+      const container = renderChatView({
+        canAbort: true,
+        runActive: true,
+        runId: "run-1",
+        stream: "The answer is ready.",
+        startupStatus: { state: "status", runId: "run-1", phase },
+        onAbort,
+      });
+      expect(container.textContent).toContain("The answer is ready.");
+      expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      expect(
+        container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
+      ).toBe("");
+      const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+      expect(stop).not.toBeNull();
+      stop?.click();
+      expect(onAbort).toHaveBeenCalledOnce();
+    },
+  );
 });

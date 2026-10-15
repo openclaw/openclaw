@@ -38,14 +38,6 @@ registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
-function formControlValue(event: Event): string {
-  const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-    ? target.value
-    : "";
-}
 
 function CloudWorkersContent() {
   const context = useApplication();
@@ -126,10 +118,6 @@ function CloudWorkersContent() {
     });
     return () => controller.abort();
   });
-  function advertisedProfiles() {
-    return catalog().value;
-  }
-
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
@@ -146,7 +134,7 @@ function CloudWorkersContent() {
     const configState = configProjection.read().state;
     return Boolean(
       hasManageAccess() &&
-      configState?.configSnapshot?.hash &&
+      configState.configSnapshot?.hash &&
       !configState.configLoading &&
       !configState.configSaving &&
       !saveState().busy,
@@ -163,8 +151,6 @@ function CloudWorkersContent() {
     }
     setView((state) => {
       state.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
-    });
-    setView((state) => {
       state.draft = createCloudWorkerDraft(profile);
     });
     configSave.update({ error: null, notice: null });
@@ -275,8 +261,8 @@ function CloudWorkersContent() {
         ? [
             t("cloudWorkersPage.operatingSystemFact", {
               value:
-                advertisedProfiles()
-                  ?.get(profile.id)
+                catalog()
+                  .value?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -294,7 +280,7 @@ function CloudWorkersContent() {
     const statusControl = () =>
       catalog().pending ? (
         <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : advertisedProfiles()?.has(profile.id) ? (
+      ) : catalog().value?.has(profile.id) ? (
         <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
       ) : (
         <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
@@ -302,11 +288,7 @@ function CloudWorkersContent() {
 
     return (
       <SettingsRow
-        title={
-          <>
-            <code>{profile.id}</code>
-          </>
-        }
+        title={<code>{profile.id}</code>}
         description={profileDescription(profile)}
         control={
           <>
@@ -358,21 +340,19 @@ function CloudWorkersContent() {
         title={t(`cloudWorkersPage.fields.${label}`)}
         description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
         control={
-          <>
-            <input
-              class="settings-input mono"
-              aria-label={t(`cloudWorkersPage.fields.${label}`)}
-              placeholder={options.placeholder ?? undefined}
-              type={options.type ?? undefined}
-              min={field === "readyWorkers" ? "0" : undefined}
-              step={field === "readyWorkers" ? "1" : undefined}
-              autocomplete="off"
-              spellcheck="false"
-              value={view.draft[field]}
-              disabled={saveState().busy}
-              onInput={(event: Event) => patchDraft({ [field]: formControlValue(event) })}
-            />
-          </>
+          <input
+            class="settings-input mono"
+            aria-label={t(`cloudWorkersPage.fields.${label}`)}
+            placeholder={options.placeholder}
+            type={options.type}
+            min={field === "readyWorkers" ? "0" : undefined}
+            step={field === "readyWorkers" ? "1" : undefined}
+            autocomplete="off"
+            spellcheck="false"
+            value={view.draft[field]}
+            disabled={saveState().busy}
+            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+          />
         }
       />
     );
@@ -381,7 +361,7 @@ function CloudWorkersContent() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (advertisedProfiles()?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (

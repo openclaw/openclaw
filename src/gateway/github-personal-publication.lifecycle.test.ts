@@ -23,6 +23,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { preparePersonalGitHubSessionReceiptDeletion } from "../state/github-personal-publication-lifecycle.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -37,6 +38,7 @@ import {
   personalPublicationAccount as account,
   preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
+import { readLocalGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 
 function holdReceiptDeletion(afterPreparation?: () => Promise<void>) {
   const waiting = createDeferredCore();
@@ -125,6 +127,31 @@ describe("personal publication session lifecycle", () => {
       lifecycle: readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
     };
   }
+
+  it("revokes captured publication authority after committed receipt cleanup", async () => {
+    const { session, receipt } = await publishReceipt();
+    const owner = await readLocalGitHubPublicationWorktreeOwner(receipt!);
+    try {
+      expect(() => owner.assertCurrent()).not.toThrow();
+      const remove = await preparePersonalGitHubSessionReceiptDeletion({
+        agentId: receipt!.agent_id,
+        generations: [
+          {
+            sessionKey: receipt!.session_key,
+            sessionId: receipt!.session_id,
+            lifecycleRevision: session.read().lifecycleRevision ?? null,
+          },
+        ],
+      });
+      await remove();
+      expect(session.read().sessionId).toBe(receipt!.session_id);
+      expect(() => owner.assertCurrent()).toThrow(
+        "GitHub publication lifecycle authority is unavailable; retry recovery.",
+      );
+    } finally {
+      owner.release();
+    }
+  });
 
   it("preserves repository receipts when a session is recreated before receipt deletion admission", async () => {
     const { owner } = fixture;

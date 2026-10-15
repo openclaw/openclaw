@@ -298,7 +298,7 @@ export function registerGracefulGatewayShutdownTests({
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
         onSnapshot: expect.any(Function),
       });
       expect(close).toHaveBeenCalledWith({

@@ -38,6 +38,7 @@ type GitUpdateTarget = {
   sha?: string;
   version?: string;
   schemaVersions?: OpenClawSchemaVersions;
+  databaseEngines?: unknown;
   metadataUnreadable?: string;
 };
 

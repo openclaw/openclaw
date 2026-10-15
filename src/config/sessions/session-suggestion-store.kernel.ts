@@ -5,10 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { sessionMetadataExpectedEntryMatches } from "./session-accessor.sqlite-owner.js";
 import type {
@@ -32,8 +29,6 @@ import {
 import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
-
-export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-policy.js";
 
 function suggestionDb(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SuggestionDatabase>(database.db);
@@ -62,13 +57,12 @@ function assertSessionTarget(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   params: { expectedSessionId?: string; expectedEntry?: SessionMetadataExpectedEntry },
-  options: OpenClawAgentDatabaseOptions,
 ): void {
   if (params.expectedEntry) {
     if (
       (params.expectedSessionId !== undefined &&
         params.expectedSessionId !== params.expectedEntry.sessionId) ||
-      !sessionMetadataExpectedEntryMatches(database, sessionKey, params.expectedEntry, options)
+      !sessionMetadataExpectedEntryMatches(database, sessionKey, params.expectedEntry)
     ) {
       throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
     }
@@ -110,7 +104,6 @@ export function addSessionSuggestionInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   params: SessionSuggestionAddParams,
-  options: OpenClawAgentDatabaseOptions,
 ): StoredSessionSuggestion {
   const authorId = params.authorId.trim();
   const authorLabel = params.authorLabel?.trim() || undefined;
@@ -126,7 +119,7 @@ export function addSessionSuggestionInDatabase(
     createdAt: params.createdAt ?? Date.now(),
     state: "pending",
   };
-  assertSessionTarget(database, sessionKey, params, options);
+  assertSessionTarget(database, sessionKey, params);
   const db = suggestionDb(database);
   pruneResolvedSessionSuggestions(database, sessionKey);
   // Compare decoded IDs in JS; binding the author here changes malformed-ID
@@ -195,9 +188,8 @@ export function claimSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   params: SessionSuggestionClaimParams,
-  options: OpenClawAgentDatabaseOptions,
 ): SessionSuggestionDispatchClaim | null {
-  assertSessionTarget(database, sessionKey, params, options);
+  assertSessionTarget(database, sessionKey, params);
   const db = suggestionDb(database);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -257,9 +249,8 @@ export function releaseSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   params: SessionSuggestionReleaseParams,
-  options: OpenClawAgentDatabaseOptions,
 ): boolean {
-  assertSessionTarget(database, sessionKey, params, options);
+  assertSessionTarget(database, sessionKey, params);
   const result = executeSqliteQuerySync(
     database.db,
     suggestionDb(database)
@@ -277,9 +268,8 @@ export function finalizeSessionSuggestionClaimInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   params: SessionSuggestionFinalizeParams,
-  options: OpenClawAgentDatabaseOptions,
 ): StoredSessionSuggestion | null {
-  assertSessionTarget(database, sessionKey, params, options);
+  assertSessionTarget(database, sessionKey, params);
   const db = suggestionDb(database);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,

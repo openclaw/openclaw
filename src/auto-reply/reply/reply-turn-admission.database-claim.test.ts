@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -32,6 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     testing.resetReplyRunRegistry();
     await closeOpenClawAgentDatabasesAsync();
+    memorySessionActorOwners.reset();
     vi.restoreAllMocks();
     cleanup();
   }),
@@ -61,24 +63,21 @@ function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined
   }
 }
 
-it("keeps native incognito admission with its existing owner without an actor", async ({
-  signal,
-}) => {
+it("keeps incognito admission and its actor with the existing memory owner", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = "agent:main:dashboard:incognito-reply-admission";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const scope = { agentId: "main", storePath, sessionKey: key };
-    sessionEntries.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, incognito: true });
-    const native = getOpenClawAgentDatabaseIfOpen({
+    await sessionEntries.replaceSessionEntry(scope, { sessionId, updatedAt: 1, incognito: true });
+    const owner = memorySessionActorOwners.read({
       agentId: "main",
       path: storePath,
-      env: state.env,
     });
-    expect(native).toBeDefined();
+    expect(owner).toBeDefined();
     const result = await admit(storePath, { agentId: "main", sessionKey: key });
     try {
       if (result.status !== "owned" || !result.databaseClaim) {
-        throw new Error("Native incognito admission must retain its database claim");
+        throw new Error("Incognito admission must retain its memory claim");
       }
       const { operation, databaseClaim } = result;
       expect(getReplyOperationSessionTarget(operation)).toMatchObject({
@@ -87,18 +86,24 @@ it("keeps native incognito admission with its existing owner without an actor", 
         readSource: {
           agentId: "main",
           path: storePath,
-          databaseIdentity: databaseClaim.identity,
+          databaseIdentity: owner?.identity.incarnation,
         },
         target: { canonicalKey: key, storeKeys: [key] },
       });
-      expect(typeof databaseClaim.identity).toBe("symbol");
-      await expect(acquireReplyOperationSessionActor(operation)).resolves.toBeUndefined();
+      expect(databaseClaim).toMatchObject({
+        kind: "memory",
+        identity: owner?.identity.handle,
+        incarnation: owner?.identity.incarnation,
+      });
+      const actor = await acquireReplyOperationSessionActor(operation);
+      expect(actor?.target).toEqual({ database: owner?.identity, sessionKey: key });
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
         sessionId,
         incognito: true,
         updatedAt: 1,
       });
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
       expect(fs.existsSync(storePath)).toBe(false);
       expect(databaseClaim.isCurrent()).toBe(true);
       operation.complete();
@@ -109,7 +114,8 @@ it("keeps native incognito admission with its existing owner without an actor", 
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
       complete(result);

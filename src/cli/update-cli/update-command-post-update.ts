@@ -1,5 +1,4 @@
 import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared/update-phase.js";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
@@ -34,6 +33,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
+  withUpdateStateRead,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
@@ -64,16 +64,17 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
+type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};
 
 export async function finishUpdate(
   params: FinishUpdateParams,
-  {
-    beforeFinalization,
-    ...options
-  }: FinishUpdateOptions & {
-    beforeFinalization?: () => Promise<void>;
-  } = {},
+  { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
   return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
@@ -85,6 +86,7 @@ async function finishSettledUpdate(
   params: FinishUpdateParams,
   {
     candidateRuntime = false,
+    adoptedFinalization,
     onGatewayStartAttempted: observeGatewayStartAttempted,
   }: FinishUpdateOptions,
   captured: ReturnType<typeof captureUpdateFinalization>,
@@ -113,12 +115,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  let gateway: TriageFailureContext["gateway"] = "preserve";
-  let triageAllowed = true;
-  const createFailure = bindUpdateFinalizationFailure(params, progressFailure, () => ({
-    triageAllowed,
-    gateway,
-  }));
+  const createFailure = bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -247,7 +244,6 @@ async function finishSettledUpdate(
       !gatewayStartAttempted &&
       (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
-      triageAllowed = false;
       return { result, recoverService: false };
     }
     return { result, recoverService };
@@ -343,9 +339,6 @@ async function finishSettledUpdate(
       if (service && !params.originalManagedServiceRuntime) {
         root = serviceVerdict && "root" in serviceVerdict ? serviceVerdict.root : root;
         finalResult.recovery = { ...finalResult.recovery, service };
-        if (service === "healthy" && params.shouldRestart) {
-          gateway = "verify-running";
-        }
         if (service === "failed") {
           finalResult.status = "error";
           try {
@@ -384,7 +377,6 @@ async function finishSettledUpdate(
         assertCurrent,
       });
       assertCurrent();
-      triageAllowed &&= !isUpdateGatewayReadinessPending(finalResult);
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
     pendingResult = completeUpdateCommandResult(params, captured.interruptedResult(finalResult));
@@ -460,7 +452,9 @@ async function finishSettledUpdate(
       const runsPostActivationInspections =
         shouldRestart &&
         (!params.coreAlreadyCurrent || deferPluginConvergence) &&
-        (!candidateRuntime || isUpdateDoctorInspectionReportMode(process.env));
+        (!candidateRuntime ||
+          adoptedFinalization ||
+          isUpdateDoctorInspectionReportMode(process.env));
       const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
         const pluginParams = {
           ...params,
@@ -472,7 +466,6 @@ async function finishSettledUpdate(
         };
         const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
         if (convergence.resultWithPostUpdate.status === "error") {
-          triageAllowed = !convergence.cancelled;
           const reported = await reportResult(convergence.resultWithPostUpdate);
           throw createFailure(reported, convergence.detail);
         }
@@ -503,17 +496,25 @@ async function finishSettledUpdate(
       const restartConfigSnapshot =
         postUpdateConfigSnapshot ??
         (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-          readConfigFileSnapshot({
-            observe: false,
-            skipPluginValidation: true,
-            suppressFutureVersionWarning: true,
-          }),
+          withUpdateStateRead(
+            () =>
+              readConfigFileSnapshot({
+                observe: false,
+                skipPluginValidation: true,
+                suppressFutureVersionWarning: true,
+              }),
+            params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
+          ),
         ));
       let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
       try {
-        restartContext = await prepareUpdateRestart(
-          { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
-          restartConfigSnapshot,
+        restartContext = await withUpdateStateRead(
+          () =>
+            prepareUpdateRestart(
+              { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
+              restartConfigSnapshot,
+            ),
+          params.opts.run?.deadline?.remainingMs() ?? params.updateStepTimeoutMs,
         );
       } catch (error) {
         const message =
@@ -574,17 +575,6 @@ async function finishSettledUpdate(
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
-        }
-        triageAllowed = restartContext.serviceMutationAllowed;
-        if (
-          restarted === "restart-health-failed" &&
-          params.shouldRestart &&
-          restartContext.serviceMutationAllowed &&
-          (params.preManagedServiceStop?.running !== false ||
-            params.preManagedServiceStop.stopped) &&
-          !restartContext.skipLegacyServiceRestart
-        ) {
-          gateway = "verify-running";
         }
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,

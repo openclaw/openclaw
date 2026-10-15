@@ -94,6 +94,9 @@ export type ProjectChipOptions = {
   projectId: string;
   freshWorkspace?: boolean;
   onNewWorkspace?: () => void;
+  deviceFolder?: boolean;
+  onDeviceFolder?: () => void;
+  deviceFolderDisabledReason?: string;
   gatewayLabel: string;
   submitting: boolean;
   pendingPlacement: boolean;

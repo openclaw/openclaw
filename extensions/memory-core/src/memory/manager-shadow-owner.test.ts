@@ -71,15 +71,16 @@ describe("private shadow admission", () => {
       return store;
     });
     const owner = await createShadow("retiring.sqlite");
-    expect(() => owner.db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
+    const db = owner.db;
+    expect(() => db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const closing = owner.closeShadow();
     try {
       await entered.promise;
-      expect(owner.db.isOpen).toBe(true);
+      expect(db.isOpen).toBe(true);
       expect(owner.shadowReleased).toBe(false);
       released.resolve();
       await closing;
-      expect(owner.db.isOpen).toBe(false);
+      expect(db.isOpen).toBe(false);
       expect(owner.shadowReleased).toBe(true);
     } finally {
       released.resolve();

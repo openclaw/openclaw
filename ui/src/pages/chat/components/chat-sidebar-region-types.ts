@@ -38,6 +38,7 @@ export type RegionProps = {
   callbacks: SidebarRegionCallbacks | null;
   narrow: boolean;
   sideFocusLocked: boolean;
+  sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   availableWidth: number;
 };

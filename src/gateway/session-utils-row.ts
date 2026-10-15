@@ -36,6 +36,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -60,14 +61,11 @@ import { projectSessionProviderReview } from "./session-provider-review-projecti
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
-import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
-  deriveSessionTitle,
-  prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
   readStoreChildSessionLinks,
   type SessionChildLink,
@@ -106,8 +104,7 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
+  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -176,23 +173,6 @@ export function readSessionRowInputs(params: {
     storePath,
   });
 
-  const titleRead = prepareSessionTitleRead(entry, displayName, params);
-  let derivedTitle = titleRead?.derivedTitle;
-  let lastMessagePreview: string | undefined;
-  if (entry?.sessionId && titleRead?.needsTranscript) {
-    const fields = readScopedSessionTitleFieldsFromTranscript({
-      agentId: params.storeAgentId ?? agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: key,
-      storePath,
-    });
-    if (params.includeDerivedTitles) {
-      derivedTitle ??= deriveSessionTitle(entry, fields.firstUserMessage, displayName);
-    }
-    lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
-  }
-
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,
@@ -245,8 +225,8 @@ export function readSessionRowInputs(params: {
       configuredAgentIds: params.configuredAgentIds,
       agentId,
       displayName,
-      derivedTitle,
-      lastMessagePreview,
+      derivedTitle: params.preparedTitle?.derivedTitle,
+      lastMessagePreview: params.preparedTitle?.lastMessagePreview,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -459,6 +439,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    deviceFolder: entry?.deviceFolder,
     repositoryWorkspaceId: entry?.repositoryWorkspaceId,
     ...(input.repository ? { repository: input.repository } : {}),
     execNode: entry?.execNode,
@@ -595,6 +576,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   return {
     row,
     source: {
+      parsedKey: parseAgentSessionKey(key),
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -632,6 +614,7 @@ export function presentSessionRow(
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
   const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
+    parsedKey: source.parsedKey,
     entry,
     now,
     rowContext: {
@@ -658,13 +641,14 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
     if (options.excludedChildKeys?.has(key)) {
       return [];
     }
     const childActive = projectGatewaySessionRunState({
       key,
       entry: childEntry,
+      parsedKey,
       now,
       rowContext: {
         subagentRuns,
@@ -676,6 +660,7 @@ export function presentSessionRow(
       !resolveSessionChildOwners({
         key,
         entry: childEntry,
+        parsedKey,
         now,
         subagentRuns,
         hasActiveRun: childActive,

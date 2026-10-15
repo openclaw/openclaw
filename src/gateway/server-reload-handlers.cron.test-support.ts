@@ -1,7 +1,6 @@
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadCronJobsStore } from "../cron/store.js";
+import { loadCronJobsStore, resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -43,14 +42,14 @@ export function registerGatewayCronReloadTests({
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
       const fixtureDir = autoCleanupTempDirs.make("openclaw-monitor-publication-");
-      const initialConfig = {
+      const initialConfig: OpenClawConfig = {
         agents: {
           entries: {
             first: { heartbeat: { every: "1h" } },
             second: { heartbeat: { every: "1h" } },
           },
         },
-      } satisfies OpenClawConfig;
+      };
       const nextConfig = {
         ...initialConfig,
         agents: {
@@ -64,9 +63,12 @@ export function registerGatewayCronReloadTests({
       const { buildGatewayCronService } =
         await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
       const cronState = buildGatewayCronService({
+        storePath: await resolveCronJobsStorePathFromConfigAsync(initialConfig, {
+          ...process.env,
+          OPENCLAW_STATE_DIR: fixtureDir,
+        }),
         scheduler,
         cfg: initialConfig,
-        storePath: path.join(fixtureDir, "cron", "jobs.json"),
         deps: {} as never,
         env: { ...process.env, OPENCLAW_STATE_DIR: fixtureDir, OPENCLAW_SKIP_CRON: "0" },
         broadcast: vi.fn(),

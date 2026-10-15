@@ -38,6 +38,7 @@ async function scan(
   previous?: UsageCostRollupEntry,
   generation = "initial",
   readSequences?: number[],
+  checkProgress?: () => void,
 ) {
   const storePath = path.resolve("synthetic-usage-paging.sqlite");
   const filePath = formatSqliteSessionFileMarker({
@@ -65,6 +66,7 @@ async function scan(
     pricingFingerprint: "synthetic-pricing",
     resolveCosts: async (pairs) => pairs.map(() => undefined),
     readGeneration: async () => generation,
+    checkProgress,
     // A short page does not mean end-of-range; decoded byte limits can cut any page.
     readRows: async (_marker, afterSeq, throughSeq) => {
       const page = rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2);
@@ -86,6 +88,27 @@ function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: numbe
 }
 
 describe("paged SQLite usage rollups", () => {
+  it("stops reading subsequent transcript pages when its owner cancels", async () => {
+    const controller = new AbortController();
+    const reason = new Error("usage client disconnected");
+    const readSequences: number[] = [];
+    await expect(
+      scan(
+        [...initial, { seq: 9, event: message("b", "a", 4) }],
+        undefined,
+        "initial",
+        readSequences,
+        () => {
+          if (readSequences.length > 0) {
+            controller.abort(reason);
+          }
+          controller.signal.throwIfAborted();
+        },
+      ),
+    ).rejects.toBe(reason);
+    expect(readSequences).toEqual([1, 4]);
+  });
+
   it("keeps known billing separate from unavailable usage across incremental refreshes", async () => {
     const before = await scan(initial);
     const interrupted = [...initial, { seq: 9, event: message("aborted", "a", 100, true) }];

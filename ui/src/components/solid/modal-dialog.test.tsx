@@ -129,9 +129,43 @@ describe("Solid native modal policy", () => {
     expect(modalDialog(handle).open).toBe(true);
   });
 
+  it("publishes each lifecycle phase once from the host with settled focus", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    try {
+      const { handle } = mount({ manual: true });
+      const confirm = handle.querySelector("button");
+      const phases = ["overlay-show", "overlay-after-show", "overlay-hide", "overlay-after-hide"];
+      const captured: { event: Event; focus: Element | null }[] = [];
+      const bubbled = vi.fn();
+      for (const phase of phases) {
+        handle.addEventListener(
+          phase,
+          (event) => captured.push({ event, focus: document.activeElement }),
+          true,
+        );
+        handle.addEventListener(phase, bubbled);
+      }
+      handle.show();
+      await completeFrames();
+      handle.hide();
+      await completeFrames();
+
+      expect(captured.map(({ event }) => event.type)).toEqual(phases);
+      expect(captured.map(({ event }) => event.target)).toEqual(phases.map(() => handle));
+      expect(captured.map(({ event }) => event.cancelable)).toEqual([true, false, true, false]);
+      expect(bubbled).toHaveBeenCalledTimes(4);
+      expect(captured[1]?.focus).toBe(confirm);
+      expect(captured[3]?.focus).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
+  });
+
   it("rolls back the public open property synchronously when showing is vetoed", () => {
     const { handle } = mount({ manual: true });
-    handle.addEventListener("wa-show", (event) => event.preventDefault());
+    handle.addEventListener("overlay-show", (event) => event.preventDefault(), true);
     handle.show();
     expect(handle.open).toBe(false);
     expect(modalDialog(handle).open).toBe(false);
@@ -158,7 +192,7 @@ describe("Solid native modal policy", () => {
       ));
       flush();
       changes.mockClear();
-      const eventName = operation === "show" ? "wa-show" : "wa-hide";
+      const eventName = operation === "show" ? "overlay-show" : "overlay-hide";
       const veto = (event: Event) => event.preventDefault();
       host.addEventListener(eventName, veto);
       setOpen(!initial);
@@ -214,7 +248,7 @@ describe("Solid native modal policy", () => {
     const parent = handle.parentNode!;
     changes.mockClear();
     const hiding: Event[] = [];
-    handle.addEventListener("wa-hide", (event) => {
+    handle.addEventListener("overlay-hide", (event) => {
       hiding.push(event);
       event.preventDefault();
     });
@@ -292,11 +326,11 @@ describe("Solid native modal policy", () => {
     const onCancel = vi.fn();
     const { handle } = mount({ onCancel });
     const veto = (event: Event) => event.preventDefault();
-    handle.addEventListener("wa-hide", veto);
+    handle.addEventListener("overlay-hide", veto);
     handle.hide();
     expect(handle.open).toBe(true);
     expect(onCancel).not.toHaveBeenCalled();
-    handle.removeEventListener("wa-hide", veto);
+    handle.removeEventListener("overlay-hide", veto);
     handle.hide();
     expect(handle.open).toBe(false);
     expect(onCancel).not.toHaveBeenCalled();
@@ -307,8 +341,8 @@ describe("Solid native modal policy", () => {
     const hiding = vi.fn();
     const hidden = vi.fn();
     handle.addEventListener("modal-cancel", () => handle.hide());
-    handle.addEventListener("wa-hide", hiding);
-    handle.addEventListener("wa-after-hide", hidden);
+    handle.addEventListener("overlay-hide", hiding);
+    handle.addEventListener("overlay-after-hide", hidden);
     modalDialog(handle).dispatchEvent(new Event("cancel", { cancelable: true }));
     await completeFrames();
     expect(handle.open).toBe(false);
@@ -319,7 +353,12 @@ describe("Solid native modal policy", () => {
   it("ignores nested overlay lifecycle events", () => {
     const onCancel = vi.fn();
     const { handle, view } = mount({ onCancel });
-    for (const type of ["overlay-hide", "overlay-after-hide", "wa-hide", "wa-after-hide"]) {
+    for (const type of [
+      "overlay-show",
+      "overlay-after-show",
+      "overlay-hide",
+      "overlay-after-hide",
+    ]) {
       view.getByRole("button").dispatchEvent(new Event(type, { bubbles: true }));
     }
     expect(onCancel).not.toHaveBeenCalled();
@@ -417,8 +456,8 @@ describe("Solid native modal policy", () => {
     await completeFrames();
     const hidden = vi.fn();
     const shown = vi.fn();
-    handle.addEventListener("wa-after-hide", hidden);
-    handle.addEventListener("wa-after-show", shown);
+    handle.addEventListener("overlay-after-hide", hidden);
+    handle.addEventListener("overlay-after-show", shown);
     handle.hide();
     handle.show();
     await completeFrames();
@@ -432,7 +471,7 @@ describe("Solid native modal policy", () => {
     const { handle, view } = mount();
     const dialog = modalDialog(handle);
     const shown = vi.fn();
-    handle.addEventListener("wa-after-show", shown);
+    handle.addEventListener("overlay-after-show", shown);
     view.unmount();
     await completeFrames();
     expect(shown).not.toHaveBeenCalled();

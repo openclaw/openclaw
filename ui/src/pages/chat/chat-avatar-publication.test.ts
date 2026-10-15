@@ -7,7 +7,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { invalidateChatAvatarCache, refreshSenderAgentAvatars } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

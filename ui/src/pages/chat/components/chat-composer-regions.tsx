@@ -1,10 +1,10 @@
 import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
-import { LitContent } from "./chat-composer-interop.tsx";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
+import { isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 export function ComposerQueue(view: { composer: ChatComposerProps; showAbortableUi: boolean }) {
@@ -14,6 +14,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
     <ChatQueue
       queue={view.composer.queue}
       displayQueue={view.composer.displayQueue}
+      connected={view.composer.connected}
       offline={view.composer.offline}
       canAbort={view.showAbortableUi}
       canRemoveServerQueued={canAct()}
@@ -69,29 +70,29 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
       }
     >
       <div class="agent-chat__progress-float" hidden={!view.shown}>
-        <LitContent
-          value={renderSessionProgressCard(
-            view.composer.progressCard,
-            "composer",
-            view.composer.onDismissProgressCard,
-            view.composer.selectedSession?.status,
-            view.composer.selectedSession?.startedAt,
-            view.composer.selectedSession?.endedAt,
-            view.composer.runActive,
-            view.composer.collapseTaskProgress,
-            {
-              presented: view.shown,
-              gatewayScope: view.composer.gatewayScope,
-              sessionIdentity: view.composer.progressCardIdentity,
-              cardLifetime: view.composer.progressCardLifetime,
-              readingHistory: view.composer.readingHistory,
-              onManipulate: view.composer.onProgressManipulate,
-            },
+        <SessionProgressCard
+          card={view.composer.progressCard}
+          placement="composer"
+          onDismiss={view.composer.onDismissProgressCard}
+          sessionStatus={view.composer.selectedSession?.status}
+          startedAt={view.composer.selectedSession?.startedAt}
+          endedAt={view.composer.selectedSession?.endedAt}
+          hasActiveRun={isChatRunWorking(view.composer)}
+          collapseComposerByDefault={view.composer.collapseTaskProgress}
+          composerDisclosureContext={{
+            presented: view.shown,
+            gatewayScope: view.composer.gatewayScope,
+            sessionIdentity: view.composer.progressCardIdentity,
+            cardLifetime: view.composer.progressCardLifetime,
+            readingHistory: view.composer.readingHistory,
+            onManipulate: view.composer.onProgressManipulate,
+          }}
+          refreshAction={
             view.composer.connected && view.composer.canSend
               ? view.composer.progressCardRefresh
-              : undefined,
-            view.composer.onClearSavedProgressCard,
-          )}
+              : undefined
+          }
+          onClearSaved={view.composer.onClearSavedProgressCard}
         />
       </div>
     </Show>

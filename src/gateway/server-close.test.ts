@@ -6,24 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
-import {
-  createReplyOperation,
-  type ReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
   createServiceRegistration,
@@ -35,6 +29,8 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { registerGatewayCancellationTests } from "./server-close-cancellation.test-support.js";
+import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
 import {
   createGatewayCloseTestDepsFactory,
   createGatewayCloseTestHandlerFactory,
@@ -217,6 +213,7 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
+    memorySessionActorOwners.reset();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
@@ -225,56 +222,7 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([
-    { ownership: "owned", retained: false },
-    { ownership: "unowned", retained: false },
-    { ownership: "owned", retained: true },
-    { ownership: "unowned", retained: true },
-  ] as const)(
-    "reports $ownership queued cleanup failure and honors retained resources ($retained)",
-    async ({ ownership, retained }) => {
-      const resolveGatewayContext = () => undefined;
-      const cleanupError = new Error("queued engine disposal failed");
-      const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(async () => {
-        throw failure;
-      });
-      enqueueSwarmRun({
-        groupId: `failed-queued-cleanup-${ownership}`,
-        runId: `failed-queued-${ownership}`,
-        maxConcurrent: 1,
-        activeRunIds: [`failed-queued-blocker-${ownership}`],
-        lifecycleOwner: ownership === "owned" ? resolveGatewayContext : undefined,
-        start: async () => {},
-        onStartFailure: () => true,
-        onRemoved,
-      });
-      const retireRegistry = vi.fn(async () => ({ cleanupCount: 0, failures: [] }));
-      const closeSdkResources = vi.fn(async () => {});
-      const clearSecretsRuntimeSnapshot = vi.fn();
-      const close = createGatewayCloseHandler({
-        resolveGatewayContext,
-        closeSdkResources,
-        clearSecretsRuntimeSnapshot,
-        closePluginRegistry: async (onRetirement) => {
-          await onRetirement?.(retireRegistry);
-          return { memoryErrors: [], pluginFailures: [] };
-        },
-      });
-      try {
-        await expect(close()).rejects.toMatchObject({ errors: [failure] });
-        expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
-        expect(closeSdkResources).toHaveBeenCalledTimes(ownership === "owned" && retained ? 0 : 1);
-        expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
-        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
-      } finally {
-        releaseSwarmRun(`failed-queued-blocker-${ownership}`);
-        const { testing } =
-          await import("../agents/subagents/swarm/swarm-scheduler.test-support.js");
-        testing.reset();
-      }
-    },
-  );
+  registerGatewayResourceRetirementTests(createGatewayCloseHandler);
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
@@ -1150,86 +1098,10 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each([false, true])(
-    "cancels only captured Gateway replies before disposal (marker fails: %s)",
-    async (markerFails) => {
-      const resolveGatewayContext = () => undefined;
-      const otherGatewayContext = () => undefined;
-      const operations: ReplyOperation[] = [];
-      const begin = (key: string, resolver = resolveGatewayContext) => {
-        const operation = createReplyOperation({
-          sessionKey: key,
-          sessionId: key,
-          resetTriggered: false,
-        });
-        operation.setPhase("running");
-        bindGatewayContextResolver(operation, resolver);
-        operations.push(operation);
-        return operation;
-      };
-      const owned = begin("agent:main:closing");
-      const reboundDuringAbort = begin("agent:main:rebound");
-      owned.abortSignal.addEventListener(
-        "abort",
-        () => bindGatewayContextResolver(reboundDuringAbort, otherGatewayContext),
-        { once: true },
-      );
-      const replaced = begin("agent:main:replaced");
-      const other = begin("agent:main:other", otherGatewayContext);
-      const finalizing = begin("agent:main:finalizing");
-      finalizing.freezeAbort();
-      const markerEntered = createDeferredCore();
-      const markerCommitted = createDeferredCore();
-      const observed: boolean[] = [];
-      const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
-        async () => {
-          markerEntered.resolve(undefined);
-          await markerCommitted.promise;
-          if (markerFails) {
-            throw new Error("marker write failed");
-          }
-        },
-      );
-      const close = createGatewayCloseHandler({
-        getPendingReplyCount: () => Number(!owned.abortSignal.aborted),
-        markMainSessionsAbortedForRestart,
-        channelIds: ["telegram"],
-        stopChannel: async () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        disposeAllCodeModeRuns: () => {
-          observed.push(owned.abortSignal.aborted);
-        },
-        resolveGatewayContext,
-      });
-      try {
-        const closing = close({ restartExpectedMs: 123, drainTimeoutMs: 0 });
-        await markerEntered.promise;
-        expect(owned.abortSignal.aborted).toBe(false);
-        replaced.complete();
-        const replacement = begin(replaced.key);
-        markerCommitted.resolve(undefined);
-        const result = await closing;
-
-        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
-          expect.objectContaining({ activeRuns: [], reason: "gateway restart shutdown" }),
-        );
-        expect(observed).toEqual([true, true]);
-        expect(isAgentRunRestartAbortReason(owned.abortSignal.reason)).toBe(true);
-        expect(other.abortSignal.aborted).toBe(false);
-        expect(reboundDuringAbort.abortSignal.aborted).toBe(false);
-        expect(replacement.abortSignal.aborted).toBe(false);
-        expect(finalizing.abortSignal.aborted).toBe(false);
-        expect(finalizing.result).toBeNull();
-        expect(result.warnings.includes("restart-main-session-marker")).toBe(markerFails);
-      } finally {
-        markerCommitted.resolve(undefined);
-        for (const operation of operations) {
-          operation.complete();
-        }
-      }
-    },
-  );
+  registerGatewayCancellationTests({
+    createClose: createGatewayCloseHandler,
+    setShutdownHook: (hook) => mocks.triggerInternalHook.mockImplementation(hook),
+  });
 
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();

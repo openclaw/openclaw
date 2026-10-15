@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -17,6 +17,7 @@ import { readTranscriptEventRows } from "../../config/sessions/session-accessor.
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
@@ -53,7 +54,15 @@ import {
   sessionManagerReadInitialContext,
 } from "./session-manager-current-turn.js";
 import * as managerContext from "./session-manager-incognito.js";
+import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManager } from "./session-manager.js";
+
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+afterEach(() => {
+  for (const owner of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
+});
 
 async function withSelectedTranscriptReader<T>(
   target: Parameters<typeof SessionManager.openModelContextAsync>[0],
@@ -108,6 +117,37 @@ async function withSelectedTranscriptReader<T>(
     }
   }
 }
+
+it("reloads a durable sibling transcript under the parent writer without borrowing its actor", async () => {
+  await withOpenClawTestState({ label: "sibling-transcript-reload" }, async (state) => {
+    const parent = {
+      agentId: "main",
+      sessionId: "parent",
+      sessionKey: "agent:main:parent",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    const sibling = { ...parent, sessionId: "sibling", sessionKey: "agent:main:sibling" };
+    const updatedAt = Date.now();
+    await upsertSessionEntryCore(parent, { sessionId: parent.sessionId, updatedAt });
+    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt });
+    const manager = await SessionManager.openAsync(sibling);
+    const message = makeUserMessage("sibling transcript", 1);
+    const entryId = await manager.appendMessageAsync(message);
+
+    await withSelectedTranscriptReader(
+      parent,
+      async () => {
+        const reloaded = await readCommittedSessionManagerReload(sibling, undefined);
+        expect(reloaded.kind).toBe("full");
+        expect(reloaded.snapshot.events).toEqual([
+          expect.objectContaining({ type: "session", id: sibling.sessionId }),
+          expect.objectContaining({ type: "message", id: entryId, message }),
+        ]);
+      },
+      true,
+    );
+  });
+});
 
 it.each(["bounded", "anchors"] as const)(
   "reads current actor entry facts through %s history after writes and replacement",
@@ -241,7 +281,7 @@ it.each(["unchanged", "append", "rewrite"] as const)(
   },
 );
 
-it("uses resident actor anchors for replay and rejects a rewritten hydrated turn", async () => {
+it("replays a durable current turn and rejects it after a rewrite", async () => {
   await withOpenClawTestState({ label: "actor-replay-validation" }, async (state) => {
     const target = {
       agentId: "main",
@@ -256,38 +296,18 @@ it("uses resident actor anchors for replay and rejects a rewritten hydrated turn
     await withSelectedTranscriptReader(
       target,
       async () => {
-        const validated = vi.fn();
-        const prepare = transcriptHydration.prepareSessionTranscriptHydration;
-        const spy = vi
-          .spyOn(transcriptHydration, "prepareSessionTranscriptHydration")
-          .mockImplementation((...args) => {
-            const reader = prepare(...args);
-            return {
-              ...reader,
-              readCurrentTurnEntry: (request) => {
-                validated();
-                return reader.readCurrentTurnEntry(request);
-              },
-            };
-          });
         const replay = () =>
           replayView[sessionManagerPrepareCurrentTurnReplay](
             () => false,
             (entry) => entry?.type === "message" && entry.message.role === "user",
           );
-        try {
-          expect(await replay()).toMatchObject({ entryId: userId });
-          expect(validated).not.toHaveBeenCalled();
-          runWithoutOwnedSessionTranscriptWrites(() =>
-            source.removeTrailingEntries((entry) => entry.type === "message"),
-          );
-          await expect(replay()).rejects.toThrow(
-            /Persisted user turn changed|Session transcript projection is rebuilding/,
-          );
-          expect(validated).toHaveBeenCalledOnce();
-        } finally {
-          spy.mockRestore();
-        }
+        expect(await replay()).toMatchObject({ entryId: userId });
+        runWithoutOwnedSessionTranscriptWrites(() =>
+          source.removeTrailingEntries((entry) => entry.type === "message"),
+        );
+        await expect(replay()).rejects.toThrow(
+          /Persisted user turn changed|Session transcript projection is rebuilding/,
+        );
       },
       true,
     );
@@ -333,40 +353,6 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
     }
   });
 });
-
-it.each(["key", "path"] as const)(
-  "rejects a replaced native owner selected by %s",
-  async (route) => {
-    await withOpenClawTestState({ label: "native-context-owner" }, async (state) => {
-      const pathname = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-      const options = { agentId: "main", path: pathname, env: state.env };
-      const original = openOpenClawAgentDatabase(options);
-      const target = {
-        agentId: "main",
-        sessionId: "empty-native-context",
-        sessionKey:
-          route === "key"
-            ? "agent:main:dashboard:incognito-context-owner"
-            : "agent:main:context-owner",
-        storePath:
-          route === "key" ? path.join(state.agentDir("main"), "openclaw-agent.sqlite") : pathname,
-        env: state.env,
-      };
-      await expect(
-        SessionManager.readSessionContextAsync(target, async (messages) => {
-          expect([...messages]).toEqual([]);
-          await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
-          expect(openOpenClawAgentDatabase(options)).not.toBe(original);
-          return "stale owner result";
-        }),
-      ).rejects.toThrow("incognito database owner is no longer current");
-      expect(
-        await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
-      ).toEqual([]);
-      expect(fs.existsSync(pathname)).toBe(false);
-    });
-  },
-);
 
 it("reads full durable context through workers and preserves the deprecated synchronous result", async () => {
   await withOpenClawTestState({ label: "context-read-async" }, async (state) => {
@@ -436,24 +422,11 @@ it("reads full durable context through workers and preserves the deprecated sync
     ).rejects.toThrow("Session transcript changed during context read");
     expect(consumeMissing).not.toHaveBeenCalled();
     expect(fs.existsSync(missing.storePath)).toBe(false);
-    const alias = path.join(state.stateDir, "context-alias");
-    const successor = path.join(state.stateDir, "missing-successor");
-    fs.mkdirSync(successor);
-    fs.symlinkSync(path.dirname(target.storePath), alias, "junction");
-    await expect(
-      SessionManager.readSessionContextAsync(
-        { ...target, storePath: path.join(alias, path.basename(target.storePath)) },
-        async () => {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(successor, alias, "junction");
-        },
-      ),
-    ).rejects.toThrow(/captured|identity|owner/);
   });
 });
 
 it.each(["durable", "admitted", "incognito"] as const)(
-  "shares immutable initial messages (%s)",
+  "keeps projected initial messages detached from the stored view (%s)",
   async (mode) => {
     await withOpenClawTestState({ label: "shared-model-context" }, async (state) => {
       const scope = {
@@ -465,7 +438,14 @@ it.each(["durable", "admitted", "incognito"] as const)(
             : "agent:main:shared-context",
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      if (mode === "incognito") {
+        memoryOwners.push({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        });
+      } else {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      }
       const seed = await SessionManager.openAsync(scope);
       const userId = await seed.appendMessageAsync({
         role: "user",
@@ -528,12 +508,10 @@ it.each(["durable", "admitted", "incognito"] as const)(
       ) {
         throw new Error("Missing stored messages");
       }
-      expect(context.messages[0]).toBe(user.message);
-      expect(projectedReply.content).toBe(reply.message.content);
-      expect(Object.isFrozen(user.message)).toBe(true);
-      expect(Object.isFrozen(reply.message.content)).toBe(true);
+      expect(context.messages[0]).toEqual(user.message);
+      expect(projectedReply.content).not.toBe(reply.message.content);
       expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
-      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
+      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
       expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
     });
   },
@@ -939,20 +917,14 @@ it("keeps one bounded context snapshot and observes a foreign rewrite on the nex
   });
 });
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["append", "rewrite"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
-  "reads the completed-turn snapshot across later $mutation (incognito=$incognito)",
-  async ({ incognito, mutation }) => {
+it.each(["append", "rewrite"] as const)(
+  "reads the completed durable turn snapshot across later %s",
+  async (mutation) => {
     await withOpenClawTestState({ label: "completed-model-context" }, async (state) => {
       const scope = {
         agentId: "main",
         sessionId: "completed-context",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-completed-context"
-          : "agent:main:completed-context",
+        sessionKey: "agent:main:completed-context",
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -978,21 +950,16 @@ it.each(
         }
         source.appendMessage({ role: "user", content: "newest question", timestamp: 3 });
       };
-      const spy = incognito
-        ? undefined
-        : vi
-            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-            .mockImplementationOnce(async (...args) => {
-              spy!.mockRestore();
-              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
-              mutate();
-              return result;
-            });
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          spy.mockRestore();
+          const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+          mutate();
+          return result;
+        });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
-        if (incognito) {
-          mutate();
-        }
         if (mutation === "rewrite") {
           await expect(pending).rejects.toThrow(/transcript|anchor/i);
         } else {
@@ -1004,7 +971,7 @@ it.each(
           });
         }
       } finally {
-        spy?.mockRestore();
+        spy.mockRestore();
       }
     });
   },

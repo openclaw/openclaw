@@ -2,6 +2,10 @@ import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtim
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -362,6 +366,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
 export function useSideQuestionTestSetup() {
   beforeEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    setRuntimeConfigSnapshot({});
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -413,6 +418,7 @@ export function useSideQuestionTestSetup() {
 
   afterEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.unstubAllGlobals();

@@ -1,16 +1,20 @@
 import { existsSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
-import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
+import {
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -63,11 +67,67 @@ afterEach(async () => {
 });
 
 describe("heartbeat outcome store", () => {
-  it("claims once without writing absent outcomes, durable retries, or another run's claim", async () => {
+  it("persists and claims the first outcome after reopening without host SQL", async () => {
+    const env = await createEnv();
+    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    await closeOpenClawAgentDatabasesAsync();
+    const host = observeHostDataSql();
+    try {
+      await persistHeartbeatOutcome({
+        ...target,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 100,
+        response: { outcome: "progress", notify: false, summary: "First after boot" },
+      });
+      expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toMatchObject({
+        summary: "First after boot",
+      });
+      expect(host.queries).toEqual([]);
+    } finally {
+      host.restore();
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toMatchObject({
+      summary: "First after boot",
+    });
+    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" })).toBeUndefined();
+  });
+
+  it("preserves absent storage when there is no durable base session", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-heartbeat-absent-") };
+    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    await persistHeartbeatOutcome({
+      ...target,
+      runSessionKey: "agent:main:main:heartbeat",
+      occurredAt: 100,
+      response: { outcome: "progress", notify: false, summary: "No durable session" },
+    });
+    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toBeUndefined();
+    expect(existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
+  });
+
+  it("claims once without writing absent outcomes, durable retries, or another run's claim", async ({
+    onTestFinished,
+  }) => {
+    const config = getRuntimeConfig();
+    const sourceConfig = getRuntimeConfigSourceSnapshot();
+    onTestFinished(() => setRuntimeConfigSnapshot(config, sourceConfig ?? undefined));
+    // Count heartbeat writes without the fixture's independent automatic maintenance commit.
+    setRuntimeConfigSnapshot({
+      ...config,
+      session: {
+        ...config.session,
+        maintenance: { ...config.session?.maintenance, mode: "warn" },
+      },
+    });
     const env = await createEnv();
     const target = { agentId: "main", sessionKey: "agent:main:main", env };
     let commits = 0;
+    let admissions = 0;
     sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        admissions++;
+      }
       if (request.stage === "commit") {
         commits++;
       }
@@ -77,6 +137,10 @@ describe("heartbeat outcome store", () => {
 
     expect(await claim("first-run")).toBeUndefined();
     expect(commits).toBe(0);
+    const afterAbsent = admissions;
+    expect(await claim("first-run")).toBeUndefined();
+    expect(await claim("second-run")).toBeUndefined();
+    expect(admissions).toBe(afterAbsent);
     await persistHeartbeatOutcome({
       ...target,
       runSessionKey: "agent:main:main:heartbeat",
@@ -87,9 +151,11 @@ describe("heartbeat outcome store", () => {
     const claimed = await claim("first-run");
     expect(claimed).toMatchObject({ summary: "Recorded progress" });
     expect(commits).toBe(2);
+    const afterClaim = admissions;
     expect(await claim("first-run")).toEqual(claimed);
     expect(await claim("second-run")).toBeUndefined();
     expect(commits).toBe(2);
+    expect(admissions).toBe(afterClaim);
   });
 
   it("leaves the outcome unclaimed when its admitted run retires before worker admission", async () => {
@@ -168,12 +234,12 @@ describe("heartbeat outcome store", () => {
     });
     expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "another-user" })).toBeUndefined();
     const memoryPath = resolveIncognitoOpenClawAgentSqlitePath(target);
-    const database = getOpenClawAgentDatabaseIfOpen({ ...target, path: memoryPath });
-    const identity = readOpenClawAgentDatabaseIdentity(
-      expectDefined(database, "Incognito session must retain its memory database"),
-    );
-    expect(typeof identity.identity).toBe("symbol");
-    expect(identity.filename).toBe("");
+    expect(
+      memorySessionActorOwners
+        .read({ agentId: target.agentId, path: memoryPath })
+        ?.readSession(target.sessionKey, { assertCurrent() {}, authorize() {} })?.entry?.sessionId,
+    ).toBe("private-session");
+    expect(getOpenClawAgentDatabaseIfOpen({ ...target, path: memoryPath })).toBeUndefined();
     expect(existsSync(memoryPath)).toBe(false);
     expect(existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
   });

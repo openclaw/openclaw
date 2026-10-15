@@ -14,10 +14,7 @@ export function withSessionTranscriptProjectionReceipt<T>(
   return projectionReceipts.run(receipt, read);
 }
 
-export function readSessionTranscriptProjectionReceipt(
-  database: { db: DatabaseSync; path: string },
-  sessionId: string,
-) {
+function readCurrentReceipt(database: { db: DatabaseSync; path: string }, sessionId: string) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
@@ -28,5 +25,22 @@ export function readSessionTranscriptProjectionReceipt(
   ) {
     return undefined;
   }
-  return structuredClone(receipt.facts);
+  return receipt;
+}
+
+export function readSessionTranscriptProjectionReceipt(
+  database: { db: DatabaseSync; path: string },
+  sessionId: string,
+) {
+  const receipt = readCurrentReceipt(database, sessionId);
+  return receipt && structuredClone({ facts: receipt.facts, contextOnly: receipt.contextOnly });
+}
+
+/** Accounting needs row validity, already established by the complete actor postimage. */
+export function hasSessionTranscriptEntryReceipt(
+  database: { db: DatabaseSync; path: string },
+  sessionId: string,
+  sessionKey: string,
+): boolean {
+  return readCurrentReceipt(database, sessionId)?.entrySessionKey === sessionKey;
 }

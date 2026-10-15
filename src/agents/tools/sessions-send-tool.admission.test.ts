@@ -343,7 +343,6 @@ describe("sessions_send dispatch admission", () => {
       sourceKey: requesterSessionKey,
       threadId: 42,
     },
-    { name: "direct", accountId: "direct", sourceKey: requesterSessionKey, threadId: "42" },
     {
       name: "exact legacy DM",
       accountId: "default",

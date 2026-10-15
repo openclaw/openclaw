@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -504,20 +505,15 @@ describe("Gateway GitHub publication boundaries", () => {
         "UPDATE github_publication_requests SET worktree_id = ?, session_id = ?, session_key = ? WHERE request_id = ?",
       )
       .run(otherWorktree.id, "session-other", otherSession, "stale");
-    const loadSession = mocks.loadSession.getMockImplementation()!;
-    mocks.loadSession.mockImplementation((key: string) => {
-      const loaded = loadSession(key);
-      return key === otherSession
-        ? {
-            ...loaded,
-            entry: {
-              ...loaded.entry,
-              sessionId: "session-other",
-              worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
-            },
-          }
-        : loaded;
-    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: otherSession },
+      {
+        ...mocks.loadSession(otherSession).entry,
+        sessionId: "session-other",
+        worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
+      },
+    );
+    mocks.persistedSessionKeys.add(otherSession);
     const findWorktree = mocks.findWorktree.getMockImplementation()!;
     mocks.findWorktree.mockImplementation((kind: string, key: string) =>
       key === otherSession ? otherWorktree : findWorktree(kind, key),
