@@ -28,7 +28,9 @@ import {
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { releaseChatSearchHighlight, syncChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
+  getTranscriptState,
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
@@ -87,6 +89,21 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  createEffect(
+    // The projection rereads pane search state on every update; follow the same read.
+    () =>
+      current().projection.searchOpen ? getTranscriptState(input.props.paneId).searchQuery : "",
+    (query) => {
+      if (root) {
+        syncChatSearchHighlight(root, query);
+      }
+    },
+  );
+  onCleanup(() => {
+    if (root) {
+      releaseChatSearchHighlight(root);
+    }
+  });
   createEffect(
     () => [current(), input.props.fetchLinkFavicon] as const,
     ([, fetchLinkFavicon]) => {

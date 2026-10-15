@@ -1,12 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import MarkdownIt, { type Token } from "markdown-it";
 import { createMemo, Match, Show, Switch } from "solid-js";
-import { escapeRegExp } from "../../../src/shared/regexp.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { matchQuery } from "../lib/text-match.ts";
 import { LitContent } from "../lit/solid-bridge.ts";
 import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
@@ -15,13 +15,7 @@ import { Icon } from "./solid/icon.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
-// Preserve source offsets when case folding expands Unicode characters.
-// The pattern is literal and Solid escapes every rendered text segment.
-function matchQuery(text: string, query: string) {
-  const needle = query.trim();
-  return needle ? new RegExp(escapeRegExp(needle), "iu").exec(text) : null;
-}
-
+// Solid escapes every rendered text segment.
 function highlightMatch(text: string, query: string) {
   const match = matchQuery(text, query);
   const index = match?.index ?? -1;
