@@ -63,9 +63,17 @@ export function resolveCommandReplyExpectation(params: {
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey) ||
-    !isDeliverableMessageChannel(params.messageChannel ?? "")
+    isSubagentSessionKey(params.sessionKey)
   ) {
+    return "required";
+  }
+  if (
+    params.opts.inputProvenance?.kind === "internal_system" &&
+    params.opts.inputProvenance.sourceTool === "cron_failure_repair"
+  ) {
+    return "optional";
+  }
+  if (!isDeliverableMessageChannel(params.messageChannel ?? "")) {
     return "required";
   }
   if (params.opts.inputProvenance?.kind !== "inter_session") {

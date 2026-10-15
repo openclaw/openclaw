@@ -31,10 +31,43 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
+  resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+
+describe("resolveCommandReplyExpectation", () => {
+  const base = { cfg: {}, messageChannel: "webchat", sessionKey: "agent:main:dashboard:test" };
+
+  it("allows a silent cron repair reply in a WebChat owner conversation", () => {
+    expect(
+      resolveCommandReplyExpectation({
+        ...base,
+        opts: { inputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" } },
+      }),
+    ).toBe("optional");
+  });
+
+  it("still requires replies for ordinary WebChat and private completion turns", () => {
+    expect(resolveCommandReplyExpectation({ ...base, opts: {} })).toBe("required");
+    expect(
+      resolveCommandReplyExpectation({
+        ...base,
+        opts: { inputProvenance: { kind: "internal_system", sourceTool: "other" } },
+      }),
+    ).toBe("required");
+    expect(
+      resolveCommandReplyExpectation({
+        ...base,
+        opts: {
+          privateCompletion: true,
+          inputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" },
+        },
+      }),
+    ).toBe("required");
+  });
+});
 
 function formatClaudeCliFallbackPrelude(
   seed: NonNullable<
