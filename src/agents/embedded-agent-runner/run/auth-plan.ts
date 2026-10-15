@@ -10,6 +10,7 @@ import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
+import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
@@ -189,23 +190,20 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           context,
         }),
     });
-    // Legacy jobs have no trustworthy account history. Native authority and
-    // credentialless execution remain valid, but ambient credentials need adoption.
+    // Legacy jobs have no trustworthy account history. Their env or provider-config key is
+    // the only one they can use, so it keeps running; an eligible stored account needs adoption.
     if (
       runParams.trigger === "cron" &&
       !runParams.authProfileBinding &&
       !runParams.scheduledRuntimeAuthority &&
-      prepared.attempts.some(({ plan }) => {
-        const source = plan.credentialSource;
-        return (
-          source?.kind === "profile" ||
-          (source?.kind === "direct" && source.evidence !== "synthetic")
-        );
-      })
+      prepared.attempts.some(({ plan }) => plan.credentialSource?.kind === "profile")
     ) {
-      throw new Error(
+      const refusal = new Error(
         "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
       );
+      // Another model would only bypass the operator's account choice.
+      recordModelFallbackStop(refusal);
+      throw refusal;
     }
     return prepared;
   };

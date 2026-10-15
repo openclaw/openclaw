@@ -194,14 +194,10 @@ export async function maybeRepairCronInferenceBindings(params: {
             ? { requiredAuthProfileId: explicitProfileId, allowAuthProfileFallback: false }
             : {}),
         });
-        const firstSource = currentAuth.attempts[0]?.plan.credentialSource;
-        if (firstSource?.kind === "direct") {
-          if (firstSource.evidence === "synthetic") {
-            continue;
-          }
-          throw new Error(
-            "The current route uses an environment/provider-config credential, not a durable stored account.",
-          );
+        // Synthetic, env and provider-config routes have no stored account to record; the
+        // runtime keeps such a job on that key and refuses it once a stored account is eligible.
+        if (currentAuth.attempts[0]?.plan.credentialSource?.kind === "direct") {
+          continue;
         }
         if (!explicitProfileId) {
           const providerPin = resolveProviderEntryApiKeyProfileReference({
