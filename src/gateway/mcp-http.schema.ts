@@ -21,6 +21,23 @@ export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefin
   return normalizeOptionalString(tool.name);
 }
 
+function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unknown> | undefined {
+  let value;
+  try {
+    value = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return {};
+  }
+  try {
+    return { ...value };
+  } catch {
+    return undefined;
+  }
+}
+
 function flattenUnionSchema(
   raw: Record<string, unknown>,
   toolName: string,
@@ -117,7 +134,10 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     if (!name) {
       return [];
     }
-    let raw = isRecord(tool.parameters) ? { ...tool.parameters } : {};
+    let raw = readLoopbackToolParameters(tool);
+    if (!raw) {
+      return [];
+    }
     if (raw.anyOf || raw.oneOf) {
       raw = flattenUnionSchema(raw, name);
     }
