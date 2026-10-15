@@ -211,6 +211,7 @@ describe("web monitor inbox delivery and dedupe", () => {
       await listener.close();
     }
   });
+
   it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
     let finishMessage: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
@@ -571,18 +572,38 @@ describe("web monitor inbox delivery and dedupe", () => {
 
       expect(onMessage).toHaveBeenCalledTimes(2);
       expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(3, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(4, "999@s.whatsapp.net", {
-        text: "media",
-      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        3,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        4,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
       expect(sock.end).toHaveBeenCalledTimes(1);
       expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
         sock.end.mock.invocationCallOrder.at(0),

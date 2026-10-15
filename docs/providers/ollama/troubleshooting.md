@@ -104,7 +104,7 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Model outputs tool JSON as text">
+  <Accordion title="Model outputs tool calls as text">
     Usually the provider is in OpenAI-compatible mode, or the model cannot
     handle tool schemas. Prefer native mode:
 
@@ -125,8 +125,9 @@ sidebarTitle: "Troubleshooting"
     `compat.supportsTools: false` on that model entry and retest.
 
     When a reply consists of a structured tool-call attempt naming an available
-    tool, OpenClaw asks the model once to call the tool natively when recovery
-    is safe. Earlier side effects can prevent that retry. A repeated text call
+    tool, including wrapped XML, ReAct `Action`/`Action Input`, and legacy
+    `[TOOL_CALL]` blocks, OpenClaw asks the model once to call the tool natively
+    when recovery is safe. Earlier side effects can prevent that retry. A repeated text call
     fails visibly instead of reporting success. Text calls are never executed
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.

@@ -5306,7 +5306,6 @@
 ["src/commands/dashboard.test.ts","../infra/device-bootstrap.js","b444289c367e945f2ab3a7586879446ae05a078c9ba217247ec74ade8878d4b7",1]
 ["src/commands/dashboard.test.ts","../infra/ports-inspect.js","80a05d42f0dacd990d58f5e9f43080aa503c5b996d74bd07aca92a59ff3b9f9a",1]
 ["src/commands/dashboard.test.ts","./gateway-readiness.js","8bc529c0dd43a3a1c2b569a1a71877a076c42976937c5d6aba9db3488a766f3d",1]
-["src/commands/dashboard.test.ts","./onboard-helpers.js","d7e85ecfaf56aa45e7d60c7ae2901a7bf3e411f30e31b5e5f89f4f8964f2ef4e",1]
 ["src/commands/dashboard/json.test.ts","../../config/config.js","8feb21bee8acf8fcb18ffd9232b17329802299854c78829ab4de64d98e1561c3",1]
 ["src/commands/dashboard/json.test.ts","../../infra/clipboard.js","6c674d8c63d4306d99433fc80c22ab9d9a9662f0febfc197c7057e7743452c9c",1]
 ["src/commands/dashboard/json.test.ts","../../infra/device-bootstrap.js","b444289c367e945f2ab3a7586879446ae05a078c9ba217247ec74ade8878d4b7",1]

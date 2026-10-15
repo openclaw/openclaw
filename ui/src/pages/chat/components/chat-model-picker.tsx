@@ -10,11 +10,10 @@ import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
+  ChatContextWindowControl,
   type ChatContextWindowControlParams,
-  renderContextWindowControl,
-} from "./chat-context-window-control.ts";
+} from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
@@ -197,10 +196,6 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 export function ChatModelPicker(params: ChatModelPickerParams) {
   const pickerOverlay = createChatPickerOverlay();
   const state = createMemo(() => prepareChatModelPicker(params));
-  const contextWindowContent = createMemo(() => {
-    const control = params.contextWindow;
-    return control ? renderContextWindowControl(control, params.sessionKey) : undefined;
-  });
   let details: HTMLDetailsElement | undefined;
   createEffect(
     () => [
@@ -607,7 +602,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                   >
                     {t("chat.modelControls.noMatchingModels")}
                   </div>
-                  <LitContent value={contextWindowContent()} />
+                  {params.contextWindow ? (
+                    <ChatContextWindowControl
+                      contextWindow={params.contextWindow}
+                      sessionKey={params.sessionKey}
+                    />
+                  ) : undefined}
                 </>
               ) : undefined}
             </>

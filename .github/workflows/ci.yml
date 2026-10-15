@@ -178,6 +178,7 @@ jobs:
       source_channel_test_env_json: ${{ steps.manifest.outputs.source_channel_test_env_json }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
+      node_test_group_pools_json: ${{ steps.manifest.outputs.node_test_group_pools_json }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_pr_madge_import_cycles: ${{ steps.manifest.outputs.run_pr_madge_import_cycles }}
@@ -3478,6 +3479,23 @@ jobs:
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      - name: Resolve pooled Node test groups
+        id: node-test-groups
+        if: matrix.groups_pool
+        env:
+          GROUP_POOL: ${{ fromJSON(needs.preflight.outputs.node_test_group_pools_json)[matrix.groups_pool] }}
+          GROUP_INDEX: ${{ matrix.groups_index }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { decodeNodeTestGroups, encodeNodeTestGroups } from './scripts/lib/ci-node-test-groups-codec.mts';
+          const groups = decodeNodeTestGroups(process.env.GROUP_POOL)[Number(process.env.GROUP_INDEX)];
+          if (!Array.isArray(groups)) {
+            throw new Error('Node test group pool does not contain the selected row');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `groups_gzip_base64=${encodeNodeTestGroups(groups)}\n`);
+          JS
+
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -3485,7 +3503,7 @@ jobs:
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: *frozen_target
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
-          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}

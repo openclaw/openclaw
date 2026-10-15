@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import type { WorkerRetirementReason } from "../infra/worker-cpu.js";
 import {
   WorkerTaskError,
   WorkerTaskPool,
@@ -93,7 +94,7 @@ function retireIdlePool(owner: NodePool): void {
     return;
   }
   void runBestEffortCleanup({
-    cleanup: () => closePool(owner),
+    cleanup: () => closePool(owner, "memory_pressure"),
     onError: (error) =>
       process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
   });
@@ -106,11 +107,11 @@ function retireIdlePools(): void {
   }
 }
 
-async function closePool(owner: NodePool): Promise<void> {
+async function closePool(owner: NodePool, reason: WorkerRetirementReason): Promise<void> {
   removeIdlePool(owner);
   // Native slots retain custody until exit; keep their owner through pending or failed cleanup.
   retiringPools.add(owner);
-  await owner.tasks.close();
+  await owner.tasks.close(undefined, reason);
   retiringPools.delete(owner);
   owner.lifetime?.pools.delete(owner);
 }
@@ -129,7 +130,9 @@ function capturePoolLifetime(): NodePoolLifetime | undefined {
     host.adopt(lifetime, {
       release: async () => {
         scheduler.beginClose();
-        const results = await Promise.allSettled([...pools].map(closePool));
+        const results = await Promise.allSettled(
+          [...pools].map((owner) => closePool(owner, "shutdown")),
+        );
         await scheduler.stop();
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
@@ -166,7 +169,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     if (!retiring.size) {
       break;
     }
-    await Promise.all([...retiring].map(closePool));
+    await Promise.all([...retiring].map((owner) => closePool(owner, "rotation")));
   }
   for (const owner of idlePools.keys()) {
     if (
@@ -209,14 +212,16 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
 
 async function releasePool(owner: NodePool): Promise<void> {
   const { lifetime } = owner;
-  if (
-    idlePools.size >= MAX_IDLE_POOLS ||
-    !lifetime ||
-    lifetime.scheduler.signal.aborted ||
-    owner.tasks.isClosed ||
-    owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href
-  ) {
-    await closePool(owner);
+  if (!lifetime || lifetime.scheduler.signal.aborted || owner.tasks.isClosed) {
+    await closePool(owner, lifetime?.scheduler.signal.aborted ? "shutdown" : "dispose");
+    return;
+  }
+  if (owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href) {
+    await closePool(owner, "rotation");
+    return;
+  }
+  if (idlePools.size >= MAX_IDLE_POOLS) {
+    await closePool(owner, "eviction");
     return;
   }
   idlePools.set(
@@ -226,13 +231,14 @@ async function releasePool(owner: NodePool): Promise<void> {
       lifetime.scheduler.schedule({
         id: `code-mode-worker-idle:${++nextPoolId}`,
         delayMs: 5 * 60_000,
-        run: () => closePool(owner),
+        run: () => closePool(owner, "idle-expiry"),
       }),
       lifetime.scheduler.schedule({
         id: `code-mode-worker-surplus:${++nextPoolId}`,
         delayMs: 30_000,
         // Keep one warm isolate through gaps without retaining the completed burst.
-        run: () => (idlePools.keys().next().value === owner ? undefined : closePool(owner)),
+        run: () =>
+          idlePools.keys().next().value === owner ? undefined : closePool(owner, "idle-expiry"),
       }),
     ]),
   );
@@ -276,7 +282,7 @@ function continuation(pool: NodePool): CodeModeExecutorContinuation {
         return Promise.resolve();
       }
       state = "disposing";
-      return (closing ??= closePool(pool)
+      return (closing ??= closePool(pool, "dispose")
         .then(() => {
           state = "disposed";
         })
@@ -433,7 +439,7 @@ async function run(
   } finally {
     clearTimeout(timer);
     if (!retained) {
-      await closePool(pool);
+      await closePool(pool, "dispose");
     }
   }
 }
@@ -457,7 +463,11 @@ export const nodeCodeModeExecutor: CodeModeExecutor = {
     } catch (error) {
       // The waiter can end before native retirement; a late pool must never execute its source.
       void runBestEffortCleanup({
-        cleanup: () => acquisition.then(closePool, () => undefined),
+        cleanup: () =>
+          acquisition.then(
+            (owner) => closePool(owner, "dispose"),
+            () => undefined,
+          ),
         onError: (cleanupError) =>
           process.emitWarning(
             `Code Mode worker retirement failed: ${formatErrorMessage(cleanupError)}`,

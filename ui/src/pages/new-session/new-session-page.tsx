@@ -11,7 +11,7 @@ import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
@@ -189,9 +189,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   };
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // The retained Lit slot must not republish identical Solid inputs on each
-  // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -284,10 +281,8 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
               fallback={
                 <DraftWelcome
                   sessions={page().context?.sessions}
-                  options={{
-                    ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, draftProps),
-                  }}
+                  options={page().welcomeOptions()}
+                  composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }
             >

@@ -342,40 +342,33 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       }
     },
   );
-  it(
-    "preserves consecutive backspaces received in the same terminal input chunk",
-    async ({ signal }) => {
-      await fixture.run.write("abc\x7f\x7f\r", { delay: false });
-
-      const sent = await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" &&
-          (objectFieldEquals(entry, "message", "a") || objectFieldEquals(entry, "message", "ab")),
-        signal,
-      );
-      expect(sent.payload).toMatchObject({ message: "a" });
-      await fixture.run.waitForOutput("PTY_RESPONSE: a");
+  it.for([
+    {
+      name: "preserves consecutive backspaces received in the same terminal input chunk",
+      chunks: ["abc\x7f\x7f\r"],
+      message: "a",
+      rejected: "ab",
     },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
-    async ({ signal }) => {
-      await fixture.run.write("keepXword", { delay: false });
-      await fixture.run.write("\u001b[D".repeat(5), { delay: false });
-      await fixture.run.write("\u0004", { delay: false });
-      await fixture.run.write("\r", { delay: false });
-
-      const sent = await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "keepword"),
-        signal,
-      );
-      expect(sent.payload).toMatchObject({ message: "keepword" });
-      await fixture.run.waitForOutput("PTY_RESPONSE: keepword");
+    {
+      name: "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
+      chunks: ["keepXword", "\u001b[D".repeat(5), "\u0004", "\r"],
+      message: "keepword",
+      rejected: undefined,
     },
-    TEST_TIMEOUT_MS,
-  );
+  ])("$name", { timeout: TEST_TIMEOUT_MS }, async ({ chunks, message, rejected }, { signal }) => {
+    for (const chunk of chunks) {
+      await fixture.run.write(chunk, { delay: false });
+    }
+    const sent = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "sendChat" &&
+        (objectFieldEquals(entry, "message", message) ||
+          (rejected !== undefined && objectFieldEquals(entry, "message", rejected))),
+      signal,
+    );
+    expect(sent.payload).toMatchObject({ message });
+    await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+  });
 
   it(
     "cancels a buffered submit before Ctrl+D shutdown",
@@ -651,39 +644,30 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     async ([_name, runCase], { signal }) => runCase(signal),
   );
 
-  it(
-    "preserves xAI account limit errors in terminal output",
-    async ({ signal }) => {
-      await fixture.run.write("xai limit proof\r");
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
-        signal,
-      );
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
+  it.for([
+    {
+      name: "preserves xAI account limit errors in terminal output",
+      message: "xai limit proof",
+      output: ["monthly spending limit"],
+      hidden: "Run /auth",
     },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "renders redacted, cause-aware send failures in the real terminal loop",
-    async () => {
-      await fixture.run.write("tui error redaction proof\r");
-      await fixture.run.waitForOutput("send failed: gateway down");
-      await fixture.run.waitForOutput("Authorization: Bearer");
-
-      expect(fixture.run.visibleOutput()).not.toContain("sk-abcdefghijklmnopqrstuv");
-      expect(
-        (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "tui error redaction proof"),
-        ),
-      ).toBe(true);
+    {
+      name: "renders redacted, cause-aware send failures in the real terminal loop",
+      message: "tui error redaction proof",
+      output: ["send failed: gateway down", "Authorization: Bearer"],
+      hidden: "sk-abcdefghijklmnopqrstuv",
     },
-    TEST_TIMEOUT_MS,
-  );
+  ])("$name", { timeout: TEST_TIMEOUT_MS }, async ({ message, output, hidden }, { signal }) => {
+    await fixture.run.write(`${message}\r`);
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      signal,
+    );
+    for (const text of output) {
+      await fixture.run.waitForOutput(text);
+    }
+    expect(fixture.run.visibleOutput()).not.toContain(hidden);
+  });
 
   registerToolCardRenderingTests(startTuiFixture, STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 

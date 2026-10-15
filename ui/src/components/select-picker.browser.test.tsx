@@ -1,9 +1,11 @@
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LitContent } from "../lit/solid-content.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderDecisionModelPicker } from "./decision-model-picker.ts";
 import { renderModelPicker, type ModelPickerOption } from "./model-picker.ts";
 import { renderPicker, type SelectPicker } from "./select-picker.ts";
-import { renderSettingsRow } from "./settings-ui.ts";
+import { SettingsRow } from "./solid/settings-ui.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
@@ -72,14 +74,54 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         searchable: true,
         onChange,
       })}`;
-      render(
-        html`
-          ${renderSettingsRow({ title: "Primary", control: html`${renderModelPicker({ label: "Primary", value: "fixture/model-0", options, onChange })}` })}
-          ${renderSettingsRow({ title: "Decision", control: html`${renderDecisionModelPicker({ id: "alignment-decision", models: [{ provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" }], value: "fixture/one", disabled: false, onChange })}` })}
-          ${renderSettingsRow({ title: "Shared", control: shared })} ${shared}
-          ${renderSettingsRow({ title: "Value", control: html`<input class="settings-input" aria-label="Value" value="42" /><span class="settings-secret"><input class="settings-input" aria-label="Nested value" value="example" /></span>` })}
-        `,
-        host,
+      mountSolid(
+        () => (
+          <>
+            <SettingsRow
+              title="Primary"
+              control={
+                <LitContent
+                  value={renderModelPicker({
+                    label: "Primary",
+                    value: "fixture/model-0",
+                    options,
+                    onChange,
+                  })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Decision"
+              control={
+                <LitContent
+                  value={renderDecisionModelPicker({
+                    id: "alignment-decision",
+                    models: [
+                      { provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" },
+                    ],
+                    value: "fixture/one",
+                    disabled: false,
+                    onChange,
+                  })}
+                />
+              }
+            />
+            <SettingsRow title="Shared" control={<LitContent value={shared} />} />
+            <LitContent value={shared} />
+            <SettingsRow
+              title="Value"
+              control={
+                <>
+                  <input class="settings-input" aria-label="Value" value="42" />
+                  <span class="settings-secret">
+                    <input class="settings-input" aria-label="Nested value" value="example" />
+                  </span>
+                </>
+              }
+            />
+          </>
+        ),
+        { container: host },
       );
       for (const picker of host.querySelectorAll<SelectPicker>("openclaw-select-picker")) {
         await picker.updateComplete;
