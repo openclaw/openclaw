@@ -1,4 +1,9 @@
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import {
+  joinDiagnosticContent,
+  truncateDiagnosticContent,
+} from "../../infra/diagnostic-content.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -9,6 +14,7 @@ import {
   type DiagnosticHarnessRunErrorEvent,
   type DiagnosticHarnessRunOutcome,
 } from "../../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -20,6 +26,10 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
+import {
+  resolveFinalAssistantRawText,
+  resolveFinalMessageRawText,
+} from "../embedded-agent-runner/run/helpers.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
@@ -45,7 +55,23 @@ type AgentRunCompletion = {
   outcome: "completed" | "aborted" | "blocked" | "error";
   blockedBy?: string;
   error?: unknown;
+  messageContent?: AgentRunMessageContent;
 };
+type AgentRunMessageContent = { userPrompt?: string; finalResponse?: string };
+
+/** Gated, bounded prompt/answer for child run.completed, like embedded and CLI runs. */
+function agentRunMessageContent(
+  prompt: string | undefined,
+  assistant?: Parameters<typeof resolveFinalMessageRawText>[0],
+): AgentRunMessageContent | undefined {
+  const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
+  const finalText = policy.outputMessages ? resolveFinalMessageRawText(assistant) : undefined;
+  const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
+  const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
+  return userPrompt || finalResponse
+    ? { ...(userPrompt ? { userPrompt } : {}), ...(finalResponse ? { finalResponse } : {}) }
+    : undefined;
+}
 
 function assertAgentHarnessContextEngineSupport(
   harness: AgentHarness,
@@ -167,7 +193,12 @@ function emitAgentRunCompleted(
       ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
       ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
     },
-    errorMessage ? { errorMessage } : undefined,
+    errorMessage || completion.messageContent
+      ? {
+          ...(errorMessage ? { errorMessage } : {}),
+          ...(completion.messageContent ? { messageContent: completion.messageContent } : {}),
+        }
+      : undefined,
   );
 }
 
@@ -217,6 +248,18 @@ function emitAgentHarnessRunCompleted(params: {
   // forward the message so the error span shows more than a bare category.
   const errorMessage =
     outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
+  const finalAssistantText = contentPolicy.outputMessages
+    ? resolveFinalMessageRawText(
+        result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
+      )
+    : undefined;
+  const finalResponse = finalAssistantText
+    ? joinDiagnosticContent([finalAssistantText])
+    : undefined;
+  const harnessContent: { userPrompt?: string; finalResponse?: string } | undefined = finalResponse
+    ? { finalResponse }
+    : undefined;
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "harness.run.completed",
@@ -229,7 +272,10 @@ function emitAgentHarnessRunCompleted(params: {
       ...(typeof result.yieldDetected === "boolean" ? { yieldDetected: result.yieldDetected } : {}),
       itemLifecycle: { ...result.itemLifecycle },
     },
-    errorMessage ? { errorMessage } : undefined,
+    {
+      ...(errorMessage ? { errorMessage } : {}),
+      ...(harnessContent ? { harnessContent } : {}),
+    },
   );
 }
 
@@ -247,10 +293,18 @@ function createAgentHarnessLifecycleDiagnostics(
   let agentRunTrace = finalizing ? createRunTrace() : undefined;
   let agentRunStartedAt = finalizing ? startedAt : 0;
   let phase: AgentHarnessLifecyclePhase = "prepare";
-  emitTrustedDiagnosticEvent({
-    type: "harness.run.started",
-    ...agentHarnessDiagnosticBase(harness, params, trace),
-  });
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
+  const harnessContent =
+    contentPolicy.inputMessages && params.prompt
+      ? { userPrompt: truncateDiagnosticContent(params.prompt) }
+      : undefined;
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "harness.run.started",
+      ...agentHarnessDiagnosticBase(harness, params, trace),
+    },
+    harnessContent ? { harnessContent } : undefined,
+  );
   const unsubscribe = subscribeAgentCommentaryDiagnostics(
     params.config,
     agentHarnessDiagnosticBase(harness, params, trace),
@@ -303,7 +357,10 @@ function createAgentHarnessLifecycleDiagnostics(
         },
         errorMessage ? { errorMessage } : undefined,
       );
-      complete({ outcome: "error", error }, finalizing);
+      complete(
+        { outcome: "error", error, messageContent: agentRunMessageContent(params.prompt) },
+        finalizing,
+      );
     },
   };
 }
@@ -342,7 +399,13 @@ export async function runAgentHarnessLifecycleAttempt(
     diagnostics.unsubscribe();
   }
 
-  diagnostics.complete(agentRunCompletion(result));
+  diagnostics.complete({
+    ...agentRunCompletion(result),
+    messageContent: agentRunMessageContent(
+      params.prompt,
+      result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
+    ),
+  });
   emitAgentHarnessRunCompleted({
     harness,
     attemptParams: params,
@@ -388,18 +451,35 @@ export async function runAgentHarnessLifecycleFinalization(
               diagnosticTrace: freezeDiagnosticTraceContext(diagnostics.trace),
             },
     };
-    diagnostics.complete({ outcome: "completed" });
-    emitTrustedDiagnosticEvent({
-      type: "harness.run.completed",
-      ...agentHarnessDiagnosticBase(
-        harness,
-        params,
-        result.result.diagnosticTrace ?? diagnostics.trace,
-      ),
-      durationMs: Date.now() - diagnostics.startedAt,
+    diagnostics.complete({
       outcome: "completed",
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      messageContent: agentRunMessageContent(params.prompt, result.result.assistant),
     });
+    const finalizationContentPolicy = resolveDiagnosticModelContentCapturePolicy(
+      getRuntimeConfigSnapshot(),
+    );
+    const finalizationVisibleText = finalizationContentPolicy.outputMessages
+      ? resolveFinalAssistantRawText(result.result.assistant)
+      : undefined;
+    const finalizationResponseText = finalizationVisibleText
+      ? joinDiagnosticContent([finalizationVisibleText])
+      : undefined;
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "harness.run.completed",
+        ...agentHarnessDiagnosticBase(
+          harness,
+          params,
+          result.result.diagnosticTrace ?? diagnostics.trace,
+        ),
+        durationMs: Date.now() - diagnostics.startedAt,
+        outcome: "completed",
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      },
+      finalizationResponseText
+        ? { harnessContent: { finalResponse: finalizationResponseText } }
+        : undefined,
+    );
     return result;
   } catch (error) {
     diagnostics.fail(error);

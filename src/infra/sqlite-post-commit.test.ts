@@ -2,9 +2,9 @@ import { afterEach, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   deferSqlitePostCommitPublication,
+  publishSqliteCommittedState,
   stageSqliteCommittedPublication,
   stageSqliteTransactionState,
-  withSqliteCommittedPublications,
   withSqlitePostCommitPublications,
   type SqliteCommittedPublication,
 } from "./sqlite-post-commit.js";
@@ -37,18 +37,16 @@ it.each(["waiting", "active"] as const)(
     const { database, transaction, write, rows } = fixture();
     const installed: string[] = [];
     const observed: string[][] = [];
-    const stage = (key: string) => {
-      stageSqliteCommittedPublication(database, {
-        installFacts: () => installed.push(key),
-        invalidate() {},
-        notify: () => observed.push([...installed]),
-      });
-    };
+    const publication = (key: string): SqliteCommittedPublication => ({
+      installFacts: () => installed.push(key),
+      invalidate() {},
+      notify: () => observed.push([...installed]),
+    });
     const native = () => {
-      stage("tentative-native");
-      withSqliteCommittedPublications(database, () => stage("committed-worker"));
+      stageSqliteCommittedPublication(database, publication("tentative-native"));
+      publishSqliteCommittedState(publication("committed-worker"));
       expect(observed).toEqual([["committed-worker"]]);
-      stage("later-native");
+      stageSqliteCommittedPublication(database, publication("later-native"));
       throw new Error("native transaction refused");
     };
     expect(() =>

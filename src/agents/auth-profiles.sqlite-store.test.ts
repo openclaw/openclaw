@@ -35,7 +35,6 @@ import {
 import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
-  writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
 import {
@@ -262,27 +261,6 @@ describe("auth profile sqlite store", () => {
         database.close();
       }
       expect(fs.existsSync(resolveAuthProfileDatabasePath(agentDir))).toBe(false);
-    });
-  });
-
-  it("keeps legacy ownership when the main agent has runtime state", async () => {
-    await withAgentDirEnv("openclaw-auth-shared-legacy-", async (agentDir) => {
-      writePersistedAuthProfileStateRaw(
-        { version: 1, order: { openai: ["openai:legacy"] } },
-        agentDir,
-      );
-
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir,
-        profileId: "openai:default",
-        credential: apiKeyCredential("sk-updated"),
-      });
-
-      const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
-      expect(sharedValue(sharedDatabase, "auth.sharedStore")).toBeUndefined();
-      expect(sharedValue(sharedDatabase, "authProfiles.store")).toBeUndefined();
-      sharedDatabase.close();
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
     });
   });
 

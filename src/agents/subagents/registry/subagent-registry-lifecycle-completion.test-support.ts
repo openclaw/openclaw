@@ -32,11 +32,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-  subagentRunRecordVersion,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -63,11 +59,11 @@ function policyReceipt(
       if (!entry) {
         return [];
       }
-      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      const row = bindSubagentRunRecord(entry);
+      const subagent = rowToSubagentRunRecord(row)!;
       return [
         {
           subagent,
-          version: subagentRunRecordVersion(subagent)!,
           cleanupHandled: entry.cleanupHandled,
         },
       ];

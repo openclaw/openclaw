@@ -1,5 +1,8 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -8,6 +11,7 @@ import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plu
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
@@ -485,9 +489,21 @@ describe("late exact requester recovery", () => {
       } else {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
+        const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+        onTestFinished(() =>
+          memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+        );
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
+          { ...fixture.state.entry, incognito: true },
+        );
       }
       const delivery = fixture.startDelivery();
-      await fixture.dispatchEntered.promise;
+      await awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Announcement did not reach direct delivery",
+      );
       fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
       fixture.dispatchDone.resolve({ status: "ok", result: { payloads: [] } });
       await expect(delivery).resolves.toMatchObject({ delivered: false });

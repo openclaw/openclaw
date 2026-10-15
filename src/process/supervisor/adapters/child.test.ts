@@ -211,7 +211,7 @@ it("keeps macOS no-detach TERM on the direct signal path", async () => {
 it("retains one Linux fallback snapshot through root close and disposal", async () => {
   setPlatform("linux");
   const force = vi.fn();
-  killTreeMock.mockReturnValue({ force });
+  killTreeMock.mockReturnValue({ force, exited: () => false });
   const { adapter, child, emitExit, emitClose } = await setup({}, true);
   adapter.kill("SIGTERM");
   adapter.kill("SIGTERM");

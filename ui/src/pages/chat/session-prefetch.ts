@@ -61,13 +61,10 @@ type SessionPrefetchSnapshot = {
 };
 
 type SessionPrefetchCandidate = {
-  activityAt: number;
   sessionKey: string;
   snapshotKey: string;
   canonicalSessionKey: string;
   sessionId: GatewaySessionRow["sessionId"];
-  activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
-  updatedAt: GatewaySessionRow["updatedAt"];
 };
 
 function mayPrefetchHistory(
@@ -359,7 +356,6 @@ class SessionPrefetcher {
       return null;
     }
     return {
-      activityAt,
       sessionKey: row.key,
       canonicalSessionKey: resolveChatSnapshotSessionKey(snapshot.snapshotHost, {
         sessionKey: row.key,
@@ -367,8 +363,6 @@ class SessionPrefetcher {
       }),
       snapshotKey,
       sessionId: row.sessionId,
-      activeLeafEntryId: row.activeLeafEntryId,
-      updatedAt: row.updatedAt,
     };
   }
 
@@ -389,31 +383,13 @@ class SessionPrefetcher {
     if (!candidate) {
       return true;
     }
-    // Unrelated roster refreshes cannot retire this read, but every row sharing
-    // its snapshot key must agree: an unchanged alias cannot hide newer history.
-    let found = false;
-    for (const row of current.rows ?? []) {
-      if (
-        resolveChatSnapshotKey(current.snapshotHost, {
-          sessionKey: row.key,
-          agentId: row.agentId,
-        }) !== candidate.snapshotKey
-      ) {
-        continue;
-      }
-      const activityAt = sessionActivityAt(row);
-      if (
-        row.sessionId !== candidate.sessionId ||
-        row.activeLeafEntryId !== candidate.activeLeafEntryId ||
-        (row.updatedAt ?? 0) > (candidate.updatedAt ?? 0) ||
-        activityAt > candidate.activityAt ||
-        isSessionRunActive(row)
-      ) {
-        return false;
-      }
-      found ||= row.updatedAt === candidate.updatedAt && activityAt === candidate.activityAt;
-    }
-    return found;
+    // Warm history is best effort; opening the pane revalidates its cursor.
+    // Cache invalidation and the final open-pane check still own publication.
+    return (
+      current.rows?.some(
+        (row) => row.key === candidate.sessionKey && row.sessionId === candidate.sessionId,
+      ) === true
+    );
   }
 
   private isOpen(snapshotKey: string): boolean {
@@ -457,26 +433,40 @@ export class SessionPrefetchController implements ReactiveController {
   hostConnected(): void {
     // Home is a sibling of the page. Observe every pane on this socket through
     // its shell, including lifecycle edges that cannot bubble after removal.
-    this.paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
-    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
-    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+    this.bindPaneRoot(this.host.closest("openclaw-app-shell") ?? this.host);
     this.prefetcher.connect();
     this.sync();
   }
 
   hostUpdated(): void {
+    // Solid constructs the page before attachment; its commit supplies the shell.
+    const paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
+    if (paneRoot !== this.paneRoot) {
+      this.bindPaneRoot(paneRoot);
+    }
     this.sync();
   }
 
   hostDisconnected(): void {
+    this.unbindPaneRoot();
+    this.clearSubscriptions();
+    this.prefetcher.disconnect();
+  }
+
+  private bindPaneRoot(root: Element): void {
+    this.unbindPaneRoot();
+    this.paneRoot = root;
+    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+  }
+
+  private unbindPaneRoot(): void {
     this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
     this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
     this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
-    this.clearSubscriptions();
-    this.prefetcher.disconnect();
   }
 
   private readonly handleNavigationIntent = (event: Event) => {

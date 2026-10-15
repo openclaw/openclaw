@@ -58,7 +58,6 @@ export async function checkInboundAccessControl(params: {
   isFromMe: boolean;
   messageTimestampMs?: number;
   connectedAtMs?: number;
-  pairingGraceMs?: number;
   /** False for messages the sender did not type (poll votes): never send a pairing prompt. */
   pairingReplyAllowed?: boolean;
   verbose?: boolean;
@@ -72,15 +71,11 @@ export async function checkInboundAccessControl(params: {
     accountId: params.accountId,
     selfE164: params.selfE164,
   });
-  const pairingGraceMs =
-    typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
-      ? params.pairingGraceMs
-      : PAIRING_REPLY_HISTORY_GRACE_MS;
   const suppressPairingReply =
     params.pairingReplyAllowed === false ||
     (typeof params.connectedAtMs === "number" &&
       typeof params.messageTimestampMs === "number" &&
-      params.messageTimestampMs < params.connectedAtMs - pairingGraceMs);
+      params.messageTimestampMs < params.connectedAtMs - PAIRING_REPLY_HISTORY_GRACE_MS);
 
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied: policy.providerMissingFallbackApplied,

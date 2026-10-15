@@ -22,8 +22,8 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
-import { registerSessionMaintenancePreserveKeysProvider } from "../../config/sessions/store-maintenance-preserve.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
 import {
@@ -182,6 +182,55 @@ async function enqueueGuardedCliWatchdog(params: {
     admission.close();
   }
 }
+
+it.for([
+  { entry: { archivedAt: 1 }, error: "archived", retryable: false },
+  { entry: { initializationPending: true }, error: "still initializing", retryable: true },
+  {
+    entry: {
+      mainRestartRecovery: {
+        cycleId: "failed-recovery",
+        revision: 1,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    },
+    error: "ended during restart recovery",
+    retryable: false,
+  },
+] satisfies Array<{ entry: Partial<InternalSessionEntry>; error: string; retryable: boolean }>)(
+  "preserves session event admission policy: $error",
+  async ({ entry, error, retryable }, { signal }) => {
+    await withOpenClawTestState({ label: "session-event-refusal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+        skills: { load: { watch: false } },
+      };
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const scope = { agentId: "main", sessionKey: "agent:main:event-refusal" };
+      await replaceSessionEntry(scope, { sessionId: "event-refusal", updatedAt: 1, ...entry });
+      runEmbeddedAgentMock.mockReset();
+      const receipt = enqueueSessionEventForHost("Resume interrupted work", {
+        ...scope,
+        source: "restart",
+        abortSignal: signal,
+      });
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: expect.stringContaining(error),
+        retryable,
+      });
+      await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+    });
+  },
+);
 
 it.for([
   "allowed",
@@ -420,36 +469,31 @@ it.for([
               host.close();
             }
           });
-        let maintenancePrepared = false;
+        let creationConflictObserved = false;
         const cancellation = new AbortController();
         let creationCancellationObserved = false;
         const commitProjection =
           sessionLifecycleProjection.commitSessionLifecycleProjectionInWorker;
         const creationCommit =
-          change === "cancelled-creation"
+          change === "cancelled-creation" || change === "creation-retry"
             ? vi
                 .spyOn(sessionLifecycleProjection, "commitSessionLifecycleProjectionInWorker")
                 .mockImplementation(async (params) => {
+                  const creating = params.input.projected.upsertedEntries.some(
+                    (entry) => entry.sessionKey === scope.sessionKey && !entry.expectedEntry,
+                  );
+                  if (creating && change === "creation-retry" && !creationConflictObserved) {
+                    creationConflictObserved = true;
+                    throw new SessionEntryLifecycleUpsertConflictError(scope.sessionKey);
+                  }
                   const result = await commitProjection(params);
-                  if (
-                    params.input.projected.upsertedEntries.some(
-                      (entry) => entry.sessionKey === scope.sessionKey && !entry.expectedEntry,
-                    )
-                  ) {
+                  if (creating && change === "cancelled-creation") {
                     creationCancellationObserved = true;
                     cancellation.abort();
                   }
                   return result;
                 })
             : undefined;
-        let stopPreserving = () => {};
-        if (change === "creation-retry") {
-          stopPreserving = registerSessionMaintenancePreserveKeysProvider(async () => {
-            maintenancePrepared = true;
-            stopPreserving();
-            return { capture: () => [], dispose: () => {} };
-          });
-        }
         let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
         let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
         const route = toolOnly
@@ -507,7 +551,6 @@ it.for([
         } finally {
           route?.mockRestore();
           creationCommit?.mockRestore();
-          stopPreserving();
         }
         if (change === "failed-adoption") {
           expect(accepted).toMatchObject({ ok: false });
@@ -519,7 +562,7 @@ it.for([
         }
         if (change === "creation-retry") {
           expect(accepted).toMatchObject({ ok: false });
-          expect(maintenancePrepared).toBe(true);
+          expect(creationConflictObserved).toBe(true);
           expect(outcome).toMatchObject({
             status: "failed",
             executionStarted: false,

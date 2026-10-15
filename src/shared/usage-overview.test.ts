@@ -11,8 +11,9 @@ function report(
   options: UsageOverviewOptions = {},
 ) {
   return buildUsageOverview({
-    sessions: [{ key: "session", agentId: "main", instances: [{ sessionFile: "fixture" }] }],
-    summaries: [{ ...createEmptyCostUsageTotals(), ...summary }],
+    rows: [
+      { key: "session", agentId: "main", usage: { ...createEmptyCostUsageTotals(), ...summary } },
+    ],
     options,
     dayBucket,
   });
@@ -338,45 +339,44 @@ describe("overview family and multi-agent accounting", () => {
         toolUsage: { totalCalls: 1, uniqueTools: 1, tools: [{ name: "read", count: 1 }] },
       };
     };
+    const firstDay = makeUsage(10, "2026-02-01", "provider::a", "model");
+    const secondDay = makeUsage(20, "2026-02-02", "provider", "a::model");
     const first = {
-      sessions: [
-        {
-          key: "family",
-          agentId: "first",
-          channel: "slack",
-          creatorKey: "person",
-          updatedAt: 20,
-          instances: [{ sessionFile: "first" }, { sessionFile: "rotated" }],
-        },
-      ],
-      summaries: [
-        makeUsage(10, "2026-02-01", "provider::a", "model"),
-        makeUsage(20, "2026-02-02", "provider", "a::model"),
-      ],
+      key: "family",
+      agentId: "first",
+      channel: "slack",
+      creatorKey: "person",
+      updatedAt: 20,
+      usage: {
+        ...makeUsage(30, "2026-02-01", "provider::a", "model"),
+        lastActivity: secondDay.lastActivity,
+        activityDates: ["2026-02-01", "2026-02-02"],
+        dailyBreakdown: [...firstDay.dailyBreakdown!, ...secondDay.dailyBreakdown!],
+        dailyMessageCounts: [...firstDay.dailyMessageCounts!, ...secondDay.dailyMessageCounts!],
+        modelUsage: [...firstDay.modelUsage!, ...secondDay.modelUsage!],
+        missingCostEntries: 2,
+        missingCostByModel: { "provider::a/model": 1, "provider/a::model": 1 },
+        messageCounts: { total: 2, user: 0, assistant: 2, toolCalls: 2, toolResults: 0, errors: 0 },
+        toolUsage: { totalCalls: 2, uniqueTools: 1, tools: [{ name: "read", count: 2 }] },
+      },
     };
     const second = {
-      sessions: [
-        {
-          key: "second",
-          agentId: "second",
-          channel: "slack",
-          creatorKey: "person",
-          updatedAt: 30,
-          instances: [{ sessionFile: "second" }],
-        },
-      ],
-      summaries: [makeUsage(30, "2026-02-01", "provider::a", "model")],
+      key: "second",
+      agentId: "second",
+      channel: "slack",
+      creatorKey: "person",
+      updatedAt: 30,
+      usage: makeUsage(30, "2026-02-01", "provider::a", "model"),
     };
     return [first, second];
   }
 
-  it("merges family instances and all agents before selecting the page", () => {
+  it("aggregates prepared family rows and all agents before selecting the page", () => {
     const options = { offset: 1, limit: 1, sort: "recent" as const };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
     const inputs = sources();
     const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
+      rows: inputs,
       options,
       dayBucket,
     });
@@ -416,14 +416,13 @@ describe("overview family and multi-agent accounting", () => {
     const options = { selectedDays: ["2026-02-01"], recentKeys: [] };
     const inputs = sources();
     const later = inputs[1]!;
-    later.summaries[0]!.firstActivity = Date.parse("2026-02-03T10:00:00Z");
-    later.summaries[0]!.lastActivity = Date.parse("2026-02-03T10:01:00Z");
-    later.summaries[0]!.activityDates = ["2026-02-03"];
-    later.summaries[0]!.dailyBreakdown![0]!.date = "2026-02-03";
-    later.summaries[0]!.dailyMessageCounts![0]!.date = "2026-02-03";
+    later.usage.firstActivity = Date.parse("2026-02-03T10:00:00Z");
+    later.usage.lastActivity = Date.parse("2026-02-03T10:01:00Z");
+    later.usage.activityDates = ["2026-02-03"];
+    later.usage.dailyBreakdown![0]!.date = "2026-02-03";
+    later.usage.dailyMessageCounts![0]!.date = "2026-02-03";
     const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
+      rows: inputs,
       options,
       dayBucket,
     });
@@ -465,8 +464,7 @@ describe("overview family and multi-agent accounting", () => {
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
     const inputs = sources();
     const result = buildUsageOverview({
-      sessions: inputs.flatMap((source) => source.sessions),
-      summaries: inputs.flatMap((source) => source.summaries),
+      rows: inputs,
       options,
       dayBucket,
     });
@@ -477,16 +475,15 @@ describe("overview family and multi-agent accounting", () => {
 
   it("counts activity independently of recently modified empty comparison rows", () => {
     const result = buildUsageOverview({
-      sessions: ["active", "empty"].map((key) => ({
+      rows: ["active", "empty"].map((key) => ({
         key,
         agentId: "main",
         updatedAt: 2,
-        instances: [{ sessionFile: key }],
+        usage:
+          key === "active"
+            ? { ...createEmptyCostUsageTotals(), firstActivity: 1, totalTokens: 7 }
+            : createEmptyCostUsageTotals(),
       })),
-      summaries: [
-        { ...createEmptyCostUsageTotals(), firstActivity: 1, totalTokens: 7 },
-        createEmptyCostUsageTotals(),
-      ],
       options: {},
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
@@ -499,10 +496,7 @@ describe("overview family and multi-agent accounting", () => {
     expect(result.aggregates.sessionCount).toBe(1);
     expect(result.totals.totalTokens).toBe(7);
     const emptySelected = buildUsageOverview({
-      sessions: [
-        { key: "empty", agentId: "main", updatedAt: 2, instances: [{ sessionFile: "empty" }] },
-      ],
-      summaries: [createEmptyCostUsageTotals()],
+      rows: [{ key: "empty", agentId: "main", updatedAt: 2, usage: createEmptyCostUsageTotals() }],
       options: { selectedSessions: ["empty"] },
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
@@ -535,10 +529,10 @@ it.each(["tokens", "cost"] as const)(
         ),
       }),
     );
-    const sessions = ["first", "second"].map((key) => ({
+    const rows = ["first", "second"].map((key, index) => ({
       key,
       agentId: "main",
-      instances: [{ sessionFile: key }],
+      usage: summaries[index] ?? null,
     }));
     const options = {
       selectedDays: ["2026-02-01"],
@@ -546,7 +540,7 @@ it.each(["tokens", "cost"] as const)(
       sort,
     };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
-    const compact = buildUsageOverview({ sessions, summaries, options, dayBucket });
+    const compact = buildUsageOverview({ rows, options, dayBucket });
     expect(
       compact.sessions.map((session) => [
         session.key,
@@ -558,8 +552,7 @@ it.each(["tokens", "cost"] as const)(
       ["second", 1, 0.1],
     ]);
     const canonical = buildUsageOverview({
-      sessions,
-      summaries,
+      rows,
       options,
       dayBucket,
       compact: false,
@@ -582,6 +575,7 @@ it.each(["tokens", "cost"] as const)(
     expect(compact.overview.selectedRows[0]?.usage?.dailyBreakdown).toBeUndefined();
     expect(canonical.overview.selectedRows[0]?.usage?.dailyBreakdown).toHaveLength(2);
     expect(compact.overview).toMatchObject({
+      selectedUsageComplete: true,
       tableSessionCount: 2,
       tableTotals: { tokens: 91, cost: 9.1, errors: 0 },
     });

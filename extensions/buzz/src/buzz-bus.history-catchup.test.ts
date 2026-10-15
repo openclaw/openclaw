@@ -104,7 +104,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
           }
         }
         if (!relayMocks.stallHistoryPages || !isHistoryPage) {
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         }
         return {
           id: `sub:${relayMocks.historyRequests.length}`,

@@ -15,6 +15,7 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
+import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
@@ -26,6 +27,7 @@ import type {
   AgentSchemaInspection,
   AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
@@ -144,6 +146,10 @@ export function createAgentSchemaInspectionWorker() {
             };
           }
         }
+        if (kind === "agent" && input.requireStartupMigrationReadiness) {
+          // Only an admission miss needs comparison templates in later runtime workers.
+          getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
+        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -186,7 +192,11 @@ export function createAgentSchemaInspectionWorker() {
           } else {
             if (kind === "state") {
               const stateInspection = message.stateInspection;
-              if (!stateInspection) {
+              if (stateInspection === null) {
+                response.resolve(null);
+                return;
+              }
+              if (stateInspection === undefined) {
                 failure = new Error("Invalid state schema inspection response");
                 kill();
                 return;
@@ -306,10 +316,10 @@ export function createAgentSchemaInspectionWorker() {
       input: StateSchemaInspectionInput,
       callerSignal: AbortSignal | undefined,
       snapshotPath?: string,
-    ): Promise<StateSchemaInspection> => {
+    ): Promise<StateSchemaInspection | null> => {
       const result = await operations.inspect({ kind: "state", input }, callerSignal, snapshotPath);
-      if (!result || !("schemas" in result)) {
-        throw new Error("Missing state schema inspection result");
+      if (result && !("schemas" in result)) {
+        throw new Error("Unexpected agent schema inspection result");
       }
       return result;
     },

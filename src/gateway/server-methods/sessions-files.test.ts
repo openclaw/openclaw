@@ -48,8 +48,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (original) => ({
   ...(await original<typeof import("../session-utils.js")>()),
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
@@ -111,6 +110,38 @@ describe("sessions.files RPC handlers", () => {
       entry,
     });
   }
+
+  it.each(["list", "get", "assets", "set", "reveal"] as const)(
+    "rejects device-folder %s without touching either host's files",
+    async (operation) => {
+      const deviceRoot = outsideDirs.make("session-files-device-");
+      fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "GATEWAY");
+      fs.writeFileSync(path.join(deviceRoot, "notes.txt"), "DEVICE");
+      mockSession({
+        sessionId: "device-session",
+        deviceFolder: { deviceId: "paired-device", path: deviceRoot },
+        spawnedCwd: workspaceRoot,
+        spawnedWorkspaceDir: workspaceRoot,
+      });
+      const params =
+        operation === "reveal"
+          ? { key: sessionKey }
+          : {
+              sessionKey,
+              path: "notes.txt",
+              ...(operation === "assets" ? { refs: [] } : {}),
+              ...(operation === "set"
+                ? { content: "WRONG HOST", expectedHash: hashContent("GATEWAY") }
+                : {}),
+            };
+      const error = expectError(await invoke(`sessions.files.${operation}`, params));
+      expect(error.details).toMatchObject({ type: "device_folder_files_unavailable" });
+      expect(fs.readFileSync(path.join(workspaceRoot, "notes.txt"), "utf8")).toBe("GATEWAY");
+      expect(fs.readFileSync(path.join(deviceRoot, "notes.txt"), "utf8")).toBe("DEVICE");
+      expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+      expect(hoisted.readDelta).not.toHaveBeenCalled();
+    },
+  );
 
   function fixedStoreConfig() {
     return {

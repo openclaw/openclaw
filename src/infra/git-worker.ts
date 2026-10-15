@@ -46,6 +46,7 @@ const SPAWN_OPERATIONS = {
   "checkout.diff": "checkout.diff",
   "checkout.baseline": "checkout.baseline",
   "pull-request.branch-facts": "pull-request.branch-facts",
+  "pull-request.branch-comparison": "pull-request.branch-facts",
   "worktree.snapshot": "worktree.snapshot",
   "worktree.snapshot-verify-exact": "worktree.snapshot",
   "worktree.cleanup-inspection": "worktree.cleanup",
@@ -140,7 +141,6 @@ function poolFor(
     workerOptions:
       owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
-    idleTimeoutMs: 30_000,
   }));
 }
 
@@ -223,7 +223,8 @@ async function executeOperation(
   const contentRoot =
     command.type === "checkout.diff" || command.type === "checkout.baseline"
       ? command.input.cwd
-      : command.type === "pull-request.branch-facts"
+      : command.type === "pull-request.branch-facts" ||
+          command.type === "pull-request.branch-comparison"
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;

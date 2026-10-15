@@ -1,14 +1,18 @@
 import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
+import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
-import "../pages/chat/components/browser-tab-card.tsx";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
 import "../test-helpers/load-styles.ts";
+import "./agent-select-registration.ts";
 import "./menu-surface.ts";
+import { Menu } from "./solid/menu.tsx";
 import "./resizable-divider.ts";
 import "./web-awesome.ts";
 
@@ -103,14 +107,6 @@ function menuSurface(dropdown: Dropdown): HTMLElement {
   return surface;
 }
 
-async function settledMenuSurface(dropdown: Dropdown) {
-  await dropdown.updateComplete;
-  await Promise.all(
-    [...dropdown.querySelectorAll("wa-dropdown-item")].map((item) => item.updateComplete),
-  );
-  return menuSurface(dropdown);
-}
-
 async function openMenu(dropdown: Dropdown) {
   const shown = new Promise<Event>((resolve) => {
     dropdown.addEventListener("wa-after-show", resolve, { once: true });
@@ -125,27 +121,13 @@ async function expectMenuInTopLayer(dropdown: Dropdown) {
   await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
 }
 
-async function pauseMenuOpening(dropdown: Dropdown, trigger: HTMLElement) {
-  const surface = await settledMenuSurface(dropdown);
-  surface.style.setProperty("--show-duration", "1s");
-  trigger.click();
-  await expect.poll(() => surface.getAnimations().length).toBe(1);
-  const animation = surface.getAnimations()[0];
-  if (!animation) {
-    throw new Error("expected the menu to be animating");
-  }
-  animation.pause();
-  animation.currentTime = 500;
-  return surface;
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
-  const dropdown = card.querySelector("wa-dropdown");
-  if (!dropdown) {
+  const menu = card.querySelector<HTMLElement>(".oc-menu");
+  if (!menu) {
     throw new Error("expected browser card menu");
   }
-  return dropdown;
+  return menu;
 }
 
 describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
@@ -187,11 +169,19 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(menu.contains(hit)).toBe(true);
     expect(surface.getBoundingClientRect().width).toBe(0);
     menu.style.left = "250px";
-    await expect.poll(() => nearby).toEqual([false, true]);
+    // Occlusion samples geometry on animation frames. Wait for that boundary
+    // rather than racing a wall-clock poll against background WebKit frames.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true]);
     expect(distant).toEqual([false]);
     menu.style.left = "850px";
-    await expect.poll(() => nearby).toEqual([false, true, false]);
-    await expect.poll(() => distant).toEqual([false, true]);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true, false]);
+    expect(distant).toEqual([false, true]);
   });
 
   it("paints a dropdown above the divider through its own popover", async () => {
@@ -230,16 +220,18 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
   it("stays opaque while the menu animates open", async () => {
     await useDesktopViewport();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "agent-select";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.textContent = "Agent";
-    const item = document.createElement("wa-dropdown-item");
-    item.textContent = "All agents";
-    dropdown.append(trigger, item);
-    document.body.append(dropdown);
-    const menu = await pauseMenuOpening(dropdown, trigger);
+    const picker = document.createElement("openclaw-agent-select");
+    picker.options = [{ value: "all", label: "All agents" }];
+    document.body.append(picker);
+    await picker.updateComplete;
+    const menu = picker.querySelector<HTMLElement>(".agent-select__menu")!;
+    menu.style.setProperty("--oc-overlay-show-duration", "1s");
+    picker.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await expect.poll(() => menu.getAnimations().length).toBeGreaterThan(0);
+    for (const animation of menu.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 500;
+    }
     expect(getComputedStyle(menu).opacity).toBe("1");
     expect(getComputedStyle(menu).scale).not.toBe("1");
   });
@@ -362,9 +354,9 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         host,
       );
       const { page } = await import("vitest/browser");
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
-      const photo = host.querySelector<HTMLElement>('wa-dropdown-item[value="photo"]')!;
-      const skills = host.querySelector<HTMLElement>('wa-dropdown-item[value="open-skills"]')!;
+      await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
+      const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
+      const skills = host.querySelector<HTMLElement>('[data-value="open-skills"]')!;
       await hoverBackground(photo, highlight);
       const attachmentHover = getComputedStyle(photo).backgroundColor;
       await hoverBackground(skills, attachmentHover);
@@ -379,33 +371,35 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       document.body.append(host);
       const { page } = await import("vitest/browser");
-      render(
-        html`<wa-dropdown>
-          <button slot="trigger">Library</button>
-          ${solidTemplate(renderComposerLibraryMenuSolid, {
-            result: null,
-            loading: false,
-            busy: false,
-            error: "Library unavailable",
-            notice: null,
-            canWrite: false,
-            onReload: () => {},
-            onRead: () => {},
-            onActivate: () => {},
-          })}
-        </wa-dropdown>`,
-        host,
+      mountSolid(
+        () =>
+          createComponent(Menu, {
+            id: "library-menu-test",
+            label: "Library",
+            items: composerLibraryMenuItems({
+              result: null,
+              loading: false,
+              busy: false,
+              error: "Library unavailable",
+              notice: null,
+              canWrite: false,
+              onReload: () => {},
+              onRead: () => {},
+              onActivate: () => {},
+            }),
+          }),
+        { container: host },
       );
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
       await hoverBackground(
-        host.querySelector<HTMLElement>('[value="library-reload"]')!,
+        host.querySelector<HTMLElement>('[data-value="library-reload"]')!,
         highlight,
       );
     },
   );
 
   it.each(["dark", "light"] as const)(
-    "matches session menu geometry and theme inside browser-card shadow roots in %s mode",
+    "matches session menu geometry and theme inside browser cards in %s mode",
     async (theme) => {
       await useDesktopViewport();
       const highlight = useTheme(theme);
@@ -419,19 +413,23 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         title: "Example page",
       };
       document.body.append(card);
-      const dropdown = await browserCardMenu(card);
+      const menu = await browserCardMenu(card);
       const { page } = await import("vitest/browser");
-      await page.elementLocator(card.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await page.elementLocator(card.querySelector<HTMLElement>(".more")!).click();
       const item = card.querySelector<HTMLElement>('[value="copy-url"]')!;
-      const reference = document.createElement("wa-dropdown");
-      reference.className = "session-menu";
-      const referenceItem = document.createElement("wa-dropdown-item");
-      referenceItem.className = "session-menu__item";
-      referenceItem.textContent = "Reference action";
-      reference.append(referenceItem);
+      const reference = document.createElement("div");
       document.body.append(reference);
-      const menu = await settledMenuSurface(dropdown);
-      const referenceMenu = await settledMenuSurface(reference);
+      render(
+        solidTemplate(Menu, {
+          id: "browser-card-reference",
+          label: "Reference menu",
+          class: "session-menu",
+          items: [{ id: "reference", label: "Reference action", class: "session-menu__item" }],
+        }),
+        reference,
+      );
+      const referenceMenu = reference.querySelector<HTMLElement>(".oc-menu")!;
+      const referenceItem = reference.querySelector<HTMLElement>('[data-value="reference"]')!;
       for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
         expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
           getComputedStyle(referenceMenu).getPropertyValue(property),

@@ -127,5 +127,5 @@ export async function serveControlUiIndexHtml(
     "Cache-Control",
     bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
   );
-  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent, sessionEntryPath);
+  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

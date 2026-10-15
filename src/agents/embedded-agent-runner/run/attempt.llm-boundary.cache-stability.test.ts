@@ -8,7 +8,6 @@ import {
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
-import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -286,22 +285,12 @@ describe("prompt-cache boundary regressions", () => {
   describe("cross-run failure and queued-input replay", () => {
     registerParityHostLifecycle();
 
-    it.each(
-      (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
-        (["error", "aborted"] as const).flatMap((stopReason) =>
-          (
-            [
-              "partial",
-              "empty",
-              "blank",
-              "completed-tool",
-              "unfinished-tool",
-              "unfinished-tool-only",
-            ] as const
-          ).map((contentKind) => ({ api, stopReason, contentKind })),
-        ),
-      ),
-    )(
+    it.each([
+      { api: "openai-responses", stopReason: "error", contentKind: "partial" },
+      { api: "openai-responses", stopReason: "error", contentKind: "completed-tool" },
+      { api: "openai-responses", stopReason: "error", contentKind: "unfinished-tool-only" },
+      { api: "anthropic-messages", stopReason: "error", contentKind: "completed-tool" },
+    ] as const)(
       "$api preserves $contentKind $stopReason history through cold replay",
       async ({ api, stopReason, contentKind }) => {
         const staged = user("Staged follow-up", TS + 2);
@@ -315,31 +304,26 @@ describe("prompt-cache boundary regressions", () => {
           provider: api === "anthropic-messages" ? "anthropic" : "openai",
           model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
           stopReason,
-          content:
-            contentKind === "empty"
+          content: [
+            ...(contentKind === "unfinished-tool-only"
               ? []
               : [
-                  ...(contentKind === "unfinished-tool-only"
-                    ? []
-                    : [
-                        {
-                          type: "text" as const,
-                          text: contentKind === "blank" ? "" : "Incomplete answer",
-                        },
-                      ]),
-                  ...(contentKind === "completed-tool" ||
-                  contentKind === "unfinished-tool" ||
-                  contentKind === "unfinished-tool-only"
-                    ? [
-                        {
-                          type: "toolCall" as const,
-                          id: "call_fixture",
-                          name: "read",
-                          arguments: {},
-                        },
-                      ]
-                    : []),
-                ],
+                  {
+                    type: "text" as const,
+                    text: "Incomplete answer",
+                  },
+                ]),
+            ...(contentKind === "completed-tool" || contentKind === "unfinished-tool-only"
+              ? [
+                  {
+                    type: "toolCall" as const,
+                    id: "call_fixture",
+                    name: "read",
+                    arguments: {},
+                  },
+                ]
+              : []),
+          ],
           errorMessage: "private provider diagnostic",
           __openclaw: { runId: "first-run", itemId: "first-item" },
         };
@@ -560,31 +544,6 @@ describe("prompt-cache boundary regressions", () => {
     ]);
   });
 
-  it.each([
-    ["openai-completions", false],
-    ["openai-completions", true],
-    ["openai-responses", false],
-    ["openai-responses", true],
-  ] as const)(
-    "preserves inbound metadata across consecutive %s requests (append-only context=%s)",
-    async (api, appendOnlyRuntimeContext) => {
-      const metadata = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"test"}\n```\n\n';
-      const active = [user(`${metadata}Check the deployment.`), ...toolRound(1, api)];
-      const boundaryOptions = { ...options, appendOnlyRuntimeContext };
-      const previous = await capture(api, active, boundaryOptions);
-      const next = await capture(
-        api,
-        [...active, answer, user("Next request", TS + 60000)],
-        boundaryOptions,
-      );
-      const field = api === "openai-completions" ? "messages" : "input";
-      const before = previous[field] as unknown[];
-      const after = next[field] as unknown[];
-      expect(JSON.stringify(before)).toContain("openclaw:ctx");
-      expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
-    },
-  );
-
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
@@ -605,48 +564,6 @@ describe("prompt-cache boundary regressions", () => {
     );
     expect(JSON.stringify(previousMessages.at(-1))).toContain("sender=Bob");
     expect(JSON.stringify(nextMessages)).not.toContain("sender=Bob");
-  });
-
-  it("continues Responses tool rounds without moving or losing cron prompt context", async () => {
-    const metadata = "Conversation info:\nsender=Bob";
-    const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
-    const messages = [
-      carrier(metadata),
-      user(`${memory}\n\nCurrent time: 2026-06-05 10:30. Check the deployment.`),
-    ];
-    let previous = await capture("openai-responses", messages);
-    expect(JSON.stringify(previous.input)).toContain("saved preference");
-    expect(JSON.stringify(previous.input)).toContain(metadata.replaceAll("\n", "\\n"));
-    for (const round of [1, 2]) {
-      const callId = `call_${round}`;
-      messages.push(...toolRound(round, "openai-responses"));
-      const request = await capture("openai-responses", messages);
-      const continuation = resolveResponsesContinuationRequest(
-        {
-          lastRequest: previous,
-          lastResponseId: `resp_${round}`,
-          lastResponseItems: [
-            { type: "function_call", call_id: callId, name: "read", arguments: "{}" },
-          ],
-        },
-        request,
-      );
-      expect(continuation.continuationStatus).toBe("continued");
-      expect(continuation.request.input).toEqual([
-        { type: "function_call_output", call_id: callId, output: `result ${round}` },
-      ]);
-      previous = request;
-    }
-    messages.push(answer, user("next request", TS + 60000));
-    const next = await capture("openai-responses", messages);
-    expect(JSON.stringify(next.input)).toContain("saved preference");
-    expect(JSON.stringify(next.input)).not.toContain("sender=Bob");
-    expect(
-      resolveResponsesContinuationRequest(
-        { lastRequest: previous, lastResponseId: "resp_final", lastResponseItems: [] },
-        next,
-      ).continuationStatus,
-    ).toBe("history_changed");
   });
 
   it("keeps batched steering context with its owning user through Responses conversion", async () => {

@@ -5,6 +5,7 @@ import {
   getInternalDiagnosticEventSequence,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -15,6 +16,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import * as mainThreadStall from "../../infra/main-thread-stall.js";
 import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
@@ -57,10 +59,12 @@ function createMonitorHarness(params?: {
   cpuMsPerWallMs?: number;
   utilization?: number;
   isIdle?: () => boolean;
+  schedulerWallOffsetMs?: number;
 }) {
   let nowMs = 10_000;
   nativeDelay.max = 20_000_000;
-  const clock = createGatewaySchedulerClock(nowMs);
+  const wallOffsetMs = params?.schedulerWallOffsetMs ?? 0;
+  const clock = createGatewaySchedulerClock(nowMs + wallOffsetMs);
   const scheduler = createTestGatewayScheduler(clock.clock);
   const cpuMsPerWallMs = params?.cpuMsPerWallMs ?? 0.1;
   const utilization = params?.utilization ?? 0.2;
@@ -88,7 +92,7 @@ function createMonitorHarness(params?: {
   const sample = async (elapsedMs = 20) => {
     nowMs += elapsedMs;
     nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
-    await clock.advanceTo(nowMs);
+    await clock.advanceTo(nowMs + wallOffsetMs);
   };
   return {
     monitor,
@@ -110,27 +114,56 @@ function createMonitorHarness(params?: {
 }
 
 describe("createGatewayEventLoopHealthMonitor", () => {
-  it("sleeps for ten seconds while idle and resumes full sampling with work", async () => {
+  it("aligns idle sampling within ten seconds and resumes full sampling with work", async () => {
     let idle = true;
     const harness = createMonitorHarness({ isIdle: () => idle });
     await harness.samples(50);
     const first = harness.monitor.snapshot();
     const reads = harness.cpuUsage.mock.calls.length;
-    await harness.samples(499);
+    await harness.samples(449);
     await harness.sample(19);
     expect(harness.monitor.snapshot()).toBe(first);
     expect(harness.cpuUsage).toHaveBeenCalledTimes(reads);
     await harness.sample(1);
-    expect(harness.monitor.snapshot()).toMatchObject({
-      intervalMs: 10_000,
+    const idleSample = harness.monitor.snapshot();
+    expect(idleSample).toMatchObject({
+      intervalMs: 9_000,
       delayP99Ms: 0,
-      delayMaxMs: 20,
       degraded: false,
     });
+    expect(idleSample?.delayMaxMs).toBe(0);
     idle = false;
     await harness.samples(500);
     await harness.samples(50);
     expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, delayMaxMs: 20 });
+  });
+
+  it("detects a late idle wake with separate wall and elapsed clocks", async () => {
+    // Isolate deadline detection from callback attribution of the synthetic clock jump.
+    const stallMonitor = vi.spyOn(mainThreadStall, "createMainThreadStallMonitor").mockReturnValue({
+      drain: () => ({ stalls: [], dropped: 0, delayMaxMs: 0 }),
+      reset: () => {},
+      stop: () => {},
+    });
+    try {
+      const harness = createMonitorHarness({
+        isIdle: () => true,
+        schedulerWallOffsetMs: 1_700_000_000_000,
+      });
+      await harness.samples(50);
+      await harness.samples(450);
+      expect(harness.monitor.snapshot()).toMatchObject({ degraded: false });
+      harness.elapseWithoutSampling(12_000);
+      nativeDelay.max = 20_000_000;
+      await harness.sample();
+      expect(harness.monitor.snapshot()).toMatchObject({
+        degraded: true,
+        delayMaxMs: 2_020,
+        reasons: ["event_loop_delay"],
+      });
+    } finally {
+      stallMonitor.mockRestore();
+    }
   });
 
   it("keeps idle callback stalls and resumes one-second sampling after degradation", async () => {
@@ -142,12 +175,13 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       run: () => harness.elapseWithoutSampling(1_200),
     });
     await harness.sample();
-    await harness.samples(439);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    await harness.samples(389);
+    const stalledSample = harness.monitor.snapshot();
+    expect(stalledSample).toMatchObject({
       degraded: true,
-      delayMaxMs: 1_220,
       reasons: ["event_loop_delay"],
     });
+    expect(stalledSample?.delayMaxMs).toBe(1_200);
     await harness.samples(50);
     expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, degraded: false });
   });
@@ -322,6 +356,43 @@ describe("event-loop measurement telemetry", () => {
   afterEach(() => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticEventsForTest();
+  });
+
+  it("advances an idle window when telemetry gains interest without resetting or replaying it", async () => {
+    const harness = createMonitorHarness({ isIdle: () => true });
+    await harness.samples(50);
+    const first = harness.monitor.snapshot();
+    expect(first).toMatchObject({ intervalMs: 1_000 });
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    await harness.samples(25);
+
+    const events: DiagnosticEventPayload[] = [];
+    const subscribe = () =>
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+        exclude: ["log.record"],
+      });
+    const stop = subscribe();
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.clock.armedAtMs).toBe(12_000);
+    await waitForDiagnosticEventsDrained();
+    expect(events).toEqual([]);
+
+    await harness.samples(24);
+    expect(harness.monitor.snapshot()).toBe(first);
+    await harness.sample();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([{ type: "gateway.event_loop.sample", intervalMs: 1_000 }]);
+    expect(harness.clock.armedAtMs).toBe(13_000);
+
+    stop();
+    await harness.samples(50);
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    expect(events).toHaveLength(1);
+    harness.monitor.stop();
+    expect(harness.clock.armedAtMs).toBeNull();
+    const stopAfterClose = subscribe();
+    expect(harness.clock.armedAtMs).toBeNull();
+    stopAfterClose();
   });
 
   it("records each sampling window once without needing a reader or inheriting reader context", async () => {

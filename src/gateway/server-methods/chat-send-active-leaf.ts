@@ -2,15 +2,12 @@ import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessi
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils.js";
+import type { GatewaySessionEntryRead } from "../session-utils.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function assertExpectedLeafActive(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  > & {
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath"> & {
     transcript?: SessionTranscriptAnchorFacts;
   },
   agentId: string,
@@ -56,10 +53,7 @@ export function assertExpectedLeafActive(
 
 /** Read the current row and active path in one existing worker snapshot before a Stop effect. */
 export async function assertExpectedLeafActiveAsync(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  >,
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath">,
   agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,

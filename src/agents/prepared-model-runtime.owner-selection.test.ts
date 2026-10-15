@@ -13,7 +13,10 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import {
+  scopePreparedModelRuntimeLease,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -61,9 +64,13 @@ function holdNextCatalogWrite() {
 describe("prepared model runtime owner selection", () => {
   it("awaits cold metadata preparation before deriving runtime selections", async () => {
     const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
+    const metadataStarted = createDeferred();
     using resolveMetadata = vi
       .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-      .mockReturnValueOnce(prepared.promise);
+      .mockImplementationOnce(() => {
+        metadataStarted.resolve();
+        return prepared.promise;
+      });
     const deriveRuntimePluginSelections = vi.fn(() => []);
     const input = fixture.agentInput("cold-metadata", {});
     const metadataSnapshot = createPluginMetadataSnapshot({
@@ -73,6 +80,7 @@ describe("prepared model runtime owner selection", () => {
     const pending = acquireAgentRunPreparedModelRuntime(input, {
       deriveRuntimePluginSelections,
     });
+    await metadataStarted.promise;
     expect(resolveMetadata).toHaveBeenCalledOnce();
     expect(deriveRuntimePluginSelections).not.toHaveBeenCalled();
     prepared.resolve(metadataSnapshot);
@@ -178,6 +186,29 @@ describe("prepared model runtime owner selection", () => {
       expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
     },
   );
+
+  it("honors live catalog demand inside a retained static parent", async () => {
+    const input = {
+      ...fixture.agentInput("default", {}),
+      workspaceDir: fixture.state.workspaceDir,
+    };
+    const discovered = { id: "live-only", name: "Live catalog row", provider: "custom" };
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [discovered],
+      routeVariants: [discovered],
+    });
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }),
+    );
+    expect(parent.snapshot.modelCatalog.entries).toEqual([]);
+    await parent.run(async () => {
+      await using live = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "live",
+        pluginGeneration: parent.pluginGeneration,
+      });
+      expect(live.snapshot.modelCatalog.entries.map(({ id }) => id)).toEqual(["live-only"]);
+    });
+  });
 
   it("rejects unpublished plugin generations while matching pending callers share their owner", async () => {
     const config = {};
@@ -519,6 +550,10 @@ describe("prepared model runtime snapshots", () => {
       const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
       await publishGateway(initialConfig);
       const replacementWrite = holdNextCatalogWrite();
+      const executionFolder = canonical
+        ? "/tmp/old-workspace-dir"
+        : "/tmp/dynamic-replacement-workspace";
+      const catalogBuildsBeforeAdmission = mocks.prepareStaticCatalog.mock.calls.length;
 
       let leasePending: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
       let refresh: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
@@ -528,7 +563,7 @@ describe("prepared model runtime snapshots", () => {
         });
         leasePending = acquireAgentRunPreparedModelRuntime({
           ...fixture.agentInput("default", initialConfig),
-          workspaceDir: canonical ? "/tmp/old-workspace-dir" : "/tmp/dynamic-replacement-workspace",
+          workspaceDir: executionFolder,
           ...(canonical
             ? {
                 agentDir: "/tmp/old-agent-dir",
@@ -548,14 +583,12 @@ describe("prepared model runtime snapshots", () => {
         const lease = await leasePending;
 
         expect(lease.snapshot.config).toBe(latestConfig);
-        expect(lease.snapshot.workspaceDir).toBe(
-          canonical ? "/tmp/unused-workspace" : "/tmp/dynamic-replacement-workspace",
-        );
+        expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
         expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
         if (canonical) {
           expect(lease.snapshot.agentDir).toBe(fixture.state.agentDir("default"));
         } else {
-          expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+          expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(catalogBuildsBeforeAdmission);
         }
         await lease[Symbol.asyncDispose]();
       } finally {

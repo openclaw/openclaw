@@ -171,8 +171,10 @@ it.skipIf(process.platform === "win32").for([
           });
           const post = Worker.prototype.postMessage;
           Worker.prototype.postMessage = function(request, ...args) {
+            // postMessage transfers and detaches the serialized input.
+            const commandType = request.type === 'execute' ? deserialize(request.input).type : undefined;
             const result = Reflect.apply(post, this, [request, ...args]);
-            if (request.type === 'execute' && deserialize(request.input).type === 'updateRuns.recordStep') {
+            if (commandType === 'updateRuns.recordStep') {
               Worker.prototype.postMessage = post;
               receiptWorker = this;
               process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});

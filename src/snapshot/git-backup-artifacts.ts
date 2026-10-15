@@ -30,6 +30,14 @@ export type GitBackupRepositoryState = {
 };
 
 export function gitBackupArtifactFiles(manifest: GitBackupManifest): string[] {
+  if (manifest.schemaVersion === 2) {
+    return [
+      GIT_BACKUP_MANIFEST,
+      ...["manifest.json", "anchor.sqlite", "database.sqlite"].map((name) =>
+        path.join("postgres", name),
+      ),
+    ];
+  }
   return [
     GIT_BACKUP_MANIFEST,
     GIT_BACKUP_SCHEMA,
@@ -82,7 +90,7 @@ export async function readGitBackupRepositoryState(
       ? (
           await requireGit(
             repositoryPath,
-            ["ls-tree", "-r", "-z", head.stdout.trim(), "--", "global", "agents"],
+            ["ls-tree", "-r", "-z", head.stdout.trim(), "--", "global", "agents", "stores"],
             {
               env,
             },
@@ -166,7 +174,11 @@ export async function prepareScopeUpdate(
   env?: NodeJS.ProcessEnv,
 ): Promise<GitBackupScopeUpdate | undefined> {
   if (relative !== "global") {
-    await assertBackupDirectory(repositoryPath, "agents", state);
+    await assertBackupDirectory(
+      repositoryPath,
+      relative.startsWith("stores") ? "stores" : "agents",
+      state,
+    );
   }
   const scopePath = path.join(repositoryPath, relative);
   await assertBackupDirectory(repositoryPath, relative, state);
@@ -175,6 +187,9 @@ export async function prepareScopeUpdate(
     return undefined;
   }
   await assertBackupDirectory(repositoryPath, path.join(relative, GIT_BACKUP_TABLES), state);
+  if (manifest?.schemaVersion === 2 || previous?.schemaVersion === 2) {
+    await assertBackupDirectory(repositoryPath, path.join(relative, "postgres"), state);
+  }
   const previousFiles = previous ? gitBackupArtifactFiles(previous) : [];
   const files = manifest ? gitBackupArtifactFiles(manifest) : [];
   const owned = new Set(previousFiles);
@@ -253,6 +268,7 @@ export async function applyScopeUpdate(
     await fs.rm(path.join(scopePath, file), { force: true });
   }
   for (const file of update.files) {
+    await fs.mkdir(path.dirname(path.join(scopePath, file)), { recursive: true, mode: 0o700 });
     await fs.cp(path.join(stagingRoot, update.relative, file), path.join(scopePath, file), {
       force: false,
       errorOnExist: true,

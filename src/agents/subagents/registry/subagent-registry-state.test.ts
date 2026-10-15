@@ -124,7 +124,6 @@ describe("subagent registry state read cache", () => {
           options?.onChunk?.(
             [...runs.values()].map((entry) => ({
               entry,
-              version: "fixture-version",
               createdAt: entry.createdAt,
             })),
           );

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -15,6 +15,8 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  renderComposerInto,
+  disposeComposer,
 } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -29,7 +31,6 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
@@ -564,20 +565,18 @@ describe("queued message edit round-trip", () => {
         chatOutboxOwner(host).syncHost(host);
         expect(host.chatQueue).toEqual([]);
         const active = activeQueuedMessageEdit(host);
-        render(
-          renderChatComposer(
-            createComposerProps({
-              queue: host.chatQueue,
-              sessionKey: host.sessionKey,
-              queuedEdit: {
-                editingId: active?.id ?? null,
-                editingText: active?.draftText,
-                source: active?.source,
-                onCancel: () => cancelQueuedMessageEdit(host),
-              },
-            }),
-          ),
+        renderComposerInto(
           container,
+          createComposerProps({
+            queue: host.chatQueue,
+            sessionKey: host.sessionKey,
+            queuedEdit: {
+              editingId: active?.id ?? null,
+              editingText: active?.draftText,
+              source: active?.source,
+              onCancel: () => cancelQueuedMessageEdit(host),
+            },
+          }),
         );
         await submitQueuedEdit(host);
         expect(send).not.toHaveBeenCalled();
@@ -595,7 +594,7 @@ describe("queued message edit round-trip", () => {
         expect(cancelQueuedMessageEdit(host)).toBe(true);
         expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);
       } finally {
-        render(null, container);
+        disposeComposer(container);
         unsubscribe();
         await resetComposerFixture();
       }

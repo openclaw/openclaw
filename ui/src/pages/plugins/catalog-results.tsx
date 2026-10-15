@@ -225,9 +225,10 @@ export function formatCompactCount(value: number): string {
   if (value < 1_000) {
     return new Intl.NumberFormat().format(value);
   }
-  const scale = value < 1_000_000 ? 1_000 : 1_000_000;
+  const scale = value >= 999_500_000 ? 1_000_000_000 : value >= 999_500 ? 1_000_000 : 1_000;
   const count = value / scale;
-  return `${count >= 100 ? Math.round(count) : Number(count.toFixed(1))}${scale === 1_000 ? "k" : "m"}`;
+  const suffix = scale === 1_000 ? "k" : scale === 1_000_000 ? "m" : "b";
+  return `${count >= 100 ? Math.round(count) : Number(count.toFixed(1))}${suffix}`;
 }
 
 function CatalogCard(props: {

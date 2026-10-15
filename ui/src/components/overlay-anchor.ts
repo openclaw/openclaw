@@ -79,8 +79,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
   const original = surface.style.getPropertyValue("position-anchor");
   const priority = surface.style.getPropertyPriority("position-anchor");
   const oldPlacement = surface.dataset.placement;
-  const doc = surface.ownerDocument;
-  const win = doc.defaultView;
+  let win: Window | null = null;
   let source: HTMLSpanElement | undefined;
   let presented = false;
   let frame: number | undefined;
@@ -127,6 +126,12 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
     }
   };
   const schedule = () => {
+    const binding = current();
+    // CSS follows same-root anchors; only a cross-root proxy needs frame sampling.
+    if (!presented || !binding?.anchor || !crossRoot(binding)) {
+      stop();
+      return;
+    }
     if (!win || frame !== undefined) {
       return;
     }
@@ -147,9 +152,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       }
       bindings.push(binding);
       apply();
-      if (presented) {
-        schedule();
-      }
+      schedule();
     },
     remove(binding) {
       const index = bindings.indexOf(binding);
@@ -158,6 +161,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       }
       if (bindings.length) {
         apply();
+        schedule();
         return;
       }
       stop();
@@ -178,6 +182,9 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       if (!current()?.anchor) {
         return;
       }
+      // Solid template nodes can be adopted into the live document after binding.
+      const doc = surface.ownerDocument;
+      win = doc.defaultView;
       if (!source) {
         source = doc.createElement("span");
         source.setAttribute("aria-hidden", "true");

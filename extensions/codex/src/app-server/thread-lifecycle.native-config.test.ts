@@ -426,7 +426,7 @@ describe("Codex native configuration lifecycle", () => {
         });
         try {
           await expect(startOrResumeThread(common)).rejects.toThrow(
-            revokeDuringBindingRead ? "Codex warm thread ownership changed" : "active",
+            "Codex warm thread ownership changed",
           );
         } finally {
           bindingRead?.mockRestore();

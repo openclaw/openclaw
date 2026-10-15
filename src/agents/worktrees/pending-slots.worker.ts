@@ -1,8 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { Value } from "typebox/value";
 import { WorktreeRecordSchema } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -15,14 +15,15 @@ import { listRegistryWorktreesInDatabase } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const PENDING_SCOPE = "core:managed-worktrees:pending-slots";
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "state_leases" | "worktrees">>(db);
+const query = (db: EngineConnection) =>
+  getNodeSqliteKysely<Pick<DB, "state_leases" | "worktrees">>(db);
 
 export type PendingWorktreeSlot = {
   record: ManagedWorktreeRecord;
   state: "pending" | "recovering";
 };
 
-function readSlots(db: DatabaseSync) {
+function readSlots(db: EngineConnection) {
   return executeSqliteQuerySync(
     db,
     query(db).selectFrom("state_leases").selectAll().where("scope", "=", PENDING_SCOPE),
@@ -58,7 +59,7 @@ function isPendingRecord(value: unknown): value is ManagedWorktreeRecord {
 }
 
 /** One statement observes publication as either pending or live, never neither or both. */
-export function readWorktreeSlotCountInDatabase(db: DatabaseSync): number {
+export function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
   const k = query(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -88,7 +89,7 @@ export function readWorktreeSlotCountInDatabase(db: DatabaseSync): number {
   );
 }
 
-export function readPendingWorktreesInDatabase(db: DatabaseSync): PendingWorktreeSlot[] {
+export function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
   return readSlots(db).map(({ record, state }) => ({ record, state }));
 }
 
@@ -102,7 +103,7 @@ function assertPendingWorktreeMutationLease(
 }
 
 export function reservePendingWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   value: { record: ManagedWorktreeRecord; owner: StateLeaseProcessOwner },
   leases: readonly OpenClawStateLeaseIdentity[] = [],
 ): void {
@@ -152,7 +153,7 @@ export function reservePendingWorktreeInDatabase(
 }
 
 export function recoverPendingWorktreesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   _input: undefined,
   leases: readonly OpenClawStateLeaseIdentity[] = [],
 ): void {
@@ -182,7 +183,7 @@ export function recoverPendingWorktreesInDatabase(
 }
 
 export function releasePendingWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   { id }: { id: string },
   leases: readonly OpenClawStateLeaseIdentity[] = [],
 ): void {
@@ -198,7 +199,7 @@ export function releasePendingWorktreeInDatabase(
 }
 
 export function publishPendingWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   id: string,
   record: ManagedWorktreeRecord,
   leases: readonly OpenClawStateLeaseIdentity[] = [],

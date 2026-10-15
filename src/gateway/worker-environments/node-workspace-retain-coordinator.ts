@@ -7,6 +7,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -114,9 +115,11 @@ function snapshotEntriesForNode(
             : []
           : null;
       const exactManifest =
-        additional !== null && placement?.workspaceBaseManifestRef
-          ? [...new Set([placement.workspaceBaseManifestRef, ...additional])].toSorted()
-          : null;
+        placement?.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF
+          ? []
+          : additional !== null && placement?.workspaceBaseManifestRef
+            ? [...new Set([placement.workspaceBaseManifestRef, ...additional])].toSorted()
+            : null;
       return [
         {
           environmentId: environment.environmentId,

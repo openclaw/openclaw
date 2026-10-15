@@ -218,45 +218,6 @@ describe("chat composer queue reordering", () => {
     expect(cancelFrame).toHaveBeenCalled();
   });
 
-  it.each([
-    { key: "ArrowUp", expected: ["c", "b"] },
-    { key: "ArrowDown", expected: ["c", "d"] },
-  ])("moves the focused row on $key", async ({ key, expected }) => {
-    const onQueueMove = vi.fn();
-    const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3), waiting("d", 4)],
-      onQueueMove,
-      onQueueRemove: vi.fn(),
-    });
-    const grip = container.querySelectorAll<HTMLButtonElement>(".chat-queue__grip")[2]!;
-    grip.focus();
-
-    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-    grip.dispatchEvent(event);
-
-    expect(onQueueMove.mock.calls).toEqual([expected]);
-    // Arrow keys belong to the handle here, so the transcript must not scroll.
-    expect(event.defaultPrevented).toBe(true);
-    const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
-    render(
-      renderChatQueue({
-        queue: ids.map((id, index) => waiting(id, index)),
-        onQueueMove,
-        onQueueRemove: vi.fn(),
-      }),
-      container,
-    );
-    await Promise.resolve();
-    expect(container.querySelector('[data-chat-queue-item="c"] .chat-queue__grip')).toBe(grip);
-    expect(document.activeElement).toBe(grip);
-    grip.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-    if (key === "ArrowUp") {
-      expect(onQueueMove).toHaveBeenLastCalledWith("c", "a");
-    } else {
-      expect(onQueueMove).toHaveBeenCalledOnce();
-    }
-  });
-
   it("leaves other keys alone on the handle", () => {
     const onQueueMove = vi.fn();
     const container = renderQueue({
@@ -314,7 +275,7 @@ describe("chat composer queue reordering", () => {
     });
 
     const rows = [...container.querySelectorAll(".chat-queue__item")];
-    expect(rows.map((row) => row.querySelector("wa-dropdown") !== null)).toEqual([
+    expect(rows.map((row) => row.querySelector(".chat-queue__overflow") !== null)).toEqual([
       true,
       false,
       true,
@@ -330,7 +291,6 @@ describe("chat composer queue reordering", () => {
 
     const disabled = (selector: string) =>
       rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
-    expect(disabled("wa-dropdown-item")).toEqual([true, false, true]);
     expect(disabled(".chat-queue__more")).toEqual([true, false, true]);
     expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
 

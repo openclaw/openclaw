@@ -28,6 +28,99 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
+it.each([false, true])("preserves native link intent (routing=%s)", async (routing) => {
+  let cancel = false;
+  let selections = 0;
+  const navigate = vi.fn();
+  const view = mountMenu({
+    items: [{ id: "settings", label: "Settings", href: "#settings" }],
+    onNavigate: routing ? navigate : undefined,
+    onSelect: (_item, event) => {
+      selections += 1;
+      if (cancel) {
+        event.preventDefault();
+      }
+    },
+  });
+  const prevented: boolean[] = [];
+  let suppressNative = true;
+  const initialHash = window.location.hash;
+  view.container.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("a")) {
+      prevented.push(event.defaultPrevented);
+      // Modified gestures stay native; same-tab clicks below exercise the real cancellation path.
+      if (suppressNative) {
+        event.preventDefault();
+      }
+    }
+  });
+  await openMenu();
+  const link = surface().querySelector<HTMLAnchorElement>("a")!;
+  expect(getComputedStyle(link).cursor).toBe("pointer");
+  for (const options of [
+    { metaKey: true },
+    { ctrlKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+  ]) {
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
+  }
+  for (const target of ["_blank", "named-window"]) {
+    link.target = target;
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  }
+  link.target = "";
+  link.download = "settings.txt";
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  link.removeAttribute("download");
+  expect(prevented).toEqual(Array.from({ length: 8 }, () => false));
+  const canceledClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+  canceledClick.preventDefault();
+  link.dispatchEvent(canceledClick);
+  expect(prevented.at(-1)).toBe(true);
+
+  suppressNative = false;
+  await userEvent.click(link);
+  await expect.poll(() => selections).toBe(1);
+  expect(navigate.mock.calls).toEqual(routing ? [[{ href: "#settings", value: "settings" }]] : []);
+  expect(prevented.at(-1)).toBe(true);
+  await phase(surface(), "hidden");
+
+  await openMenu();
+  cancel = true;
+  await userEvent.click(link);
+  await expect.poll(() => selections).toBe(2);
+  expect(navigate).toHaveBeenCalledTimes(routing ? 1 : 0);
+  expect(view.handle.overlay.open).toBe(true);
+  expect(window.location.hash).toBe(initialHash);
+  cancel = false;
+  link.focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.poll(() => selections).toBe(3);
+  expect(navigate).toHaveBeenCalledTimes(routing ? 2 : 0);
+  await phase(surface(), "hidden");
+});
+
+it("forwards link navigation from nested menus and closes the root", async () => {
+  const navigate = vi.fn();
+  mountMenu({
+    items: [
+      {
+        id: "manage",
+        label: "Manage",
+        children: [{ id: "models", label: "Models", href: "#models" }],
+      },
+    ],
+    onNavigate: navigate,
+  });
+  await openMenu();
+  await openMenu("people-manage");
+  await userEvent.click(surface("people-manage").querySelector<HTMLAnchorElement>("a")!);
+  await expect.poll(() => navigate).toHaveBeenCalledWith({ href: "#models", value: "models" });
+  await phase(surface(), "hidden");
+});
+
 it.each([false, true])(
   "rolls rejected controlled visibility back to accepted state (initial=%s)",
   async (initial) => {

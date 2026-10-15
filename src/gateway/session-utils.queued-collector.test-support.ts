@@ -16,6 +16,7 @@ import { resolveSessionResetPolicy } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
@@ -33,7 +34,8 @@ import type {
 } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
@@ -89,6 +91,7 @@ export function useQueuedCollectorFixture() {
       },
     });
     await captureRuntimeConfigAsyncReader()();
+    await loadOrCreateProcessDeviceIdentityAsync();
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
@@ -98,7 +101,7 @@ export function useQueuedCollectorFixture() {
         expect(method).toBe("agent");
         const runId = String(params.idempotencyKey);
         const sessionKey = String(params.sessionKey);
-        const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+        const { storePath, entry } = await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
         await upsertSessionEntryCore(
           { storePath, sessionKey },
           (
@@ -264,6 +267,12 @@ export function useQueuedCollectorFixture() {
       label: "Reserved collector",
       incognito: false,
       requesterInternalKey: parentKey,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+        cfg: getRuntimeConfig(),
+        key: parentKey,
+        agentId: "main",
+        projection: "full",
+      }),
       completionOwnerSessionKey: parentKey,
       creationPolicy,
       modelPatch: {},

@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { AuthProfileAuthorizationError } from "../agents/auth-profiles/authorization-contract.js";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { withAuthProfileCredentialWriteCustody } from "../agents/auth-profiles/credential-write-custody.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -19,12 +20,14 @@ import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js"
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "./state-domain-publication.js";
 import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import { readProfileAuthority, type ProfileAuthorityStatus } from "./user-profile-authority.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 
 type CredentialFact = {
   id: string;
   credential: AuthProfileCredential;
   replacement: boolean;
+  authorizationId?: string;
 };
 
 export const personalCredentialPublication = createStateDomainPublication<CredentialFact>({
@@ -35,13 +38,17 @@ export const personalCredentialPublication = createStateDomainPublication<Creden
     typeof value.id === "string" &&
     parseUserModelAuthProfileId(value.id) !== undefined &&
     typeof value.replacement === "boolean" &&
+    (value.authorizationId === undefined || typeof value.authorizationId === "string") &&
     inlineAuthProfileCredentialSchema.safeParse(value.credential).success,
 });
 
 type CredentialCell = {
   credential?: AuthProfileCredential;
   identityCurrent: () => boolean;
+  identityStatus?: () => ProfileAuthorityStatus;
   observed?: boolean;
+  authorizationId?: string;
+  authorizationObserved?: boolean;
 };
 type CredentialOwner = {
   cells: Map<string, CredentialCell>;
@@ -86,6 +93,8 @@ personalCredentialPublication.subscribeFacts((change) => {
         // Reconnect never revives a retained grant, even with identical token bytes.
         const next = fact.value.replacement ? { ...cell } : cell;
         next.credential = fact.value.credential;
+        next.authorizationId = fact.value.authorizationId;
+        next.authorizationObserved = true;
         owner.cells.set(id, next);
       }
     }
@@ -130,10 +139,13 @@ export async function capturePersonalCredentialAuthority(
   }
   let cell = owner.cells.get(profileId);
   if (!cell?.identityCurrent()) {
-    cell = { identityCurrent };
+    cell = {
+      identityCurrent,
+      identityStatus: () => readProfileAuthority(identityCurrent.transferable),
+    };
     owner.cells.set(profileId, cell);
   }
-  const retained = cell;
+  let retained = cell;
   const assertCurrent = () => {
     if (
       owners.get(identity) !== owner ||
@@ -149,6 +161,41 @@ export async function capturePersonalCredentialAuthority(
   };
   assertCurrent();
   return {
+    observeAuthorizationId(authorizationId: string | undefined) {
+      const current = owner.cells.get(profileId);
+      if (current?.authorizationObserved && current.authorizationId === authorizationId) {
+        // Concurrent fresh captures share the same newly observed lifetime.
+        retained = current;
+      }
+      assertCurrent();
+      if (retained.authorizationObserved && retained.authorizationId !== authorizationId) {
+        // A canonical read can observe an out-of-process reconnect without a local receipt.
+        // Only this fresh capture adopts it; prior grants retain the retired cell.
+        retained = { identityCurrent, identityStatus: retained.identityStatus };
+        owner.cells.set(profileId, retained);
+      }
+      retained.authorizationId = authorizationId;
+      retained.authorizationObserved = true;
+    },
+    assertAuthorizationCurrent(authorizationId: string) {
+      const identityStatus = retained.identityStatus?.();
+      if (
+        owners.get(identity) !== owner ||
+        owner.cells.get(profileId) !== retained ||
+        identityStatus === "revoked" ||
+        (retained.authorizationObserved && retained.authorizationId !== authorizationId)
+      ) {
+        throw new AuthProfileAuthorizationError("retired");
+      }
+      if (
+        identityStatus !== "current" ||
+        owner.pending.size ||
+        owner.uncertain ||
+        !retained.authorizationObserved
+      ) {
+        throw new AuthProfileAuthorizationError("unavailable");
+      }
+    },
     observe(credential: AuthProfileCredential | undefined) {
       assertCurrent();
       // A committed postimage wins over a read dispatched before that mutation.
@@ -203,7 +250,7 @@ const nativeAuthProfileCredentialPublication = createStateDomainPublication<unkn
     if (shared) {
       return `${shared.key}:${shared.birthtime ?? ""}`;
     }
-    const agent = findOpenClawAgentDatabaseIdentity({ db });
+    const agent = findOpenClawAgentDatabaseIdentity({ db: sqlPublicationAnchor(db) });
     if (!agent || typeof agent.identity !== "string") {
       return Symbol("auth-profile-credentials");
     }
@@ -310,16 +357,17 @@ authProfileCredentialPublication.subscribeFacts((change) => {
 
 /** Deny before the native effect; managed settlement installs all facts before releasing denial. */
 export function withAuthProfileCredentialWrite<T>(
-  db: DatabaseSync,
+  db: EngineConnection,
   payload: unknown,
   write: () => T,
   didWrite: (result: T) => boolean = () => true,
 ): T {
   return withAuthProfileCredentialWriteCustody(db, () => {
-    const identity = authProfileCredentialPublication.receipt(db, new Map()).source.identity;
+    const identity = authProfileCredentialPublication.receipt(sqlPublicationAnchor(db), new Map())
+      .source.identity;
     const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
     let failed = false;
-    const managed = stageSqliteTransactionState(db, {
+    const managed = stageSqliteTransactionState(sqlPublicationAnchor(db), {
       stage() {},
       commit() {
         if (failed) {
@@ -334,9 +382,9 @@ export function withAuthProfileCredentialWrite<T>(
       const result = write();
       if (didWrite(result)) {
         if (payload === undefined) {
-          authProfileCredentialPublication.stageDeletions(db, ["store"]);
+          authProfileCredentialPublication.stageDeletions(sqlPublicationAnchor(db), ["store"]);
         } else {
-          authProfileCredentialPublication.stagePostimages(db, [payload]);
+          authProfileCredentialPublication.stagePostimages(sqlPublicationAnchor(db), [payload]);
         }
       }
       if (!managed) {

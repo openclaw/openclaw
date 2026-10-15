@@ -454,12 +454,23 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   /** Agent that owns credentials and model selection created by this setup flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+  /** Opt in to selecting the verified model when models.authLogin starts AI Setup. */
+  selectModel: Type.Optional(Type.Literal(true)),
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
+
+/** Enable a runtime with agent-scoped consent in the same config write. */
+export const SystemAgentSetupRuntimeStartParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  agentId: NonEmptyString,
+  runtimeId: NonEmptyString,
+  configPatch: Type.Record(Type.String(), Type.Unknown()),
+});
+export const SystemAgentSetupRuntimeStartResultSchema = WizardStartResultSchema;
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
@@ -489,4 +500,11 @@ export type SystemAgentSetupActivateStartParams = Static<
 >;
 export type SystemAgentSetupActivateStartResult = Static<
   typeof SystemAgentSetupActivateStartResultSchema
+>;
+
+export type SystemAgentSetupRuntimeStartParams = Static<
+  typeof SystemAgentSetupRuntimeStartParamsSchema
+>;
+export type SystemAgentSetupRuntimeStartResult = Static<
+  typeof SystemAgentSetupRuntimeStartResultSchema
 >;

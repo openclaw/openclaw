@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -54,6 +55,55 @@ let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifec
 beforeAll(async () => {
   ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
 });
+
+it.each(["visible final", "progress only"] as const)(
+  "retains the normal settle requester's durable delivery evidence: %s",
+  async (reply) => {
+    const sessionKey = "agent:main:settle-completion";
+    const sessionId = "settle-completion-session";
+    const runId = "announce:requester-settle:synthetic-cohort:yield-1";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+    const result = makeCompactionResult({
+      sessionId,
+      text: "Requester finished",
+      runner: "embedded",
+    });
+    if (reply === "progress only") {
+      result.payloads = [{ text: "Still checking", isCommentary: true }];
+      result.meta.finalAssistantVisibleText = undefined;
+    }
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    const { deliverAgentCommandResult } =
+      await vi.importActual<typeof import("./command/delivery.js")>("./command/delivery.js");
+    state.deliverAgentCommandResultMock.mockImplementation(deliverAgentCommandResult);
+    await agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Synthesize the completed child results",
+        allowModelOverride: false,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:synthetic-child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_settle",
+        },
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    const completed = loadSessionEntry(target);
+    expect(getRestartRecoveryTerminalDeliveryEvidence(completed, runId)).toMatchObject({
+      runId,
+      captured: true,
+      payloads: [{ visible: reply === "visible final" }],
+    });
+    expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["visible", "internal", "coordination"] as const)(
   "declares the %s command admission and accepts its interruption only once",
@@ -540,7 +590,23 @@ it.each(["unknown", "delivered"] as const)(
       abortedLastRun: false,
       lastRunId: sourceRunId,
       restartRecoveryTerminalRunIds: ["previous-source", sourceRunId],
-      restartRecoveryTerminalDeliveryEvidence: [previousEvidence],
+      restartRecoveryTerminalDeliveryEvidence: [
+        previousEvidence,
+        ...(deliveryState === "delivered"
+          ? [
+              {
+                runId: sourceRunId,
+                transcriptRunId: runId,
+                captured: true,
+                deliveryStatus: {
+                  status: "sent",
+                  resultCount: 1,
+                  payloadOutcomes: [{ index: 0, status: "sent" }],
+                },
+              },
+            ]
+          : []),
+      ],
     });
     expect(settled?.pendingFinalDelivery).toBeUndefined();
     expect(settled?.pendingDeliveryNotice).toEqual(

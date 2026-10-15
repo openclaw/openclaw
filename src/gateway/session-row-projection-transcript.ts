@@ -124,6 +124,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   maxSeq: fact.value.rawSeq,
                 },
                 transcriptPreview: fact.value.lastMessagePreview,
+                transcriptTerminalModel: fact.value.terminalModel,
               }
             : undefined;
         row.retainedDatabaseFacts = retained;

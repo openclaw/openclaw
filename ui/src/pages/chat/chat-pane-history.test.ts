@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
+import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import "./chat-pane.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import "./chat-pane.tsx";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -25,7 +28,7 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -72,11 +75,29 @@ describe("chat pane native history pagination", () => {
       state.sessionKey = "agent:main:mention-hydration";
       state.chatRunId = "active-run";
       const send = vi.spyOn(state, "handleSendChat").mockResolvedValue(undefined);
-      const container = createComposerContainer();
+      const container = createApplicationContextProvider(context);
       document.body.append(container);
+      let view: ReturnType<typeof mountSolid> | undefined;
+      let update: (props: Parameters<typeof ChatComposer>[0]) => void;
       const renderCurrent = () => {
         pane.render();
-        render(renderChatComposer(pane.chatProps!), container);
+        const props: Parameters<typeof ChatComposer>[0] = {
+          ...pane.chatProps!,
+          renderRevision: {},
+        };
+        if (view) {
+          update(props);
+        } else {
+          const [current, setCurrent] = createSignal(props);
+          update = setCurrent;
+          view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
+            container,
+            wrapper: createSolidApplicationContextProvider(context).wrapper,
+          });
+        }
+        if (!getOwner()) {
+          flush();
+        }
       };
       state.requestUpdate = renderCurrent;
 
@@ -140,7 +161,7 @@ describe("chat pane native history pagination", () => {
         expect(state.chatMentions).toEqual([{ profileId: "profile-bob", start: 0, end: 4 }]);
         expect(send).not.toHaveBeenCalled();
       } finally {
-        render(nothing, container);
+        view?.unmount();
         resetChatComposerState(pane.presentationId);
         container.remove();
         vi.useRealTimers();
@@ -413,7 +434,7 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("bootstraps a visible history tail once the viewport can fit it", async () => {
+  it("fills a visible history tail once the viewport can fit it", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -426,7 +447,7 @@ describe("chat pane native history pagination", () => {
     const thread = document.createElement("div");
     thread.className = "chat-thread";
     Object.defineProperty(thread, "scrollHeight", { value: 400 });
-    let clientHeight = 200;
+    let clientHeight = 0;
     Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
     const sentinel = document.createElement("div");
     sentinel.className = "chat-history-sentinel";
@@ -449,6 +470,8 @@ describe("chat pane native history pagination", () => {
     try {
       pane.syncHistoryObserver();
       expect(request).not.toHaveBeenCalled();
+      clientHeight = 200;
+      pane.syncHistoryObserver();
       clientHeight = 600;
       pane.syncHistoryObserver();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -460,6 +483,25 @@ describe("chat pane native history pagination", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["initial placement", "programmatic reveal"])(
+    "does not arm history from an upward offset during %s",
+    (placement) => {
+      const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(
+        placement !== "initial placement",
+      );
+      vi.spyOn(pane.transcript, "isProgrammaticScroll", "get").mockReturnValue(
+        placement === "programmatic reveal",
+      );
+      const thread = appendChatThread(pane, { scrollTop: 80 });
+      pane.transcriptScrollTop = 100;
+      const event = new Event("scroll");
+      Object.defineProperty(event, "target", { value: thread });
+      pane.handleTranscriptScroll(event);
+      expect(pane.historyObserverArmed).toBe(false);
+    },
+  );
 
   it("prefetches older history from upward intent well before the top edge", async () => {
     const request = vi.fn(async () => ({

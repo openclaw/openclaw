@@ -1833,6 +1833,56 @@ describe("release state artifacts", () => {
     expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
   });
 
+  it.each(["retained", "retried", "removed"] as const)(
+    "verifies a %s blocker beyond the capped display list",
+    (scenario) => {
+      const sealedPlan = executionPlan(
+        { rerunGroup: "ci" },
+        { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
+      );
+      const retained = Array.from({ length: 26 }, (_, index) => ({
+        ...FAILED_JOB,
+        name: "retained-" + String(index).padStart(2, "0"),
+        url: "https://example.invalid/jobs/retained-" + index,
+      }));
+      const first = { runAttempt: 1, jobs: retained };
+      const later = [
+        ...Array.from({ length: 26 }, (_, index) => ({
+          ...FAILED_JOB,
+          name: "additional-" + String(index).padStart(2, "0"),
+          url: "https://example.invalid/jobs/additional-" + index,
+        })),
+        ...retained.map((job, index) =>
+          index !== 25 || scenario === "retained"
+            ? job
+            : scenario === "retried"
+              ? Object.assign({}, job, { url: "https://example.invalid/jobs/retried" })
+              : Object.assign({}, job, { conclusion: "success" }),
+        ),
+      ];
+      const decision = attemptedBlockedArtifact("decision", sealedPlan, [first]);
+      const drain = attemptedBlockedArtifact("drain", sealedPlan, [
+        first,
+        { runAttempt: 2, jobs: later },
+      ]);
+      expect(decision.blockers).toHaveLength(25);
+      expect(drain.blockers).toHaveLength(25);
+      expect(drain.blockers).toEqual(
+        Array.from({ length: 25 }, (_, index) =>
+          expect.objectContaining({ job: "additional-" + String(index).padStart(2, "0") }),
+        ),
+      );
+      if (scenario === "removed") {
+        expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
+      } else {
+        expect(selectPair(sealedPlan, decision, drain).drain.state).toBe("blocked_complete");
+        expect(() =>
+          verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected()),
+        ).toThrow("Full Release Validation state: blocked_complete");
+      }
+    },
+  );
+
   it("selects a terminal blocked pair when workflow evidence refines to failed jobs", () => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });
     const decision = collectorArtifact("decision", 2, sealedPlan, {

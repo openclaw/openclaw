@@ -13,6 +13,7 @@ import {
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openExistingOpenClawStateWriter } from "./openclaw-state-db-existing-write.js";
@@ -40,7 +41,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 it("preserves full verification across a disposable startup checkpoint write", async () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkpoint-clean-close-") };
   const state = openOpenClawStateDatabase({ env });
-  const verified = readSqliteDatabaseIntegrityVerification(state.db);
+  const verified = readSqliteDatabaseIntegrityVerification(requireNativeSqliteDatabase(state.db));
   expect(verified).toBeDefined();
   await closeOpenClawStateDatabaseAsync();
   const observed = observeSqliteReadSql(StatementSync.prototype);
@@ -56,7 +57,9 @@ it("preserves full verification across a disposable startup checkpoint write", a
     );
     expect(readSqliteDatabaseCleanClose(state.path)).toBe(true);
     const reopened = openOpenClawStateDatabase({ env });
-    expect(readSqliteDatabaseIntegrityVerification(reopened.db)).toEqual(verified);
+    expect(
+      readSqliteDatabaseIntegrityVerification(requireNativeSqliteDatabase(reopened.db)),
+    ).toEqual(verified);
     expect(
       observed.queries.filter((sql) => /PRAGMA (?:integrity|foreign_key)_check/iu.test(sql)),
     ).toEqual([]);
@@ -158,7 +161,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
         .map((row) => row.name),
     ).toEqual(["status"]);
     repaired.db.exec("CREATE TABLE checkonce_later (value TEXT)");
-    assertExistingOpenClawStateRuntimeSchema(repaired.db, pathname);
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(repaired.db), pathname);
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
       2,
@@ -186,7 +189,7 @@ it("reuses live admission and revalidates after the final handles close without 
   first.db.exec(`CREATE TABLE checkonce_unrelated (id INTEGER PRIMARY KEY, value TEXT);
     CREATE INDEX checkonce_unrelated_value ON checkonce_unrelated(value)`);
   // Equal catalog definitions cannot prove that metadata rows survived arbitrary DDL.
-  assertExistingOpenClawStateRuntimeSchema(first.db, pathname);
+  assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(first.db), pathname);
   const survivingReader = openOpenClawStateReadOnlyLocation(pathname, pathname);
   closeOpenClawStateDatabaseForTest();
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -218,7 +221,7 @@ it.each(["config_machine_state", "schema_meta"] as const)(
   (table) => {
     const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-metadata-") };
     const { db, path: pathname } = openOpenClawStateDatabase({ env });
-    assertExistingOpenClawStateRuntimeSchema(db, pathname);
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname);
     const definitions = db
       .prepare(
         "SELECT sql FROM sqlite_schema WHERE tbl_name=? AND sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END",
@@ -227,11 +230,11 @@ it.each(["config_machine_state", "schema_meta"] as const)(
     db.exec(`DROP TABLE ${table}; ${definitions.map(({ sql }) => sql).join(";")};`);
     expect(db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get()).toEqual({ total: 0 });
     if (table === "schema_meta") {
-      expect(() => assertExistingOpenClawStateRuntimeSchema(db, pathname)).toThrow(
-        /inconsistent ownership or schema metadata/iu,
-      );
+      expect(() =>
+        assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+      ).toThrow(/inconsistent ownership or schema metadata/iu);
     } else {
-      assertExistingOpenClawStateRuntimeSchema(db, pathname);
+      assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname);
       expect(readStateSchemaContentVersion(db, 0)).toBe(0);
     }
   },
@@ -256,9 +259,13 @@ it.each([
 ])("refuses stale runtime admission after $change", ({ sql, object }) => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-shape-") };
   const { db, path: pathname } = openOpenClawStateDatabase({ env });
-  expect(() => assertExistingOpenClawStateRuntimeSchema(db, pathname)).not.toThrow();
+  expect(() =>
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+  ).not.toThrow();
   db.exec(sql);
-  expect(() => assertExistingOpenClawStateRuntimeSchema(db, pathname)).toThrow(object);
+  expect(() =>
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+  ).toThrow(object);
 });
 
 it.each(["required definition", "newer header"] as const)(

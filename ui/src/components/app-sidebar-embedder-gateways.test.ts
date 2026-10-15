@@ -8,7 +8,7 @@ import {
   embedderSnapshot,
   installEmbedderGatewayTestBridge,
 } from "../test-helpers/embedder-gateways.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 
@@ -32,7 +32,7 @@ describe("AppSidebar embedder Gateway menu", () => {
       bridge.publish();
       await sidebar.updateComplete;
       const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu")!;
-      const rows = [...menu.querySelectorAll<HTMLElement>('wa-dropdown-item[value^="gateway:"]')];
+      const rows = [...menu.querySelectorAll<HTMLElement>('[data-value^="gateway:"]')];
       expect(
         rows.map((row) => row.querySelector(".sidebar-customize-menu__text")?.textContent),
       ).toEqual(["My Claw", "Team"]);
@@ -45,10 +45,8 @@ describe("AppSidebar embedder Gateway menu", () => {
 
       const choose = async (value: string) => {
         const currentMenu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu")!;
-        const item = currentMenu.querySelector<HTMLElement>(`wa-dropdown-item[value="${value}"]`)!;
-        currentMenu.dispatchEvent(
-          new CustomEvent("wa-select", { detail: { item }, bubbles: true }),
-        );
+        const item = currentMenu.querySelector<HTMLElement>(`[data-value="${value}"]`)!;
+        item.click();
         await sidebar.updateComplete;
       };
       await choose("gateway:personal");
@@ -74,10 +72,10 @@ describe("AppSidebar embedder Gateway menu", () => {
         ],
       });
       await sidebar.updateComplete;
-      expect(sidebar.querySelector('[value="gateway:team"]')?.textContent).toContain(
+      expect(sidebar.querySelector('[data-value="gateway:team"]')?.textContent).toContain(
         "Team updated",
       );
-      expect(sidebar.querySelector('[value="command:gateway-set-primary"]')).toBeNull();
+      expect(sidebar.querySelector('[data-value="command:gateway-set-primary"]')).toBeNull();
       expect(sidebar.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
         "Team updated",
       );

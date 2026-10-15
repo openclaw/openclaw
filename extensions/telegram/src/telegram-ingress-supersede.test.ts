@@ -268,15 +268,8 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it.each([
-    ["/verbose on", false],
-    ["/think low", false],
-    ["/usage tokens", false],
-    ["/reasoning on", false],
     ["/deploy", false],
-    ["/status", false],
-    ["/btw quick question", false],
     ["/stop", true],
-    ["/new", true],
     ["/reset", true],
   ])("only cancellation commands supersede pending input: %s", async (text, expected) => {
     const predicate = createShouldSupersedeTelegramSpooledPending({

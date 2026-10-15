@@ -20,6 +20,7 @@ import {
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
+import { checkAgentPostgresBehavior } from "./lib/postgres-agent-conformance.mts";
 import {
   catalog,
   portTables,
@@ -27,6 +28,10 @@ import {
   sqliteOnlyNulGuards,
   type Catalog,
 } from "./lib/postgres-schema-catalog.mts";
+import {
+  assertPostgresTriggers,
+  translatePostgresTriggers,
+} from "./lib/postgres-schema-triggers.mts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MINIMUM_POSTGRES_VERSION = 16;
@@ -40,14 +45,52 @@ export const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
 }));
 
 function tableStatements(data: Catalog): string[] {
-  return ["table", "index", "foreignKey"].flatMap((kind) =>
-    data.objects
-      .filter(
-        (item) =>
-          item.kind === kind && item.sql && (kind !== "index" || item.sql.startsWith("CREATE")),
-      )
-      .map((item) => item.sql!),
+  return ["function", "table", "index", "foreignKey", "triggerFunction", "trigger"].flatMap(
+    (kind) =>
+      data.objects
+        .filter(
+          (item) =>
+            item.kind === kind && item.sql && (kind !== "index" || item.sql.startsWith("CREATE")),
+        )
+        .map((item) => item.sql!),
   );
+}
+
+/** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
+export function generateDatabasePortMetadata(
+  db: import("node:sqlite").DatabaseSync,
+  data: Catalog,
+  source: { id: string; version: number; sqlite: string; postgres: string },
+) {
+  const postData = tableStatements(data).find((sql) =>
+    data.objects.some(
+      (object) =>
+        ["index", "foreignKey", "triggerFunction", "trigger"].includes(object.kind) &&
+        object.sql === sql,
+    ),
+  );
+  const split = postData ? source.postgres.indexOf(postData) : source.postgres.length;
+  if (split < 0) {
+    throw new Error(`Generated PostgreSQL port DDL differs from ${source.id} catalog`);
+  }
+  return {
+    id: source.id,
+    version: source.version,
+    minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
+    schema: "",
+    sqlite: source.sqlite,
+    tables: portTables(data),
+    objects: data.objects
+      .filter((item) => item.kind === "check")
+      .map(({ table, kind, sql }) => ({ table, kind, sql })),
+    triggers: db
+      .prepare(
+        "SELECT name, tbl_name AS 'table', sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+      )
+      .all(),
+    preData: [0, split],
+    postData: [split, source.postgres.length],
+  };
 }
 
 export async function generateWorkboardPostgresSchema() {
@@ -69,21 +112,12 @@ export async function generateWorkboardPostgresSchema() {
       "-- The connection owner supplies search_path and the admission transaction.",
       ...statements,
     ].join("\n\n")}\n`;
-    // String ranges reuse the bootstrap SQL without maintaining a second DDL copy.
-    const postDataStart = statements[data.tables.length];
-    const split = postDataStart ? postgresSql.indexOf(postDataStart) : postgresSql.length;
-    const portMetadata = {
+    const portMetadata = generateDatabasePortMetadata(db, data, {
       id: "workboard",
       version: SCHEMA_VERSION,
-      minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
-      schema: "",
-      tables: portTables(data),
-      objects: data.objects
-        .filter((item) => item.kind === "check")
-        .map(({ table, kind, sql }) => ({ table, kind, sql })),
-      preData: [0, split],
-      postData: [split, postgresSql.length],
-    };
+      sqlite: WORKBOARD_SCHEMA_SQL,
+      postgres: postgresSql,
+    });
     return {
       catalog: data,
       sql: postgresSql,
@@ -124,13 +158,19 @@ export async function generatePostgresSchemas(
         }
       }
       const namespace = `${prefix}_${name}`;
-      // State DDL uses the owner's search_path; catalog checks target its chosen namespace.
-      catalogs[name] = { ...catalog(db, name === "state" ? "" : namespace), schema: namespace };
+      // Runtime DDL uses the owner's search_path; catalog checks target its chosen namespace.
+      catalogs[name] = { ...catalog(db, ""), schema: namespace };
     } finally {
       db.close();
     }
     const data = catalogs[name]!;
-    if (name === "state" && !options.reportOnly) {
+    if (name === "agent") {
+      translatePostgresTriggers(data);
+      data.notes.push(
+        "Voice indexes: the sole writer (src/talk/client-voice-session-store.ts) uses JSON.stringify; agentId/sessionKey are strings, origin is client/relay, status is open/closed. src/talk/client-voice-session-lookup.worker.ts compares strings only. Non-string members cannot match; no boolean/numeric coercion is needed. Duplicate-key JSON is unreachable from writers: SQLite resolves first-wins, PostgreSQL last-wins. P3-6 preflight must refuse duplicate-key voice rows before copying, with row evidence. Canonical JSON remains text.",
+      );
+    }
+    if (!options.reportOnly) {
       for (const item of data.objects.filter((entry) => entry.sql === null)) {
         const pending =
           item.kind === "index" && pendingPromotion.find((entry) => entry.name === item.name);
@@ -139,10 +179,20 @@ export async function generatePostgresSchemas(
           item.category = "pendingPromotion";
         } else if (
           item.table !== "sqlite_sequence" &&
-          ["table", "column", "default", "check", "index", "foreignKey"].includes(item.kind)
+          !item.pendingCapability &&
+          [
+            "table",
+            "column",
+            "default",
+            "check",
+            "index",
+            "foreignKey",
+            "trigger",
+            "view",
+          ].includes(item.kind)
         ) {
           throw new Error(
-            `Unsupported shared-state ${item.kind} ${item.table}.${item.name}: ${item.source}: ${item.reason}`,
+            `Unsupported ${name === "state" ? "shared-state" : "agent"} ${item.kind} ${item.table}.${item.name}: ${item.source}: ${item.reason}`,
           );
         }
       }
@@ -176,19 +226,41 @@ export async function generatePostgresSchemas(
           data.objects.filter((item) => ownership.get(item.table) === fragment.id),
         );
       }
-      files["manifest.json"] =
-        `${JSON.stringify({ minimumPostgresVersion: MINIMUM_POSTGRES_VERSION, fragments: manifest, pendingPromotion, sqliteOnlyAllowList }, null, 2)}\n`;
+      if (!options.reportOnly) {
+        files["runtime.ts"] = formatGeneratedModule(
+          `// Generated by pnpm db:postgres:gen. Do not edit.\nexport const statePostgresRuntime = ${JSON.stringify(
+            {
+              eagerSql: files["state.postgres.sql"],
+              fragments: manifest.map(({ file, ...fragment }) => ({
+                ...fragment,
+                sql: files[file],
+              })),
+              expectedCatalog: expectedPostgresCatalog(data),
+            },
+            null,
+            2,
+          )};\n`,
+          { repoRoot: ROOT, outputPath: "runtime.ts", errorLabel: "state runtime" },
+        );
+      }
       continue;
     }
-    const statements = [
-      "-- Generated from canonical SQLite; consult portability-report.md before use.",
-      "BEGIN;",
-      "SET LOCAL standard_conforming_strings = on;",
-      `CREATE SCHEMA ${quote(data.schema)};`,
-    ];
-    statements.push(...tableStatements(data));
-    files[`${name}.postgres.sql`] = `${statements.join("\n\n")}\n\nCOMMIT;\n`;
+    files[`${name}.postgres.sql`] =
+      `${["-- Generated runtime DDL; the owner supplies search_path and the transaction.", ...tableStatements(data)].join("\n\n")}\n`;
   }
+  const pendingCapabilities = Object.entries(catalogs).flatMap(([database, data]) =>
+    data.objects
+      .filter((item) => item.pendingCapability)
+      .map(({ kind, table, name, pendingCapability }) => ({
+        database,
+        kind,
+        table,
+        name,
+        pendingCapability,
+      })),
+  );
+  files["manifest.json"] =
+    `${JSON.stringify({ minimumPostgresVersion: MINIMUM_POSTGRES_VERSION, fragments: manifest, pendingPromotion, sqliteOnlyAllowList, pendingCapabilities }, null, 2)}\n`;
   const summary: Record<
     string,
     Record<string, { total: number; translated: number; reported: number }>
@@ -214,7 +286,7 @@ export async function generatePostgresSchemas(
   }
   const limitations = [
     "Readiness tooling only: SQLite remains the runtime store and canonical .sql files remain authoritative. No data migration or runtime SQL/concurrency conformance is proved.",
-    "Agent topology remains undecided: schema per agent versus shared tables. The agent output represents one canonical database only.",
+    "Agent runtime DDL represents one admitted store UUID per owner-supplied namespace. Agent PostgreSQL enablement remains blocked on the pending search capability and runtime cutover.",
     "Text uses C collation. PostgreSQL text rejects NUL; SQLite length(text) stops at NUL. Data validation and numeric/JSON representation differences need a separate migration contract.",
     "STRICT and WITHOUT ROWID options are removed. Identity sequences do not reproduce SQLite rowid/AUTOINCREMENT/sqlite_sequence allocation or rollback semantics; each rowid alias adds a PostgreSQL PK index absent from SQLite's index_list.",
     "Not covered: runtime-created memory FTS5 in packages/memory-host-sdk/src/host/memory-schema-fts.ts; vec0 in extensions/memory-core/src/memory/manager-sync-base.ts and src/migration/doctor-memory-sidecar-import.ts.",
@@ -226,6 +298,7 @@ export async function generatePostgresSchemas(
     limitations,
     pendingPromotion,
     sqliteOnlyAllowList,
+    pendingCapabilities,
     fragments: manifest,
     catalogs,
   };
@@ -256,7 +329,7 @@ export async function generatePostgresSchemas(
     );
     for (const item of data.objects.filter((entry) => entry.sql === null)) {
       markdown.push(
-        `- ${item.kind} \`${item.table}.${item.name}\`: ${item.reason}${item.category ? `; ${item.category}${item.design ? `; ${item.design}` : ""}` : ""}. Source: \`${item.source.replaceAll("`", "\\`").replaceAll("\n", " ")}\``,
+        `- ${item.kind} \`${item.table}.${item.name}\`: ${item.reason}${item.pendingCapability ? `; pendingCapability: ${item.pendingCapability}` : ""}${item.category ? `; ${item.category}${item.design ? `; ${item.design}` : ""}` : ""}. Source: \`${item.source.replaceAll("`", "\\`").replaceAll("\n", " ")}\``,
       );
     }
   }
@@ -275,6 +348,9 @@ async function verifyPostgres(
   for (const data of Object.values(catalogs)) {
     const actual = readPostgresCatalog(await querySql(postgresCatalogQuery(data.schema)));
     assertPostgresCatalog(actual, expectedPostgresCatalog(data));
+    if (data.schema.endsWith("_agent")) {
+      await assertPostgresTriggers(data, querySql);
+    }
     console.log(
       `${data.schema}: verified ${data.tables.length} tables, ${data.tables.reduce((sum, table) => sum + table.columns.length, 0)} columns, ${data.objects.filter((item) => item.kind === "check").length} CHECKs, ${data.tables.reduce((sum, table) => sum + table.indexes, 0)} indexes, ${data.tables.reduce((sum, table) => sum + table.foreignKeys.length, 0)} FKs; zero unexplained differences (types/nullability/defaults/identity, PK, UNIQUE, FK actions/deferrability)`,
     );
@@ -311,16 +387,38 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
       applied.add(fragment!.id);
     }
     await client.query("COMMIT");
-    await verifyPostgres(
-      { state: generated.report.catalogs.state! },
-      async (sql) => (await client.query(sql)).rows[0].catalog,
+    await client.query("BEGIN");
+    await client.query(`CREATE SCHEMA ${quote(`${prefix}_agent`)}`);
+    await client.query(`SET LOCAL search_path = ${quote(`${prefix}_agent`)}`);
+    await client.query(generated.files["agent.postgres.sql"]!);
+    await client.query("COMMIT");
+    await verifyPostgres(generated.report.catalogs, async (sql) => {
+      const row = (await client.query(sql)).rows[0];
+      return row.catalog ?? row.triggers;
+    });
+    await client.query(`SET search_path = ${quote(`${prefix}_agent`)}`);
+    await client.query("BEGIN");
+    await client.query(`CREATE OR REPLACE FUNCTION openclaw_memory_index_sources_trigger()
+      RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $broken$
+      BEGIN UPDATE memory_index_state SET revision = revision + 2 WHERE id = 1; RETURN NULL; END;
+      $broken$`);
+    await assert.rejects(
+      () =>
+        assertPostgresTriggers(
+          generated.report.catalogs.agent!,
+          async (sql) => (await client.query(sql)).rows[0].triggers,
+        ),
+      /trigger definitions differ/,
     );
+    await client.query("ROLLBACK");
+    await checkAgentPostgresBehavior(client);
     console.log(
       `Pending v22 promotions: ${pendingPromotion.map((entry) => entry.name).join(", ")}`,
     );
   } finally {
     await client.query("ROLLBACK");
     await client.query(`DROP SCHEMA IF EXISTS ${quote(`${prefix}_state`)} CASCADE`);
+    await client.query(`DROP SCHEMA IF EXISTS ${quote(`${prefix}_agent`)} CASCADE`);
     await client.end();
   }
 }

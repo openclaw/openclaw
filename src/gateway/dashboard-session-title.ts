@@ -11,8 +11,8 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -350,11 +350,6 @@ export async function generateWorktreeSessionTitle(
     sessionKey: resolveStoredSessionKeyForAgentStore(params),
     storePath: params.storePath,
   };
-  const incognito = captureIncognitoSessionSource(scope);
-  const claim =
-    incognito && !("kind" in incognito)
-      ? incognito.actor.sessions.captureCurrent(scope.sessionKey)
-      : undefined;
   const request = maybeGenerateSessionTitle(params).then((persisted) => {
     if (persisted) {
       params.onPersisted();
@@ -368,20 +363,10 @@ export async function generateWorktreeSessionTitle(
   const readCurrent = async (assertSourceCurrent?: () => void) => {
     params.commitGuard?.();
     assertSourceCurrent?.();
-    const current = incognito
-      ? await (
-          await import("../config/sessions/session-entry-read-runtime.js")
-        ).readSessionEntryReadOnlyInWorker(scope, () => {
-          params.commitGuard?.();
-          assertSourceCurrent?.();
-          if ("kind" in incognito) {
-            incognito.assertCurrent();
-          } else {
-            incognito.actor.assertReadable();
-            claim?.assertCurrent();
-          }
-        })
-      : await readSessionEntryReadOnlyInWorker(scope);
+    const current = await readSessionEntryReadOnlyInWorker(scope, () => {
+      params.commitGuard?.();
+      assertSourceCurrent?.();
+    });
     if (current?.sessionId !== params.sessionId) {
       throw new Error("Session changed while naming its worktree; retry from the current session.");
     }
@@ -405,25 +390,28 @@ export async function maybeGenerateDashboardSessionTitle(
 export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
-  const incognito = captureIncognitoSessionSource(scope);
-  if (incognito && "kind" in incognito) {
+  const assertCurrent = () => params.commitGuard?.();
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (memory && !memory.owner?.readSession(sessionKey, memory.authority)?.entry) {
     return false;
   }
-  const claim = incognito?.actor.sessions.captureCurrent(sessionKey);
-  const assertIncognitoCurrent = () => {
-    incognito?.admissionSignal?.throwIfAborted();
-    incognito?.actor.assertReadable();
-    claim?.assertCurrent();
+  const assertMemorySessionCurrent = memory?.owner?.captureSessionReadGuard(sessionKey);
+  const assertMemoryCurrent = () => {
+    assertMemorySessionCurrent?.();
+    memory?.binding?.actor.assertReadable();
+    memory?.authority.assertCurrent();
   };
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
-    incarnation: incognito?.actor.identity.incarnation,
   };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
     const persisted = await (params.retryFailedJoin ? existing.catch(() => false) : existing);
-    assertIncognitoCurrent();
+    assertMemoryCurrent();
     // A failed join can retry once with fresh session state and this caller's authority.
     return !persisted && params.retryFailedJoin
       ? await maybeGenerateSessionTitle({ ...params, retryFailedJoin: false })
@@ -439,7 +427,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       const assertCommitAllowed = composeSessionSourceAssertion([
         params.commitGuard,
         assertSourceCurrent,
-        ...(incognito ? [assertIncognitoCurrent] : []),
+        ...(memory ? [assertMemoryCurrent] : []),
       ]);
       if (assertSourceCurrent) {
         assertCommitAllowed?.();
@@ -467,11 +455,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
   };
 
   const run = async () => {
-    const entry = incognito
-      ? await (
-          await import("../config/sessions/session-entry-read-runtime.js")
-        ).readSessionEntryReadOnlyInWorker(scope, assertIncognitoCurrent)
-      : await readSessionEntryReadOnlyInWorker(scope);
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
     if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
       return false;
     }
@@ -487,7 +471,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     };
     const transcriptSource = (await readSessionTitleFieldsFromTranscriptAsync(transcriptScope))
       .firstUserMessage;
-    assertIncognitoCurrent();
+    assertMemoryCurrent();
     const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
     const currentText = params.currentUserMessage?.trim() ?? "";
     // A first-turn transcript may win the persistence race before title work starts.
@@ -511,7 +495,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
         ...(abortSignal ? { abortSignal } : {}),
         ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),
         onFallback: params.onFallback,
-        ...(incognito ? { assertCurrent: assertIncognitoCurrent } : {}),
+        ...(memory ? { assertCurrent: assertMemoryCurrent } : {}),
       });
     const withSource = params.withSource;
     if (!withSource) {
@@ -536,7 +520,5 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       { cancelOnError: true },
     );
   };
-  return await sessionTitleRequests.run(requestTarget, () =>
-    incognito ? incognito.actor.sessions.withSharedState(run) : Promise.resolve().then(run),
-  );
+  return await sessionTitleRequests.run(requestTarget, run);
 }

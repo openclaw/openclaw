@@ -494,6 +494,27 @@ describe("known hourly main failures", () => {
       });
       expect(result.knownMainRed).toBe(!changed);
       expect(result.failureJobId).toBe(changed ? "10" : "");
+      const requests = vi
+        .mocked(fetch)
+        .mock.calls.map(
+          ([input]) =>
+            new URL(
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+            ).pathname,
+        );
+      for (const path of [
+        "/actions/workflows/ci.yml/runs",
+        "/actions/runs/200/attempts/1/jobs",
+        "/actions/jobs/20/logs",
+        "/actions/jobs/10/logs",
+      ]) {
+        expect(
+          requests.filter((request) => request.endsWith(path)),
+          path,
+        ).toHaveLength(1);
+      }
+      expect(requests.filter((request) => request.endsWith("/pulls/7"))).toHaveLength(1);
+      expect(requests.filter((request) => request.endsWith("/git/ref/heads/main"))).toHaveLength(1);
     },
   );
 

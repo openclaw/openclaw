@@ -1,10 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import * as authProfileClone from "./clone.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   getPreparedRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
@@ -51,6 +53,10 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  beforeEach(() => {
+    prepareSharedAuthStoreOwnershipForNative();
+  });
+
   it("retires only the changed owner's reader until the runtime closes", () => {
     const agentDir = tempDirs.make("auth-snapshot-readers-");
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
@@ -61,7 +67,7 @@ describe("runtime auth profile snapshots", () => {
       );
     }
     setRuntimeAuthProfileStoreSnapshot(createStore("reader-owner"), agentDir);
-    const reader = acquireAuthProfileReadDatabase(databasePath);
+    const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
     expect(reader.status).toBe("readable");
     if (reader.status !== "readable") {
       throw new Error("Expected a pooled auth reader");
@@ -82,7 +88,7 @@ describe("runtime auth profile snapshots", () => {
 
       clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expect(reader.db.isOpen).toBe(false);
-      const replacement = acquireAuthProfileReadDatabase(databasePath);
+      const replacement = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
       expect(replacement.status).toBe("readable");
       if (replacement.status !== "readable") {
         throw new Error("Expected the pooled auth reader to reopen");

@@ -35,8 +35,8 @@ const sessionRow = (
   ...extra,
 });
 const sessionRows = [
-  sessionRow("project", "Project next steps"),
-  sessionRow("weekly", "Weekly review"),
+  sessionRow("project", "Project"),
+  sessionRow("weekly", "Weekly"),
   sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
   }),
@@ -140,8 +140,8 @@ suite.define(() => {
           ).toBe(width + 52);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-ready.png`);
           for (const [id, label] of [
-            ["project", "Project next steps"],
-            ["weekly", "Weekly review"],
+            ["project", "Project"],
+            ["weekly", "Weekly"],
           ]) {
             const title = group.locator(
               `[data-session-key="agent:main:${id}"] .sidebar-recent-session__name`,
@@ -296,7 +296,7 @@ suite.define(() => {
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
           await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
           const menuFace = sidebar.locator(
-            '.sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
+            '.sidebar-new-session-menu [data-value="main"] .identity-avatar__agent-face',
           );
           await menuFace.waitFor();
           await expect.poll(async () => (await menuFace.boundingBox())?.width).toBe(36);
@@ -313,8 +313,11 @@ suite.define(() => {
           await page.locator("body").click({ position: { x: 1000, y: 800 } });
           const collapsedSlots = parent.locator(".sidebar-session-team-state");
           const collapsedBounds = (await collapsedSlots.boundingBox())!;
+          const collapsedLinkBounds = (await parent
+            .locator(":scope > .sidebar-recent-session__link")
+            .boundingBox())!;
           expect(collapsedBounds.x + collapsedBounds.width).toBeCloseTo(
-            beforeFocus.rows[0]!.right - (touch ? 96 : 0) - beforeFocus.rows[0]!.radius,
+            collapsedLinkBounds.x + collapsedLinkBounds.width - beforeFocus.rows[0]!.radius,
             1,
           );
           expect(
@@ -336,19 +339,21 @@ suite.define(() => {
             await group.locator('.sidebar-agent-roster__signals [aria-label="Unread"]').count(),
           ).toBe(1);
           const summary = group.locator(".sidebar-agent-roster__signals [data-session-attention]");
-          const summaryBounds = (await summary.boundingBox())!;
+          let summaryBounds: Awaited<ReturnType<typeof summary.boundingBox>> = null;
+          await expect
+            .poll(async () => (summaryBounds = await summary.boundingBox()))
+            .not.toBeNull();
           const summaryActions = (await group
             .locator(".sidebar-agent-roster__actions")
             .boundingBox())!;
-          expect(summaryBounds.y).toBeGreaterThanOrEqual(summaryActions.y + summaryActions.height);
-          expect(summaryBounds.x + summaryBounds.width).toBeLessThanOrEqual(
+          expect(summaryBounds!.y).toBeGreaterThanOrEqual(summaryActions.y + summaryActions.height);
+          expect(summaryBounds!.x + summaryBounds!.width).toBeLessThanOrEqual(
             beforeFocus.rows[0]!.right,
           );
           expect(summaryActions.x + summaryActions.width).toBeCloseTo(
             beforeFocus.rows[0]!.right,
             1,
           );
-          expect(await summary.isVisible()).toBe(true);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
         },
       );

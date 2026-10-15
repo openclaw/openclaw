@@ -17,7 +17,7 @@ export function sessionMenuChoice(menu: Element, value: string) {
   };
   if (kind !== "status") {
     return menu.querySelector<HTMLElement>(
-      `#sidebar-sessions-${ids[kind!]} ~ wa-popup [data-value="${option}"]`,
+      `#sidebar-sessions-${ids[kind!]} ~ .picker-select__menu [data-value="${option}"]`,
     );
   }
   return menu.querySelector<HTMLInputElement>(

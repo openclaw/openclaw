@@ -1,11 +1,15 @@
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { AppsPage } from "../pages/apps/apps-page.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "../pages/apps/apps-page.tsx";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./mcp-app-catalog.tsx";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import "./mcp-app-resources.tsx";
@@ -37,7 +41,7 @@ const result: McpAppDiscoverResult = {
   ],
 };
 
-function discoveryContext(request: ReturnType<typeof vi.fn>) {
+function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
   const events = new Set<(event: GatewayEventFrame) => void>();
   return {
     events,
@@ -46,7 +50,7 @@ function discoveryContext(request: ReturnType<typeof vi.fn>) {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"], scopes),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -79,12 +83,29 @@ function appendElement(element: HTMLElement) {
 }
 
 describe("app launch catalog", () => {
-  it("shares pending discovery and refreshes after it settles", async () => {
+  it.each([
+    { scope: "operator.read", discover: false },
+    { scope: "operator.sessions.read", discover: false },
+    { scope: "operator.sessions.write", discover: true },
+  ])("admits discovery according to granted scope $scope", async ({ scope, discover }) => {
+    const request = vi.fn(async () => ({ servers: [] }));
+    const { context } = discoveryContext(request, [scope]);
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, context);
+    appendElement(catalog);
+    await catalog.updateComplete;
+    expect(request.mock.calls).toHaveLength(discover ? 1 : 0);
+  });
+
+  it("shares discovery and retains focused entries through refresh before remounting", async () => {
     const current = createDeferred<McpAppDiscoverResult>();
+    const refreshed = createDeferred<McpAppDiscoverResult>();
     const remounted = createDeferred<McpAppDiscoverResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(current.promise)
+      .mockReturnValueOnce(refreshed.promise)
       .mockReturnValueOnce(remounted.promise);
     const { context, events } = discoveryContext(request);
     const sidebar = document.createElement("openclaw-mcp-app-catalog");
@@ -110,7 +131,19 @@ describe("app launch catalog", () => {
       listener(event);
     }
     expect(request).toHaveBeenCalledOnce();
-    current.resolve({ servers: [{ ...result.servers[0]!, mentionTool: "search" }] });
+    const server = {
+      ...result.servers[0]!,
+      mentionTool: "search",
+      entrypoints: result.servers[0]!.entrypoints.flatMap((entry) => [
+        entry,
+        {
+          ...entry,
+          title: `${entry.title} alternate`,
+          resourceUri: `${entry.resourceUri}-alternate`,
+        },
+      ]),
+    };
+    current.resolve({ servers: [server] });
     await current.promise;
     for (const element of elements) {
       await element.updateComplete;
@@ -119,11 +152,67 @@ describe("app launch catalog", () => {
     expect(thread.querySelector("button")).not.toBeNull();
     expect(resources.querySelector("button")).not.toBeNull();
 
+    thread.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() =>
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")).toHaveLength(2),
+    );
+    const sidebarEntry = sidebar.querySelectorAll<HTMLButtonElement>("button")[1]!;
+    const threadEntry = thread.querySelectorAll<HTMLButtonElement>(
+      ".mcp-app-catalog__entry > button",
+    )[1]!;
+    sidebarEntry.focus();
+    for (const listener of events) {
+      listener(event);
+    }
+    await waitForSolid(() => {
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sidebar.querySelectorAll("button")[1]).toBe(sidebarEntry);
+      expect(document.activeElement).toBe(sidebarEntry);
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")[1]).toBe(threadEntry);
+    });
+    refreshed.resolve({
+      servers: [
+        {
+          ...server,
+          label: "Updated parts plugin",
+          entrypoints: server.entrypoints.map((entry) =>
+            Object.assign({}, entry, {
+              title: `Updated ${entry.title}`,
+              resourceUri: `${entry.resourceUri}-updated`,
+            }),
+          ),
+        },
+      ],
+    });
+    await refreshed.promise;
+    await waitForSolid(() => {
+      expect(sidebar.querySelectorAll("button")).toHaveLength(2);
+      expect(sidebar.querySelectorAll("button")[1]).toBe(sidebarEntry);
+      expect(document.activeElement).toBe(sidebarEntry);
+      expect(sidebarEntry.textContent).toBe("Updated Library alternate");
+      expect(sidebarEntry.title).toBe("Updated parts plugin");
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")).toHaveLength(2);
+      expect(thread.querySelectorAll(".mcp-app-catalog__entry > button")[1]).toBe(threadEntry);
+      expect(threadEntry.textContent).toContain("Updated Parts tray alternate");
+    });
+    const launch = vi.fn((launchEvent: Event) => launchEvent.preventDefault());
+    thread.addEventListener(MCP_APP_OPEN_EVENT, launch);
+    threadEntry.click();
+    expect(launch).toHaveBeenCalledOnce();
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      detail: {
+        entrypoint: {
+          title: "Updated Parts tray alternate",
+          resourceUri: "ui://parts/tray-alternate-updated",
+        },
+      },
+    });
+
     sidebar.remove();
     await Promise.resolve();
     appendElement(sidebar);
     await sidebar.updateComplete;
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     remounted.resolve({ servers: [] });
     await remounted.promise;
     await sidebar.updateComplete;
@@ -227,17 +316,14 @@ describe("app launch catalog", () => {
       const describeSession = vi.fn(async () => ({
         session: exists ? { key: "agent:main:main" } : null,
       }));
-      // SAFETY: the registered Apps page exposes its render-completion promise.
-      const element = document.createElement("openclaw-apps-page") as HTMLElement & {
-        readonly updateComplete: Promise<boolean>;
-      };
-      const provider = createApplicationContextProvider({
+      // SAFETY: The fixture supplies the capabilities exercised by Apps and discovery.
+      const context = {
         gateway: {
           snapshot: {
             sessionKey: "agent:main:main",
             client: { request },
             phase: "connected",
-            hello: { features: { methods: ["mcp.app.discover"] } },
+            hello: gatewayHelloForMethods(["mcp.app.discover"]),
           },
           connectionRevision: 1,
           connection: { gatewayUrl: "ws://gateway.example.test" },
@@ -253,10 +339,14 @@ describe("app launch catalog", () => {
           describe: describeSession,
         },
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-      } as unknown as ApplicationContext);
-      provider.append(element);
+      } as unknown as ApplicationContext;
+      const provider = createApplicationContextProvider(context);
       document.body.append(provider);
-      await element.updateComplete;
+      const { container: element } = mountSolid(() => createComponent(AppsPage, {}), {
+        container: provider,
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      });
+      flush();
       const catalog = element.querySelector<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]>(
         "openclaw-mcp-app-catalog",
       )!;
@@ -275,14 +365,14 @@ describe("app launch catalog", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
       });
-      await element.updateComplete;
+      flush();
       await waitForSolid(() => expect(element.textContent).toContain("Library"));
       expect(element.querySelector('[role="alert"]')).toBeNull();
       for (const listener of configChanged) {
         listener({ event: "config.changed" });
       }
       await catalog.updateComplete;
-      await element.updateComplete;
+      flush();
       expect(describeSession).toHaveBeenCalledExactlyOnceWith({
         key: "agent:main:main",
         agentId: "main",
@@ -303,7 +393,7 @@ describe("app launch catalog", () => {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"]),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -352,7 +442,7 @@ describe("app launch catalog", () => {
           snapshot: {
             client: { request: () => read.promise },
             phase: "connected",
-            hello: { features: { methods: ["mcp.app.discover"] } },
+            hello: gatewayHelloForMethods(["mcp.app.discover"]),
           },
           connectionRevision: 1,
           subscribe: () => () => {},
@@ -380,7 +470,7 @@ describe("app launch catalog", () => {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"]),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -411,7 +501,7 @@ describe("app launch catalog", () => {
         client,
         phase: "connected",
         sessionKey: "agent:main:one",
-        hello: { features: { methods: ["mcp.app.discover"] } },
+        hello: gatewayHelloForMethods(["mcp.app.discover"]),
       },
       connectionRevision: 1,
       subscribe: () => () => {},

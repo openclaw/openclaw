@@ -1,20 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as cleanupReads from "./cleanup-service-read.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
 import { replaceSessionEntrySync } from "./session-accessor.entry.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const maintenance = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock("./store-maintenance-runtime.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  memorySessionActorOwners.reset();
   maintenance.mode = "enforce";
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -43,23 +45,37 @@ afterEach(() => {
 it.each(["warn", "enforce"])(
   "does not materialize session payloads for a no-op cleanup in %s mode",
   async (mode) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cleanup-noop-"));
+    const stateDir = tempDirs.make("openclaw-cleanup-noop-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     maintenance.mode = mode;
     maintenance.maxDiskBytes = null;
     maintenance.highWaterBytes = null;
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     for (let i = 0; i < 32; i++) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:noop-${i}`, storePath },
-        { sessionId: `noop-${i}`, updatedAt: Date.now(), incognito: true },
+        { sessionId: `noop-${i}`, updatedAt: Date.now() },
       );
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    const reads = trackSqliteStatementExecutions(database.db, ["payload"], (sql) =>
-      /\b(?:session_nodes|session_entry_snapshots)\b/i.test(sql) && /\bentry_json\b/i.test(sql)
-        ? "payload"
-        : null,
-    );
+    const withStore = cleanupReads.withSessionCleanupStore;
+    let materializedEntries = 0;
+    const readObserver = vi
+      .spyOn(cleanupReads, "withSessionCleanupStore")
+      .mockImplementation((target, consume, options) =>
+        withStore(
+          target,
+          (owner) =>
+            consume({
+              ...owner,
+              read: async (fixMissing) => {
+                const snapshot = await owner.read(fixMissing);
+                materializedEntries += Object.keys(snapshot.store).length;
+                return snapshot;
+              },
+            }),
+          options,
+        ),
+      );
     try {
       const result = await runSessionsCleanup({
         cfg: {},
@@ -71,9 +87,9 @@ it.each(["warn", "enforce"])(
         afterCount: 32,
         wouldMutate: false,
       });
-      expect(reads.textBytes.payload).toBe(0);
+      expect(materializedEntries).toBe(0);
     } finally {
-      reads.restore();
+      readObserver.mockRestore();
     }
   },
 );
@@ -141,7 +157,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "previews an explicit process-held store without creating disk state (present=%s)",
+  "previews and cleans an explicit memory store without SQLite (present=%s)",
   async (present) => {
     const stateDir = tempDirs.make("openclaw-cleanup-incognito-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -149,26 +165,47 @@ it.each([false, true])(
     maintenance.highWaterBytes = null;
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
     if (present) {
+      const owner = memorySessionActorOwners.get({ agentId: "main", path: storePath });
+      const authority = { assertCurrent() {}, authorize() {} };
       for (const id of ["empty", "live"]) {
-        const scope = {
-          agentId: "main",
-          sessionKey: `agent:main:dashboard:incognito-${id}`,
-          sessionId: `incognito-${id}`,
-          storePath,
-        };
-        replaceSessionEntrySync(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          incognito: true,
-        });
-        if (id === "live") {
-          appendTranscriptMessageSync(scope, {
-            eventId: "incognito-message",
-            message: {
-              role: "user",
-              content: [{ type: "text", text: "Keep this memory-only turn." }],
-            },
-          });
+        const actor = await owner.acquire(
+          {
+            database: owner.identity,
+            sessionKey: `agent:main:dashboard:incognito-${id}`,
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        );
+        try {
+          expect(
+            await actor.storage!.mutate(
+              {
+                type: "session.entry.create",
+                input: {
+                  entry: {
+                    sessionId: `incognito-${id}`,
+                    updatedAt: Date.now(),
+                    incognito: true,
+                  },
+                  transcriptEvents:
+                    id === "live"
+                      ? [
+                          {
+                            type: "message",
+                            id: "incognito-message",
+                            message: {
+                              role: "user",
+                              content: [{ type: "text", text: "Keep this memory-only turn." }],
+                            },
+                          },
+                        ]
+                      : [],
+                },
+              },
+              authority,
+            ),
+          ).toMatchObject({ kind: "committed" });
+        } finally {
+          await actor.release();
         }
       }
     }
@@ -186,6 +223,32 @@ it.each([false, true])(
       missing: present ? 1 : 0,
     });
     expect(result.appliedSummaries).toEqual([]);
+    const observer = observeParentSqlite();
+    try {
+      const applied = await runSessionsCleanup({
+        cfg: {},
+        opts: { fixMissing: true, enforce: true },
+        targets: [{ agentId: "main", storePath }],
+      });
+      expect(applied.appliedSummaries[0]).toMatchObject({
+        beforeCount: present ? 2 : 0,
+        afterCount: present ? 1 : 0,
+        missing: present ? 1 : 0,
+        applied: true,
+      });
+      const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath });
+      expect(
+        owner
+          ?.listSessionEntries({ assertCurrent() {}, authorize() {} })
+          .map(({ sessionKey }) => sessionKey) ?? [],
+      ).toEqual(present ? ["agent:main:dashboard:incognito-live"] : []);
+      if (!present) {
+        expect(owner).toBeUndefined();
+      }
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
     expect(fs.existsSync(storePath)).toBe(false);
     expect(fs.readdirSync(stateDir, { recursive: true })).toEqual(filesBefore);
   },

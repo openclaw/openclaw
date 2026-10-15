@@ -22,7 +22,9 @@ never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
-and installed with `pnpm install --frozen-lockfile` once before rechecking. A stale
+and installed with `pnpm install --frozen-lockfile` once before rechecking. Fetch and
+fast-forward output streams to stderr, without a diffstat, instead of being captured,
+so a root thousands of commits behind refreshes regardless of output size. A stale
 dirty or non-main root cannot refresh; sparse and unrelated roots are always
 refused. The canonical checkout is never refreshed. Keep the selected installation
 intact until the command finishes. This setting applies at both dependency

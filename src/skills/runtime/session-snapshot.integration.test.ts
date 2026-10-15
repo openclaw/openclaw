@@ -20,6 +20,7 @@ import { createSkillEntry } from "../loading/skill-entry-metadata.js";
 import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import * as workspaceSkillLoader from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -97,7 +98,7 @@ describe("asynchronous runtime skill preparation", () => {
       onTestFinished(
         registerAgentWorkspaceAccess(params.workspaceDir, {
           bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-          loadSkills: async (request) => workspaceSkillLoader.readWorkspaceSkillSources(request),
+          loadSkills: async (request) => readWorkspaceSkillSources(request),
         }),
       );
       recordRemoteSkillNodeInfo({ nodeId, commands: ["system.run"] });
@@ -183,7 +184,7 @@ describe("asynchronous runtime skill preparation", () => {
         onTestFinished(
           registerAgentWorkspaceAccess(params.workspaceDir, {
             bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-            loadSkills: async (request) => workspaceSkillLoader.readWorkspaceSkillSources(request),
+            loadSkills: async (request) => readWorkspaceSkillSources(request),
           }),
         );
       }

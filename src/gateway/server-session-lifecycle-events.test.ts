@@ -90,7 +90,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       withPreparedExactRows: (async (queries, consume) => {
         queries({});
         await prepared.promise;
-        return { kind: "complete", value: consume(projection) };
+        return consume(projection);
       }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
       observeGeneration: (() => {

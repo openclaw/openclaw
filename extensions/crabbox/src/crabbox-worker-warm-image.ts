@@ -53,6 +53,9 @@ export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
   runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
+  prepareCapture: (
+    context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
+  ) => Promise<void>;
   policy?: CrabboxWarmImagePolicy;
 }) {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
@@ -310,9 +313,20 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
   };
 
-  const verifyImage = async (context: LeaseContext, checkpointId: string) => {
+  const verifyImage = async (
+    context: LeaseContext,
+    checkpointId: string,
+    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  ) => {
     const args = ["checkpoint", "inspect", checkpointId, "--verify", "--json"];
-    return parseCheckpointAvailability(await checkpointCommand(context, "inspect", args));
+    return parseCheckpointAvailability(
+      await checkpointCommand(
+        context,
+        "inspect",
+        args,
+        Math.min(timeoutMs, WARM_IMAGE_COMMAND_TIMEOUT_MS),
+      ),
+    );
   };
 
   const selectAllocation = async (
@@ -671,6 +685,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       deleteImage,
       retireImage,
       checkpointCommand,
+      prepareCapture: dependencies.prepareCapture,
     }),
 
     startContext: createCrabboxWarmImageStartContext,

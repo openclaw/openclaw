@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
@@ -77,6 +78,11 @@ export function createSessionObserverWork(params: {
     return result;
   };
   function handleEvent(event: SessionObserverEvent, settledError = false) {
+    warnPluginSdkDeprecation({
+      family: "session-observer",
+      method: "sessionObserver.handleEvent",
+      replacement: "await sessionObserver.handleEventAsync",
+    });
     if (disposal) {
       return;
     }
@@ -182,6 +188,11 @@ export function createSessionObserverWork(params: {
     handleEventAsync,
     disposeAsync,
     dispose: () => {
+      warnPluginSdkDeprecation({
+        family: "session-observer",
+        method: "sessionObserver.dispose",
+        replacement: "await sessionObserver.disposeAsync",
+      });
       if (disposed) {
         return;
       }

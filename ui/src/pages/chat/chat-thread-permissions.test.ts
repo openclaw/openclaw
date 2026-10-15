@@ -7,7 +7,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
-import { renderMessageGroup } from "./components/chat-message-group.ts";
+import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
 import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
 import { agentEvent, createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
@@ -90,7 +90,7 @@ it("renders a persisted standalone tool result as a Grant card without expanding
   );
   expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
   const button = container.querySelector<HTMLButtonElement>(".chat-permission-card button");
-  expect(button?.textContent).toBe("Grant Screen Recording");
+  expect(button?.textContent).toBe("Open System Settings");
   button?.click();
   expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request: permissionMissing });
 });

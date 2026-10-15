@@ -23,6 +23,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SystemsController } from "./systems-controller.ts";
+import { renderSidebar } from "./systems-route-view.tsx";
 import "./systems-page.tsx";
 import "./systems-sidebar.tsx";
 
@@ -142,9 +143,8 @@ function harness(
 
 async function mount(controller: SystemsController) {
   const page = document.createElement("openclaw-systems-page");
-  const sidebar = document.createElement("openclaw-systems-sidebar");
+  const sidebar = renderSidebar({ controller })!;
   page.routeData = { controller };
-  sidebar.controller = controller;
   mountSolid(() => [page, sidebar]);
   flush();
   await waitForSolid(() => expect(controller.inventory).not.toBeNull());
@@ -473,6 +473,7 @@ describe("Systems workspace", () => {
     ];
     const { controller, request } = harness(async () => environments);
     let { page, sidebar } = await mount(controller);
+    expect(renderSidebar({ controller })).toBe(sidebar);
     const names = (selector = ".systems-machine__name") =>
       [...sidebar.querySelectorAll(selector)].map((entry) => entry.textContent?.trim());
     const nodeNames = () => names(".systems-group:first-of-type .systems-machine__name");

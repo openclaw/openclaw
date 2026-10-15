@@ -190,8 +190,9 @@ current bounded group and resumes after the next quiet period.
 
 Failed session passes, including handled embedding-provider fallback failures,
 retain their pending work and retry after 1, 5, and 15 minutes, subject to the same
-idle gate. After those automatic retries, another transcript change or turn
-activity can start a new retry series. A running turn can extend either delay.
+idle gate. The last automatic retry also waits for any full-rebuild cooldown to
+end. After those automatic retries, another transcript change or turn activity
+can start a new retry series. A running turn can extend either delay.
 
 New session content becomes searchable after that delay. The current turn already
 has its own content in context; `memory_search` does not force a transcript flush.

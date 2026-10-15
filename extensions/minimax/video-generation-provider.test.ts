@@ -83,6 +83,13 @@ function oversizedJsonResponse(): Response {
 }
 
 describe("minimax video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(
+      buildMinimaxVideoGenerationProvider().generateVideo(videoRequest({ durationSeconds: 0.4 })),
+    ).rejects.toThrow("durationSeconds must be a positive duration");
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("creates a task, polls status, and downloads the generated video", async () => {
     mockVideoTask("task-123", { video_url: "https://example.com/out.mp4", file_id: "file-1" });
     fetchWithTimeoutMock.mockResolvedValueOnce({

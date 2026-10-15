@@ -12,6 +12,7 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { normalizeCronInferenceBinding } from "./inference-binding.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -48,7 +49,8 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
@@ -142,7 +144,7 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
-  } else if (next.kind === "on-exit" || next.kind === "stream") {
+  } else if (next.kind === "on-exit" || next.kind === "stream" || next.kind === "event") {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
@@ -162,6 +164,10 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
+  if (next.kind !== "event") {
+    delete next.source;
+    delete next.options;
+  }
   return { ...next };
 }
 
@@ -328,6 +334,7 @@ export function normalizeCronJobInput(
     ["toolsAllowExecTarget", normalizeCronToolsAllowExecTarget],
     ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
     ["runtimeAuthority", normalizeCronRuntimeAuthority],
+    ["inferenceBinding", normalizeCronInferenceBinding],
   ] as const) {
     if (!(field in base)) {
       continue;

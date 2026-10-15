@@ -3,8 +3,9 @@
 import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantCanvasBlock,
   createAssistantMessage,
@@ -42,27 +43,41 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   expect(customElements.get("mcp-app-view")).toBeDefined();
   await settleToolBridges(container);
 
-  const dropdown = container.querySelector("wa-dropdown");
-  expect(dropdown).toBeInstanceOf(HTMLElement);
-  expect(dropdown?.querySelectorAll("wa-dropdown-item")).toHaveLength(1);
-  const selectRawDetails = () =>
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "raw-details" } },
-      }),
+  const menu = container.querySelector(".chat-tool-card__widget-actions");
+  expect(menu).toBeInstanceOf(HTMLElement);
+  expect(menu?.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+  const rawAction = () => menu?.querySelector<HTMLButtonElement>('[data-value="raw-details"]');
+  const openMenu = async () => {
+    menu?.querySelector<HTMLButtonElement>(".chat-tool-card__widget-actions-trigger")?.click();
+    await waitForSolid(() =>
+      expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
     );
+  };
+  const selectRawDetails = async (label: string) => {
+    rawAction()?.click();
+    await waitForSolid(() => {
+      expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
+      expect(rawAction()?.getAttribute("aria-label")).toBe(label);
+    });
+  };
   const expanded = () =>
     container
       .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
       ?.getAttribute("aria-expanded");
-  selectRawDetails();
+  await openMenu();
+  await selectRawDetails("Hide raw details");
   expect(expanded()).toBe("true");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
+  expect(rawAction()?.textContent).toContain("Hide raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
   await draw();
-  expect(container.querySelector("wa-dropdown")).toBe(dropdown);
+  expect(container.querySelector(".chat-tool-card__widget-actions")).toBe(menu);
   expect(expanded()).toBe("true");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
-  selectRawDetails();
+  expect(rawAction()?.textContent).toContain("Hide raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
+  await openMenu();
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
+  await selectRawDetails("Show raw details");
   expect(expanded()).toBe("false");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Show raw details");
+  expect(rawAction()?.textContent).toContain("Show raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Show raw details");
 });

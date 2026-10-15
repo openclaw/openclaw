@@ -11,6 +11,7 @@ import {
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
@@ -353,6 +354,12 @@ describe("manual library resources through embedded and host-bound reads", () =>
           childSessionKey: childKey,
           incognito: false,
           requesterInternalKey: parentKey,
+          parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+            cfg: config,
+            key: parentKey,
+            agentId: "main",
+            projection: "full",
+          }),
           completionOwnerSessionKey: parentKey,
           creationPolicy: { actor: { type: "agent", id: "main" } },
           modelPatch: {},

@@ -13,7 +13,7 @@ import {
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
-import { renderSessionProgressCard } from "../components/session-progress-card.ts";
+import { SessionProgressCard } from "../components/session-progress-card-solid.tsx";
 import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
@@ -212,18 +212,13 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           ) : progress.read().card === undefined ? (
             <p>{t("sessionProgressCard.widgetLoading")}</p>
           ) : (
-            <LitContent
-              render={() =>
-                renderSessionProgressCard(
-                  progress.read().card,
-                  "board",
-                  undefined,
-                  history()?.sessionInfo?.status,
-                  history()?.sessionInfo?.startedAt,
-                  history()?.sessionInfo?.endedAt,
-                  history()?.sessionInfo?.hasActiveRun === true,
-                )
-              }
+            <SessionProgressCard
+              card={progress.read().card}
+              placement="board"
+              sessionStatus={history()?.sessionInfo?.status}
+              startedAt={history()?.sessionInfo?.startedAt}
+              endedAt={history()?.sessionInfo?.endedAt}
+              hasActiveRun={history()?.sessionInfo?.hasActiveRun === true}
             />
           )}
         </section>

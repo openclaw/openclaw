@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import {
+  renderComposerFixture,
+  resetComposerFixture,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -29,18 +31,15 @@ describe("archived session composer banner", () => {
     action.focus();
     const banner = action.parentElement;
 
-    render(
-      renderChatComposer({
-        ...props,
-        disabledBanner: {
-          kind: "composer-replacement",
-          text: "This session is still archived.",
-          actionLabel: "Unarchive",
-          onAction: refreshedAction,
-        },
-      }),
-      container,
-    );
+    renderComposerInto(container, {
+      ...props,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "This session is still archived.",
+        actionLabel: "Unarchive",
+        onAction: refreshedAction,
+      },
+    });
 
     expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
       "This session is still archived.",

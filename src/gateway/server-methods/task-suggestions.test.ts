@@ -99,6 +99,7 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
 }
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
+
 beforeEach(async () => {
   await dismissPendingTaskSuggestions();
   mocks.handleChatSend.mockReset();

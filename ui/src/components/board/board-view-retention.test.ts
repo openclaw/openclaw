@@ -3,7 +3,14 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardOp } from "../../lib/board/types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
-import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
+import {
+  boardWidget,
+  callbacks,
+  mount,
+  openBoardMenu,
+  settleCells,
+  snapshot,
+} from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -134,15 +141,8 @@ describe("openclaw-board-view retention", () => {
       view.snapshot = applyBoardFixtureOps(view.snapshot!, ops);
     });
     view.callbacks = callbacks({ applyOps });
-    const moveButton = [...view.querySelectorAll<HTMLElement>("wa-dropdown-item")].find(
-      (button) => button.textContent?.trim() === "Operations",
-    );
-    view.querySelector(".board-widget__menu")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: moveButton },
-        bubbles: true,
-      }),
-    );
+    await openBoardMenu(cell);
+    cell.querySelector<HTMLButtonElement>('[data-value="move:ops"]')!.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
         { kind: "widget_move", name: "alpha", tabId: "ops", position: 1 },

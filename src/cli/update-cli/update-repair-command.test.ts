@@ -9,6 +9,7 @@ import {
   buildStatusUpdateRows,
   formatUpdateRestartStatusValue,
 } from "../../commands/status-update-restart.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationAnchor,
@@ -151,6 +152,15 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
+  it("tells operators to stop the live Gateway owner before repair", async () => {
+    mocks.ownershipAllowed.mockRejectedValueOnce(
+      new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
+    );
+    await expect(updateRepairCommand({ json: true })).rejects.toThrow(
+      /Stop the Gateway first \(openclaw gateway stop\)/,
+    );
+    expect(mocks.finalize).not.toHaveBeenCalled();
+  });
   it.each(["aborted", "publishing"])(
     "exits nonzero while a released %s package record remains pending",
     async (phase) => {

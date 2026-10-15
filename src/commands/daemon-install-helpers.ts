@@ -346,14 +346,12 @@ function collectPluginConfigSecretRefs(params: {
   return context.assignments.map((assignment) => assignment.ref);
 }
 
-// Operator opt-in env vars that should survive service regeneration even though
-// they share the OPENCLAW_ prefix that is otherwise stripped from preserved
-// environments. These represent intentional, user-placed configuration on the
-// service definition that the install/repair flow should not silently revert.
+// Preserve operator opt-ins while discarding stale OpenClaw-managed values.
 const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
   "OPENCLAW_CONFIG_READONLY",
   "OPENCLAW_CONTAINER_HINT",
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
 ]);
 
 function collectExistingServiceEnvVars(

@@ -384,7 +384,24 @@ describe("historical transcript directive migration", () => {
 
       const result = await migrateHistoricalTranscriptDirectives({ env });
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toHaveLength(1);
+      expect(result.changes).toHaveLength(2);
+      const recoveryDirectories = () =>
+        fs
+          .readdirSync(path.dirname(databasePath))
+          .filter((name) => name.startsWith("openclaw-transcript-directives-recovery-"));
+      const backups = recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      const backupPath = path.join(path.dirname(databasePath), backups[0]!, "database.sqlite");
+      expect(readEventJson(backupPath, "tagged-session", 0)).toBe(JSON.stringify(tagged));
+      expect(readEventJson(backupPath, "reaction-session", 0)).toBe(JSON.stringify(reaction));
+      const backup = openNodeSqliteDatabase(backupPath, { readOnly: true });
+      try {
+        expect(
+          backup.prepare("SELECT archive_blob FROM session_transcript_archives").get(),
+        ).toEqual({ archive_blob: new Uint8Array(archiveBytes) });
+      } finally {
+        backup.close();
+      }
 
       const migratedTagged = JSON.parse(readEventJson(databasePath, "tagged-session", 0)) as {
         message: Record<string, unknown>;
@@ -459,6 +476,7 @@ describe("historical transcript directive migration", () => {
         generationsAfterFirstRun.reaction,
       );
       expect(fs.readFileSync(archivePath)).toEqual(archiveBytesAfterFirstRun);
+      expect(recoveryDirectories()).toEqual(backups);
     },
   );
 

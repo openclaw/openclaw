@@ -11,6 +11,7 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
@@ -18,7 +19,6 @@ import {
   assistantMessage,
   createParams,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
@@ -42,6 +42,8 @@ setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
   it("revokes native submission custody when an unstamped parent session is replaced", async () => {
+    // Worker preparation must not race this authority check's execution deadline.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createParams(path.join(tempDir, "unstamped-parent.jsonl"), tempDir);
     const target = {
       agentId: "main",
@@ -53,6 +55,10 @@ describe("Codex attempt subscription recovery", () => {
     const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
     const harness = createStartedThreadHarness(async () => undefined);
     const attempt = runCodexAppServerAttempt(params);
+    const settledAttempt = attempt.then(
+      (result) => result,
+      (error: unknown) => error,
+    );
     await attempt.waitForTurnAccepted();
     try {
       const registration = register.mock.calls.at(-1)?.[0];
@@ -69,10 +75,12 @@ describe("Codex attempt subscription recovery", () => {
         "Native submission session lifecycle is no longer current.",
       );
     } finally {
-      await seedRunSessionOwnerForTest(target.sessionId, target.sessionKey);
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await attempt;
+      await settledAttempt;
     }
+    expect(await settledAttempt).toMatchObject({
+      message: `Codex session generation is no longer current: ${target.sessionId}`,
+    });
   });
 
   it("continues a confirmed interrupted thread while a sibling turn stays active", async () => {
@@ -91,6 +99,9 @@ describe("Codex attempt subscription recovery", () => {
     let turns = 0;
     const harness = createStartedThreadHarness(
       async (method) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
         if (method === "thread/start") {
           return threadStartResult(++starts === 1 ? "thread-1" : "thread-sibling");
         }
@@ -104,6 +115,7 @@ describe("Codex attempt subscription recovery", () => {
       },
       { persistedThreads: [] },
     );
+    ownCodexInferenceClient(harness.client);
     const first = runCodexAppServerAttempt(params);
     await first.waitForTurnAccepted();
     const sibling = runCodexAppServerAttempt(siblingParams);
@@ -298,7 +310,8 @@ describe("Codex attempt subscription recovery", () => {
       });
 
       const retry = runCodexAppServerAttempt({ ...params, runId: "run-retry" });
-      await vi.waitFor(() => expect(turnCount).toBe(2), fastWait);
+      await retry.waitForTurnAccepted();
+      expect(turnCount).toBe(2);
       await harness.completeTurn({ threadId, turnId: "turn-2" });
       await retry;
       expect(
@@ -309,55 +322,88 @@ describe("Codex attempt subscription recovery", () => {
       expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(false);
     },
   );
-  it("does not replay subscription publication when reader release fails", async () => {
-    const captured =
-      createDeferred<ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>>();
-    const prepare = runAttemptResources.prepareCodexAttemptResources;
-    const capture = vi
-      .spyOn(runAttemptResources, "prepareCodexAttemptResources")
-      .mockImplementationOnce((prompt) => {
-        const resources = prepare(prompt);
-        captured.resolve(resources);
-        return resources;
-      });
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "custody.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    const run = runCodexAppServerAttempt(params);
-    const resources = await Promise.race([
-      captured.promise,
-      run.then(() => {
-        throw new Error("Attempt ended before preparation");
-      }),
-    ]);
-    await harness.waitForMethod("turn/start");
-    const { connection } = resources.prompt.context.runtime;
-    const { threadId } = resources.state.thread;
-    const rowFailure = new Error("row reader release failed");
-    const withCurrent = connection.withCurrent;
-    const admission = vi
-      .spyOn(connection, "withCurrent")
-      .mockImplementationOnce(async (consume) => {
-        await withCurrent(consume);
-        throw rowFailure;
-      });
-    const publication = vi.spyOn(threadOwnership, "retainCodexAppServerBindingSubscription");
-    try {
-      await expect(resources.retainThreadSubscription()).rejects.toBe(rowFailure);
-      expect(publication).toHaveBeenCalledOnce();
-      expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(true);
-      expect(harness.requests.some(({ method }) => method === "thread/unsubscribe")).toBe(false);
-    } finally {
-      admission.mockRestore();
-      publication.mockRestore();
-      capture.mockRestore();
-      resources.state.nativeSettlementExpired = true;
-      await harness.completeTurn({ threadId, turnId: "turn-1" });
-      await run;
-    }
-  });
+  it.each(["after publication", "before publication with new native custody"] as const)(
+    "recovers subscription custody when row admission fails %s",
+    async (failureAt) => {
+      const captured =
+        createDeferred<ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>>();
+      const prepare = runAttemptResources.prepareCodexAttemptResources;
+      const capture = vi
+        .spyOn(runAttemptResources, "prepareCodexAttemptResources")
+        .mockImplementationOnce((prompt) => {
+          const resources = prepare(prompt);
+          captured.resolve(resources);
+          return resources;
+        });
+      const harness = createStartedThreadHarness();
+      const params = createParams(
+        path.join(tempDir, "custody.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      const run = runCodexAppServerAttempt(params);
+      const resources = await Promise.race([
+        captured.promise,
+        run.then(() => {
+          throw new Error("Attempt ended before preparation");
+        }),
+      ]);
+      await run.waitForTurnAccepted();
+      const { connection } = resources.prompt.context.runtime;
+      const { threadId } = resources.state.thread;
+      const rowFailure = new Error("row reader release failed");
+      const rowWaiting = createDeferred<void>();
+      const releaseRow = createDeferred<void>();
+      const withCurrent = connection.withCurrent;
+      const admission = vi
+        .spyOn(connection, "withCurrent")
+        .mockImplementationOnce(async (consume) => {
+          if (failureAt === "after publication") {
+            await withCurrent(consume);
+          } else {
+            rowWaiting.resolve();
+            await releaseRow.promise;
+          }
+          throw rowFailure;
+        });
+      const publication = vi.spyOn(threadOwnership, "retainCodexAppServerBindingSubscription");
+      try {
+        const retention = resources.retainThreadSubscription();
+        if (failureAt === "after publication") {
+          await expect(retention).rejects.toBe(rowFailure);
+        } else {
+          await rowWaiting.promise;
+          const authority = resources.nativeProcessAuthority!;
+          expect(authority.hasCurrentProcesses(harness.client, threadId)).toBe(false);
+          // Native inventory arrives while foreground row admission is waiting.
+          // Its real owner must survive that reader's failure and publish under
+          // fresh cleanup admission, without replaying a started publication.
+          const confirm = authority.prepareBackgroundCommands(
+            harness.client,
+            { threadId, turnId: "turn-1" },
+            new Map([["background-item", "process-1"]]),
+          );
+          confirm(new Map([["background-item", "process-1"]]));
+          expect(authority.hasCurrentProcesses(harness.client, threadId)).toBe(true);
+          releaseRow.resolve();
+          await expect(retention).resolves.toBe(true);
+          await expect(resources.retainThreadSubscription()).resolves.toBe(true);
+        }
+        expect(publication).toHaveBeenCalledOnce();
+        expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(true);
+        expect(harness.requests.some(({ method }) => method === "thread/unsubscribe")).toBe(false);
+      } finally {
+        admission.mockRestore();
+        publication.mockRestore();
+        capture.mockRestore();
+        resources.state.nativeSettlementExpired = true;
+        await harness.completeTurn({ threadId, turnId: "turn-1" });
+        await run;
+        if (failureAt !== "after publication") {
+          await harness.notify({ method: "thread/closed", params: { threadId } });
+        }
+      }
+    },
+  );
 
   it.each([false, true])(
     "preserves native ownership through terminal overflow (expected native: %s)",

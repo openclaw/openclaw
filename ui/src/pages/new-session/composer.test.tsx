@@ -528,7 +528,7 @@ describe("new-session composer start control", () => {
 
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
     expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
-    expect(composer.querySelector("wa-dropdown-item[value='start-terminal']")).toBeNull();
+    expect(composer.querySelector("[data-value='start-terminal']")).toBeNull();
   });
 
   it("marks the Start button busy while the session is starting", () => {
@@ -559,6 +559,20 @@ describe("new-session composer start control", () => {
 
 describe("new-session composer sizing lifecycle", () => {
   beforeEach(() => vi.spyOn(CSS, "supports").mockReturnValue(false));
+
+  it("leaves native input geometry to the deferred sizing owner", () => {
+    vi.spyOn(CSS, "supports").mockReturnValue(true);
+    const { composer } = renderComposer();
+    const textarea = composerTextarea(composer);
+    const read = vi.fn(() => 42);
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: read });
+    Object.defineProperty(textarea, "clientHeight", { configurable: true, get: read });
+
+    textarea.value = "Native typing";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(read).not.toHaveBeenCalled();
+  });
 
   it("keeps the shared fallback for non-pixel CSS caps", () => {
     const textarea = document.createElement("textarea");

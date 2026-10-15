@@ -14,9 +14,9 @@ import {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -590,7 +590,6 @@ export async function noteStateIntegrity(
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
-  const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
@@ -761,17 +760,6 @@ export async function noteStateIntegrity(
       }
       await repairWritableDirectory(dir, displayDir, label);
     }
-  }
-
-  // Compare only the effective home's default; other accounts do not share this history.
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
-    warnings.push(
-      [
-        "- Multiple state directories detected. This can split session history.",
-        `  - ${shortenHomePath(defaultStateDir)}`,
-        `  Active state dir: ${displayStateDir}`,
-      ].join("\n"),
-    );
   }
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);

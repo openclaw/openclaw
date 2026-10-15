@@ -635,7 +635,6 @@ describe("interrupted requester-settle continuation ownership", () => {
     "rearmed",
     "unstarted",
     "consumed",
-    "missing member",
     "different session",
     "different agent",
     "different store",
@@ -664,9 +663,6 @@ describe("interrupted requester-settle continuation ownership", () => {
     }
     if (scenario === "consumed") {
       child.requesterSettleWake = undefined;
-    }
-    if (scenario === "missing member") {
-      child.requesterSettleWake!.batchRunIds!.push("missing");
     }
     if (scenario === "different session") {
       child.completionRequesterSessionId = "replacement";
@@ -709,6 +705,15 @@ describe("interrupted requester-settle continuation ownership", () => {
       status: "terminal",
       error: expect.stringContaining("Gateway restart"),
     });
+  });
+
+  it("keeps the dispatched surviving cohort owned after a member retires", async () => {
+    const { child, worker } = cohort();
+    child.requesterSettleWake!.batchRunIds!.push("retired-member");
+
+    expect(await recover(worker)).toEqual({ status: "handled" });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
   });
 
   it.each(["yielded", "finished", "same-task replacement"] as const)(

@@ -68,7 +68,7 @@ describe("Talk relay audio base64", () => {
       await stopTalkRealtimeRelaySession({ relaySessionId, connId });
     }
     for (const [transcriptionSessionId, connId] of transcription) {
-      stopTalkTranscriptionRelaySession({ transcriptionSessionId, connId });
+      await stopTalkTranscriptionRelaySession({ transcriptionSessionId, connId });
     }
     realtime.clear();
     transcription.clear();

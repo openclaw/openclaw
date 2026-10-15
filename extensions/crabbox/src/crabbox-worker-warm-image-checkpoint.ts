@@ -98,7 +98,7 @@ function parseCheckpointJson(stdout: string, action: string): Record<string, unk
 export function parseCreatedCheckpoint(
   stdout: string,
   leaseId: string,
-): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> {
+): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> & { captureEstablished: boolean } {
   const record = parseCheckpointJson(stdout, "create");
   const checkpointId = nonEmptyString(record.id);
   const kind = nonEmptyString(record.kind);
@@ -112,9 +112,14 @@ export function parseCreatedCheckpoint(
   ) {
     throw new Error("Crabbox checkpoint create returned an invalid native checkpoint");
   }
-  // This parser consumes only successful `checkpoint create --wait` results.
-  // Crabbox owns readiness; provider-native state names are not a portable readiness signal.
-  return { checkpointId, kind, state: "available" };
+  return {
+    checkpointId,
+    kind,
+    captureEstablished: record.captureEstablished === true,
+    state: ["available", "ready", "succeeded", "completed"].includes(nativeState.toLowerCase())
+      ? "available"
+      : "pending",
+  };
 }
 
 export function parseForkedCheckpoint(

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -36,7 +36,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await page.locator("openclaw-app-sidebar .sidebar-rail").waitFor();
       await page.locator("openclaw-app-sidebar").evaluate(async (element) => {
-        await (element as AppSidebarSessionNavigationElement).updateComplete;
+        await (element as AppSidebarElement).updateComplete;
       });
       const pinReads = async () =>
         (await gateway.getRequests("sessions.describe")).filter((request) =>

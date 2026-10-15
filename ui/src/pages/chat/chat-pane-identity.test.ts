@@ -9,10 +9,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -21,11 +21,12 @@ import {
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
+  connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -167,6 +168,7 @@ describe("chat pane assistant identity snapshots", () => {
       },
       runtimeConfig: {
         state: { configNeedsApply: false, configSnapshot: null },
+        ensureLoaded: async () => undefined,
         subscribe: () => () => undefined,
       },
     });
@@ -174,7 +176,7 @@ describe("chat pane assistant identity snapshots", () => {
     pane.context = context;
     pane.connectedClient = null;
     pane.sessionKey = "global";
-    (pane as TestChatPane & { render: () => null }).render = () => null;
+    pane.render = () => ({ layout: html``, capabilityDialogs: undefined });
 
     try {
       pane.connectedCallback();
@@ -296,6 +298,10 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
+        presentation: {
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
+          agentId: "main",
+        },
         state: {
           result: null,
           agentId: "main",
@@ -313,7 +319,6 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -469,10 +474,10 @@ function createGlobalFeaturePane(
     pane.requestUpdate();
   };
   select("research");
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  connectPaneTestView(pane);
   onTestFinished(() => {
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
-    ChatPaneBase.prototype.disconnectedCallback.call(pane);
+    pane.disconnectedCallback();
     cancelChatStreamRenderFrame(state);
   });
   const emit = (payload: ProgressCardChangedEvent) => {

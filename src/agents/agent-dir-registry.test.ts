@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
   normalizeAgentDirRegistryPath,
@@ -10,6 +11,8 @@ import {
   resolveRegisteredAgentIdForDir,
   unregisterResolvedAgentDir,
 } from "./agent-dir-registry.js";
+
+vi.mock("node:worker_threads", () => ({ isMainThread: true }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -127,8 +130,98 @@ describe("agent directory registry", () => {
     }
   });
 
+  it.each([64, 256, 810])("reuses observations across walks of %i registered agents", (count) => {
+    const root = tempDirs.make("openclaw-agent-dir-fleet-");
+    const fleet = Array.from({ length: count }, (_, index) => ({
+      agentId: `fleet-${index}`,
+      agentDir: path.join(root, `fleet-${index}`, "agent"),
+    }));
+    for (const owner of fleet) {
+      fs.mkdirSync(owner.agentDir, { recursive: true });
+    }
+    const watch = vi.spyOn(fs, "watch");
+    for (const owner of fleet) {
+      registerResolvedAgentDir(owner);
+    }
+    const initialWatches = watch.mock.calls.length;
+    const closes = watch.mock.results.map((result) => {
+      if (result.type !== "return") {
+        throw new Error("Missing agent directory ancestor watch");
+      }
+      return vi.spyOn(result.value, "close");
+    });
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    try {
+      for (const owner of fleet) {
+        expect(registerResolvedAgentDir(owner)).toBe(false);
+        expect(resolveRegisteredAgentIdForDir(owner.agentDir)).toBe(owner.agentId);
+      }
+      expect(watch).toHaveBeenCalledTimes(initialWatches);
+      expect(closes.every((close) => close.mock.calls.length === 0)).toBe(true);
+      expect(realpath).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+      for (const owner of fleet) {
+        unregisterResolvedAgentDir(owner);
+      }
+      closes.forEach((close) => close.mockRestore());
+      watch.mockRestore();
+    }
+  });
+
+  it("retains ancestor watches when a named notification leaves directory identity unchanged", () => {
+    const agentDir = tempDirs.make("openclaw-agent-dir-unchanged-");
+    const watch = vi.spyOn(fs, "watch");
+    registerResolvedAgentDir({ agentId: "main", agentDir });
+    const count = watch.mock.calls.length;
+    const parentIndex = watch.mock.calls.findIndex(
+      ([directory]) => directory === path.dirname(agentDir),
+    );
+    const parent = watch.mock.results[parentIndex];
+    if (parent?.type !== "return") {
+      throw new Error("Missing agent directory ancestor watch");
+    }
+    const close = vi.spyOn(parent.value, "close");
+    try {
+      parent.value.emit("change", "change", path.basename(agentDir));
+      expect(close).not.toHaveBeenCalled();
+      expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("main");
+      expect(watch).toHaveBeenCalledTimes(count);
+    } finally {
+      close.mockRestore();
+      unregisterResolvedAgentDir({ agentId: "main", agentDir });
+      watch.mockRestore();
+    }
+  });
+
+  it("retires ancestor watches on shutdown without losing registered ownership", async () => {
+    const agentDir = tempDirs.make("openclaw-agent-dir-shutdown-");
+    const watch = vi.spyOn(fs, "watch");
+    registerResolvedAgentDir({ agentId: "main", agentDir });
+    const closes = watch.mock.results.map((result) => {
+      if (result.type !== "return") {
+        throw new Error("Missing agent directory ancestor watch");
+      }
+      return vi.spyOn(result.value, "close");
+    });
+    try {
+      expect(closes.length).toBeGreaterThan(0);
+      await drainGlobalSingletonLifecycleState("restart", { retainSharedState: true });
+      expect(closes.every((close) => close.mock.calls.length === 0)).toBe(true);
+      await drainGlobalSingletonLifecycleState("shared-state");
+      expect(closes.every((close) => close.mock.calls.length === 1)).toBe(true);
+      expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("main");
+    } finally {
+      unregisterResolvedAgentDir({ agentId: "main", agentDir });
+      closes.forEach((close) => close.mockRestore());
+      watch.mockRestore();
+    }
+  });
+
   it("invalidates a prepared alias after its parent is replaced", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = tempDirs.make("openclaw-agent-dir-replaced-");
     const original = path.join(root, "original");
     const replacement = path.join(root, "replacement");

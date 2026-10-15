@@ -20,6 +20,7 @@ import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -402,7 +403,7 @@ class CanvasWidgetController {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
-    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
       { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
       this.sandboxOrigin,
@@ -545,8 +546,8 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     host.style.display = "contents";
     host.style.minHeight = "";
     const context = useApplication();
+    const gateway = projectGateway(context.gateway);
     const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const [gatewayRevision, setGatewayRevision] = createSignal(0, { ownedWrite: true });
     const controller = new CanvasWidgetController(host, host, context, () =>
       setRevision((n) => n + 1),
     );
@@ -570,7 +571,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       configurable: true,
       get: () => controller.documentHtml,
     });
-    const unsubscribe = context?.gateway.subscribe(() => setGatewayRevision((n) => n + 1));
     createRenderEffect(
       () => [
         props.docId,
@@ -578,7 +578,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         props.connectionGeneration,
         props.allowScripts,
         props.presentationActive,
-        gatewayRevision(),
+        gateway.read(),
       ],
       () => {
         controller.reconcile();
@@ -592,7 +592,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     onSettled(() => controller.connect());
     onCleanup(() => {
       Object.defineProperty(host, "allowScripts", scriptProperty);
-      unsubscribe?.();
       controller.dispose();
     });
     const retry = () => {

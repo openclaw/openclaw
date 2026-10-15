@@ -16,7 +16,8 @@ suite.define(() => {
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("composer-picker-targets", artifactRoot)
       : undefined;
-    await suite.withPage({ viewport: { width: 701, height: 729 } }, async ({ page }) => {
+    // Keep the shell desktop-sized; Files supplies the narrow composer.
+    await suite.withPage({ viewport: { width: 1100, height: 729 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", reasoning: true }],
         sessions: [
@@ -43,7 +44,8 @@ suite.define(() => {
         .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
         .toBeLessThan(360);
 
-      for (const width of [701, 1280, 560, 393]) {
+      const contextLayouts = [];
+      for (const width of [1100, 1280, 560, 393, 320]) {
         if (width === 560) {
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await page.locator(".chat-workspace-rail").waitFor({ state: "hidden" });
@@ -89,6 +91,22 @@ suite.define(() => {
             }),
           )
           .toEqual([]);
+        contextLayouts.push(
+          await composer.evaluate((node) => {
+            const ring = node.querySelector<HTMLElement>(".context-ring")!;
+            const model = node.querySelector<HTMLElement>("[data-chat-model-select]")!;
+            const ringBox = ring.getBoundingClientRect();
+            const modelBox = model.getBoundingClientRect();
+            return {
+              label: ring.textContent?.trim(),
+              accessibleName: ring.getAttribute("aria-label"),
+              gap: modelBox.left - ringBox.right,
+              centerOffset: Math.abs(
+                ringBox.y + ringBox.height / 2 - (modelBox.y + modelBox.height / 2),
+              ),
+            };
+          }),
+        );
         for (const [triggerSelector, menuSelector, otherMenuSelector] of [
           [
             '[data-chat-model-select="true"]',
@@ -122,6 +140,13 @@ suite.define(() => {
           await page.keyboard.press("Escape");
           await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(false);
         }
+      }
+      for (const layout of contextLayouts) {
+        expect(layout.label).toBe("");
+        expect(layout.accessibleName).toBe("Session context usage: 21k of 200k (11%)");
+        expect(layout.gap).toBeGreaterThanOrEqual(0);
+        expect(layout.gap).toBeLessThanOrEqual(8);
+        expect(layout.centerOffset).toBeLessThanOrEqual(1);
       }
     });
   });

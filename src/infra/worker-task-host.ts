@@ -16,6 +16,7 @@ import {
   markWorkerRetirement,
   receiveWorkerMemoryPort,
 } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -133,8 +134,11 @@ export function createWorkerTaskHost(
         );
     },
     receiveMessage: receiveWorkerMemoryPort,
+    observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     workerStarted(worker, pool) {
-      trackSqliteDatabaseAdmissionWorker(worker);
+      if (owner.databaseAccess !== "read-only") {
+        trackSqliteDatabaseAdmissionWorker(worker);
+      }
       attributeWorkerToPool(worker, pool);
     },
     workerRetiring(worker, reason) {

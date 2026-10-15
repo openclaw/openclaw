@@ -1,7 +1,7 @@
+import { resolveStateDir } from "../config/paths.js";
 // TTS preference mutations stay off the agent prompt's read-only import path.
-import path from "node:path";
 import type { TtsAutoMode, TtsProvider } from "../config/types.js";
-import { privateFileStoreSync } from "../infra/private-file-store.js";
+import { writePrivateTextFileAtomicSync } from "../infra/private-file-store.js";
 import { canonicalizeSpeechProviderId } from "./provider-registry.js";
 import { normalizeTtsPersonaId, readTtsPrefs, type TtsUserPrefs } from "./tts-settings.js";
 
@@ -11,10 +11,7 @@ function updateTtsPrefs(
 ): void {
   const prefs = readTtsPrefs(prefsPath);
   prefs.tts = update(prefs.tts);
-  privateFileStoreSync(path.dirname(prefsPath)).writeText(
-    path.basename(prefsPath),
-    JSON.stringify(prefs, null, 2),
-  );
+  writePrivateTextFileAtomicSync(prefsPath, JSON.stringify(prefs, null, 2), resolveStateDir());
 }
 
 export function setTtsAutoMode(prefsPath: string, mode: TtsAutoMode): void {

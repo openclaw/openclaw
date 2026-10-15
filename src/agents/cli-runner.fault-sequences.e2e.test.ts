@@ -229,6 +229,7 @@ async function runOuter(options: OuterRunOptions = {}) {
   harness.wholeTurnRuns += 1;
   const runId = "run-cli-fault-e2e";
   const config = fallbackConfig(options.fallbacks);
+  setRuntimeConfigSnapshot(config);
   return withTestRunAdmission(
     {
       admittedRunContext: createTestAdmittedRunContext(runId),

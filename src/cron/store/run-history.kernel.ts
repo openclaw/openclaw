@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -17,10 +17,11 @@ import {
   resolveCronRunRecordTimestamp,
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
+import { publishCronRunHistoryChange } from "./run-history-changes.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
-const query = (db: DatabaseSync) =>
+const query = (db: EngineConnection) =>
   getNodeSqliteKysely<
     Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings" | "cron_run_receipts">
   >(db);
@@ -63,7 +64,7 @@ function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
 
 /** Reads only Cron facts from the admitted released table, without restoring Tasks. */
 export function readCronRunRecordsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   jobId?: string,
   runId?: string,
 ): CronRunRecord[] {
@@ -148,7 +149,7 @@ export function readCronRunRecordsInDatabase(
 }
 
 /** Caller owns the exact transaction. History never authorizes execution or receipt adoption. */
-export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryWrite): void {
+export function recordCronRunInDatabase(db: EngineConnection, input: CronRunHistoryWrite): void {
   const existing = readCronRunRecordsInDatabase(db, input.jobId, input.runId).find(
     (row) =>
       row.runId === input.runId &&
@@ -209,11 +210,12 @@ export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryW
         }),
     );
   }
+  publishCronRunHistoryChange(db);
 }
 
 /** Queue rejection is durable even if the host never receives the commit result. */
 export function recordSkippedCronRequestInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     storeKey: string;
     jobId: string;
@@ -257,6 +259,16 @@ export function recordSkippedCronRequestInDatabase(
   });
 }
 
+function cronRunHistoryExpiry(row: CronRunRecord): number {
+  const defaultExpiry =
+    resolveCronRunRecordTimestamp(row) + (row.status === "lost" ? LOST_RETENTION_MS : RETENTION_MS);
+  return row.cleanupAfter === undefined
+    ? defaultExpiry
+    : row.status === "lost"
+      ? Math.min(row.cleanupAfter, defaultExpiry)
+      : row.cleanupAfter;
+}
+
 /** Same seven-day/lost-day and separate history/quiet-count bounds as released cron rows. */
 function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number): Set<string> {
   const expired = new Set<string>();
@@ -265,14 +277,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
     if (row.status === "queued" || row.status === "running") {
       continue;
     }
-    const timestamp = resolveCronRunRecordTimestamp(row);
-    const defaultExpiry = timestamp + (row.status === "lost" ? LOST_RETENTION_MS : RETENTION_MS);
-    const expiry =
-      row.cleanupAfter === undefined
-        ? defaultExpiry
-        : row.status === "lost"
-          ? Math.min(row.cleanupAfter, defaultExpiry)
-          : row.cleanupAfter;
+    const expiry = cronRunHistoryExpiry(row);
     if (now >= expiry) {
       expired.add(row.id);
     }
@@ -299,7 +304,7 @@ function collectExpiredCronRunIds(records: readonly CronRunRecord[], now: number
 }
 
 function pruneCronRunHistoryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   schema: CronRunReceiptWriteSchema,
   records = readCronRunRecordsInDatabase(db),
@@ -387,15 +392,30 @@ export function planCronRunHistoryMaintenance(
   const reconciledIds = new Set(reconciliations.map((row) => row.id));
   // Newly lost rows retain their first lost observation until the next sweep.
   const pruneCandidates = records.filter((row) => !reconciledIds.has(row.id));
+  const expired = collectExpiredCronRunIds(pruneCandidates, now);
+  let nextSweepAtMs = Infinity;
+  for (const row of [...pruneCandidates, ...reconciliations]) {
+    if (expired.has(row.id)) {
+      continue;
+    }
+    const active = row.status === "queued" || row.status === "running";
+    const deadline = active
+      ? protectedJobIds.has(row.jobId?.trim() ?? "")
+        ? now + 60_000
+        : (row.lastEventAt ?? row.startedAt ?? row.createdAt) + 5 * 60_000
+      : cronRunHistoryExpiry(row);
+    nextSweepAtMs = Math.min(nextSweepAtMs, deadline);
+  }
   return {
     reconciliations,
     pruneCandidates,
-    prune: collectExpiredCronRunIds(pruneCandidates, now).size > 0,
+    prune: expired.size > 0,
+    nextSweepAtMs: Number.isFinite(nextSweepAtMs) ? nextSweepAtMs : null,
   };
 }
 
 export function applyCronRunHistoryMaintenanceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   plan: ReturnType<typeof planCronRunHistoryMaintenance>,
   now: number,
   schema: CronRunReceiptWriteSchema,

@@ -1,22 +1,12 @@
 import "../../styles/config.css";
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  useContext,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
-import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
 import { subscribeLobsterdex } from "../../components/lobster-dex.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -38,7 +28,6 @@ import {
   projectAgentIdentity,
 } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
 import type { ConfigPageId } from "./config-sections.ts";
@@ -220,10 +209,10 @@ function ConfigBody(props: {
 
 export type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
 
-function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
-  const host = untrack(() => props.host);
+export function ConfigPage(props: ConfigPageProps) {
+  let host!: HTMLElement;
   const context = useApplication();
-  // Plain controllers can notify while a descendant or bridge owns the current scope.
+  // Plain controllers can notify while a descendant owns the current scope.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
   const controller = new ConfigPageController(
     context,
@@ -268,7 +257,7 @@ function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
   // Server selection intent can change while the stored preferences stay equal.
   subscriptions.push(context.theme.subscribe(refresh), subscribeLobsterdex(refresh));
   createEffect(
-    () => [props.pageId ?? "advanced", props.routeData ?? null] as const,
+    () => [props.pageId, props.routeData] as const,
     ([pageId, routeData]) => controller.updateRoute(pageId, routeData),
   );
   onSettled(() => {
@@ -289,38 +278,34 @@ function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
     return controller.configObject;
   });
   createEffect(revision, () => controller.afterCommit());
-  const inheritedLayout = useContext(ShellLayoutProvider);
-  const layoutOwner = shellLayoutOwnerForHost(host);
-  const layout = inheritedLayout ?? (layoutOwner ? { owner: layoutOwner, host } : null);
   return (
-    <ShellLayoutProvider value={layout}>
-      <Show when={(props.pageId ?? "advanced") !== "memory"}>
+    <openclaw-config-page ref={(element) => (host = element)}>
+      <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
-          title={titleForRoute(props.pageId ?? "advanced")}
-          subtitle={renderConfigPageSubtitle(props.pageId ?? "advanced")}
+          title={titleForRoute(props.pageId)}
+          subtitle={renderConfigPageSubtitle(props.pageId)}
         />
       </Show>
       <SettingsWorkspace>
         <ConfigBody
           controller={controller}
-          pageId={props.pageId ?? "advanced"}
-          routeData={props.routeData ?? null}
+          pageId={props.pageId}
+          routeData={props.routeData}
           config={configProps()}
           configObject={configObject()}
         />
       </SettingsWorkspace>
-    </ShellLayoutProvider>
+    </openclaw-config-page>
   );
 }
 
-// The bridge owns the single host for both the Lit route and Solid callers.
-export const ConfigPage = defineSolidBridge<ConfigPageProps>(
-  "openclaw-config-page",
-  (props, host) => <ConfigPageContent {...props} host={host} />,
-  {
-    properties: {
-      pageId: { default: "advanced", attribute: "page-id" },
-      routeData: { default: null, attribute: false },
-    },
-  },
-);
+export type ConfigPageRouteData = ConfigRouteData & { pageId: ConfigPageId };
+
+// Keep renderer identity shared across subpages so route changes preserve this owner.
+export function ConfigRoute(props: SolidRouteProps<ConfigPageRouteData>) {
+  return (
+    <Show when={props.data}>
+      {(data) => <ConfigPage pageId={data().pageId} routeData={data()} />}
+    </Show>
+  );
+}

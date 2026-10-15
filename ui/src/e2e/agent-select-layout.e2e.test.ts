@@ -39,10 +39,10 @@ suite.define(() => {
         const openPicker = async () => {
           await picker.waitFor();
           await Promise.all([
-            picker.evaluate(
+            picker.locator(".agent-select__menu").evaluate(
               (element) =>
                 new Promise<void>((resolve) => {
-                  element.addEventListener("wa-after-show", () => resolve(), { once: true });
+                  element.addEventListener("overlay-after-show", () => resolve(), { once: true });
                 }),
             ),
             trigger.click(),

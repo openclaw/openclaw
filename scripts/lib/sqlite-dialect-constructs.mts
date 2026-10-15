@@ -3,6 +3,12 @@ export type DialectGroup = (typeof DIALECT_GROUPS)[number];
 export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   // Canonical owner of SQLite FK/sequence primitives that ports and migrations call instead of raw sites.
   "src/infra/sqlite-strict.ts",
+  // Canonical owner of SQLite user_version read/write.
+  "src/infra/sqlite-user-version.ts",
+  // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
+  "src/infra/sqlite-migration-scoped-snapshot.ts",
+  // SQLite planner-statistics owner: bounded optimization under existing writer admission.
+  "src/infra/sqlite-planner-statistics.ts",
 ];
 export type DialectMatch = {
   construct: string;

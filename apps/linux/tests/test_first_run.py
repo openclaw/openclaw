@@ -1,8 +1,9 @@
 from contextlib import redirect_stdout
 import io
+import hashlib
+import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -11,6 +12,7 @@ from unittest.mock import Mock, patch
 from first_run import role_matches
 from gateway_switch import GatewayOnboardingFixture, GatewaySwitchFixture
 from inline_browser import GatewayFixture
+from stage_onboarding_runtime import stage_onboarding_runtime
 
 
 class GatewayPointerTests(unittest.TestCase):
@@ -56,7 +58,7 @@ class GatewayPointerTests(unittest.TestCase):
 
 
 class OnboardingResourcesTests(unittest.TestCase):
-    def test_stages_runtime_and_installs_a_canonical_launcher(self):
+    def test_stages_the_compiled_runtime_without_a_parallel_installer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binary = root / "source/openclaw-desktop"
@@ -75,17 +77,31 @@ class OnboardingResourcesTests(unittest.TestCase):
                 for relative in ("manifest.json", "bin/bun"):
                     self.assertEqual((staged.parent / "desktop-runtime" / relative).read_bytes(),
                                      (runtime / relative).read_bytes())
-                subprocess.run([
-                    "bash", str(staged.parent / "install-cli.sh"), "--json", "--no-onboard",
-                    "--prefix", str(prefix), "--version", "main", "--runtime-only",
-                    "--install-method", "git", "--git-dir", str(prefix / "dev/openclaw"),
-                ], cwd=home, check=True, capture_output=True)
-                cli = prefix / "bin/openclaw"
-                self.assertEqual(cli.read_text(), '#!/usr/bin/env bash\nset -euo pipefail\n'
-                                 f'exec "{prefix}/tools/node/bin/node" "{prefix}/dev/openclaw/dist/entry.js" "$@"\n')
-                self.assertIn("OpenClaw fixture", subprocess.check_output([str(cli), "--version"], text=True))
-                self.assertTrue((home / "fixture-installer-called").is_file())
-                self.assertFalse((home / "fixture-runtime-installed.json").exists())
+                self.assertFalse((staged.parent / "install-cli.sh").exists())
+
+    def test_fixture_package_replaces_core_but_preserves_the_pinned_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "desktop-runtime"
+            runtime.mkdir()
+            copied = runtime.parent / "debug/desktop-runtime"
+            copied.mkdir(parents=True)
+            (copied / "stale.js").touch()
+            package = runtime / "package"
+            package.mkdir()
+            (package / "old.js").write_text("old core")
+            (runtime / "manifest.json").write_text(json.dumps({
+                "revision": "pinned", "files": {"bin/bun": "runtime-hash", "package/old.js": "old-hash"},
+            }))
+            stage_onboarding_runtime(runtime)
+            manifest = json.loads((runtime / "manifest.json").read_text())
+            entry = "package/node_modules/openclaw/openclaw.mjs"
+            content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
+            self.assertEqual(manifest, {"revision": "pinned", "files": {
+                "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
+            }})
+            self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
+            self.assertFalse((package / "old.js").exists())
+            self.assertFalse(copied.exists())
 
     def test_missing_runtime_resources_fail_before_launch(self):
         with tempfile.TemporaryDirectory() as temporary:

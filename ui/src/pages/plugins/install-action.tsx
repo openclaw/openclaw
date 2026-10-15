@@ -1,8 +1,7 @@
-import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, onSettled, For } from "solid-js";
-import { configureAnchoredPopup } from "../../components/anchored-overlay.ts";
+import { createEffect, createSignal, onCleanup, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -35,17 +34,16 @@ function InstallActionContent(
   props: PluginInstallActionProps,
   host: PluginInstallActionElement,
 ): JSX.Element {
-  let button!: HTMLButtonElement;
-  const [open, setOpen] = createSignal<boolean>((previous) =>
-    props.progress || props.busy ? (previous ?? false) : false,
-  );
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  const [open, setOpen] = createSignal(false);
+  let popover: PopoverHandle | undefined;
   const [now, setNow] = createSignal(Date.now());
   let pinned = false;
   let hovering = false;
   const progressId = `plugin-install-progress-${generateUUID()}`;
   const dismiss = () => {
     pinned = false;
-    setOpen(false);
+    popover?.overlay.request(false, "return");
   };
   dismissers.set(host, dismiss);
   onCleanup(() => dismissers.delete(host));
@@ -55,16 +53,6 @@ function InstallActionContent(
       host.toggleAttribute("open", expanded);
     },
   );
-  const handleEscape = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && open()) {
-      dismiss();
-      event.stopPropagation();
-    }
-  };
-  onSettled(() => {
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  });
   createEffect(
     () => props.progress && props.progress.finishedAt === undefined,
     (running) => {
@@ -73,20 +61,6 @@ function InstallActionContent(
       }
       const timer = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(timer);
-    },
-  );
-  createEffect(
-    () => Boolean(props.progress),
-    (present) => {
-      if (!present) {
-        return;
-      }
-      const popup = host.querySelector("wa-popup");
-      if (popup instanceof WaPopup) {
-        configureAnchoredPopup(popup, button, "bottom");
-        popup.distance = 16;
-        popup.hoverBridge = true;
-      }
     },
   );
   createEffect(
@@ -113,16 +87,22 @@ function InstallActionContent(
       class="plugin-install-action"
       onMouseEnter={() => {
         hovering = true;
-        setOpen(true);
+        popover?.show();
       }}
       onMouseLeave={() => {
         hovering = false;
         if (!pinned && !host.contains(document.activeElement)) {
-          setOpen(false);
+          popover?.hide();
         }
       }}
-      onFocusIn={() => {
-        setOpen(true);
+      onFocusIn={(event: FocusEvent) => {
+        // The owner's return focus during close must not reopen the panel.
+        if (
+          popover?.overlay.phase !== "closing" &&
+          !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
+        ) {
+          popover?.show();
+        }
       }}
       onFocusOut={(event: FocusEvent) => {
         if (
@@ -130,14 +110,12 @@ function InstallActionContent(
           !hovering &&
           !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
         ) {
-          setOpen(false);
+          popover?.hide();
         }
       }}
     >
       <button
-        ref={(element) => {
-          button = element;
-        }}
+        ref={setButton}
         type="button"
         class={[
           props.buttonClass,
@@ -174,7 +152,11 @@ function InstallActionContent(
             }
           } else {
             pinned = !pinned;
-            setOpen(pinned);
+            if (pinned) {
+              popover?.show();
+            } else {
+              popover?.hide();
+            }
           }
         }}
       >
@@ -190,11 +172,31 @@ function InstallActionContent(
         )}
         {progress() ? <Icon name="chevronDown" /> : undefined}
       </button>
-      {progress() ? (
-        <wa-popup class="plugin-install-action__popup" prop:active={open()}>
+      {progress() && button() ? (
+        <Popover
+          id={progressId}
+          label={t("pluginsPage.installProgress.title")}
+          anchor={button()}
+          class="plugin-install-action__popup"
+          placement="bottom-start"
+          ref={(handle) => {
+            popover = handle;
+            setOpen(handle.overlay.open);
+            if (hovering || pinned || host.contains(document.activeElement)) {
+              handle.show();
+            }
+          }}
+          dismissOutsidePointer={false}
+          dismissOutsideFocus={false}
+          onOpenChange={(value) => {
+            if (!value) {
+              pinned = false;
+            }
+            setOpen(value);
+          }}
+        >
           <section
             class="plugin-install-progress"
-            id={progressId}
             role="status"
             aria-label={t("pluginsPage.installProgress.title")}
           >
@@ -248,7 +250,7 @@ function InstallActionContent(
               </details>
             ) : undefined}
           </section>
-        </wa-popup>
+        </Popover>
       ) : undefined}
     </span>
   );

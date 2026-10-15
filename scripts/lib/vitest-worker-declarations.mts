@@ -109,10 +109,16 @@ export const vitestWorkerDeclarationEntries = {
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",
+  "extensions/codex/doctor-closed-stdin.test-support":
+    "extensions/codex/src/doctor-closed-stdin.test-support.ts",
+  "extensions/codex/doctor-closed-stdin-entrypoint.test-support":
+    "extensions/codex/src/doctor-closed-stdin-entrypoint.test-support.ts",
   "extensions/codex/session-history-worker-entrypoint":
     "extensions/codex/session-history-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":

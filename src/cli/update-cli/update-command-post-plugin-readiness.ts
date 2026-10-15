@@ -62,8 +62,17 @@ export async function applyPostPluginUpdateReadiness(params: {
   pluginUpdate: PostCorePluginUpdateResult;
   timeoutMs: number;
   nodeRunner?: string;
+  includeOptionalInspections?: boolean;
 }): Promise<PostCorePluginUpdateResult> {
-  const args = [params.entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
+  const args = [
+    params.entryPath,
+    "doctor",
+    "--lint",
+    "--json",
+    "--severity-min",
+    params.includeOptionalInspections ? "info" : "error",
+    ...(params.includeOptionalInspections ? ["--all"] : []),
+  ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const startedAt = Date.now();
@@ -126,32 +135,54 @@ export async function applyPostPluginUpdateReadiness(params: {
   }
   const completed = execution.termination === "exit" && !execution.outputLimitExceeded;
   doctorLint.doctorLintFindings = report.doctorLintFindings;
-  const policyAdvisory =
-    execution.code === 1 && completed && report.advisoryOnly && report.checksRun > 0;
+  const inspectionAdvisories = params.includeOptionalInspections
+    ? report.findings.filter(
+        (finding) => finding.severity === "info" || finding.severity === "warning",
+      )
+    : [];
+  const readinessFindings = report.findings.filter(
+    (finding) => !inspectionAdvisories.includes(finding),
+  );
+  const advisoryOnly =
+    execution.code === 1 &&
+    completed &&
+    (report.advisoryOnly || inspectionAdvisories.length > 0) &&
+    readinessFindings.length === 0 &&
+    report.checksRun > 0;
   const passed =
-    ((execution.code === 0 && completed && report.ok) || policyAdvisory) &&
+    ((execution.code === 0 && completed && report.ok) || advisoryOnly) &&
     report.checksRun > 0 &&
-    report.findings.length === 0;
-  if (policyAdvisory) {
+    readinessFindings.length === 0;
+  if (advisoryOnly) {
     doctorLint.advisory = {
       kind: "recoverable-maintenance",
-      message: "Doctor security policy findings are advisory during updates.",
+      message:
+        inspectionAdvisories.length > 0
+          ? "Doctor inspection findings are advisory during updates."
+          : "Doctor security policy findings are advisory during updates.",
     };
   }
   if (report.failureFacts.length) {
     doctorLint.failureFacts = report.failureFacts;
   }
-  if (report.warnings.length > 0) {
+  const warnings = [
+    ...report.warnings,
+    ...inspectionAdvisories.filter((finding) => finding.severity !== "info"),
+  ];
+  if (warnings.length > 0) {
     pluginUpdate.status = pluginUpdate.status === "error" ? "error" : "warning";
     pluginUpdate.warnings = [
       ...(pluginUpdate.warnings ?? []),
-      ...report.warnings.map((finding) => readinessWarning(finding, "doctor-advisory")),
+      ...warnings.map((finding) => readinessWarning(finding, "doctor-advisory")),
     ];
   }
   if (passed) {
+    if (params.includeOptionalInspections) {
+      doctorLint.deferredInspectionCheckIds = [];
+    }
     return pluginUpdate;
   }
-  if (report.findings.length === 0) {
+  if (readinessFindings.length === 0) {
     return createPostPluginReadinessExecutionFailure(
       pluginUpdate,
       report.checksRun === 0
@@ -166,7 +197,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     failureFacts: report.failureFacts,
     warnings: [
       ...(pluginUpdate.warnings ?? []),
-      ...report.findings.map((finding) => readinessWarning(finding)),
+      ...readinessFindings.map((finding) => readinessWarning(finding)),
     ],
   };
 }

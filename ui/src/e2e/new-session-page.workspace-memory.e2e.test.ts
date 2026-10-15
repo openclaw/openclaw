@@ -456,7 +456,7 @@ suite.define(() => {
       await project.waitFor();
       await recentFolder.waitFor();
       await captureProjectUiProof(suite, page, "identity-project-recents-after.png", {
-        surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+        surface: page.locator(".oc-popover.new-session-page__project-popover"),
         content: [project, recentFolder],
       });
       await project.click();
@@ -869,7 +869,7 @@ suite.define(() => {
       const placeTrigger = page.locator("#new-session-project-trigger");
       await placeTrigger.click();
       await page
-        .locator('wa-popover.new-session-page__project-popover [data-value="workspace"]')
+        .locator('.oc-popover.new-session-page__project-popover [data-value="workspace"]')
         .click();
       await gateway.resolveDeferred("fs.listDir", {
         path: PICKED,

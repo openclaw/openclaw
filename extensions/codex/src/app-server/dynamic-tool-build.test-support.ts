@@ -112,6 +112,8 @@ export async function buildDynamicToolsForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
+  const config = params.config ?? {};
+  setRuntimeConfigSnapshot(config, config);
   return buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,

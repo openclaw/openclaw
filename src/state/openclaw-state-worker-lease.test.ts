@@ -50,7 +50,10 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: the synthetic physical database must not reach the real cache singleton lifecycle.
 vi.mock("./openclaw-state-db-cache.js", () => ({
+  // The synthetic cache is the only lifecycle this file publishes.
+  assertPublishedOpenClawStateDatabaseLifecycle: () => {},
   openClawStateDatabaseCache: {
     getKnownOpenClawStateDatabaseIdentity: () => physical.databaseAdmission?.identity,
   },
@@ -129,6 +132,11 @@ function createLeaseFixture() {
     id: 1,
     key: "synthetic-state",
     databasePath: "/synthetic/state.sqlite",
+    stateAccess: {
+      canonicalPath: "/synthetic/state.sqlite",
+      assertAccessAllowed() {},
+      assertReadAllowed() {},
+    },
     pathReferences: new Map([["/synthetic/state.sqlite", 1]]),
     moduleUrl: "file:///synthetic/shared-state-worker.js",
     inputHash: "capture-lease-fixture",

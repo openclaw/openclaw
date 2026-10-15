@@ -1,5 +1,5 @@
 ---
-summary: "Agent tools for cross-session status, recall, messaging, and sub-agent orchestration"
+summary: "Agent tools for session creation, cross-session status, recall, messaging, and sub-agent orchestration"
 read_when:
   - You want to understand what session tools the agent has
   - You want to configure cross-session access or sub-agent spawning
@@ -10,7 +10,7 @@ title: "Session tools"
 OpenClaw gives agents tools to work across sessions, inspect status, and orchestrate sub-agents.
 
 `sessions_list`, `sessions_history`, `sessions_search`, `session_status`,
-`sessions_send`, `sessions`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
+`sessions_send`, `sessions`, `sessions_create`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
 It is required when several people have steered the turn. The named person's
 authority determines session access and child execution; unknown or revoked
 participants are rejected. Single-person turns can omit it.
@@ -19,20 +19,21 @@ session access rules.
 
 ## Available tools
 
-| Tool                 | What it does                                                                            |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| `sessions`           | Patch, reset, delete, or assign ownership of visible sessions and manage session groups |
-| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)              |
-| `sessions_search`    | Search visible session transcripts and return matching excerpts                         |
-| `sessions_history`   | Read the transcript of a specific session                                               |
-| `sessions_send`      | Run another session on the same Gateway and optionally wait                             |
-| `conversations_list` | List stable external conversation addresses                                             |
-| `conversations_send` | Send to one exact external conversation without running a local session                 |
-| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply               |
-| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                                 |
-| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results                           |
-| `subagents`          | List or cancel background work in this session tree                                     |
-| `session_status`     | Show a `/status`-style card and optionally set a per-session model override             |
+| Tool                 | What it does                                                                |
+| -------------------- | --------------------------------------------------------------------------- |
+| `sessions`           | Manage visible sessions and organize session groups                         |
+| `sessions_create`    | Create an independent session, optionally starting work                     |
+| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)  |
+| `sessions_search`    | Search visible session transcripts and return matching excerpts             |
+| `sessions_history`   | Read the transcript of a specific session                                   |
+| `sessions_send`      | Run another session on the same Gateway and optionally wait                 |
+| `conversations_list` | List stable external conversation addresses                                 |
+| `conversations_send` | Send to one exact external conversation without running a local session     |
+| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply   |
+| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                     |
+| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results               |
+| `subagents`          | List or cancel background work in this session tree                         |
+| `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
 
 These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The UI-only task-suggestion tools `suggest_task` and `dismiss_task` remain coding-profile tools.
 
@@ -52,6 +53,37 @@ and delete results can queue attribution-only generic facts. The private facts
 distinguish committed or scheduled work from typed lifecycle conflicts and
 definitive no-ops; their public display remains generic and unverified. Direct
 Gateway sharing operations are outside this run-audit boundary.
+
+## Creating an independent session
+
+Use `sessions_create` when the user explicitly asks to start or
+create a session or task, including “spin up a new task.” This creates a normal,
+persistent visible session that the user can return to and steer independently.
+It is not a supervised child and does not send a completion event to the caller;
+do not yield expecting one.
+
+- Supply a nonblank `message` to start the first turn, or omit it to create an idle session.
+- Optional `label`, `agentId`, `cwd`, `group`, `model`, and `permissionMode` configure
+  the new session. `user` selects the verified requester when needed, as described
+  above. `agentId` defaults to the requesting agent; omitted settings use destination
+  defaults. `group` selects a sidebar category, not execution parentage. The tool
+  does not accept creator identity, role, key, parent, fork, spawn, or adoption fields.
+- The result identifies the new `sessionKey` and `sessionId`. `runStarted` reports
+  whether the first turn started; `runId` is present when available. If creation
+  succeeds but startup fails, `runError` reports the failure and the session remains
+  available. Inspect that session before retrying creation.
+
+Creation is exposed only with live admitted `operator.sessions.write` authority.
+The existing `sessions` management tool does not create sessions, and senderless
+runs do not gain the separate creation capability. The default sandbox surface for an
+admitted non-owner with session-write authority includes creation and renaming.
+Tool policy and execution-time authority checks still apply.
+
+Use `sessions_spawn` for actual delegated helpers. Hidden children are the default;
+`visible: true` remains available for deliberately supervised child work the user
+needs to revisit or steer. Use `suggest_task` for proactive, unrequested follow-up
+proposals: it records a card and starts nothing until accepted. An explicit request
+to start work is not a suggestion request.
 
 ## Listing and reading sessions
 
@@ -85,8 +117,10 @@ byte caps still apply.
 Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
-Cancelled and interrupted inputs are retained for inspection and never run
-automatically. Built-in and CLI agent turns also receive bounded text previews of recent
+Cancelled inputs never run automatically. Interrupted inputs are retained for
+inspection; the Gateway can re-admit an unconsumed ordinary peer send that has
+durable delivery ownership, as described below. Other interrupted inputs do not
+run automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or
 resume work without a current request. The preview tells the agent to resume them
@@ -123,7 +157,7 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 ## Managing session settings and groups
 
-The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain the full tool. An explicit non-owner sender receives `assign_owner` for visible sessions. An admitted operator with `operator.sessions.write` can also rename sessions they created with a label-only patch. Rename defaults to the current session and preserves its identity, history, workspace, settings, and running work. Renaming another created session requires its `sessions_list` `sessionId` as `expectedSessionId`. An admitted non-admin operator with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to as a human owner, subject to existing session access checks. The narrower `operator.sessions.write` scope alone does not expose those controls. For a non-owner operator with session-write authority, the default sandbox exposes only renaming. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Other settings, deletion, cloud-profile discovery, and global group actions remain owner-gated. Senderless system runs keep their existing session-management surface, subject to tool policy, scopes, and live caller checks.
+The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain the full tool. An explicit non-owner sender receives `assign_owner` for visible sessions. An admitted operator with `operator.sessions.write` can also rename sessions they created with a label-only patch. Rename defaults to the current session and preserves its identity, history, workspace, settings, and running work. Renaming another created session requires its `sessions_list` `sessionId` as `expectedSessionId`. An admitted non-admin operator with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to as a human owner, subject to existing session access checks. The narrower `operator.sessions.write` scope alone does not expose those controls. For a non-owner operator with session-write authority, the default sandbox exposes `sessions_create` and label-only renaming through `sessions`. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Other settings, deletion, cloud-profile discovery, and global group actions remain owner-gated. Senderless system runs keep their existing session-management surface, subject to tool policy, scopes, and live caller checks.
 
 Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
 
@@ -164,7 +198,7 @@ reject the batch before mutation. To archive an eligible current session, use a 
 its archive is deferred until the run finishes, while a batch reports that
 current-session target as failed and continues with the others.
 
-Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. Pass `group` to place it in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
+Use `sessions_create` for independent sessions. For deliberately supervised child work, use `sessions_spawn` with `visible: true`. Pass `group` to place that child in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. The spawn path enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.
 
@@ -227,6 +261,21 @@ arbitrary target history. The target can still disclose data or act on the
 request; send-only access is not isolation from a privileged target's behavior.
 
 During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
+
+Ordinary peer sends accepted by the Gateway retain delivery ownership with the
+saved input. After an unexpected shutdown or update restart, startup re-admits
+only unconsumed inputs whose exact source and target sessions still exist and
+whose current communication policies and visibility permit delivery. It reuses
+the original input identity, preserving per-target order and consumption
+deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
+revoked access, or a policy requiring fresh approval prevents automatic recovery.
+Inputs saved by older versions without delivery ownership remain available for
+inspection, not automatic retry. In history, `queued` means an input has current
+custody, not that the model is executing it; an input that remains `interrupted`
+is saved but is not being retried. A display-only notice distinguishes changed
+sessions, denied communication, and unavailable admission without feeding those
+diagnostics back to the model. Task continuations and steering retain their
+separate lifecycle owners.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
@@ -403,7 +452,7 @@ Key options:
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `worktree: true` to give a native child its own [managed checkout](/concepts/managed-worktrees), with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden children support these fields without `visible: true`; hidden `projectId` and all worktree names/base refs require `worktree: true`. The first turn waits for asynchronous preparation. `cleanup: "delete"` uses session deletion to snapshot and remove the checkout; `"keep"` retains it under the usual idle and archive lifecycle. ACP does not support managed-worktree parameters. Sidebar `group`, `projectGitUrl`, and cloud placement profiles remain visible-only.
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
-- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+- `visible: true` to create a persistent visible supervised child instead of a hidden sub-agent session. For an independent human-requested session, use `sessions_create` as described above. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 Sub-agents below the default depth limit of `5` receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Set a lower `maxSpawnDepth` to turn sessions at that depth into leaves sooner.
 

@@ -27,7 +27,7 @@ import type {
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
 it.each([
@@ -134,15 +134,19 @@ it.each([
         agentId,
         sessionKey: kind === "unknown" ? "unknown" : "global",
       };
-      const route = resolveGatewaySessionStoreTarget({
+      const route = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
         key: kind === "alias" ? "agent:main:main" : scope.sessionKey,
         agentId: scope.agentId,
+        projection: "list",
+        exactRead: true,
+        readOnly: false,
       });
       const qualified = await prepareQualifiedSessionEntryTarget({
         ...route,
         requestedKey: kind === "alias" ? route.canonicalKey : scope.sessionKey,
         storeKey: route.canonicalKey,
+        readSource: route.capturedReadSource,
       });
       const effect = vi.fn();
       const host = observeHostDataSql();

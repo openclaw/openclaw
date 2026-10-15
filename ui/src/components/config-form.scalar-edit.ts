@@ -1,4 +1,5 @@
 // Scalar edit sessions keep their initial primitive branch while focused rerenders apply patches.
+type ScalarControl = HTMLInputElement | HTMLTextAreaElement;
 type ScalarValueBranch = "string" | "number" | "boolean";
 
 export type ScalarEditHint = {
@@ -14,7 +15,7 @@ type ScalarInputState = {
   renderedValue: string;
 };
 
-const scalarInputState = new WeakMap<HTMLInputElement, ScalarInputState>();
+const scalarInputState = new WeakMap<ScalarControl, ScalarInputState>();
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
   const type = typeof value;
@@ -22,7 +23,7 @@ export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined
 }
 
 export function beginScalarEdit(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
   const state = scalarInputState.get(target);
@@ -34,13 +35,13 @@ export function beginScalarEdit(
 }
 
 export function scalarEditHintForInput(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
   return scalarInputState.get(target)?.edit ?? { branch: initialBranch };
 }
 
-export function finishScalarEdit(target: HTMLInputElement): void {
+export function finishScalarEdit(target: ScalarControl): void {
   const state = scalarInputState.get(target);
   if (state) {
     state.edit = undefined;
@@ -69,9 +70,9 @@ export function syncScalarInputIdentity(
   pathKey: string,
   presentationIdentity: string,
   renderedValue: string,
-  revalidate: (target: HTMLInputElement) => void,
+  revalidate: (target: ScalarControl) => void,
 ): void {
-  if (!(element instanceof HTMLInputElement)) {
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
     return;
   }
   const previous = scalarInputState.get(element);

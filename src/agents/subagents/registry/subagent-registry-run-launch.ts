@@ -31,14 +31,12 @@ import {
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
-import { prepareSubagentRegistrationRows } from "./subagent-registration-rows.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
 import {
-  SubagentRegistryVersionConflictError,
   SubagentRegistryWriteError,
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -52,6 +50,7 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
+import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
 import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
@@ -141,7 +140,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       childAgentId,
     );
     let authority: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
-    let preparedRows: Map<string, SubagentRunRecord> | undefined;
+    let preparedRows: (() => ReadonlyMap<string, SubagentRunRecord>) | undefined;
     let plannedEntry: SubagentRunRecord | undefined;
     let registered: SubagentRunRecord | undefined;
     let custodyTransferred = false;
@@ -179,7 +178,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     };
     const ownsCleanupSession = () =>
       preparedRows !== undefined &&
-      ![...preparedRows.values(), ...this.options.getChildSessionCandidates(childSessionKey)].some(
+      ![
+        ...preparedRows().values(),
+        ...this.options.getChildSessionCandidates(childSessionKey),
+      ].some(
         (candidate) =>
           candidate.runId !== registered?.runId &&
           isSubagentRunGenerationCandidate(candidate, childSessionKey, childAgentId),
@@ -279,13 +281,13 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         ],
         context,
       );
-      selected ??= preparedRows.get(runId);
+      selected ??= preparedRows().get(runId);
       assertCurrent();
       const isGenerationCandidate = (row: SubagentRunRecord) =>
         isSubagentRunGenerationCandidate(row, childSessionKey, childAgentId);
       const runIds = new Set([
         runId,
-        ...[...preparedRows.values(), ...this.options.getChildSessionCandidates(childSessionKey)]
+        ...[...preparedRows().values(), ...this.options.getChildSessionCandidates(childSessionKey)]
           .filter(isGenerationCandidate)
           .map((row) => row.runId),
       ]);
@@ -367,11 +369,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           return {
             value: entry,
             postimages,
-            registrationCohort: {
-              childSessionKey,
-              childAgentId,
-              runIds: [...rows.values()].filter(isGenerationCandidate).map((row) => row.runId),
-            },
           };
         },
         {
@@ -472,9 +469,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         );
       }
     } catch (error) {
-      if (error instanceof SubagentRegistryVersionConflictError) {
-        preparedRows = undefined;
-      }
       if (!queuedScope) {
         initialOutcome =
           hasSqliteWorkerOutcomeUnknown(error) ||

@@ -481,6 +481,8 @@ suite.define(() => {
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
         "talk.catalog",
+        "talk.config",
+        "talk.config",
         "talk.catalog",
         "talk.client.create",
       ]);
@@ -608,6 +610,8 @@ suite.define(() => {
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
         "talk.catalog",
+        "talk.config",
+        "talk.config",
         "talk.catalog",
         "talk.client.create",
       ]);

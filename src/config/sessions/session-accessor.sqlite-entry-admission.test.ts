@@ -27,6 +27,7 @@ import {
   loadSessionEntry,
   onSessionIdentityMutation,
   patchSessionEntryCore,
+  createSessionEntryWithTranscript,
 } from "./session-accessor.js";
 import {
   patchSessionEntryTarget,
@@ -39,6 +40,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 
 const roots = createTempDirTracker();
 const worker = vi.hoisted(() => ({
@@ -82,6 +84,7 @@ afterEach(async () => {
   }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  memorySessionActorOwners.reset();
   if (worker.gate) {
     expect([...worker.gate.workers].every((observed) => observed.threadId === -1)).toBe(true);
     worker.gate = undefined;
@@ -108,6 +111,18 @@ function fixture(sessionKey = "agent:main:admission") {
   replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
   return { root, env, scope, database, databasePath: database.path };
+}
+
+async function memoryFixture() {
+  const root = roots.make("session-memory-patch-admission-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const scope = { agentId: "main", env, sessionKey: "agent:main:dashboard:incognito-admission" };
+  await createSessionEntryWithTranscript(scope, () => ({
+    ok: true,
+    entry: { sessionId: "original", updatedAt: 1, incognito: true },
+  }));
+  return { root, env, scope };
 }
 
 function evictHandle(databasePath: string) {
@@ -237,9 +252,7 @@ it.each([
 it.each(["worker", "legacy callback", "incognito"] as const)(
   "admits %s updater invocation through its owner",
   async (mode) => {
-    const f = fixture(
-      mode === "incognito" ? "agent:main:dashboard:incognito-admission" : undefined,
-    );
+    const f = mode === "incognito" ? await memoryFixture() : fixture();
     const native = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
     let called = false;
     const operation = own(

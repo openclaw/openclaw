@@ -4,15 +4,8 @@ import {
   type DatabaseFileIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
@@ -58,7 +51,6 @@ export type SessionTranscriptWorkerReadSource = {
 /** Read through an anchor locator while retaining the requested physical source and its authority. */
 export async function withSessionTranscriptReadSource<T>(
   scope: SessionTranscriptReadScope,
-  readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: SessionTranscriptWorkerReadSource) => Promise<T>,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
@@ -76,13 +68,6 @@ export async function withSessionTranscriptReadSource<T>(
       captured.defaultAgentId,
   );
   signal?.throwIfAborted();
-  if (
-    isIncognitoSessionKey(captured.sessionKey) ||
-    (captured.storePath &&
-      isIncognitoOpenClawAgentSqlitePath(captured.storePath, { agentId, env: captured.env }))
-  ) {
-    return readInProcess(captured);
-  }
   const storePath =
     captured.storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: captured.env });
   const selected = getOwnedSessionTranscriptReader(captured);
@@ -125,7 +110,6 @@ export async function withSessionTranscriptReadSource<T>(
           const preparedReads =
             execution && claim && expectedIdentity
               ? createPreparedSessionTranscriptReads({
-                  execution,
                   claim,
                   expectedIdentity,
                   assertCurrent,
@@ -196,14 +180,6 @@ export async function withSessionTranscriptReadSource<T>(
             context.maintenanceScope?.assertAdmission();
             context.admission.assertCurrent();
             discovery.assertCurrent();
-            assertSessionStoreReadCandidate(databasePath, candidates);
-            const current = readDatabasePathIdentitySync(databasePath);
-            if (
-              current.key !== selectedIdentity.key ||
-              current.birthtime !== selectedIdentity.birthtime
-            ) {
-              throw new Error("Transcript read changed its captured database owner");
-            }
           };
           assertSource();
           const result = await readResolved(

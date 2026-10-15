@@ -12,6 +12,7 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
   preflightWorkerWorkspace: workspace.preflight,
 }));
 
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   GatewayDrainingError,
@@ -150,8 +151,11 @@ describe("dispatch Stop before provider allocation", () => {
       const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
         "./session-utils-store-worker.js",
       );
+      const config = { ...support.testState.config, session: { store: storePath } };
+      setRuntimeConfigSnapshot(config, config);
+      moveDestinationMocks.getRuntimeConfig.mockReturnValue(config);
       const sessionTarget = await targetReader.resolveGatewaySessionStoreTargetInWorker({
-        cfg: { ...support.testState.config, session: { store: storePath } },
+        cfg: config,
         key: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
       });
@@ -263,6 +267,10 @@ describe("dispatch Stop before provider allocation", () => {
             await placements.startDispatch(REQUEST);
           } else if (outcome === "incarnation") {
             sourceEntry.sessionId = "replacement-session";
+            await upsertSessionEntryCore(
+              { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey, storePath },
+              sourceEntry,
+            );
           }
         }
         release.resolve();

@@ -361,7 +361,7 @@ describe("managed artifact lifecycle", () => {
   });
 
   it("rechecks managed download after a shared session becomes draft", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       hoisted.realSessionFacts = true;
       const owner = ensureProfileForEmail("artifact-owner@example.test");

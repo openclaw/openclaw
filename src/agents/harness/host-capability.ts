@@ -372,7 +372,6 @@ export function createAgentHarnessHostCapabilities(params: {
     });
   });
 
-  const trajectoryRecorder = attempt.trajectoryRecorder;
   const scheduledToolSources = new WeakMap<
     AnyAgentTool,
     Readonly<{ targetTool: "exec" | "process"; execute: AnyAgentTool["execute"] }>
@@ -417,6 +416,9 @@ export function createAgentHarnessHostCapabilities(params: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        // One host owns selection and launch. A plugin's mutable config or exec
+        // overrides cannot replace the identity captured before its handoff.
+        exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
         installedSkills: getInstalledSkills(
@@ -486,11 +488,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
-    ...(trajectoryRecorder
-      ? {
-          trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
-        }
-      : {}),
+    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive();
       return preparedRunEnvironment;
@@ -500,7 +498,7 @@ export function createAgentHarnessHostCapabilities(params: {
       return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
-    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. */
+    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
         family: "agent-harness-host",
@@ -541,7 +539,6 @@ export function createAgentHarnessHostCapabilities(params: {
           },
         ),
       );
-      library?.assertPublicationCurrent();
       return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {

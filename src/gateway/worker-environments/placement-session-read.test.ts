@@ -76,6 +76,7 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       const publication = () =>
         stagePlacementTurnClaimWorkerPublication(identity, failed, undefined, failed.state, failed);
       const pending = publication();
+      expect(() => read.prepareRead()).toThrow("placement authority changed");
       expect(() => current()).toThrow("placement authority changed");
       pending.rollback();
       expect(current()).toEqual(failed);

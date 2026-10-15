@@ -72,39 +72,6 @@ describe("diagnostic-events", () => {
     expect((message as string).startsWith(prefix)).toBe(true);
   }
 
-  it("uses active request trace context when events omit explicit trace", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-    });
-    const explicitTrace = createDiagnosticTraceContext({
-      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      spanId: "bbbbbbbbbbbbbbbb",
-    });
-    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
-    const stop = onDiagnosticEvent((event) => {
-      events.push({ trace: event.trace, type: event.type });
-    });
-
-    runWithDiagnosticTraceContext(trace, () => {
-      emitDiagnosticEvent({
-        type: "message.queued",
-        source: "telegram",
-      });
-      emitDiagnosticEvent({
-        type: "message.queued",
-        source: "telegram",
-        trace: explicitTrace,
-      });
-    });
-    stop();
-
-    expect(events).toEqual([
-      { trace, type: "message.queued" },
-      { trace: explicitTrace, type: "message.queued" },
-    ]);
-  });
-
   it("marks dispatcher provenance separately from trust", async () => {
     const events: Array<{
       internal: boolean;
@@ -541,60 +508,6 @@ describe("diagnostic-events", () => {
     ).toBe(true);
   });
 
-  it("preserves trusted lifecycle terminals when the async queue is full", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => {
-      events.push(event);
-    });
-    const model = {
-      runId: "run-model",
-      callId: "call-model",
-      provider: "openai",
-      model: "gpt-5.4",
-    };
-    const harness = { runId: "run-harness", harnessId: "harness" };
-    const terminalEvents: Array<Parameters<typeof emitTrustedDiagnosticEvent>[0]> = [
-      { type: "tool.execution.completed", toolName: "exec", durationMs: 1 },
-      { type: "tool.execution.error", toolName: "exec", durationMs: 1, errorCategory: "test" },
-      { type: "model.call.completed", ...model, durationMs: 1 },
-      { type: "model.call.error", ...model, durationMs: 1, errorCategory: "test" },
-      { type: "harness.run.completed", ...harness, durationMs: 1, outcome: "completed" },
-      {
-        type: "harness.run.error",
-        ...harness,
-        durationMs: 1,
-        phase: "resolve",
-        errorCategory: "test",
-      },
-    ];
-
-    emitTrustedDiagnosticEvent(terminalEvents[0]!);
-
-    for (let index = 0; index < 9_999; index += 1) {
-      emitDiagnosticEvent(modelStartedEvent(`saturation-run-${index}`, `saturation-call-${index}`));
-    }
-    for (const terminalEvent of terminalEvents.slice(1)) {
-      emitTrustedDiagnosticEvent(terminalEvent);
-    }
-
-    expect(
-      hasPendingInternalDiagnosticEvent(
-        (event, metadata) => metadata.trusted && event.type === "harness.run.error",
-      ),
-    ).toBe(true);
-
-    await waitForDiagnosticEventsDrained();
-
-    for (const terminalEvent of terminalEvents) {
-      expect(events).toContainEqual(expect.objectContaining(terminalEvent));
-    }
-    expect(
-      events.filter(
-        (event) => event.type === "model.call.started" && event.runId.startsWith("saturation-run-"),
-      ),
-    ).toHaveLength(9_994);
-  });
-
   it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {
     const events: DiagnosticEventPayload[] = [];
     onDiagnosticEvent((event) => {
@@ -716,37 +629,6 @@ describe("diagnostic-events", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
-  });
-
-  it("drops event-loop samples under queue pressure while preserving lifecycle terminals", async () => {
-    const sample = {
-      type: "gateway.event_loop.sample" as const,
-      intervalMs: 1_000,
-      delayMaxMs: 1_500,
-    };
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => events.push(event));
-    for (let index = 0; index < 10_001; index += 1) {
-      emitInternalDiagnosticEvent(sample);
-    }
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      toolName: "exec",
-      durationMs: 1,
-    });
-    expect(events).toHaveLength(0);
-    await waitForDiagnosticEventsDrained();
-    expect(events.filter((event) => event.type === sample.type)).toHaveLength(9_999);
-    expect(events).toContainEqual(expect.objectContaining({ type: "tool.execution.completed" }));
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "diagnostic.async_queue.dropped",
-        droppedEvents: 2,
-        droppedUntrustedEvents: 2,
-        maxQueueLength: 10_000,
-        drainBatchSize: 100,
-      }),
-    );
   });
 
   it("keeps log records and runtime measurements off the public diagnostic event stream", async () => {

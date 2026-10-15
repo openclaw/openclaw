@@ -8,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
+  authProvider: string;
 };
 
 type LoginProvider = {
@@ -48,19 +49,20 @@ export function buildLoginProviders({
     if (providers && !providers.includes(capability.provider)) {
       continue;
     }
-    for (const option of capability.loginOptions ?? []) {
+    const loginOptions = capability.loginOptions ?? [];
+    for (const option of loginOptions) {
       const group = ensureGroup(option.brandId, capability.provider);
       group.label ||= option.groupLabel?.trim() ?? "";
       if (!choices.has(option.id)) {
         choices.add(option.id);
-        group.choices.push(option);
+        group.choices.push({ ...option, authProvider: capability.provider });
       }
     }
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
     if (capability.quickApiKeySetup && allowQuickApiKey) {
-      const brands = capability.loginOptions?.length
-        ? capability.loginOptions.map((option) => option.brandId)
+      const brands = loginOptions.length
+        ? loginOptions.map((option) => option.brandId)
         : [capability.provider];
       for (const id of new Set(brands)) {
         const group = ensureGroup(id, capability.provider);
@@ -79,6 +81,7 @@ export function buildLoginProviders({
     group.choices.push({
       ...option,
       brandId: id,
+      authProvider: id,
       kind: "setup-secret",
       featured: false,
       ...(duplicateLabel

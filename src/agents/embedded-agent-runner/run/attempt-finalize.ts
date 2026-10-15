@@ -259,9 +259,11 @@ export async function completeEmbeddedAttemptAfterTurn(
 
   const shouldPersistBootstrapCompletion = () => {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
+    const assistant = settled.currentAttemptCompletedAssistant ?? settled.currentAttemptAssistant;
     return (
       shouldRecordCompletedBootstrapTurn &&
       !promptError &&
+      assistant?.stopReason !== "error" &&
       !lifecycleState.aborted &&
       !lifecycleState.timedOutDuringCompaction &&
       !compactionOccurredThisAttempt

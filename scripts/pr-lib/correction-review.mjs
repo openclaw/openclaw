@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { baselineRefreshScope } from "./baseline-refresh.mjs";
+import { baselineRefreshCandidate } from "./baseline-refresh.mjs";
 import {
   createReviewArtifactTemplate,
   renderReviewMarkdown,
@@ -65,7 +65,7 @@ function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) 
   }
   // Include both the incoming scope and every fixup path. Candidate metadata is
   // derived in memory; the live incoming-head metadata is never rewritten.
-  const changed = baselineRefreshScope({
+  const baseline = baselineRefreshCandidate({
     pr: prMeta.number,
     incoming,
     incomingReviewOid: jsonOid,
@@ -73,13 +73,16 @@ function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) 
     anchor,
     bindingOid,
   });
-  const paths = new Set([...prMeta.files.map((file) => file.path), ...changed]);
-  return { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) };
+  const paths = new Set([...prMeta.files.map((file) => file.path), ...baseline.paths]);
+  return {
+    metadata: { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) },
+    baselineHead: baseline.baselineHead,
+  };
 }
 
 function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindingOid) {
   if (
-    !["init", "validate"].includes(command) ||
+    !["init", "validate", "publication-baseline"].includes(command) ||
     !Number.isSafeInteger(pr) ||
     pr < 1 ||
     !/^[0-9a-f]{40}$/u.test(incoming)
@@ -116,7 +119,7 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
   const review = JSON.parse(readRegular(jsonPath));
   const violations = validateReviewArtifacts({
     review,
-    prMeta: candidate,
+    prMeta: candidate.metadata,
   });
   if (violations.length) {
     throw new Error(violations.join("\n"));
@@ -150,7 +153,11 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
   ) {
     throw new Error("The correction review must resolve every incoming BLOCKER/IMPORTANT finding.");
   }
-  process.stdout.write(renderReviewMarkdown(review));
+  process.stdout.write(
+    command === "publication-baseline"
+      ? (candidate.baselineHead ?? "")
+      : renderReviewMarkdown(review),
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

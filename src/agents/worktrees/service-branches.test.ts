@@ -751,8 +751,27 @@ describe("ManagedWorktreeService branch discovery", () => {
     });
   });
 
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes changed refs", async () => {
+    const packs = path.join(repo, ".git", "objects", "pack");
+    await fs.mkdir(packs, { recursive: true });
+    // Git ignores keep markers during discovery; all still participate in the revision.
+    await Promise.all(
+      Array.from({ length: 1_100 }, (_, index) =>
+        fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
+      ),
+    );
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    await expectWarmBranchAdmission(repo, () => run.mockClear());
+    expect(run).toHaveBeenCalledTimes(0);
+    await git(repo, "branch", "new-branch");
+    expect((await service.listRepositoryBranches(repo)).branches).toContainEqual({
+      name: "new-branch",
+      kind: "local",
+    });
+  });
+
   it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
-    "rejects a %s HEAD object after a branch-list cache hit",
+    "rejects a %s HEAD object when branch suggestions refresh",
     async (damage) => {
       const head = await git(repo, "rev-parse", "HEAD");
       let object = path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2));
@@ -776,6 +795,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       } else {
         await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
       }
+      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
 
       await expect(
         service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
@@ -790,7 +810,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   );
 
   it.each(["global", "worktree", "included", "environment", "relative", "parameters"])(
-    "observes changed %s config after warming checkout admission",
+    "observes changed %s config on branch suggestion refresh",
     async (source) => {
       let config = path.join(root, "global.gitconfig");
       if (source === "worktree") {
@@ -812,6 +832,7 @@ describe("ManagedWorktreeService branch discovery", () => {
         vi.stubEnv("GIT_CONFIG_GLOBAL", config);
       }
       await fs.writeFile(config, "[malformed\n");
+      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
       expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
         {
           branches: [],
@@ -821,7 +842,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it("keeps tag peeling and alternate object storage under native Git admission", async () => {
+  it("supports tag HEADs and alternate object storage through native Git refresh", async () => {
     const head = await git(repo, "rev-parse", "HEAD");
     await git(repo, "tag", "-a", "tag-head", "-m", "tagged commit");
     const tag = await git(repo, "rev-parse", "tag-head");
@@ -833,6 +854,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     }
     await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
     for (const checkout of [repo, alternate]) {
+      await fs.utimes(path.join(checkout, ".git", "HEAD"), 0, 0);
       expect(
         await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
       ).toEqual({

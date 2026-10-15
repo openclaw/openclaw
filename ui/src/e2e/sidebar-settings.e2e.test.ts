@@ -432,7 +432,7 @@ suite.define(() => {
         .waitFor();
       expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
       expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator('[data-navigation-view="sessions"]').click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
       await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);
@@ -481,6 +481,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await page.bringToFront();
+      await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe("visible");
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
       const credential = page.getByLabel("Gateway secret", { exact: true });

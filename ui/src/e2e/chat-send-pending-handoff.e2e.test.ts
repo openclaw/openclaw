@@ -521,8 +521,8 @@ suite.define(() => {
             { match: {}, response: latestPage },
           ],
         });
-        // Collapsed tool turns fit the viewport, so the UI can request older
-        // history immediately. Hold that response until after receipt recovery.
+        // Collapsed tool turns fit the viewport, so automatic history loading
+        // can begin immediately. Hold that response until after receipt recovery.
         await gateway.deferNext("chat.history", { offset: 80 });
         await gateway.setOnline(true);
         await gateway.waitForRequest("chat.history", {
@@ -547,14 +547,12 @@ suite.define(() => {
         await captureProof("consumed-prompt-latest-page.png");
         const userBubbles = currentPage.locator(".chat-bubble").getByText(prompt, { exact: true });
         const latestPromptCount = await userBubbles.count();
-
         await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
         await gateway.resolveDeferred("chat.history");
         await waitForChatScrollIdle(currentPage);
         const thread = currentPage.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.hover();
         await currentPage.mouse.wheel(0, -1_000_000);
-        await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
         await currentPage.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).waitFor();
         await waitForChatScrollIdle(currentPage);
         await captureProof("consumed-prompt-loaded-history.png");

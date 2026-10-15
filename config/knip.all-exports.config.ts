@@ -55,6 +55,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/pr-review-artifacts.node.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
+  // The state-reader build test launches this native dependency fixture by path.
+  "test/scripts/state-read-worker-dependency.test-support.mts!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The corpus README runs this generator by path; remove with that proof command.
@@ -63,6 +65,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The deprecated-import test launches this isolated SDK caller by path.
+  "src/plugins/plugin-sdk-deprecated-member.test-support.ts!",
   // The existing-store Bun regression launches this source fixture directly by path.
   "src/infra/sqlite-existing-database.bun.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
@@ -103,9 +107,13 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
+  // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/state/openclaw-state-db.postgres.test-support.ts!",
   // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
   "scripts/control-ui-parity/vitest.config.ts!",
   "scripts/control-ui-parity/capture-suite.ts!",
+  // The cold-load benchmark README invokes this standalone driver by path.
+  "scripts/bench-control-ui-cold-load.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
@@ -149,13 +157,8 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // The presentation proof HTML selects these browser entries by renderer query param.
-        ...(workspace === "ui"
-          ? [
-              "src/test-helpers/presentation-primitives-lit.ts!",
-              "src/test-helpers/presentation-primitives-solid.tsx!",
-            ]
-          : []),
+        // The presentation proof HTML loads this browser entry.
+        ...(workspace === "ui" ? ["src/test-helpers/presentation-primitives-solid.tsx!"] : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations

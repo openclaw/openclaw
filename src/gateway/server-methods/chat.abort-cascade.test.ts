@@ -689,7 +689,7 @@ describe("descendant cascade ownership", () => {
         await proceed.promise;
         return { ok: true, messageId: "aborted-partial" };
       });
-    if (!hasOwnedActive) {
+    if (!hasOwnedActive && kind !== "orphan") {
       releaseSwarmRun("capacity");
     }
     const pending = invokeChatAbortHandler({
@@ -739,6 +739,9 @@ describe("descendant cascade ownership", () => {
       admission?.release();
       proceed.resolve();
       const respond = await pending;
+      if (kind === "orphan") {
+        releaseSwarmRun("capacity");
+      }
       expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
       const child = await getSubagentRunByChildSessionKey(childKey);
       if (canCascade) {

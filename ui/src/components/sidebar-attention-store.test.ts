@@ -26,34 +26,15 @@ import {
 import {
   createStore,
   cronPage,
+  eventJob,
+  inventoryRequest,
+  startAuthenticatedStore,
   type CompactCronPage,
 } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 
 describe("sidebar attention source publication", () => {
   let store: SidebarAttentionStore | undefined;
-
-  function inventoryRequest(
-    list: (params?: unknown) => unknown,
-    jobs = 1,
-    auth: () => unknown = () => ({ ts: 1, providers: [] }),
-  ) {
-    return vi.fn(async (method: string, params?: unknown) =>
-      method === "cron.list"
-        ? list(params)
-        : method === "cron.status"
-          ? { enabled: true, triggersEnabled: true, jobs }
-          : auth(),
-    );
-  }
-
-  function startAuthenticatedStore(request: Parameters<typeof mockClient>[0]) {
-    const harness = createGatewayHarness(mockClient(request));
-    harness.update({ selfUser: { id: "alice", name: "Alice" } });
-    store = createStore(harness.gateway);
-    store.activate(SidebarAttentionStoreController);
-    return { ...harness, attention: store };
-  }
 
   function settleRefresh() {
     return new Promise<void>((resolve) => {
@@ -151,6 +132,7 @@ describe("sidebar attention source publication", () => {
         return cronPage("incident");
       });
       const harness = startAuthenticatedStore(request);
+      store = harness.attention;
       await vi.advanceTimersByTimeAsync(0);
       expect(harness.attention.entries).toMatchObject([{ label: "incident" }]);
 
@@ -417,6 +399,7 @@ describe("sidebar attention source publication", () => {
           : cronPage("current");
       }, 2);
       const { attention } = startAuthenticatedStore(request);
+      store = attention;
       await waitForFast(() => expect(offsets).toEqual([0, 1]));
 
       if (boundary === "hidden") {
@@ -466,7 +449,11 @@ describe("sidebar attention source publication", () => {
 
       try {
         for (let index = 0; index < 20; index++) {
-          harness.emitEvent("cron", {});
+          harness.emitEvent("cron", {
+            action: "finished",
+            jobId: "current",
+            job: eventJob({ id: "current" }),
+          });
         }
         expect(listCalls).toBe(1);
         expect(statusCalls).toBe(1);
@@ -524,18 +511,27 @@ describe("sidebar attention source publication", () => {
         () => ({ ts: 120_000, providers: [] }),
       );
       const harness = startAuthenticatedStore(request);
+      store = harness.attention;
       const key = resolveSidebarAttentionKey(harness.gateway);
       if (initial === "settled") {
         await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "previous" }]));
       } else if (initial === "pending") {
-        harness.emitEvent("cron", {});
+        harness.emitEvent("cron", {
+          action: "finished",
+          jobId: "current",
+          job: eventJob({ id: "current" }),
+        });
       } else {
         dismissSidebarAttention(key, { kind: "cronFailed", signature: "current" });
       }
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
       for (let index = 0; index < 20; index++) {
-        harness.emitEvent("cron", {});
+        harness.emitEvent("cron", {
+          action: "finished",
+          jobId: "current",
+          job: eventJob({ id: "current" }),
+        });
       }
       pendingList.resolve(cronPage("previous"));
       await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "previous" }]));
@@ -753,6 +749,7 @@ describe("sidebar attention source publication", () => {
         : { ts: 1, providers: [] };
     });
     const harness = startAuthenticatedStore(request);
+    store = harness.attention;
     if (disabled) {
       await settleRefresh();
       expect(store?.entries).toEqual([]);
@@ -960,6 +957,7 @@ describe("sidebar attention source publication", () => {
     ).toBe(true);
     store = createStore(harness.gateway);
     store.activate(SidebarAttentionStoreController);
+    await import("../pages/chat/chat-outbox-owner.ts");
     await waitForFast(() =>
       expect(store?.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]),
     );

@@ -21,11 +21,6 @@ const hoisted = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
 // mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
 vi.mock("../session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: (params: { key: string; agentId?: string }) =>

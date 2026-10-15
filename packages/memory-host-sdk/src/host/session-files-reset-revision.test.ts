@@ -18,12 +18,14 @@ import {
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../../../../src/config/sessions/session-actor-memory-owner.js";
 import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../../../src/state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -60,6 +62,13 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  memorySessionActorOwners.closeDatabase({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    }),
+  });
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -336,6 +345,9 @@ describe("SQLite session snapshots and reset content revision", () => {
         storePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       };
       expect(await buildSessionEntry(scope.sessionKey, scope)).toBeNull();
+      expect(await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }])).toEqual([
+        null,
+      ]);
       expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
       expect(fsSync.existsSync(scope.storePath)).toBe(false);
       await upsertSessionEntryCore(scope, {
@@ -343,20 +355,36 @@ describe("SQLite session snapshots and reset content revision", () => {
         updatedAt: 1,
         ...(incognito ? { incognito: true } : {}),
       });
-      expect(
-        replaceTranscriptEventsSync(scope, [
-          {
-            type: "message",
-            id: "visible",
-            message: { role: "user", content: "Visible transcript" },
-          },
-        ]),
-      ).toBe(true);
+      await appendTranscriptMessage(scope, {
+        eventId: "visible",
+        message: { role: "user", content: "Visible transcript" },
+      });
       expect((await buildSessionEntry(scope.sessionKey, scope))?.content).toBe(
         "User: Visible transcript",
       );
+      const [batched] = await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }]);
+      expect(batched?.content).toBe("User: Visible transcript");
       expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "absent" });
       expect(fsSync.existsSync(scope.storePath)).toBe(!incognito);
+      if (incognito) {
+        const namespace = {
+          agentId: scope.agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId }),
+        };
+        memorySessionActorOwners.closeDatabase(namespace);
+        expect(
+          await buildSessionEntries([
+            { absPath: scope.sessionKey, options: scope },
+            {
+              absPath: scope.sessionKey,
+              options: { ...scope, sessionKey: undefined, storePath: namespace.path },
+            },
+          ]),
+        ).toEqual([null, null]);
+        expect(memorySessionActorOwners.read(namespace)).toBeUndefined();
+        expect(fsSync.existsSync(namespace.path)).toBe(false);
+        expect(fsSync.existsSync(scope.storePath)).toBe(false);
+      }
     },
   );
 
