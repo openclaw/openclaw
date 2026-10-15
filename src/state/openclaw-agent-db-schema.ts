@@ -634,7 +634,8 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
 ): SqliteIntegrityOperation<void> {
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
-  const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  // The opened file owns its identity; lexical resolution can change a symlink/.. locator.
+  const pathname = db.location() ?? resolveOpenClawAgentSqlitePath(databaseOptions);
   // Explicit maintenance inspects current bytes even when this process previously admitted them.
   revokeSqliteDatabaseAdmissions(db);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
