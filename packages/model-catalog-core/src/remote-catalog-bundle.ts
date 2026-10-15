@@ -104,6 +104,7 @@ function parseCatalogRows<T extends { id: string }>(
 ): T[] {
   const seen = new Set<string>();
   return rows.flatMap((raw, index) => {
+    const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
     let value = raw;
     let droppedInput = false;
     if (
@@ -116,11 +117,14 @@ function parseCatalogRows<T extends { id: string }>(
       );
       droppedInput = input.length !== raw.input.length;
       if (droppedInput) {
+        if (input.length === 0) {
+          warn(`remote model catalog: skipped row with no supported input modalities ${row}`);
+          return [];
+        }
         value = { ...raw, input };
       }
     }
     const parsed = schema.safeParse(value);
-    const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
     if (!parsed.success || seen.has(key(parsed.data))) {
       warn(`remote model catalog: skipped invalid row ${row}`);
       return [];

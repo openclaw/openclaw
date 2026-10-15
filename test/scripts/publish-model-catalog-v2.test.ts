@@ -46,13 +46,22 @@ function fixtureRoot() {
         modelsDev: { "fixture-native": "upstream" },
         providers: {
           anthropic: {
+            defaultModel: "video-only",
+            defaultUtilityModel: "video-only",
             // Retired manifest authoring field: ignored, never published.
             recommendedModels: ["seed-0"],
-            models: seeds.map((model, index) =>
-              index === 0
-                ? { ...model, input: ["text", "image", "video", "document"], cost: { input: 0.5 } }
-                : model,
-            ),
+            models: [
+              ...seeds.map((model, index) =>
+                index === 0
+                  ? {
+                      ...model,
+                      input: ["text", "image", "video", "document"],
+                      cost: { input: 0.5 },
+                    }
+                  : model,
+              ),
+              { id: "video-only", input: ["video"] },
+            ],
           },
           openai: {
             defaultModel: "seed-0",
@@ -84,7 +93,7 @@ function fixtureRoot() {
   fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "scripts", "lib", "recommended-models.json"),
-    JSON.stringify(["seed-2", "paid", "seed-0"]),
+    JSON.stringify(["seed-2", "paid", "seed-0", "video-only"]),
   );
   return root;
 }
@@ -425,6 +434,12 @@ describe("publish model catalog v2", () => {
     expect(v1.sourceCommit).toBe(v2.sourceCommit);
     expect(v1.minVersion).toBe("2026.7.0");
     expect(v1.providers.anthropic?.models[0]?.input).toEqual(["text", "image", "document"]);
+    expect(v1.providers.anthropic?.models.some((model) => model.id === "video-only")).toBe(false);
+    expect(v2.models.some((model) => model.id === "video-only")).toBe(false);
+    for (const provider of [v1.providers.anthropic, v2.providers.anthropic]) {
+      expect(provider).not.toHaveProperty("defaultModel");
+      expect(provider).not.toHaveProperty("defaultUtilityModel");
+    }
     expect(
       v2.models.find((model) => model.provider === "anthropic" && model.id === "seed-0")?.input,
     ).toEqual(["text", "image", "document"]);

@@ -1132,8 +1132,31 @@ export async function enrichModelCatalogPricing(options: {
 }
 
 // Both hosted formats serve released clients whose input enum predates video.
-function publishedModelInput(input: ModelCatalogModel["input"]) {
-  return input?.filter((value) => value === "text" || value === "image" || value === "document");
+function projectReleasedModelInputs(bundle: PublishedModelCatalogBundle): void {
+  for (const [id, provider] of Object.entries(bundle.providers)) {
+    const omitted = new Set<string>();
+    provider.models = provider.models.filter((model) => {
+      const input = model.input?.filter(
+        (value) => value === "text" || value === "image" || value === "document",
+      );
+      if (model.input?.length && input?.length === 0) {
+        omitted.add(model.id);
+        return false;
+      }
+      if (input) {
+        model.input = input;
+      }
+      return true;
+    });
+    for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+      if (provider[field] && omitted.has(provider[field])) {
+        delete provider[field];
+      }
+    }
+    if (provider.models.length === 0) {
+      delete bundle.providers[id];
+    }
+  }
 }
 
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
@@ -1144,9 +1167,7 @@ export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle)
         providerId,
         {
           ...provider,
-          models: provider.models
-            .toSorted((left, right) => left.id.localeCompare(right.id))
-            .map((model) => Object.assign({}, model, { input: publishedModelInput(model.input) })),
+          models: provider.models.toSorted((left, right) => left.id.localeCompare(right.id)),
         },
       ]),
   );
@@ -1317,11 +1338,11 @@ export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2
       (left, right) =>
         left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
     )
-    .map(({ id, provider, input, ...metadata }) =>
+    .map(({ id, provider, ...metadata }) =>
       Object.assign(
         { id, provider },
         Object.fromEntries(
-          Object.entries({ ...metadata, input: publishedModelInput(input) })
+          Object.entries(metadata)
             .toSorted(([left], [right]) => left.localeCompare(right))
             .map(([key, value]) => [key, sortJsonValueKeys(value)]),
         ),
@@ -1381,6 +1402,7 @@ export async function runPublishModelCatalog(
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
+  projectReleasedModelInputs(bundle);
   const featuredResult = args.outV2
     ? await resolveProviderFeaturedModels({ bundle, loadSource })
     : {};

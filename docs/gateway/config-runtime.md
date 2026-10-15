@@ -96,6 +96,8 @@ stays active. Pricing-only v1 catalogs without model providers remain supported.
 Both hosted catalog formats keep the `text`, `image`, and `document` input
 modalities accepted by released clients. Bundled model metadata can include
 newer modalities.
+Rows with only unsupported input modalities are omitted rather than exposed as
+text models; defaults and recommendations do not reference omitted hosted rows.
 
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or

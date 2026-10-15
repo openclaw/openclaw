@@ -207,13 +207,12 @@ it.each([1, 2] as const)(
           );
     const models =
       bundle.schemaVersion === 1 ? (bundle.providers.first?.models ?? []) : bundle.models;
-    expect(models.slice(0, 3).map(({ id, input }) => ({ id, input }))).toEqual([
+    expect(models.slice(0, 2).map(({ id, input }) => ({ id, input }))).toEqual([
       { id: "kept", input: ["text", "image", "video", "document"] },
-      { id: "future-only", input: [] },
       { id: "last", input: ["text"] },
     ]);
     expect(
-      bundle.schemaVersion === 1 ? bundle.providers.second?.models : models.slice(3),
+      bundle.schemaVersion === 1 ? bundle.providers.second?.models : models.slice(2),
     ).toMatchObject([{ id: "kept" }]);
     if (bundle.schemaVersion === 2) {
       expect(bundle.providers.first?.recommendedModels).toEqual(["kept"]);
