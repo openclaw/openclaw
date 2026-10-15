@@ -7,12 +7,16 @@ import {
   readImageProbeFromHeader,
 } from "../media/image-ops.js";
 import { createImageProcessor } from "../media/image-processor.js";
+import {
+  CHAT_IMAGE_RENDITION_MAX_BYTES,
+  DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
+  type ChatImageRenditionWidth,
+} from "../shared/chat-image-renditions.js";
 
-// Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
-const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
-const MANAGED_IMAGE_THUMBNAIL_MAX_BYTES = 512 * 1024;
-
-export async function encodeImageThumbnail(source: Uint8Array): Promise<Buffer> {
+export async function encodeImageThumbnail(
+  source: Uint8Array,
+  width: ChatImageRenditionWidth = DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
+): Promise<Buffer> {
   const buffer = Buffer.from(source.buffer, source.byteOffset, source.byteLength);
   const format = readImageProbeFromHeader(buffer)?.format;
   // A single-frame transform must not silently discard GIF/APNG/WebP animation.
@@ -23,16 +27,18 @@ export async function encodeImageThumbnail(source: Uint8Array): Promise<Buffer> 
   if (!still) {
     throw new Error("Managed image thumbnail is unavailable for this image format");
   }
+  const maxBytes = CHAT_IMAGE_RENDITION_MAX_BYTES[width];
   const thumbnail = await createImageProcessor().encode(source, {
-    format: "png",
-    resize: { maxSide: MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, enlarge: false },
-    compressionLevel: 8,
-    maxBytes: MANAGED_IMAGE_THUMBNAIL_MAX_BYTES,
-    // Keep lossless 3× detail when possible, then 2×/1× for dense images.
-    search: { maxSide: [MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, 800, 400], compressionLevel: [8] },
+    // Photon supports portable fixed-quality WebP with alpha; specifying quality
+    // would require an external codec. Auto-orientation remains enabled.
+    format: "webp",
+    resize: { maxSide: width, enlarge: false },
+    maxBytes,
+    // Bound work to three candidates, reducing resolution only to meet the budget.
+    search: { maxSide: [width, width / 2, width / 4] },
   });
   // Rastermill returns its smallest candidate even when no candidate fits.
-  if (thumbnail.data.byteLength > MANAGED_IMAGE_THUMBNAIL_MAX_BYTES) {
+  if (thumbnail.data.byteLength > maxBytes) {
     throw new Error("Managed image thumbnail exceeds the preview byte limit");
   }
   return thumbnail.data;
@@ -78,17 +84,18 @@ export async function resolveManagedImageThumbnail(
 export async function readImageThumbnailFromFile(
   opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
   maxBytes?: number,
+  width: ChatImageRenditionWidth = DEFAULT_CHAT_IMAGE_RENDITION_WIDTH,
 ): Promise<Buffer> {
   if (maxBytes !== undefined && opened.stat.size > maxBytes) {
     throw new Error("Managed image exceeds the preview byte limit");
   }
   const { dev, ino } = opened.exactIdentity;
-  const cacheKey = `${opened.realPath}\0${dev}:${ino}\0${opened.stat.ctimeMs}\0${opened.stat.mtimeMs}\0${opened.stat.size}`;
+  const cacheKey = `${opened.realPath}\0${dev}:${ino}\0${opened.stat.ctimeMs}\0${opened.stat.mtimeMs}\0${opened.stat.size}\0${width}`;
   return await resolveManagedImageThumbnail(cacheKey, async () => {
     const source = await opened.handle.readFile();
     if (maxBytes !== undefined && source.byteLength > maxBytes) {
       throw new Error("Managed image exceeds the preview byte limit");
     }
-    return await encodeImageThumbnail(source);
+    return await encodeImageThumbnail(source, width);
   });
 }

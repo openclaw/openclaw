@@ -9,7 +9,7 @@ import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -400,7 +400,7 @@ function FramedMessageGroup(props: {
       </Show>
       <div class="chat-group-messages">
         <Show when={frame().forwardedSource}>
-          <LitContent value={renderForwardedAttribution(props.group, options())} />
+          <ForwardedAttribution group={props.group} options={options()} />
         </Show>
         <LitContent value={renderReplyLine(frame().replyLine, options())} />
         <Show

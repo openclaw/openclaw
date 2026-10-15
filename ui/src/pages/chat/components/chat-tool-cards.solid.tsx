@@ -31,7 +31,7 @@ import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-render.solid.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
@@ -572,7 +572,7 @@ function ToolCardView(props: ToolCardProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );

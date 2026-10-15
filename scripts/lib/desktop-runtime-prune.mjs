@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const developmentFiles = {
   openai: { versions: ["7.30.0"], sources: ["src"], trees: [] },
   zod: { versions: ["4.6.5"], sources: ["src"], trees: [] },
-  "@anthropic-ai/sdk": { versions: ["0.131.0"], sources: ["src"], trees: [] },
+  "@anthropic-ai/sdk": { versions: ["0.132.1"], sources: ["src"], trees: [] },
   "@mistralai/mistralai": {
     versions: ["2.7.0"],
     sources: ["src"],
