@@ -324,7 +324,9 @@ describe("browser.request local control state", () => {
     let boundServer: import("node:http").Server | undefined;
     vi.mocked(listenBrowserHttpServer).mockImplementationOnce(async () => {
       const server = createServer();
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
       boundServer = server;
       return server;
     });
