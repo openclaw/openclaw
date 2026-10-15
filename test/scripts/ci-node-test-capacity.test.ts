@@ -108,6 +108,20 @@ it.each<{
     },
   },
   {
+    reason: "an unqualified sibling in a mixed selected job",
+    change: (job) => {
+      job.groups[0]!.configs = ["test/vitest/vitest.agents-embedded-agent.config.ts"];
+      job.groups.push({
+        ...job.groups[0]!,
+        shard_name: "agentic-agents-embedded-run",
+        configs: ["test/vitest/vitest.agents-embedded-agent-run.config.ts"],
+        includePatterns: [
+          "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts",
+        ],
+      });
+    },
+  },
+  {
     reason: "missing worker bound",
     change: (job) => {
       delete job.groups[0]!.fallbackMaxWorkers;
