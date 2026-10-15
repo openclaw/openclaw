@@ -515,16 +515,16 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (params.phase === "refresh") {
       return inspected;
     }
-    if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
-      const warning = `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
-      defaultRuntime.log(theme.warn(warning));
+    if (!params.shouldRestart && serviceState.running) {
+      warn(
+        params.updateInstallKind === "package"
+          ? "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation."
+          : "--no-restart is set while the managed gateway service is running; the git update will not stop or restart that process.",
+      );
     }
     const windowsTaskAutoStartRecovery =
       !params.shouldRestart && isGatewayServiceEnv(process.env) ? undefined : await suspendTask();
-    return {
-      ...inspected,
-      ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
-    };
+    return { ...inspected, windowsTaskAutoStartRecovery };
   }
   const block = await resolveAncestryBlock(serviceState);
   if (block) {
@@ -704,7 +704,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     ...inspected,
     stopped: true,
     stoppedAtMs,
-    ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
+    windowsTaskAutoStartRecovery,
   };
 }
 
