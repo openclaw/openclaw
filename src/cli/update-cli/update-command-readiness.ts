@@ -117,25 +117,23 @@ export async function verifyPreviousGatewayForUpdate(params: {
         probeTimeoutMs: 5_000,
         deadline,
         requireRunningService: true,
-        settle: { probes: 1 },
+        // The incumbent is rollback evidence, not a process this update started.
+        // Waiting for its recovery can consume the replacement's activation budget.
+        waitForStartup: false,
         signal: deadline.signal,
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
-      if (health.waitOutcome === "timeout" || health.waitOutcome === "still-starting") {
-        progress(health.waitOutcome, lastReason, true);
+      if (!health.healthy || !readyz) {
+        progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
       progress("installation", "checking service command ownership of the previous installation");
       const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
       assertCurrent();
       return Boolean(
-        expectedVersion &&
-        servesPreviousPackage === true &&
-        health.healthy &&
-        health.runtime.status === "running" &&
-        readyz,
+        expectedVersion && servesPreviousPackage === true && health.runtime.status === "running",
       );
     });
   } catch (error) {
@@ -203,7 +201,7 @@ export type UpdateGatewayReadinessParams = {
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
-  /** A failure before activation observes existing health without waiting for startup. */
+  /** Observe an existing process without waiting for startup. */
   waitForStartup?: boolean;
   settle?: { probes: number };
   signal?: AbortSignal;
