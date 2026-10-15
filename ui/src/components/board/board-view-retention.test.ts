@@ -1,16 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { BoardOp } from "../../lib/board/types.ts";
-import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
+import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.tsx";
 import "./board-view.ts";
-import {
-  boardWidget,
-  callbacks,
-  mount,
-  openBoardMenu,
-  settleCells,
-  snapshot,
-} from "./board-view.test-support.ts";
+import { boardWidget, mount, settleCells, snapshot } from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -131,33 +123,5 @@ describe("openclaw-board-view retention", () => {
     teardown.resolve();
     await settleCells(view);
     expect(cell.isConnected).toBe(false);
-  });
-
-  it("moves widgets to another tab from the kebab menu", async () => {
-    const view = await mount();
-    const cell = view.querySelector("openclaw-board-widget-cell")!;
-    const frame = cell.querySelector("iframe");
-    const applyOps = vi.fn(async (ops: BoardOp[]) => {
-      view.snapshot = applyBoardFixtureOps(view.snapshot!, ops);
-    });
-    view.callbacks = callbacks({ applyOps });
-    await openBoardMenu(cell);
-    cell.querySelector<HTMLButtonElement>('[data-value="move:ops"]')!.click();
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_move", name: "alpha", tabId: "ops", position: 1 },
-      ]),
-    );
-    const cells = await settleCells(view);
-    expect(cell.isConnected).toBe(true);
-    expect(cell.hidden).toBe(true);
-    expect(cell.active).toBe(false);
-    expect(cell.querySelector("iframe")).toBe(frame);
-    expect(cells.some((entry) => entry.widget?.name === "ops-only")).toBe(false);
-
-    view.activeTabId = "ops";
-    await settleCells(view);
-    expect(cell.active).toBe(true);
-    expect(cell.querySelector("iframe")).toBe(frame);
   });
 });

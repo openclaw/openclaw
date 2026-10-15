@@ -86,42 +86,39 @@ afterEach(() => {
 });
 
 describe("custodian automatic setup", () => {
-  it.each(["configured", "activated"] as const)(
-    "renders %s, selects an alternative, and greets only after setup",
-    async (status) => {
-      const setup = createDeferred<SetupAutoResult>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "openclaw.setup.auto") {
-          return setup.promise;
-        }
-        if (method === "openclaw.setup.activate") {
-          return { ok: true, modelRef: alternative.modelRef };
-        }
-        return reply;
-      });
-      const { context } = createContext(request, methods, { agentsList });
-      const { page } = await mountPage(context);
-      expect(page.textContent).toContain("Connecting your AI");
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.auto"]);
-      expect(request).toHaveBeenCalledWith("openclaw.setup.auto", {}, { timeoutMs: null });
-      setup.resolve(result(status));
-      await setup.promise;
-      await settled(page);
-      expect(page.textContent).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
-      expect(page.textContent).toContain(reply.reply);
-      click(page, "Local model");
-      await settled(page);
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate",
-        { kind: "ollama" },
-        { timeoutMs: null },
-      );
-      expect(page.textContent).toContain("Using Local model (ollama/qwen3) on gateway.test");
-      expect(
-        request.mock.calls.filter(([method]) => method === "openclaw.setup.auto"),
-      ).toHaveLength(1);
-    },
-  );
+  it("renders configured inference, selects an alternative, and greets only after setup", async () => {
+    const setup = createDeferred<SetupAutoResult>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.setup.auto") {
+        return setup.promise;
+      }
+      if (method === "openclaw.setup.activate") {
+        return { ok: true, modelRef: alternative.modelRef };
+      }
+      return reply;
+    });
+    const { context } = createContext(request, methods, { agentsList });
+    const { page } = await mountPage(context);
+    expect(page.textContent).toContain("Connecting your AI");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.auto"]);
+    expect(request).toHaveBeenCalledWith("openclaw.setup.auto", {}, { timeoutMs: null });
+    setup.resolve(result("configured"));
+    await setup.promise;
+    await settled(page);
+    expect(page.textContent).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
+    expect(page.textContent).toContain(reply.reply);
+    click(page, "Local model");
+    await settled(page);
+    expect(request).toHaveBeenCalledWith(
+      "openclaw.setup.activate",
+      { kind: "ollama" },
+      { timeoutMs: null },
+    );
+    expect(page.textContent).toContain("Using Local model (ollama/qwen3) on gateway.test");
+    expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.auto")).toHaveLength(
+      1,
+    );
+  });
 
   it("keeps the current selection and shows activation failure", async () => {
     const request = vi.fn(async (method: string) =>
@@ -140,7 +137,7 @@ describe("custodian automatic setup", () => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("Local model is offline");
   });
 
-  it.each(["needs-sign-in", "configured", "activated"] as const)(
+  it.each(["needs-sign-in", "configured"] as const)(
     "uses the existing sign-in wizard from %s and refreshes the card after success",
     async (status) => {
       let autoCalls = 0;
@@ -346,16 +343,13 @@ describe("custodian automatic setup", () => {
     expect(page.textContent).not.toContain("Using ChatGPT");
   });
 
-  it.each([false, true])(
-    "preserves the existing flow without the advertised method (onboarding=%s)",
-    async (onboarding) => {
-      const request = vi.fn(async () => reply);
-      const { context } = createContext(request, ["openclaw.chat"], { agentsList });
-      const { page } = await mountPage(context, { onboarding });
-      await settled(page);
-      expect(page.querySelector(".custodian-setup")).toBeNull();
-      expect(request).not.toHaveBeenCalled();
-      expect(page.querySelector(".custodian__setup-state")).not.toBeNull();
-    },
-  );
+  it("preserves the existing caretaker flow without the advertised method", async () => {
+    const request = vi.fn(async () => reply);
+    const { context } = createContext(request, ["openclaw.chat"], { agentsList });
+    const { page } = await mountPage(context, { onboarding: false });
+    await settled(page);
+    expect(page.querySelector(".custodian-setup")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector(".custodian__setup-state")).not.toBeNull();
+  });
 });

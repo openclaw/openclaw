@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { publishSqliteDatabaseAdmission } from "../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -26,6 +27,7 @@ import {
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
 import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import {
+  emptyWatchedSessionUpstreamLinksAdmission,
   readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
@@ -222,6 +224,7 @@ export function upsertSeedCursor(params: {
         conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet(cursor),
       ),
   );
+  publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
 }
 
 function updateMaterialCursor(params: {
@@ -270,6 +273,7 @@ function updateMaterialCursor(params: {
         }),
       ),
   );
+  publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
   return {
     lastSeenSequence: lastSeen,
     queueOnly: isAmbientGroupWatchCursor(current),
@@ -303,7 +307,7 @@ export function recordSessionStateEventInDatabase(
       .insertInto("session_state_events")
       .values(bindSessionStateEvent(input, occurredAt))
       .onConflict((conflict) => conflict.column("dedupe_key").doNothing())
-      .returning("sequence"),
+      .returningAll(),
   );
   const insertedSequence = insert?.sequence;
   if (insertedSequence === undefined) {
@@ -405,14 +409,7 @@ export function recordSessionStateEventInDatabase(
     });
   }
 
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSessionStateKysely(db)
-      .selectFrom("session_state_events")
-      .selectAll()
-      .where("sequence", "=", insertedSequence),
-  );
-  return { row, notices };
+  return { row: insert, notices };
 }
 
 /** The caller owns the transaction and schedules retention after notice publication. */

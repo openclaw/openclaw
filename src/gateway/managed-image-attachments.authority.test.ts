@@ -5,29 +5,18 @@ import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  ANIMATED_GIF_BYTES,
-  ANIMATED_WEBP_BYTES,
-  APNG_BYTES,
-  createBmpBuffer,
-} from "./http-image.test-support.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
 } from "./http-request-authority.js";
 import {
   createFixture,
-  requireAttachmentIdFromUrl,
-  requireManagedOriginalPath,
   prepareManagedSessionStore,
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
-import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 type PlaybackTranscodeResolution = Awaited<
@@ -69,10 +58,6 @@ vi.mock("../media/playback-transcode.js", async (importOriginal) => ({
 const {
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
   cleanupManagedOutgoingMediaRecords,
-  createManagedOutgoingMediaBlocks,
-  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
-  readManagedOutgoingImageThumbnail,
-  resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
 } = await import("./managed-image-attachments.js");
 
 describe("managed media response authority", () => {
@@ -93,203 +78,6 @@ describe("managed media response authority", () => {
       });
       resolvePlaybackTranscodeMock.mockReset().mockResolvedValue({ kind: "passthrough" });
     },
-  });
-
-  async function requestManagedImage(url: string, method = "GET") {
-    const { res, setHeader } = makeMockHttpResponse();
-    res.req.url = url;
-    res.req.method = method;
-    const chunks: Buffer[] = [];
-    res.on("data", (chunk: Buffer) => chunks.push(chunk));
-    const finished = new Promise<void>((resolve) => {
-      res.once("finish", resolve);
-    });
-    expect(
-      await handleManagedOutgoingImageHttpRequest(res.req, res, {
-        auth: { mode: "none", allowTailscale: false },
-        stateDir,
-      }),
-    ).toBe(true);
-    await finished;
-    return {
-      result: {
-        statusCode: res.statusCode,
-        headers: Object.fromEntries(setHeader.mock.calls),
-        body: Buffer.concat(chunks),
-      },
-    };
-  }
-
-  it.each([
-    {
-      filename: "cat.png",
-      contentType: "image/png",
-      source: createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 }),
-      still: true,
-    },
-    {
-      filename: "legacy.bmp",
-      contentType: "image/bmp",
-      source: createBmpBuffer(1600, 800),
-      still: true,
-    },
-    {
-      filename: "animation.gif",
-      contentType: "image/gif",
-      source: ANIMATED_GIF_BYTES,
-      still: false,
-    },
-    { filename: "animation.png", contentType: "image/apng", source: APNG_BYTES, still: false },
-    {
-      filename: "animation.webp",
-      contentType: "image/webp",
-      source: ANIMATED_WEBP_BYTES,
-      still: false,
-    },
-  ])(
-    "serves inline previews without flattening $filename through local reads and the artifact ticket",
-    async ({ filename, contentType, source, still }) => {
-      const { attachmentId, sessionKey } = await createFixture(stateDir, {
-        body: source,
-        filename,
-        contentType,
-      });
-      const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-      const transcriptMessages = [
-        {
-          role: "assistant",
-          content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
-          __openclaw: { id: "msg-1" },
-        },
-      ];
-      readSessionMessagesMock.mockResolvedValue(transcriptMessages);
-      const download = await resolveManagedOutgoingImageArtifactDownload({
-        sessionKey,
-        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
-        stateDir,
-      });
-      const thumbnailUrl = `${download?.url.replace(/\/full(?=\?)/u, "/thumbnail")}&v=3`;
-      const localRequest = {
-        sessionKey,
-        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
-        stateDir,
-        maxBytes: 12 * 1024 * 1024,
-        signal: new AbortController().signal,
-      };
-      const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
-      if (still) {
-        expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
-          width: 1200,
-          height: 600,
-        });
-        expect(localThumbnail!.byteLength).toBeLessThan(source.byteLength);
-      } else {
-        expect(localThumbnail).toEqual(source);
-      }
-      await expect(
-        readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
-      ).rejects.toThrow("byte limit");
-      await expect(
-        readManagedOutgoingImageThumbnail({ ...localRequest, sessionKey: "agent:other:main" }),
-      ).resolves.toBeNull();
-
-      vi.clearAllMocks();
-      const { result } = await requestManagedImage(thumbnailUrl);
-
-      expect(result.statusCode).toBe(200);
-      expect(result.headers["content-type"]).toBe(still ? "image/png" : contentType);
-      expect(result.headers["content-disposition"]).toContain(
-        still ? `${path.parse(filename).name}-thumbnail.png` : filename,
-      );
-      expect(result.headers["cache-control"]).toBe("private, max-age=300, immutable");
-      expect(result.headers["content-length"]).toBe(String(localThumbnail!.byteLength));
-      expect(result.body).toEqual(localThumbnail);
-      expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
-      const head = await requestManagedImage(thumbnailUrl, "HEAD");
-      expect(head.result.statusCode).toBe(200);
-      expect(head.result.headers["content-type"]).toBe(still ? "image/png" : contentType);
-      expect(head.result.headers["content-length"]).toBe(String(localThumbnail!.byteLength));
-      expect(head.result.body).toHaveLength(0);
-      const original = await requestManagedImage(download!.url);
-      expect(original.result.body.equals(source)).toBe(true);
-    },
-  );
-
-  it.each([
-    {
-      contentType: "image/gif",
-      source: (() => {
-        const bytes = Buffer.from(ANIMATED_GIF_BYTES);
-        // Widen the logical screen; the two 1×1 frames remain valid.
-        bytes.writeUInt16LE(2, 6);
-        return bytes;
-      })(),
-    },
-    { contentType: "image/apng", source: APNG_BYTES },
-    { contentType: "image/webp", source: ANIMATED_WEBP_BYTES },
-  ])(
-    "preserves $contentType originals and rejects dimension overflow without flattening",
-    async ({ contentType, source }) =>
-      withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const mediaUrl = `data:${contentType};base64,${source.toString("base64")}`;
-        const blocks = await createManagedOutgoingMediaBlocks({
-          sessionKey: "agent:main:main",
-          stateDir,
-          items: [{ url: mediaUrl, trustedLocal: false }],
-        });
-        const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
-        const originalPath = await requireManagedOriginalPath(stateDir, attachmentId);
-        expect(await fs.readFile(originalPath)).toEqual(source);
-        await expect(
-          createManagedOutgoingMediaBlocks({
-            sessionKey: "agent:main:main",
-            stateDir,
-            items: [{ url: mediaUrl, trustedLocal: false }],
-            limits: { maxWidth: 1 },
-          }),
-        ).rejects.toThrow("width limit");
-        expect(
-          (await listManagedImageRecordEntries({ stateDir })).map(
-            ({ record }) => record.attachmentId,
-          ),
-        ).toEqual([attachmentId]);
-      }),
-  );
-
-  it("fits an oversized BMP through managed ingestion and serves a PNG preview", async () => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const source = createBmpBuffer(5000, 500);
-      const blocks = await createManagedOutgoingMediaBlocks({
-        sessionKey: "agent:main:main",
-        stateDir,
-        messageId: "msg-1",
-        items: [{ url: `data:image/bmp;base64,${source.toString("base64")}`, trustedLocal: false }],
-      });
-      expect(blocks[0]).toMatchObject({ type: "image", width: 4090, height: 409 });
-      expect(blocks[1]).toMatchObject({
-        type: "text",
-        text: expect.stringContaining("resized from 5000×500"),
-      });
-      readSessionMessagesMock.mockResolvedValue([
-        { role: "assistant", content: blocks, __openclaw: { id: "msg-1" } },
-      ]);
-      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
-      const download = await resolveManagedOutgoingImageArtifactDownload({
-        sessionKey: "agent:main:main",
-        stateDir,
-        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
-      });
-      const { result } = await requestManagedImage(
-        download!.url.replace(/\/full(?=\?)/u, "/thumbnail"),
-      );
-      expect(result.statusCode).toBe(200);
-      expect(result.headers["content-type"]).toBe("image/png");
-      expect(readImageProbeFromHeader(result.body)).toMatchObject({
-        format: "png",
-        width: 1200,
-        height: 120,
-      });
-    });
   });
 
   it.each(["revoked", "rejected", "retired", "schema-missing"] as const)(

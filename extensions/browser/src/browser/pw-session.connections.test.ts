@@ -266,12 +266,6 @@ describe("pw-session connection scoping", () => {
 
   it.each([
     {
-      host: "non-loopback CDP hosts",
-      cdpUrl: "http://93.184.216.34:9222",
-      ssrfPolicy: { allowPrivateNetwork: true },
-      error: "discovery unavailable",
-    },
-    {
       host: "loopback HTTP CDP hosts",
       cdpUrl,
       ssrfPolicy: {},

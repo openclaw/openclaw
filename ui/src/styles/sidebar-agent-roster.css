@@ -173,6 +173,12 @@ openclaw-sidebar-agent-roster {
   gap: var(--team-slot-gap);
 }
 
+.sidebar-session-team-state__counts > .sidebar-child-session-toggle__count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--team-slot-gap);
+}
+
 .sidebar-session-team-state {
   display: flex;
   gap: var(--team-slot-gap);
@@ -210,7 +216,7 @@ openclaw-sidebar-agent-roster {
 }
 .sidebar-recent-session.sidebar-recent-session--team {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   gap: 4px;
   min-height: 32px;
   padding: 0;
@@ -254,7 +260,7 @@ openclaw-sidebar-agent-roster {
   display: none;
 }
 .sidebar-recent-session--team > .sidebar-child-session-toggle {
-  grid-column: 1;
+  grid-column: 3;
   grid-row: 1;
   width: 20px;
   height: 32px;
@@ -281,11 +287,11 @@ openclaw-sidebar-agent-roster {
   font-weight: 450;
 }
 .shell--mobile-nav .sidebar-recent-session.sidebar-recent-session--team {
-  grid-template-columns: 20px minmax(0, 1fr) 44px;
+  grid-template-columns: 20px minmax(0, 1fr) auto 44px;
   min-height: 44px;
 
   > .sidebar-recent-session__aside {
-    grid-column: 3;
+    grid-column: 4;
   }
 
   > .sidebar-recent-session__link {
@@ -295,10 +301,10 @@ openclaw-sidebar-agent-roster {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.sidebar-recent-session--team {
-    grid-template-columns: 20px minmax(0, 1fr) 92px;
+    grid-template-columns: 20px minmax(0, 1fr) auto var(--session-row-actions-reserve);
   }
   .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
-    grid-column: 3;
+    grid-column: 4;
   }
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;

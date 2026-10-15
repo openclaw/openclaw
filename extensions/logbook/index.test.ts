@@ -146,16 +146,18 @@ describe("logbook gateway methods", () => {
     "locates its %s worker from the selected runtime entry",
     async (_layout, entry, worker) => {
       const { services } = registerLogbook(path.resolve(entry));
+      const config = { database: { engine: "postgres" as const } };
       const stopBeforeOpening = new Error("worker location captured");
       const open = vi.spyOn(LogbookStore, "open").mockRejectedValueOnce(stopBeforeOpening);
       const scheduler = createTestPluginServiceScheduler();
       try {
         await expect(
-          services[0]!.start({ config: {}, stateDir: "/unused", logger: console, scheduler }),
+          services[0]!.start({ config, stateDir: "/unused", logger: console, scheduler }),
         ).rejects.toBe(stopBeforeOpening);
         expect(open).toHaveBeenCalledExactlyOnceWith(
           path.join("/unused", "logbook"),
           pathToFileURL(path.resolve(worker)),
+          config,
         );
       } finally {
         await scheduler.stop();

@@ -489,50 +489,38 @@ describe("mcp cli", () => {
     });
   });
 
-  it.each(["process", "dotenv", "unset"])(
-    "does not flag authored MCP header/env references with %s env",
-    async (source) => {
-      await withMcpHome(async (home) => {
-        vi.stubEnv(
-          "MCP_DOCTOR_AUTHORED_TOKEN",
-          source === "process" ? "Bearer test-token" : undefined,
-        );
-        const stateDir = path.join(home, ".openclaw");
-        if (source === "dotenv") {
-          await fs.writeFile(
-            path.join(stateDir, ".env"),
-            "MCP_DOCTOR_AUTHORED_TOKEN=Bearer test-token\n",
-          );
-        }
-        await fs.writeFile(
-          path.join(stateDir, "mcp-servers.json"),
-          JSON.stringify({
-            docs: {
-              url: "https://mcp.example.com/mcp",
-              headers: {
-                Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
-                "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
-                "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
-                api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
-              },
-              env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+  it("does not flag authored MCP header/env references after environment resolution", async () => {
+    await withMcpHome(async (home) => {
+      vi.stubEnv("MCP_DOCTOR_AUTHORED_TOKEN", "Bearer test-token");
+      const stateDir = path.join(home, ".openclaw");
+      await fs.writeFile(
+        path.join(stateDir, "mcp-servers.json"),
+        JSON.stringify({
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            headers: {
+              Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
+              "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
+              "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
+              api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
             },
-          }),
-        );
-        await fs.writeFile(
-          path.join(stateDir, "openclaw.json"),
-          JSON.stringify({ mcp: { servers: { $include: "./mcp-servers.json" } } }),
-        );
+            env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+          },
+        }),
+      );
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ mcp: { servers: { $include: "./mcp-servers.json" } } }),
+      );
 
-        await runMcpCommand(["mcp", "doctor", "docs", "--json"]);
+      await runMcpCommand(["mcp", "doctor", "docs", "--json"]);
 
-        expect(JSON.parse(lastLogLine())).toMatchObject({
-          ok: true,
-          servers: [{ name: "docs", ok: true, issues: [] }],
-        });
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: true,
+        servers: [{ name: "docs", ok: true, issues: [] }],
       });
-    },
-  );
+    });
+  });
 
   it("reports ignored OAuth Authorization headers regardless of casing", async () => {
     await withMcpHome(async (home) => {

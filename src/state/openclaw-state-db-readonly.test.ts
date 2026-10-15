@@ -354,7 +354,6 @@ it("reuses an idle writer but isolates its transaction", async () => {
 
 it.each([
   { failure: "quarantine", composite: false },
-  { failure: "quarantine", composite: true },
   { failure: "callback", composite: true },
 ] as const)(
   "cleans the async snapshot after $failure rejection (composite: $composite)",

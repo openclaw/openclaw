@@ -47,7 +47,6 @@ import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.
 import {
   loadPersistedAuthProfileStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
-  loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
   mergePersistedAuthProfileState,
 } from "./persisted.js";
@@ -106,6 +105,7 @@ import {
   inspectPersistedSharedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
   resolveAuthProfileStoreOwner,
   runAuthProfileWriteTransaction,
@@ -190,7 +190,7 @@ export function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfile
   );
 }
 
-function isEnvOnlyAuthProfileRuntime(): boolean {
+export function isEnvOnlyAuthProfileRuntime(): boolean {
   return authProfileRuntimeMode.getStore()?.kind === "env-only";
 }
 
@@ -939,20 +939,18 @@ export function createAuthProfileStoreRuntime(
       if (preparedRows) {
         return loadPersistedAuthProfileStoreFromRows(preparedRows, databasePath);
       }
-      const store =
-        !effectiveAgentDir && env && !effectiveOptions?.database
-          ? loadPersistedSharedAuthProfileStore(env)
-          : loadPersistedAuthProfileStore(
-              effectiveAgentDir,
-              resolvePersistedLoadOptions(effectiveOptions),
-            );
-      if (
-        !store &&
-        (!effectiveAgentDir && env && !effectiveOptions?.database
-          ? inspectPersistedSharedAuthProfileStoreRaw(env)
-          : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database)
-        ).status !== "missing"
-      ) {
+      const sharedEnv = !effectiveAgentDir && !effectiveOptions?.database ? env : undefined;
+      const inspected = sharedEnv
+        ? inspectPersistedSharedAuthProfileStoreRaw(sharedEnv)
+        : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database);
+      const store = mergePersistedAuthProfileState(
+        inspected.status === "readable" ? inspected.raw : null,
+        () =>
+          sharedEnv
+            ? readPersistedSharedAuthProfileStateRaw(sharedEnv)
+            : readPersistedAuthProfileStateRaw(effectiveAgentDir, effectiveOptions?.database),
+      );
+      if (!store && inspected.status !== "missing") {
         throw new AuthProfileStoreUnreadableError(effectiveOptions?.database?.path ?? databasePath);
       }
       return store;
@@ -984,6 +982,10 @@ export function createAuthProfileStoreRuntime(
       );
     }
     const store = readStore();
+    effectiveOptions?.onReadSource?.({
+      databasePath,
+      hasStore: store !== null,
+    });
     if (!preparedRows && !effectiveOptions?.database) {
       recordRuntimeAuthProfilePersistedStore(databasePath, store);
     }
@@ -1284,10 +1286,13 @@ export function createAuthProfileStoreRuntime(
   const {
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForCatalogAsync,
     ensureAuthProfileStore,
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
     ensureAuthProfileStoreWithoutExternalProfilesAsync,
+    ensureAuthProfileStoreForLocalUpdate,
+    ensureAuthProfileStoreForLocalUpdateAsync,
     prepareAuthProfileStoreForModelRuntime,
   } = createAuthProfileStoreReadRuntime({
     isEnvOnlyAuthProfileRuntime,
@@ -1440,77 +1445,6 @@ export function createAuthProfileStoreRuntime(
       ...options,
       readOnly: true,
       allowKeychainPrompt: false,
-    });
-  }
-
-  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. */
-  function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
-    warnPluginSdkDeprecation({
-      family: "auth-profiles",
-      method: "ensureAuthProfileStoreForLocalUpdate",
-      replacement: "ensureAuthProfileStoreForLocalUpdateAsync",
-    });
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
-    const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
-    const store = loadAuthProfileStoreForAgent(effectiveAgentDir, options);
-    const authPath = effectiveAgentDir
-      ? resolveAgentAuthPath(effectiveAgentDir)
-      : resolveSharedAuthPath();
-    const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-    const mainAuthPath = mainAgentDir
-      ? resolveAgentAuthPath(mainAgentDir)
-      : resolveSharedAuthPath();
-    if (!effectiveAgentDir || authPath === mainAuthPath) {
-      return store;
-    }
-
-    const mainStore = loadInheritedAuthProfileStore(
-      () => loadAuthProfileStoreForAgent(undefined, { readOnly: true, syncExternalCli: false }),
-      undefined,
-      getScopedAuthProfileEnv(),
-    );
-    return mainStore
-      ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-      : store;
-  }
-
-  async function ensureAuthProfileStoreForLocalUpdateAsync(
-    agentDir?: string,
-  ): Promise<AuthProfileStore> {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    return withPreparedAuthProfileStoreReads(agentDir, undefined, async (prepared) => {
-      const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
-      const store = await prepared.readStore(prepared.effectiveAgentDir, options);
-      const mainAgentDir = prepared.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir());
-      const mainAuthPath = mainAgentDir
-        ? resolveAgentAuthPath(mainAgentDir)
-        : await prepared.sharedPath();
-      if (
-        !prepared.effectiveAgentDir ||
-        resolveAgentAuthPath(prepared.effectiveAgentDir) === mainAuthPath
-      ) {
-        return store;
-      }
-      let mainStore: AuthProfileStore | null | undefined;
-      try {
-        mainStore = await prepared.readStore(undefined, { readOnly: true, syncExternalCli: false });
-      } catch (error) {
-        mainStore = loadInheritedAuthProfileStore(
-          () => {
-            throw error;
-          },
-          undefined,
-          prepared.env,
-        );
-      }
-      return mainStore
-        ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-        : store;
     });
   }
 
@@ -1836,6 +1770,7 @@ export function createAuthProfileStoreRuntime(
     loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForCatalogAsync,
     ensureAuthProfileStore,
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,

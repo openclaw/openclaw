@@ -129,6 +129,9 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
 Read-only forks do not acquire workspace placement authority, so a parent's
 pending placement publication does not block them. Normal parent settlement and
 usage updates preserve the fork's read authority. Session reset or deletion
@@ -241,6 +244,11 @@ nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
+
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
@@ -613,6 +621,18 @@ declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness execution identity
+
+The harness host's closure-bound `preparedEnvironment()` returns non-secret
+execution facts. When `hostExecutionRequired` is true, use the host's
+`createToolSurfaceAsync()` execution tools rather than a native runtime shell
+environment overlay. The host captures credential selection before plugin
+handoff and binds it privately at child launch. Tool construction overrides
+cannot replace that selection. The tools retain the host's existing approvals,
+source authority, process lifecycle, and failure handling; this fact grants no
+credential export or remote delegation authority. Hosts without a managed
+selection omit the optional fact and retain native execution defaults.
 
 ## Other top-level `api` fields
 

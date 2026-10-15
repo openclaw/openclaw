@@ -19,6 +19,7 @@ export function recordDoctorMigrationBackups(
   env: NodeJS.ProcessEnv,
   backupId: string,
   inventory: readonly { path: string; identity: fs.BigIntStats; archivePath: string }[],
+  versionPhase = false,
 ): void {
   const runId = `startup-migration-${backupId}`;
   const manifestPath = path.join(resolveSessionSqliteMigrationRunsDir(env), `${runId}.json`);
@@ -40,7 +41,7 @@ export function recordDoctorMigrationBackups(
         artifact: {
           identity: readMigrationArtifactIdentity(archivePath),
           classification: "repair-original" as const,
-          reason: "pre-startup-migration-backup",
+          reason: versionPhase ? "pre-version-migration-backup" : "pre-startup-migration-backup",
           dependencies: [],
           disposal: { state: "retained" as const },
         },
@@ -70,10 +71,11 @@ export function recordDoctorMigrationBackups(
   });
 }
 
-/** Called only after Doctor's database readiness owner verifies the whole fleet. */
+/** Complete a committed version phase, or the full Doctor phase for undeclared migrations. */
 export function completeDoctorMigrationBackups(
   env: NodeJS.ProcessEnv,
   verifiedDatabasePaths: readonly string[],
+  versionPhaseOnly = false,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -88,6 +90,12 @@ export function completeDoctorMigrationBackups(
       !manifest ||
       manifest.completedAt ||
       !manifest.targets.length ||
+      (versionPhaseOnly &&
+        !manifest.targets.every((target) =>
+          target.completedMoves.every(
+            (move) => move.artifact?.reason === "pre-version-migration-backup",
+          ),
+        )) ||
       !manifest.targets.every(({ databaseIdentity, sqlitePath }) => {
         if (!databaseIdentity || !verified.has(sqlitePath)) {
           return false;

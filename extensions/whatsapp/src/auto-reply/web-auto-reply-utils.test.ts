@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { debugMention } from "./mentions.js";
-import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
+import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 type TestMessageOverrides = {
   admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
@@ -138,28 +138,6 @@ describe("resolveMentionTargets with @lid mapping", () => {
 });
 
 describe("web auto-reply util", () => {
-  describe("elide", () => {
-    const hasLoneSurrogate = (value: string): boolean =>
-      Array.from(value).some((char) => {
-        if (char.length !== 1) {
-          return false;
-        }
-        const codeUnit = char.charCodeAt(0);
-        return codeUnit >= 0xd800 && codeUnit <= 0xdfff;
-      });
-
-    it("returns undefined for undefined input", () => {
-      expect(elide(undefined)).toBe(undefined);
-    });
-
-    it("does not split surrogate pairs when the limit lands inside an emoji", () => {
-      const output = elide("😀😀😀", 5);
-
-      expect(output).toBe("😀😀… (truncated 2 chars)");
-      expect(hasLoneSurrogate(output ?? "")).toBe(false);
-    });
-  });
-
   describe("isLikelyWhatsAppCryptoError", () => {
     it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};

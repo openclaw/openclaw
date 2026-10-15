@@ -216,7 +216,7 @@ suite.define(() => {
         await expect.poll(() => indicator.count()).toBe(0);
         await page
           .locator(".chat-working-indicator__status")
-          .getByText("Working…", { exact: true })
+          .getByText("Preparing this turn…", { exact: true })
           .waitFor();
       },
     );

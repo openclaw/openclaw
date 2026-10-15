@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayMethodsTestExclude,
@@ -95,6 +96,14 @@ const bunCompatibleWholeOwners = new Map<
   { dir: string; include: readonly string[]; exclude: readonly string[] }
 >([
   [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
+  [
+    "test/vitest/vitest.commands.config.ts",
+    {
+      dir: "src/commands",
+      include: ["src/commands/**/*.test.ts"],
+      exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
+    },
+  ],
   [
     gatewayMethodsConfig,
     { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
@@ -238,17 +247,6 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
   [
-    "test/vitest/vitest.commands.config.ts",
-    {
-      dir: "src/commands",
-      files: [
-        "src/commands/doctor-config-preflight.process.test.ts",
-        "src/commands/doctor-lint.native-capture.test.ts",
-        "src/commands/doctor-tools-md-migration.test.ts",
-      ],
-    },
-  ],
-  [
     "test/vitest/vitest.extension-qa.config.ts",
     {
       dir: "extensions",
@@ -270,15 +268,37 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
 ]);
-const bunCompatibleUnitFiles = new Set([
-  "packages/normalization-core/src/grapheme.test.ts",
-  "src/library.test.ts",
-  "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
-  "src/worker/worker-connection-closing-window.test.ts",
+// These contracts exercise Node's transferable POSIX pipe handles, including
+// suites that would otherwise pass on Bun by skipping their broker assertions.
+const nodeRequiredProcessFiles = new Set([
+  "src/process/spawn-broker/callback-context.test.ts",
+  "src/process/spawn-broker/cleanup.test.ts",
+  "src/process/spawn-broker/command-startup.test.ts",
+  "src/process/spawn-broker/detached-cleanup.test.ts",
+  "src/process/spawn-broker/execa.test.ts",
+  "src/process/spawn-broker/execution-deadline.test.ts",
+  "src/process/spawn-broker/handoff-crash.test.ts",
+  "src/process/spawn-broker/handoff.test.ts",
+  "src/process/spawn-broker/host.test.ts",
+  "src/process/spawn-broker/relay.test.ts",
+  "src/process/spawn-broker/spawn-failure.test.ts",
+  "src/process/spawn-broker/stdin-handoff.test.ts",
+  "src/process/spawn-broker/transports.test.ts",
+  "src/process/spawn-utils.test.ts",
+  // Keep the Node broker/subreaper cases and two-process relay retirement proof.
+  "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
+  "src/process/supervisor/service-child-relay-host.retirement.test.ts",
 ]);
-// src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
-// cold fs-safe native initialization roots the caller's ALS through custom_gc.
-// The dependency initialization owner needs a fix; this is not V8-specific proof.
+// The census covers unit-src; other aggregate-unit owners retain their policy.
+const unitRequiresNode = (file: string) =>
+  !(
+    (file.startsWith("src/") &&
+      !file.startsWith("src/acp/") &&
+      !file.startsWith("src/security/")) ||
+    file === "packages/normalization-core/src/grapheme.test.ts"
+  );
+// State-lease retention stays with its separate infra owner on Node: the completed
+// worker-heartbeat case still retains caller async context on the pinned Bun fork.
 const runtimePartitions = new Map<
   string,
   {
@@ -294,13 +314,7 @@ const runtimePartitions = new Map<
         globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Only qualified complete process contracts run on Bun.
-      nodeRequired: (file) =>
-        ![
-          "src/process/spawn-broker/event-order.test.ts",
-          "src/process/spawn-broker/group-custody.test.ts",
-          "src/process/terminal-pty-bun.test.ts",
-        ].includes(file),
+      nodeRequired: nodeRequiredProcessFiles,
     },
   ],
   [
@@ -308,19 +322,11 @@ const runtimePartitions = new Map<
     {
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
+        ...nodeRequiredProcessFiles,
+        // Node's trace-exit and diagnostic-report instrumentation is not a Bun contract.
         "src/cli/cli-process-diagnostics.test.ts",
-        // This contract requires Node's async_hooks Promise callback boundaries.
-        "src/infra/main-thread-stall.test.ts",
-        "src/process/spawn-broker/callback-context.test.ts",
-        "src/process/spawn-broker/cleanup.test.ts",
-        "src/process/spawn-broker/handoff.test.ts",
-        "src/process/spawn-broker/relay.test.ts",
-        "src/process/spawn-broker/startup.test.ts",
-        "src/process/spawn-broker/stdin-handoff.test.ts",
-        "src/process/spawn-broker/transports.test.ts",
         // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
         "test/scripts/bench-session-history.test.ts",
-        "test/scripts/update-restart-module-outcome.test.ts",
       ]),
     },
   ],
@@ -328,8 +334,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit.config.ts",
     {
       files: unitFiles,
-      // Preserve the shared qualification in aggregate and src-only unit owners.
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [
@@ -342,7 +347,7 @@ const runtimePartitions = new Map<
             !file.startsWith("src/acp/") &&
             !file.startsWith("src/security/"),
         ),
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [

@@ -398,13 +398,28 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
-      ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434", "pull"],
-      ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
-      ["autolink", "<https://github.com/openclaw/openclaw/pull/3434>", "#3434", "pull"],
+      [
+        "bare pull request",
+        "https://github.com/openclaw/openclaw/pull/3434",
+        "openclaw/openclaw#3434",
+        "pull",
+      ],
+      [
+        "bare issue",
+        "https://github.com/openclaw/openclaw/issues/3435",
+        "openclaw/openclaw#3435",
+        "issue",
+      ],
+      [
+        "autolink",
+        "<https://github.com/openclaw/openclaw/pull/3434>",
+        "openclaw/openclaw#3434",
+        "pull",
+      ],
       [
         "bare www item",
         "https://www.github.com/openclaw/openclaw/issues/3435",
-        "#3435",
+        "openclaw/openclaw#3435",
         "issue",
         true,
       ],
@@ -442,7 +457,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       [
         "pull shorthand",
         "[#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "#3434",
+        "openclaw/openclaw#3434",
         "pull",
       ],
       [
@@ -454,7 +469,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       [
         "shorthand with authored tooltip",
         '[#3434](https://github.com/openclaw/openclaw/pull/3434 "A pull request")',
-        "#3434",
+        "openclaw/openclaw#3434",
         "pull",
       ],
       [
@@ -513,14 +528,16 @@ describe("toSanitizedMarkdownHtml links", () => {
       }
     });
 
-    it("compacts long generated item references into chips", () => {
+    it("keeps the full repository in long generated item chips", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
           "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/3434",
         ),
       );
       const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.textContent).toBe("#3434");
+      expect(link?.textContent).toBe(
+        "a-very-long-organization-name/a-very-long-repository-name#3434",
+      );
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
       expect(link?.classList.contains("markdown-github-item")).toBe(true);
     });
@@ -567,7 +584,7 @@ describe("toSanitizedMarkdownHtml links", () => {
         const link = fragment.querySelector<HTMLAnchorElement>("a");
         expect(link?.classList.contains("markdown-github-link")).toBe(true);
         expect(link?.classList.contains("markdown-github-item")).toBe(true);
-        expect(link?.textContent).toBe("#3434");
+        expect(link?.textContent).toBe("openclaw/openclaw#3434");
         expect(link?.getAttribute("href")).toBe(input);
         expect(link?.hasAttribute("title")).toBe(false);
       },
@@ -599,8 +616,13 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      ["pull request", "`https://github.com/openclaw/openclaw/pull/141131`", "#141131", "pull"],
-      ["issue", "` https://github.com/o/r/issues/3434 `", "#3434", "issue"],
+      [
+        "pull request",
+        "`https://github.com/openclaw/openclaw/pull/141131`",
+        "openclaw/openclaw#141131",
+        "pull",
+      ],
+      ["issue", "` https://github.com/o/r/issues/3434 `", "o/r#3434", "issue"],
       ["repository", "`https://github.com/openclaw/openclaw`", "openclaw/openclaw", undefined],
     ])("promotes a code span holding only a github %s url", (_kind, input, label, kind) => {
       const href = input.replaceAll("`", "").trim();

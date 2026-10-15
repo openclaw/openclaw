@@ -1,5 +1,4 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,6 +15,7 @@ import {
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<SessionRowProjection["state"]["scope"]>;
@@ -31,12 +31,20 @@ export function createSessionRowSelection(
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
-  const orders = new Map<NonNullable<SessionsListParams["sortBy"]>, SessionEntryPair[]>();
+  const orders = new Map<
+    string,
+    {
+      sortBy: NonNullable<SessionsListParams["sortBy"]>;
+      archived: SessionsListParams["archived"];
+      entries: SessionEntryPair[];
+    }
+  >();
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
   const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
   const changedInvolvements = new Set<string>();
-  let configuredAgentIds = scope.configuredAgentIds;
+  // Store-admission scopes also include ACP IDs; owner facets use only the agent roster.
+  const configuredAgentIds = scope.ownerAgentIds;
   let involvementRevision: object | undefined;
   const removeInvolvement = (key: string) => {
     const previous = rowInvolvements.get(key);
@@ -58,7 +66,6 @@ export function createSessionRowSelection(
     rowInvolvements.delete(key);
   };
   const prepareInvolvements = () => {
-    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const context = getContext();
     const revision = context.identityProjection?.revision ?? context.userProfileIdentityById;
     if (involvementRevision !== revision) {
@@ -71,7 +78,6 @@ export function createSessionRowSelection(
       }
       involvementRevision = revision;
     }
-    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
@@ -80,7 +86,7 @@ export function createSessionRowSelection(
         entry,
         identities,
         cfg,
-        (configuredAgentIds ??= new Set(listAgentIds(cfg))),
+        configuredAgentIds,
       )?.actor;
       if (owner?.identity?.type === "profile") {
         related.add(owner.identity.id);
@@ -183,7 +189,7 @@ export function createSessionRowSelection(
         changedInvolvements.delete(key);
       }
     }
-    for (const [sortBy, entries] of orders) {
+    for (const { sortBy, archived, entries } of orders.values()) {
       const locate = (pair: SessionEntryPair) => {
         let lo = 0,
           hi = entries.length;
@@ -197,10 +203,10 @@ export function createSessionRowSelection(
         }
         return lo;
       };
-      if (oldWinner) {
+      if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
         entries.splice(locate(oldWinner.pair), 1);
       }
-      if (winner) {
+      if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
         entries.splice(locate(winner.pair), 0, winner.pair);
       }
     }
@@ -221,24 +227,32 @@ export function createSessionRowSelection(
           `duplicate rows resolve to canonical session key ${key}`,
         );
       }
-      let entries = !candidates && sortBy && orders.get(sortBy);
-      if (!entries) {
-        const targets = candidates
-          ? [...new Set(Array.from(candidates, keyFor))].flatMap((key) => winners.get(key) ?? [])
-          : [...winners.values()];
-        if (!sortBy) {
-          targets.sort((a, b) => a.position - b.position);
-        }
-        entries = targets.map((target) => target.pair);
-        if (sortBy) {
-          entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
-          if (!candidates) {
-            orders.set(sortBy, entries);
-          }
-        }
-      }
       return {
-        entries,
+        configuredAgentIds,
+        entries(this: void, archived: SessionsListParams["archived"]) {
+          const orderKey = `${sortBy}:${archived ?? false}`;
+          let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
+          if (!entries) {
+            const targets = (
+              candidates
+                ? [...new Set(Array.from(candidates, keyFor))].flatMap(
+                    (key) => winners.get(key) ?? [],
+                  )
+                : [...winners.values()]
+            ).filter((target) => matchesSessionArchiveFilter(target.row.entry, archived));
+            if (!sortBy) {
+              targets.sort((a, b) => a.position - b.position);
+            }
+            entries = targets.map((target) => target.pair);
+            if (sortBy) {
+              entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
+              if (!candidates) {
+                orders.set(orderKey, { sortBy, archived, entries });
+              }
+            }
+          }
+          return entries;
+        },
         get: (key: string) => winners.get(key)?.row,
         involvementKeys(this: void, profileId: string, personal: boolean): ReadonlySet<string> {
           prepareInvolvements();

@@ -26,6 +26,7 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   // Actual emit owners: tsgo:prod UI/plugin configs are noEmit typecheck graphs.
   const productionConfigs = [
     "tsconfig.json",
+    "tsconfig.packages.json",
     "packages/plugin-sdk/tsconfig.json",
     "extensions/browser/tsconfig.json",
   ];
@@ -40,6 +41,19 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   }
   const productionAmbient = "src/types/production.d.ts";
   const testAmbient = "src/config/sessions/session-entry.test-compat.d.ts";
+  const packageAmbient = "packages/example/src/ambient.d.ts";
+  const unrelatedAmbient = [
+    "src/types/agent-sessions.d.ts",
+    "ui/src/types/solid-elements.d.ts",
+    "extensions/example/src/ambient.d.ts",
+  ];
+  for (const file of [
+    packageAmbient,
+    ...unrelatedAmbient,
+    "packages/example/src/example.test-compat.d.ts",
+  ]) {
+    writeNativeFixtureFile(root, file, "export {};\n");
+  }
   writeNativeFixtureFile(root, productionAmbient, "declare const productionOrigin: string;");
   writeNativeFixtureFile(root, testAmbient, 'import "./runtime.js";');
   writeNativeFixtureFile(root, "src/config/sessions/runtime.ts", "export const value = 1;");
@@ -56,6 +70,10 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
     );
   const production = configuredRoots("tsconfig.json");
   expect(production).toContain(productionAmbient);
+  expect(production).toEqual(expect.arrayContaining(unrelatedAmbient));
+  expect(configuredRoots("tsconfig.packages.json").toSorted()).toEqual(
+    [packageAmbient, "packages/example/src/index.ts"].toSorted(),
+  );
   for (const config of productionConfigs) {
     expect(configuredRoots(config), config).not.toContain(testAmbient);
   }

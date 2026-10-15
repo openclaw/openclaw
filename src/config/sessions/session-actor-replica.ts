@@ -1,8 +1,5 @@
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
-import {
-  readDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -23,6 +20,7 @@ import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
   scopedWriteToken,
+  scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
 import type {
   FileTarget,
@@ -73,7 +71,6 @@ const pool = resolveGlobalSingleton<ReplicaPool>(
     owner.unsubscribe?.();
     owner.unsubscribe = undefined;
     for (const cell of owner.cells.values()) {
-      cell.reservation += 1;
       discard(cell);
     }
     owner.cells.clear();
@@ -110,8 +107,17 @@ export function ensureReplicaSubscription(): void {
       ) {
         // Creation already owns the complete entry; its first reader need not fetch it again.
         retainSessionActorEntryFacts(
-          target,
-          { entry: created.fullEntry, snapshots: "full", projection: created.projection },
+          target.database,
+          [
+            {
+              sessionKey: target.sessionKey,
+              facts: {
+                entry: created.fullEntry,
+                snapshots: "full",
+                projection: created.projection,
+              },
+            },
+          ],
           created.source.incarnation,
         );
       }
@@ -127,9 +133,6 @@ export function ensureReplicaSubscription(): void {
         })
       ) {
         continue;
-      }
-      if (change.factsInvalidated) {
-        cell.reservation += 1;
       }
       // A command's partial publication precedes its full receipt. Its native
       // token rejects superseded postimages without cancelling that receipt.
@@ -194,10 +197,7 @@ export function ensureReplicaSubscription(): void {
       if (unchangedEntry) {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
-        cell.entry = unchangedEntry;
-        cell.bytes = estimateReplicaBytes(unchangedEntry);
-        pool.snapshots += 1;
-        pool.bytes += cell.bytes;
+        retainEntry(cell, unchangedEntry);
       }
       if (
         prepared &&
@@ -234,7 +234,7 @@ export function ensureReplicaSubscription(): void {
               : undefined);
           // Metadata receipts retain side-table facts when their writer did not change sharing.
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
-          cell.entry = freezeJsonSnapshot({
+          retainEntry(cell, {
             target: cell.target,
             entry: structuredClone(prepared.fullEntry),
             dependencySessionIds,
@@ -244,10 +244,6 @@ export function ensureReplicaSubscription(): void {
             members: sharingUnchanged ? previous?.members : undefined,
             participants: sharingUnchanged ? previous?.participants : undefined,
           });
-          cell.bytes = estimateReplicaBytes(cell.entry);
-          pool.snapshots += 1;
-          pool.bytes += cell.bytes;
-          touch(cell);
         }
       }
       // Keep a bounded empty slot through pending publication so its complete
@@ -274,9 +270,19 @@ function discard(cell: ReplicaCell): void {
   }
   pool.bytes -= cell.bytes;
   cell.transcript = undefined;
+  cell.transcriptBytes = 0;
   cell.snapshot = undefined;
   cell.entry = undefined;
   cell.bytes = 0;
+}
+
+function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
+  discard(cell);
+  cell.entry = freezeJsonSnapshot(entry);
+  cell.bytes = estimateReplicaBytes(entry);
+  pool.snapshots += 1;
+  pool.bytes += cell.bytes;
+  touch(cell);
 }
 
 function retainSnapshot(
@@ -289,6 +295,13 @@ function retainSnapshot(
   }
   const previousTranscript = cell.transcript;
   discard(cell);
+  // Freeze borrowed entry facts once per installed revision, not on every read.
+  freezeJsonSnapshot(state.target);
+  freezeJsonSnapshot(state.entry);
+  freezeJsonSnapshot(state.members);
+  freezeJsonSnapshot(state.participants);
+  Object.freeze(state.dependencySessionIds);
+  Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
   cell.bytes = estimateReplicaBytes(state);
@@ -308,9 +321,10 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   if (!cell.snapshot && !cell.entry && !cell.transcript) {
     pool.snapshots += 1;
   }
-  const previousBytes = cell.transcript ? estimateReplicaBytes(cell.transcript) : 0;
+  const previousBytes = cell.transcriptBytes;
   const bytes = estimateReplicaBytes(transcript);
   cell.transcript = transcript;
+  cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
   touch(cell);
@@ -337,13 +351,17 @@ export function retainSessionActorTranscriptReplica(
 function forgetUnused(cell: ReplicaCell): void {
   const key = targetKey(cell.target);
   const empty = !cell.snapshot && !cell.entry && !cell.transcript;
-  if (!cell.handles && !cell.pending && empty && pool.cells.get(key) === cell) {
+  if (!cell.handles && empty && pool.cells.get(key) === cell) {
     pool.cells.delete(key);
   }
 }
 
 function touch(cell: ReplicaCell): void {
   const key = targetKey(cell.target);
+  const replaced = pool.cells.get(key);
+  if (replaced && replaced !== cell) {
+    discard(replaced);
+  }
   pool.cells.delete(key);
   pool.cells.set(key, cell);
   for (const candidate of pool.cells.values()) {
@@ -376,11 +394,11 @@ function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentit
   if (!cell || !state || cell.generation === undefined) {
     return undefined;
   }
-  const current = admitted ?? readDatabasePathIdentitySync(target.database.nativeLocation);
   const token = scopedWriteToken(target, state.dependencySessionIds);
   if (
-    current.key !== `file:${target.database.physicalIdentity}` ||
-    current.birthtime !== target.database.birthtime ||
+    (admitted &&
+      (admitted.key !== `file:${target.database.physicalIdentity}` ||
+        admitted.birthtime !== target.database.birthtime)) ||
     (token && token !== state.writeToken)
   ) {
     discard(cell);
@@ -393,7 +411,7 @@ function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentit
   return token ? { cell, state, incarnation: cell.generation } : undefined;
 }
 
-/** Entry projections share actor residency; they never certify live authority. */
+/** Borrow frozen entry facts; callers copy changed fields and retain their own live authority. */
 export function readSessionActorEntryFacts(
   target: FileTarget,
   snapshotFields: SessionActorEntryFacts["snapshots"] = "full",
@@ -404,12 +422,11 @@ export function readSessionActorEntryFacts(
   }
   const { cell, state, incarnation } = current;
   const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
-  // Project a shallow shell before cloning potentially large, unrequested snapshots.
-  return structuredClone({
-    target,
+  return Object.freeze({
+    target: state.target,
     entry:
       state.entry && snapshotFields !== "full"
-        ? attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields)
+        ? Object.freeze(attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields))
         : state.entry,
     members: state.members,
     participants: state.participants,
@@ -419,12 +436,14 @@ export function readSessionActorEntryFacts(
     snapshots:
       snapshotFields === "full"
         ? snapshots
-        : snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+        : Object.freeze(
+            snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+          ),
     projection: cell.snapshot
-      ? {
+      ? Object.freeze({
           hasBoard: cell.snapshot.hasBoard,
           activitySummaryWatermark: cell.snapshot.transcript.watermark,
-        }
+        })
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
@@ -492,7 +511,13 @@ export function readSessionActorTranscriptAnchorsFromReplica(
   const current = readCurrentEntryCellForPath(params);
   const snapshot = current?.cell.snapshot;
   return snapshot && snapshot.entry?.sessionId === params.sessionId
-    ? readSessionActorTranscriptAnchors(snapshot, params, selection, current?.cell.transcript?.tail)
+    ? readSessionActorTranscriptAnchors(
+        snapshot,
+        params,
+        selection,
+        current?.cell.transcript?.tail,
+        current?.cell.transcript?.anchors,
+      )
     : undefined;
 }
 
@@ -526,43 +551,41 @@ export function readSessionActorRowFacts(params: {
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
 export function retainSessionActorEntryFacts(
-  target: FileTarget,
-  facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">,
+  database: FileTarget["database"],
+  entries: readonly {
+    sessionKey: string;
+    facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">;
+  }[],
   incarnation: string,
 ): void {
   ensureReplicaSubscription();
-  const dependencySessionIds = facts.entry ? [facts.entry.sessionId] : [];
-  const writeToken = scopedWriteToken(target, dependencySessionIds);
-  if (!writeToken) {
+  const prepared = entries.map(({ sessionKey, facts }) => ({
+    target: { database, sessionKey },
+    facts,
+    dependencySessionIds: facts.entry ? [facts.entry.sessionId] : [],
+  }));
+  const tokens = scopedWriteTokens(database, prepared);
+  if (!tokens) {
     return;
   }
-  const key = targetKey(target);
-  let cell = pool.cells.get(key);
-  if (!cell) {
-    cell = { target, reservation: 0, handles: 0, pending: 0, bytes: 0 };
-    pool.cells.set(key, cell);
-  }
-  if (cell.snapshot) {
-    const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
-    if (current === cell.snapshot.writeToken) {
-      touch(cell);
-      return;
+  for (const [index, { target, facts, dependencySessionIds }] of prepared.entries()) {
+    const writeToken = tokens[index]!;
+    const key = targetKey(target);
+    let cell = pool.cells.get(key);
+    if (!cell) {
+      cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
+      pool.cells.set(key, cell);
     }
+    if (cell.snapshot) {
+      const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
+      if (current === cell.snapshot.writeToken) {
+        touch(cell);
+        continue;
+      }
+    }
+    cell.generation = incarnation;
+    retainEntry(cell, { ...facts, target, dependencySessionIds, writeToken });
   }
-  discard(cell);
-  cell.entry = freezeJsonSnapshot(
-    structuredClone({
-      ...facts,
-      target,
-      dependencySessionIds,
-      writeToken,
-    }),
-  );
-  cell.generation = incarnation;
-  cell.bytes = estimateReplicaBytes(cell.entry);
-  pool.snapshots += 1;
-  pool.bytes += cell.bytes;
-  touch(cell);
 }
 
 /** Handles retain their own authority; complete physical postimages survive handle release. */
@@ -572,11 +595,11 @@ export function createSessionActorReplica(params: {
   currentGeneration: () => string | undefined;
 }) {
   ensureReplicaSubscription();
-  const target = freezeJsonSnapshot(structuredClone(params.target));
+  const target = structuredClone(params.target);
   const key = targetKey(target);
   let cell = pool.cells.get(key);
   if (!cell) {
-    cell = { target, reservation: 0, handles: 0, pending: 0, bytes: 0 };
+    cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
     pool.cells.set(key, cell);
   }
   const owned = cell;
@@ -584,7 +607,6 @@ export function createSessionActorReplica(params: {
   let closed = false;
 
   const invalidate = () => {
-    owned.reservation += 1;
     discard(owned);
     forgetUnused(owned);
   };
@@ -597,18 +619,7 @@ export function createSessionActorReplica(params: {
   };
   const currentToken = (state: SessionActorHotState): string | undefined => {
     const { database, sessionKey } = target;
-    try {
-      const identity = readDatabasePathIdentitySync(database.nativeLocation);
-      if (
-        identity.key !== `file:${database.physicalIdentity}` ||
-        (database.birthtime !== undefined && identity.birthtime !== database.birthtime)
-      ) {
-        return undefined;
-      }
-      return scopedWriteToken({ database, sessionKey }, state.dependencySessionIds);
-    } catch {
-      return undefined;
-    }
+    return scopedWriteToken({ database, sessionKey }, state.dependencySessionIds);
   };
   const accepts = (
     state: SessionActorHotState,
@@ -624,34 +635,19 @@ export function createSessionActorReplica(params: {
     expectedGeneration: string | undefined,
   ): boolean => {
     if (!accepts(state, expectedGeneration)) {
-      discard(owned);
       return false;
     }
     retainSnapshot(owned, state, expectedGeneration);
     return owned.snapshot !== undefined;
   };
+  // The writer FIFO orders production operations; cache installation needs only
+  // the current scoped token, not a second reservation/settlement protocol.
   const begin = () => {
     params.lifetime.assertCurrent();
     if (closed) {
       throw new Error("Session actor replica is closed");
     }
-    owned.pending += 1;
-    owned.reservation += 1;
-    const selected = owned.reservation;
-    const expectedGeneration = generation();
-    let settled = false;
-    return (operation: (expectedGeneration: string | undefined) => boolean): boolean => {
-      if (settled) {
-        return false;
-      }
-      settled = true;
-      try {
-        return selected === owned.reservation && operation(expectedGeneration);
-      } finally {
-        owned.pending -= 1;
-        forgetUnused(owned);
-      }
-    };
+    return generation();
   };
 
   return {
@@ -676,49 +672,40 @@ export function createSessionActorReplica(params: {
       return owned.snapshot;
     },
     beginRead() {
-      const settle = begin();
-      return {
-        install(state: SessionActorHotState): boolean {
-          return settle((expectedGeneration) => install(state, expectedGeneration));
-        },
-        cancel(): void {
-          settle(() => false);
-        },
-      };
+      const expectedGeneration = begin();
+      return (state: SessionActorHotState) => install(state, expectedGeneration);
     },
     beginCommand() {
       const previous = owned.snapshot;
       const previousTranscript = owned.transcript;
       const previousGeneration = owned.generation;
-      const settle = begin();
+      const expectedGeneration = begin();
       return {
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
-          return settle((expectedGeneration) => {
-            if (outcome.kind === "rolled-back") {
-              const restored = previous !== undefined && install(previous, previousGeneration);
-              if (restored && previousTranscript) {
-                retainTranscript(owned, previousTranscript);
-              }
-              return restored;
+          if (outcome.kind === "rolled-back") {
+            const restored = previous !== undefined && install(previous, previousGeneration);
+            if (restored && previousTranscript) {
+              retainTranscript(owned, previousTranscript);
             }
-            if (outcome.kind === "unknown") {
-              discard(owned);
-              return false;
-            }
-            if (outcome.kind === "stale-version") {
-              return install(outcome.postimage, expectedGeneration);
-            }
-            // The command owner has already validated the committed receipt.
-            // Closing revokes this handle's disclosure, not accepted commit custody.
-            const installed = install(outcome.receipt.postimage, expectedGeneration);
-            if (installed) {
-              retainTranscript(
-                owned,
-                advanceSessionActorTranscriptReplica(previousTranscript, outcome),
-              );
-            }
-            return installed;
-          });
+            return restored;
+          }
+          if (outcome.kind === "unknown") {
+            discard(owned);
+            return false;
+          }
+          if (outcome.kind === "stale-version") {
+            return install(outcome.postimage, expectedGeneration);
+          }
+          // The command owner has already validated the committed receipt.
+          // Closing revokes this handle's disclosure, not accepted commit custody.
+          const installed = install(outcome.receipt.postimage, expectedGeneration);
+          if (installed) {
+            retainTranscript(
+              owned,
+              advanceSessionActorTranscriptReplica(previousTranscript, outcome),
+            );
+          }
+          return installed;
         },
       };
     },

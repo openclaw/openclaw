@@ -9,16 +9,18 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/run
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionInitialization } from "./session-initialization.js";
-import { registerSessionStateWatch } from "./session-state-events.js";
+import { recordSessionStateEventAsync, registerSessionStateWatch } from "./session-state-events.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
@@ -65,6 +67,7 @@ function upsertLink(
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetSystemEventsForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
@@ -361,6 +364,66 @@ describe("session upstream links", () => {
       ),
     ).toBeUndefined();
   });
+  it.each(["watch-then-link", "link-then-watch", "link-then-event"])(
+    "skips empty upstream scans until %s creates a watched link",
+    async (order) => {
+      const database = createDatabaseOptions();
+      const sessionKey = "agent:main:adopted:idle";
+      const watcherSessionKey = "agent:main:subagent:idle-watch";
+      const watch = () =>
+        registerSessionStateWatch({ watcherSessionKey, targetSessionKey: sessionKey }, database);
+      if (order === "watch-then-link") {
+        expect(await watch()).toBe(true);
+      } else {
+        upsertLink(sessionKey, "codex", database);
+      }
+      const requests = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+      const listRequests = () =>
+        requests.mock.calls.filter(([, command]) => command.type === "sessionUpstream.listWatched");
+      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
+      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
+      expect(listRequests()).toHaveLength(1);
+      if (order === "watch-then-link") {
+        expect(
+          await upsertSessionUpstreamLinkAsync(
+            {
+              sessionKey,
+              agentId: "main",
+              catalogId: "codex",
+              hostId: "gateway:local",
+              threadId: "idle-thread",
+              upstreamKind: "codex-app-server",
+              upstreamRef: { source: sessionKey },
+              marker: null,
+            },
+            database,
+          ),
+        ).toBe(true);
+      } else if (order === "link-then-watch") {
+        expect(await watch()).toBe(true);
+      } else {
+        expect(
+          await recordSessionStateEventAsync(
+            {
+              sessionKey,
+              agentId: "main",
+              kind: "human_direct_message",
+              actorType: "human",
+              summary: "New upstream activity",
+              watcherSessionKeys: [watcherSessionKey],
+              watcherStorePaths: {},
+            },
+            database,
+          ),
+        ).toBeDefined();
+      }
+      expect((await listWatchedSessionUpstreamLinks(database)).get("codex")).toEqual([
+        expect.objectContaining({ sessionKey, agentId: "main" }),
+      ]);
+      expect(listRequests()).toHaveLength(2);
+    },
+  );
+
   it("returns each watched link once and skips ambiguous agent ownership without host SQL", async () => {
     const database = createDatabaseOptions();
     const watched = "agent:main:adopted:watched";

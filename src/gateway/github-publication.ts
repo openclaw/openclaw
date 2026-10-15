@@ -62,6 +62,15 @@ import type {
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
+export type GitHubPublicationTranscriptReport = {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  result: SessionGitHubPublicationResult;
+  /** Run whose tool call requested this publication, when it is known to this process. */
+  runId?: string;
+};
+
 const activePublicationExecutions = new Map<string, Promise<SessionGitHubPublicationResult>>();
 
 function refuseLegacyPublication(
@@ -438,6 +447,10 @@ export function createGitHubPublicationCoordinator(params: {
     assertCurrent,
     signal,
   );
+  // A publication processed inside its run's tool call reports into that run, so
+  // the transcript notice stays within the turn. Process-local by design: after a
+  // restart before reporting, the notice is recorded without a run, as it was before.
+  const requestingRuns = new Map<string, string>();
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
     assertCurrent,
@@ -446,6 +459,7 @@ export function createGitHubPublicationCoordinator(params: {
     signal,
     sameWorktree,
     processRow,
+    recordRequestingRun: (requestId, runId) => requestingRuns.set(requestId, runId),
   });
   return {
     ...methods,
@@ -532,12 +546,6 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestPersonalForSessionV2(...args)
         : personal.requestPersonalForSessionV2(...args);
     },
-    async sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
-      return (await repository.sharedStatus(...args)) ?? (await methods.sharedStatus(...args));
-    },
-    async latestShared(...args: Parameters<typeof methods.latestShared>) {
-      return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
-    },
     preparePersonalStatus: repository.preparePersonalStatus,
     /** @deprecated Use personalStatusAsync and await completion. */
     personalStatus(
@@ -599,19 +607,21 @@ export function createGitHubPublicationCoordinator(params: {
       await repository.deferOrphanedRequestsAsync();
     },
     /** @deprecated Use listUnreportedResultsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
-    listUnreportedResults(): Array<{
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-      result: SessionGitHubPublicationResult;
-    }> {
+    listUnreportedResults(): GitHubPublicationTranscriptReport[] {
       return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
     async listUnreportedResultsAsync() {
-      return [
+      const publications: GitHubPublicationTranscriptReport[] = [
         ...(await methods.listUnreportedResultsAsync()),
         ...(await repository.listUnreportedResultsAsync()),
       ];
+      for (const publication of publications) {
+        const runId = requestingRuns.get(publication.result.requestId);
+        if (runId) {
+          publication.runId = runId;
+        }
+      }
+      return publications;
     },
     /** @deprecated Use readAsync and await completion. */
     read(_requestId: string): SessionGitHubPublicationResult | undefined {
@@ -626,6 +636,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     async markReportedAsync(requestId: string) {
       await runGitHubPublicationMaintenanceAsync({ operation: "report", requestId }, assertCurrent);
+      requestingRuns.delete(requestId);
     },
   };
 }

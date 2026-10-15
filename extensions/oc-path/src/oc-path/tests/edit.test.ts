@@ -17,7 +17,7 @@ Body ${REDACTED_SENTINEL}.`;
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.ast.raw).toBe(
-        `---\nname: github\ndescription: new desc\n---\n\nBody ${REDACTED_SENTINEL}.`,
+        `---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`,
       );
     }
   });
@@ -57,21 +57,25 @@ describe("setOcPath — item kv field", () => {
   );
 
   it("keeps item positions and explicit values through multiline edits and insertion", () => {
-    let ast = parseMd("## Intro\n- keep: stable\n## Tools\n- name: first\n- name: second\n").ast;
+    let ast = parseMd(
+      "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: second\n",
+    ).ast;
     for (const [address, value] of [
-      ["#0/name", "first\n- name: literal"],
-      ["$last/name", "second changed"],
-      ["+", "name: appended"],
-      ["#2/name", "appended changed"],
+      ["[frontmatter]/description", "short"],
+      ["tools/#0/name", "first\n- name: literal"],
+      ["tools/$last/name", "second changed"],
+      ["[frontmatter]/+added", "value"],
+      ["tools/+", "name: appended"],
+      ["tools/#2/name", "appended changed"],
     ] as const) {
-      const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/tools/${address}`), value);
+      const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/${address}`), value);
       if (!result.ok || result.ast.kind !== "md") {
         throw new Error(`expected Markdown edit at ${address} to succeed`);
       }
       ast = result.ast;
     }
     expect(ast.raw).toBe(
-      "## Intro\n- keep: stable\n\n## Tools\n- name: first\n- name: literal\n- name: second changed\n- name: appended changed",
+      "---\ndescription: short\nadded: value\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- name: second changed\n- name: appended changed\n",
     );
     expect(ast.blocks[1]?.items.map((item) => item.kv?.value)).toEqual([
       "first\n- name: literal",

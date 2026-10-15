@@ -51,7 +51,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
     // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 22
+    private static let maximumSupportedSchemaVersion: Int64 = 24
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -236,7 +236,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         var database: OpaquePointer?
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
             | (createIfMissing && !readOnly ? SQLITE_OPEN_CREATE : 0)
-        let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
+        let vfsName = readOnly ? try OpenClawNativeStateReadOnlyVFS.name() : nil
+        let result = sqlite3_open_v2(databaseURL.path, &database, flags, vfsName)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }

@@ -622,7 +622,7 @@ export async function dropAbortedFollowups(
     defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
   });
   await Promise.all(
-    pending.map(async (item) => {
+    [...pending, ...summaries].map(async (item) => {
       try {
         await runFollowup(item);
       } catch (error) {
@@ -757,6 +757,7 @@ async function runSyntheticOverflowSummary(params: {
     disableTools: runtimeMetadata.disableTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     runObservers: runtimeMetadata.runObservers,
+    deliveryCorrelations: runtimeMetadata.deliveryCorrelations,
     replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
     ...(params.onAdmitted
       ? {

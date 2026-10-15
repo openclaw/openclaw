@@ -29,7 +29,7 @@ it.each(["props", "owner", "parked"])(
     let painted = false;
     let part: ReturnType<typeof render>;
     const binding = { owner, isPresented: () => isPresented };
-    const draw = (presented: boolean) => {
+    const draw = (presented: boolean, dismissed = false) => {
       isPresented = presented;
       if (mode !== "props" && painted) {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
@@ -59,6 +59,7 @@ it.each(["props", "owner", "parked"])(
               ],
               status: "ready",
               presented: mode === "props" ? presented : binding,
+              dismissed,
               onDismiss: () => {},
             })}
           </section>
@@ -87,6 +88,16 @@ it.each(["props", "owner", "parked"])(
     summary.focus();
     await userEvent.keyboard(" ");
     await expect.element(menu).not.toBeVisible();
+    if (mode === "props") {
+      await page.elementLocator(summary).click();
+      await expect.element(menu).toBeVisible();
+      draw(false, true);
+      await expect.element(menu).not.toBeVisible();
+      expect(disclosure.open).toBe(false);
+      draw(true);
+      await expect.element(menu).not.toBeVisible();
+      expect(disclosure.open).toBe(false);
+    }
   },
 );
 
@@ -170,44 +181,53 @@ it.each([
   },
 );
 
-it("still wraps compact PR titles without overlapping the CI controls", async () => {
-  await page.viewport(1440, 700);
-  document.body.append(container);
-  render(
-    html`
-      <style>
-        ${baseStyles}${layoutStyles}${detailsStyles}
-      </style>
-      <section class="chat-details" style="position:relative;width:360px">
-        ${renderChatPullRequests({
-          pullRequests: [
-            {
-              number: 42,
-              owner: "example",
-              repo: "openclaw",
-              branch: "fix/layout",
-              title: "Keep long pull request titles readable in the narrow session Details panel",
-              url: "https://github.com/example/openclaw/pull/42",
-              state: "open",
-              checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-            },
-          ],
-          status: "ready",
-          compact: true,
-          onDismiss: () => {},
-        })}
-      </section>
-    `,
-    container,
-  );
-  const title = container.querySelector<HTMLElement>(".chat-pr__repo")!;
-  const link = container.querySelector<HTMLElement>(".chat-pr__link")!;
-  const controls = container.querySelector<HTMLElement>(".chat-pr__meta")!;
-  expect(title.getBoundingClientRect().height).toBeGreaterThan(
-    Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
-  );
-  expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth + 1);
-  expect(link.getBoundingClientRect().right).toBeLessThanOrEqual(
-    controls.getBoundingClientRect().left,
-  );
-});
+it.each(["openclaw", "a-very-long-repository-name-that-must-remain-readable"])(
+  "keeps the full %s PR reference and title clear of CI controls",
+  async (repo) => {
+    await page.viewport(1440, 700);
+    document.body.append(container);
+    render(
+      html`
+        <style>
+          ${baseStyles}${layoutStyles}${detailsStyles}
+        </style>
+        <section class="chat-details" style="position:relative;width:360px">
+          ${renderChatPullRequests({
+            pullRequests: [
+              {
+                number: 42,
+                owner: "example",
+                repo,
+                branch: "fix/layout",
+                title: "Keep long pull request titles readable in the narrow session Details panel",
+                url: `https://github.com/example/${repo}/pull/42`,
+                state: "open",
+                checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
+              },
+            ],
+            status: "ready",
+            compact: true,
+            onDismiss: () => {},
+          })}
+        </section>
+      `,
+      container,
+    );
+    const reference = container.querySelector<HTMLElement>(".chat-pr__number")!;
+    expect(reference.textContent).toBe(`example/${repo}#42`);
+    expect(reference.scrollWidth).toBeLessThanOrEqual(reference.clientWidth + 1);
+    const title = container.querySelector<HTMLElement>(".chat-pr__repo")!;
+    const link = container.querySelector<HTMLElement>(".chat-pr__link")!;
+    const controls = container.querySelector<HTMLElement>(".chat-pr__meta")!;
+    expect(title.getBoundingClientRect().height).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
+    );
+    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth + 1);
+    expect(link.getBoundingClientRect().right).toBeLessThanOrEqual(
+      controls.getBoundingClientRect().left,
+    );
+    expect(reference.getBoundingClientRect().right).toBeLessThanOrEqual(
+      controls.getBoundingClientRect().left,
+    );
+  },
+);

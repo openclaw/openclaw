@@ -1,11 +1,7 @@
 import { html } from "lit";
 import { solidContent } from "../lit/solid-content.tsx";
 import { resolveCloudProfileIconData, type CloudProfileIdentity } from "./provider-icon-data.ts";
-import {
-  CloudProfileIcon,
-  ProviderBrandIcon,
-  ProviderFallbackIcon,
-} from "./solid/provider-icon.tsx";
+import { CloudProfileIcon, ProviderBrandIcon } from "./solid/provider-icon.tsx";
 
 export {
   compareCloudProfiles,
@@ -22,11 +18,6 @@ export function resolveCloudProfileIcon(profile?: CloudProfileIdentity) {
     label: data.label,
     icon: html`${solidContent(CloudProfileIcon, { profile })}`,
   };
-}
-
-/** Lettered badge for surfaces that must not infer a provider identity. */
-export function renderProviderFallbackIcon(label: string, options?: { className?: string }) {
-  return html`${solidContent(ProviderFallbackIcon, { label, class: options?.className })}`;
 }
 
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {

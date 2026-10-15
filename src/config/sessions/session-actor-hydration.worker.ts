@@ -1,6 +1,4 @@
-import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
-import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
@@ -24,17 +22,13 @@ import type {
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
-import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
+import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { transcriptEventModelNavigationSql } from "./transcript-payload.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
@@ -267,7 +261,10 @@ export function hydrateSessionActorState(
               "seq",
               "navigation_type",
               "navigation_valid",
-              transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+              projectTranscriptNavigationSql(
+                database.db,
+                transcriptEventNavigationSql(database.db),
+              ).as("navigation_json"),
               /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
@@ -353,8 +350,8 @@ export function hydrateSessionActorState(
   const storedNavigation = selected ? decodeJsonProjection(selected.actor_navigation) : [];
   const navigation = storedNavigation.map((row) =>
     Object.assign(
-      // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
-      JSON.parse(row.navigation_json) as SessionTreeEntry,
+      // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
+      JSON.parse(row.navigation_json) as Record<string, unknown>,
       { seq: row.seq },
     ),
   );
@@ -452,68 +449,12 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
-  hot.completionKeys = [...state.completions.keys()];
-  hot.transcript.idempotency = [...state.transcript.identities.values()].flatMap((row) =>
-    row.message_idempotency_key
-      ? [{ key: row.message_idempotency_key, eventId: row.event_id, rawSeq: row.seq }]
-      : [],
-  );
-  hot.transcript.anchorsState =
-    !state.transcript.coldArchive && hot.transcript.version.rawSeq === null
-      ? "resident"
-      : "unavailable";
-  const generation = hot.transcript.version.generation;
-  const projection = state.transcript.projection;
-  if (
-    !state.transcript.coldArchive &&
-    hot.entry &&
-    generation &&
-    projection &&
-    !projection.needsRebuild &&
-    !projection.hasUnclassifiedEvents &&
-    projection.indexedSeq === hot.transcript.version.rawSeq
-  ) {
-    hot.transcript.anchorsState = "resident";
-    for (const row of state.transcript.identities.values()) {
-      const active = state.transcript.active.get(row.seq);
-      if (active?.message_position === undefined || active.message_position === null) {
-        continue;
-      }
-      hot.transcript.anchors.push({
-        agentId: state.agentId,
-        sessionKey: hot.target.sessionKey,
-        sessionId: hot.entry.sessionId,
-        storePath: state.path,
-        generation,
-        entryId: row.event_id,
-        rawSeq: row.seq,
-        effectiveParentId: row.parent_id,
-        activeMessagePosition: active.message_position,
-        ...(row.message_idempotency_key ? { idempotencyKey: row.message_idempotency_key } : {}),
-      });
-    }
-  }
-  if (state.transcript.coldArchive) {
-    hot.transcript.modelContext = { kind: "unavailable", reason: "cold", generation };
-  } else {
-    const tree = scanSessionTranscriptTree(state.transcript.navigation);
-    if (tree.hasInvalidLeafControl) {
-      hot.transcript.modelContext = { kind: "unavailable", reason: "projection", generation };
-    } else {
-      const entries = normalizeSessionContextEntryBoundaries(
-        selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(({ entry, parentId }) =>
-          Object.assign({}, entry, { parentId }),
-        ),
-        tree.nodes,
-      );
-      hot.transcript.modelContext = {
-        kind: "resident",
-        entries: [...iterateSessionContextEntries(entries)].map(({ entry }) => ({
-          rawSeq: entry.seq,
-          eventId: entry.id ?? null,
-        })),
-      };
-    }
-  }
+  // Durable history stays with its reader. Publishing these indexes on every
+  // append made the receipt proportional to the entire transcript.
+  hot.transcript.modelContext = {
+    kind: "unavailable",
+    reason: state.transcript.coldArchive ? "cold" : "projection",
+    generation: hot.transcript.version.generation,
+  };
   return hot;
 }

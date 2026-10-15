@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { describe, expect, it } from "vitest";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveActivatedPluginBackupInventory } from "../../plugins/manifest-backup-resources.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import {
   preparePostgresRestore,
   readBackupEngine,
@@ -29,6 +32,7 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { createUpdateDatabaseBackup } from "../update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
+import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
@@ -254,6 +258,39 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
     await fixture(async ({ client, state, anchorPath, config, namespace, storeId, namespaces }) => {
       openOpenClawStateDatabase({ env: state.env });
       await closeOpenClawStateDatabaseAsync();
+      {
+        const sharedPath = state.statePath("state", "openclaw.sqlite");
+        using shared = openNodeSqliteDatabase(sharedPath);
+        shared.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        shared
+          .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+          .run("team-reports.fixture", "{}", 1);
+        const capture = () =>
+          ["", "-wal", "-shm", "-journal"].map((suffix) => {
+            const file = `${sharedPath}${suffix}`;
+            if (!fsSync.existsSync(file)) {
+              return null;
+            }
+            const { ino, size, mtimeNs, ctimeNs } = fsSync.statSync(file, { bigint: true });
+            return { ino, size, mtimeNs, ctimeNs, bytes: fsSync.readFileSync(file) };
+          });
+        const before = capture();
+        expect(before[1]?.size).toBeGreaterThan(0n);
+        expect(before[2]).not.toBeNull();
+        await withPluginCache(createPluginCache(), () =>
+          loadDatabasePortDescriptor("team-reports", {
+            plugins: {
+              load: {
+                paths: [
+                  fileURLToPath(new URL("../../../extensions/team-reports", import.meta.url)),
+                ],
+              },
+              entries: { "team-reports": { enabled: true } },
+            },
+          }),
+        );
+        expect(capture()).toEqual(before);
+      }
       const backup = await createUpdateDatabaseBackup({
         backupRoot: state.path("candidate"),
         stateDir: state.stateDir,

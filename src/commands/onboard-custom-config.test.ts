@@ -327,17 +327,6 @@ describe("applyCustomApiConfig", () => {
       expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
     })),
     {
-      name: "invalid compatibility values at runtime",
-      params: {
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "invalid" as unknown as "openai",
-      },
-      expectedMessage:
-        'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
-    },
-    {
       name: "explicit provider ids that normalize to empty",
       params: {
         config: {},

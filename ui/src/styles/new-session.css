@@ -371,11 +371,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   opacity: 0.6;
 }
 
-/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
-.new-session-page__trigger--hiding {
-  pointer-events: none;
-}
-
 .new-session-page__runtime {
   color: var(--text);
   cursor: default;
@@ -981,10 +976,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   overflow-wrap: anywhere;
   white-space: normal;
   user-select: all;
-}
-
-.connect-machine-dialog__actions {
-  justify-content: space-between;
 }
 
 /* The chip row already spaces itself; keep the composer snug beneath it. */

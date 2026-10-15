@@ -29,6 +29,11 @@ and catalog v1 carries none. Model pickers list a provider's recommended models
 first and collapse its other models under **All models**; see
 [Models](/concepts/models#selection-source-and-fallback-strictness).
 
+After an upgrade, a compatible stored catalog can still supply recommendations
+even when it is older than the installed build. Its older model rows and prices
+are not used. Pickers match recommendations only against currently available
+rows, so a recommendation cannot bring back a retired or hidden model.
+
 ## Provider featured lists
 
 Some providers publish the models they want to feature. NVIDIA is currently the

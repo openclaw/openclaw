@@ -1,16 +1,12 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import { fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
-import { pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
 import { resolveChannelIconOwner } from "./plugin-presentation.ts";
-
-const CHANNEL_PLUGIN_ICON_TIMEOUT_MS = 10_000;
 
 type PluginPresentationRequest = {
   client: GatewayBrowserClient;
   controller: AbortController;
-  iconTimeout?: ReturnType<typeof setTimeout>;
 };
 
 type PluginPresentationHooks = {
@@ -22,11 +18,20 @@ type PluginPresentationHooks = {
 
 export class ChannelPluginPresentationController {
   private catalog: PluginListResult | null = null;
-  private readonly iconUrls = new Map<string, string>();
+  private iconUrls: Record<string, string> = {};
   private request: PluginPresentationRequest | null = null;
-  private pendingEnsureClient: GatewayBrowserClient | null = null;
+  private readonly icons: PluginIconController;
 
-  constructor(private readonly hooks: PluginPresentationHooks) {}
+  constructor(private readonly hooks: PluginPresentationHooks) {
+    this.icons = new PluginIconController({
+      getFetchContext: () => pluginIconFetchContext(hooks.getContext()),
+      isConnected: () => hooks.isConnected(),
+      onUrlsChange: (urls) => {
+        this.iconUrls = urls;
+        hooks.requestUpdate();
+      },
+    });
+  }
 
   get pluginCatalog() {
     return this.catalog;
@@ -40,7 +45,7 @@ export class ChannelPluginPresentationController {
     return Object.fromEntries(
       this.hooks.getChannelIds().flatMap((channelId) => {
         const plugin = resolveChannelIconOwner(plugins, channelId);
-        const url = plugin ? this.iconUrls.get(plugin.id) : undefined;
+        const url = plugin ? this.iconUrls[plugin.id] : undefined;
         return url === undefined ? [] : [[channelId, url] as const];
       }),
     );
@@ -50,23 +55,27 @@ export class ChannelPluginPresentationController {
     if (!client) {
       return;
     }
-    if (this.request?.client === client) {
-      if (this.catalog) {
-        this.pendingEnsureClient = client;
+    if (this.catalog) {
+      for (const channelId of this.hooks.getChannelIds()) {
+        const plugin = resolveChannelIconOwner(this.catalog.plugins, channelId);
+        if (plugin && !this.iconUrls[plugin.id] && !this.icons.isLoading(plugin.id)) {
+          // A later channel refresh retries missing artwork.
+          this.icons.invalidate(plugin.id);
+          this.icons.load(plugin.id);
+        }
       }
+      return;
+    }
+    if (this.request?.client === client) {
       return;
     }
     this.request?.controller.abort();
     const controller = new AbortController();
     const request: PluginPresentationRequest = { client, controller };
     this.request = request;
-    if (this.catalog) {
-      void this.loadIcons(this.catalog, request).finally(() => this.finishRequest(request));
-      return;
-    }
     void client
       .request<PluginListResult>("plugins.list", {}, { signal: controller.signal })
-      .then(async (result) => {
+      .then((result) => {
         if (
           this.request !== request ||
           this.hooks.getContext().gateway.snapshot.client !== client
@@ -75,80 +84,22 @@ export class ChannelPluginPresentationController {
         }
         this.catalog = result;
         this.hooks.requestUpdate();
-        await this.loadIcons(result, request);
+        this.ensure(client);
       })
       .catch(() => {
         // Channel status metadata remains a complete fallback when catalog loading fails.
       })
-      .finally(() => this.finishRequest(request));
-  }
-
-  private async loadIcons(result: PluginListResult, request: PluginPresentationRequest) {
-    request.iconTimeout = setTimeout(
-      () =>
-        request.controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
-      CHANNEL_PLUGIN_ICON_TIMEOUT_MS,
-    );
-    // The plugin owns the URL, including channels that arrive in a later status snapshot.
-    const iconTargets = new Set<string>();
-    for (const channelId of this.hooks.getChannelIds()) {
-      const plugin = resolveChannelIconOwner(result.plugins, channelId);
-      if (plugin && !this.iconUrls.has(plugin.id)) {
-        iconTargets.add(plugin.id);
-      }
-    }
-    const iconEntries = await Promise.all(
-      [...iconTargets].map(async (pluginId) => {
-        const url = await fetchPluginIconBlobUrl({
-          pluginId,
-          ...pluginIconFetchContext(this.hooks.getContext()),
-          signal: request.controller.signal,
-        }).catch(() => null);
-        return [pluginId, url] as const;
-      }),
-    );
-    const loadedUrls = iconEntries.filter(
-      (entry): entry is readonly [string, string] => entry[1] !== null,
-    );
-    if (this.request !== request || !this.hooks.isConnected()) {
-      for (const [, url] of loadedUrls) {
-        URL.revokeObjectURL(url);
-      }
-      return;
-    }
-    for (const [pluginId, url] of loadedUrls) {
-      this.iconUrls.set(pluginId, url);
-    }
-    this.hooks.requestUpdate();
-  }
-
-  private finishRequest(request: PluginPresentationRequest) {
-    if (request.iconTimeout) {
-      clearTimeout(request.iconTimeout);
-    }
-    if (this.request !== request) {
-      return;
-    }
-    this.request = null;
-    const pendingClient = this.pendingEnsureClient;
-    this.pendingEnsureClient = null;
-    if (pendingClient && this.hooks.isConnected()) {
-      this.ensure(pendingClient);
-    }
+      .finally(() => {
+        if (this.request === request) {
+          this.request = null;
+        }
+      });
   }
 
   reset() {
     this.request?.controller.abort();
-    if (this.request?.iconTimeout) {
-      clearTimeout(this.request.iconTimeout);
-    }
     this.request = null;
-    this.pendingEnsureClient = null;
-    for (const url of this.iconUrls.values()) {
-      URL.revokeObjectURL(url);
-    }
     this.catalog = null;
-    this.iconUrls.clear();
-    this.hooks.requestUpdate();
+    this.icons.reset();
   }
 }

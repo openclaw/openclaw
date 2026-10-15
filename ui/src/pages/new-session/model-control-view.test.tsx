@@ -1,5 +1,6 @@
-import { createSignal, untrack } from "solid-js";
+import { createSignal, flush, untrack } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
@@ -31,12 +32,62 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     setOptions((previous) => ({ ...previous }));
     await Promise.resolve();
     expect(render).not.toHaveBeenCalled();
-    for (const owner of ["gateway", "agents", "sessions", "config"] as const) {
+    for (const owner of ["gateway", "agents", "config"] as const) {
       first.publish(owner);
       await waitForFast(() => expect(render).toHaveBeenCalled());
       render.mockClear();
     }
     const trigger = () => view.container.querySelector("[data-chat-model-select]");
+    const mountedTrigger = trigger();
+    const mountedOption = view.container.querySelector('[data-chat-model-option="openai/gpt-5.5"]');
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the receiver.
+    const originalLowerCase = String.prototype.toLocaleLowerCase;
+    const labels = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (
+      this: string,
+      ...args: Parameters<string["toLocaleLowerCase"]>
+    ) {
+      return Reflect.apply(originalLowerCase, this, args);
+    });
+    try {
+      const result = first.context.sessions.state.result!;
+      result.sessions.push({
+        key: "agent:main:unrelated",
+        kind: "direct",
+        label: "Background session",
+      });
+      first.publish("sessions");
+      invalidateModelCatalogCache(first.context.gateway.snapshot.client!, {
+        agentId: "main",
+        sessionKey: "agent:main:unrelated",
+      });
+      flush();
+      expect(render).not.toHaveBeenCalled();
+      expect(labels.mock.contexts.filter((value) => String(value) === "GPT 5.5")).toHaveLength(0);
+      expect(trigger()).toBe(mountedTrigger);
+      expect(view.container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')).toBe(
+        mountedOption,
+      );
+
+      // A default can change in place: filtering row traffic must not freeze it.
+      agent.model.primary = "";
+      first.publish("agents");
+      flush();
+      result.defaults.model = "fixture-alternative";
+      first.publish("sessions");
+      flush();
+      expect(trigger()?.textContent).toContain("Alternative");
+      render.mockClear();
+      first.context.sessions.state.result = { ...result, defaults: { ...result.defaults } };
+      first.publish("sessions");
+      flush();
+      expect(render).not.toHaveBeenCalled();
+    } finally {
+      labels.mockRestore();
+    }
+    invalidateModelCatalogCache(first.context.gateway.snapshot.client!, { agentId: "main" });
+    flush();
+    expect(render).toHaveBeenCalled();
+    render.mockClear();
     setOptions((previous) => ({ ...previous, sending: true }));
     await waitForFast(() =>
       expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ sending: true })),

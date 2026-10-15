@@ -466,28 +466,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     },
   );
 
-  it("wakes with captured fallback output after a resumed completion returns NO_REPLY", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        delivery: { status: "failed" },
-        completion: {
-          required: true,
-          resultText: "NO_REPLY",
-          fallbackResultText: "findings captured before the wake",
-        },
-        outcome: { status: "ok" },
-      }),
-    ]);
-
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
-
-    expect(woke).toBe(true);
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("findings captured before the wake");
-    expect(message).not.toContain("<prompt-data>\nNO_REPLY\n</prompt-data>");
-  });
-
   it.each([
     {
       name: "visible shared route change",

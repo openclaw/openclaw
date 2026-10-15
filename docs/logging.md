@@ -974,6 +974,20 @@ These fields are available when the queued callback started and finished;
 `elapsedMs` records the total duration. The warning's console line carries the
 same fields as `key=value` pairs; `openclaw logs --json` shows the original `raw` record.
 
+`slow agent database reservation` covers direct, Worker, and ordered-read
+reservations when `queueWaitMs + writerExecutionMs` reaches 1000 ms, even when
+execution itself is fast. Completion delay alone does not trigger this warning.
+When a writer was holding the lane at enqueue, `blockingOperation` and optional
+`blockingCaller` identify that holder; `blockingWorkerOperations` lists its bounded
+Worker operation labels. This is the holder observed at enqueue, not a breakdown
+of every writer ahead in the queue. Reentrant borrowing does not emit a second
+reservation warning. No reservation warning is emitted below the threshold.
+
+Prometheus already exposes `openclaw_worker_queue_wait_seconds` with
+`kind="sqlite_writer"` and bounded `request_class` labels. It measures Worker
+request enqueue-to-dispatch time; an outer reservation wait before that enqueue
+is visible in the reservation warning, not in this Worker histogram.
+
 Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby
 RPC caused the delay. Older records may lack `operation`; do not infer it from
@@ -1136,6 +1150,7 @@ session's previous request), `responseId`, `sessionId`, and `promptTokens` when
 reported by the provider. The previous/current wire summaries include the
 requested `serviceTier` so tier switches can be distinguished from cache loss
 on an unchanged route.
+Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
 other request parameters. It names the first differing segment or `prefix-match`
@@ -1154,9 +1169,9 @@ baselines. No prompt content or digest values appear in these warnings.
 OpenAI service-tier rejection and downgrade records include the requested model,
 account route, run/session IDs, original requested tier, and final wire-request
 tier. Terminal responses also include the served tier, response ID/model, total
-input tokens (including cached input), and cached tokens when reported. Each
-downgraded request is logged even when the account-catalog observation is
-unchanged. Join its response ID to a prompt-cache warning to inspect the same
+input tokens (including cached input), and cached tokens when reported. Changed
+account-catalog observations log at `info`; repeated observations use `debug`.
+Join the response ID to a prompt-cache diagnostic to inspect the same
 completion; a downgrade alone does not prove a cache miss. These are raw file-log
 fields and follow the usual redaction rules at egress.
 

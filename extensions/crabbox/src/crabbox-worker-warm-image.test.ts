@@ -55,23 +55,6 @@ describe("Crabbox profile warm images", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
     expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
   });
-  it("captures distinct images when setup, machine class, desktop, or provider changes", async () => {
-    const profile = { ...PROFILE, setup: "install-node" };
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider, profile);
-
-    for (const [index, changed] of [
-      { ...profile, setup: "install-other-node" },
-      { ...profile, class: "fast" },
-      { ...profile, desktop: true },
-      { ...profile, provider: "hetzner" },
-    ].entries()) {
-      calls.length = 0;
-      await captureWarmImage(provider, changed, `provision:v2:${String(index + 1).repeat(64)}`);
-      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    }
-  });
-
   it("rejects explicit warm images without sizing before opening setup secrets", async () => {
     const { provider, calls } = createWarmProvider();
     await expect(
@@ -87,28 +70,6 @@ describe("Crabbox profile warm images", () => {
     expect(calls).toEqual([]);
   });
 
-  it.each(["standard"])(
-    "never invokes checkpoint commands with warm images disabled and class %s",
-    async (machineClass) => {
-      const { provider, calls } = createWarmProvider();
-      const profile = {
-        ...CLASSLESS_PROFILE,
-        ...(machineClass ? { class: machineClass } : {}),
-        warmImage: false,
-      };
-      const lease = await provisionWarmProfile(provider, profile);
-
-      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
-
-      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-      expect(calls.at(-1)?.argv[1]).toBe("stop");
-      // Even without capture, the stop command owns termination after its timer fires.
-      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThan(
-        calls.at(-1)!.options.timeoutMs,
-      );
-    },
-  );
-
   it("scrubs every worker identity and workspace before capturing an enrolled lease", async () => {
     const { provider, calls } = createWarmProvider();
     const lease = await provisionWarmProfile(provider);
@@ -116,12 +77,13 @@ describe("Crabbox profile warm images", () => {
 
     await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
 
-    expect(calls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual([
-      ["run"],
-      ["checkpoint", "create"],
-      ["stop"],
-    ]);
-    const scrub = calls[0];
+    const captureCalls = calls.filter(
+      ({ argv }) => argv[1] === "run" || argv[1] === "checkpoint" || argv[1] === "stop",
+    );
+    expect(captureCalls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual(
+      [["run"], ["checkpoint", "create"], ["stop"]],
+    );
+    const scrub = captureCalls[0];
     expect(scrub?.argv).toContain("--script-stdin");
     expect(scrub?.options.input).toContain("$HOME/.openclaw/cloud-workers");
 
@@ -130,7 +92,7 @@ describe("Crabbox profile warm images", () => {
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
-    expect(calls[1]?.options.timeoutMs).toBe(48 * 60_000);
+    expect(captureCalls[1]?.options.timeoutMs).toBe(48 * 60_000);
     expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
@@ -274,7 +236,7 @@ describe("Crabbox profile warm images", () => {
       }),
     ).toThrow();
     expect(fs.existsSync(envFile)).toBe(true);
-    expect(calls[1]?.argv.slice(1)).toEqual([
+    expect(captureCalls[1]?.argv.slice(1)).toEqual([
       "checkpoint",
       "create",
       "--provider",

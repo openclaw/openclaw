@@ -12,6 +12,7 @@ import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
+  MEDIA_ROWS_MIGRATION_META_KEY,
 } from "../state/openclaw-agent-db-contract.js";
 import {
   assertAgentDatabaseMaintenanceAuthority,
@@ -35,7 +36,10 @@ import {
   getOpenClawAgentMigrationSchema,
   hasPendingCurrentVersionAgentDatabaseMigration,
 } from "../state/openclaw-agent-db-schema-helpers.js";
-import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchemaSteps,
+  ensureOpenClawAgentSchema,
+} from "../state/openclaw-agent-db-schema.js";
 import { assertSupportedAgentMigrationSchemas } from "../state/openclaw-agent-db-session-migrations.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -51,22 +55,22 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
+import {
+  backupDoctorSqliteRepair,
+  repairDoctorSqliteIndexCorruption,
+} from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { refreshSqlitePlannerStatistics } from "./sqlite-planner-statistics.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
-import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
-import {
-  runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
-} from "./sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
@@ -100,12 +104,12 @@ type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 async function migrateAgentDatabase(params: {
   agentId: string;
   canonicalArchivePaths: Set<string>;
-  beforeTransaction?: () => void;
   changes: string[];
   env: NodeJS.ProcessEnv;
   pathname: string;
   maintenance: OpenClawStateLeaseContext;
   preparedArchives?: ReadonlySet<string>;
+  migratedFromVersion?: number;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
   const schemaWarnings: string[] = [];
@@ -166,7 +170,7 @@ async function migrateAgentDatabase(params: {
       };
     }
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
-    const initialVersion = userVersion;
+    const initialVersion = params.migratedFromVersion ?? userVersion;
     const prepareSchema = async () => {
       userVersion = readSqliteUserVersion(database);
       if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -187,7 +191,13 @@ async function migrateAgentDatabase(params: {
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
         // The canonical owner admits supported versions and converges additive schema;
         // media must not enumerate later schema revisions independently.
-        await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+        if (params.migratedFromVersion !== undefined) {
+          // The version phase verified this file under the same Doctor custody.
+          // Only ordinary additive maintenance remains before readers can open it.
+          ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
+        } else {
+          await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+        }
         userVersion = readSqliteUserVersion(database);
       }
     };
@@ -246,6 +256,19 @@ async function migrateAgentDatabase(params: {
         },
       );
     }
+    if (initialVersion >= AGENT_MEDIA_SCHEMA_VERSION && userVersion > initialVersion) {
+      // Version migrations own only their declared tables. Historical content
+      // repair remains a separate same-version Doctor operation.
+      return {
+        deferred: true,
+        rewrittenSessions: 0,
+        rewrittenTrajectoryRows: 0,
+        rewrittenArchives: 0,
+        warnings: schemaWarnings,
+        initialVersion,
+        finalVersion: userVersion,
+      };
+    }
     const mediaSchemaUpgrade = userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION;
     const assertMediaSchemaMigration = () => {
       if (!mediaSchemaUpgrade) {
@@ -271,42 +294,39 @@ async function migrateAgentDatabase(params: {
     }
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
+    const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     const needsRepair =
       mediaSchemaUpgrade ||
-      runSqliteDeferredTransactionSync(
+      !executeSqliteQueryTakeFirstSync(
         database,
-        () =>
-          scanTranscriptRows({
-            database,
-            pathname: params.pathname,
-            legacyTextStorage,
-          }) > 0 ||
-          scanTrajectoryRows({
-            database,
-            pathname: params.pathname,
-            rewrite: false,
-          }) > 0,
-        { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
+        db
+          .selectFrom("schema_meta")
+          .select("schema_version")
+          .where("meta_key", "=", MEDIA_ROWS_MIGRATION_META_KEY),
       );
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
+    let preserved = false;
+    const beforeRewrite = () => {
+      if (!preserved) {
+        const backup = backupDoctorSqliteRepair(params.pathname, "media-persistence");
+        preserved = true;
+        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
+      }
+    };
     if (needsRepair) {
-      const sourceVersion = readSqliteDataVersion(database);
       const changedLegacySessions = new Set<string>();
-      params.beforeTransaction?.();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
       rewritten = runSqliteImmediateTransactionSync(
         database,
         () => {
           assertAgentDatabaseMaintenanceAuthority(params.maintenance);
           assertMediaSchemaMigration();
-          if (readSqliteDataVersion(database) !== sourceVersion) {
-            throw new Error(`${params.pathname} source changed before migration transaction`);
-          }
           const rewrittenSessions = scanTranscriptRows({
             database,
             pathname: params.pathname,
             writer: owner,
             legacyTextStorage,
+            beforeRewrite,
             onChangedSession: legacyTextStorage
               ? (sessionId) => {
                   changedLegacySessions.add(sessionId);
@@ -316,10 +336,9 @@ async function migrateAgentDatabase(params: {
           const rewrittenTrajectoryRows = scanTrajectoryRows({
             database,
             pathname: params.pathname,
-            rewrite: true,
+            beforeRewrite,
           });
           if (mediaSchemaUpgrade) {
-            const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
             database.exec(`PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};`);
             executeSqliteQuerySync(
               database,
@@ -333,6 +352,24 @@ async function migrateAgentDatabase(params: {
                 .where("meta_key", "=", "primary"),
             );
           }
+          // Current writers canonicalize media. Unsupported direct writes after
+          // completion do not reopen this historical pass.
+          const now = Date.now();
+          executeSqliteQuerySync(
+            database,
+            db
+              .insertInto("schema_meta")
+              .values({
+                meta_key: MEDIA_ROWS_MIGRATION_META_KEY,
+                role: "agent",
+                agent_id: params.agentId,
+                schema_version: 1,
+                app_version: VERSION,
+                created_at: now,
+                updated_at: now,
+              })
+              .onConflict((conflict) => conflict.column("meta_key").doNothing()),
+          );
           assertAgentDatabaseMaintenanceAuthority(params.maintenance);
           assertMediaSchemaMigration();
           return { rewrittenSessions, rewrittenTrajectoryRows };
@@ -343,7 +380,10 @@ async function migrateAgentDatabase(params: {
           operationLabel: "media-persistence-retirement",
         },
       );
-      await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+      if (mediaSchemaUpgrade) {
+        await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+        userVersion = readSqliteUserVersion(database);
+      }
       if (changedLegacySessions.size > 0) {
         runSqliteImmediateTransactionSync(
           database,
@@ -371,6 +411,7 @@ async function migrateAgentDatabase(params: {
       start: { generation: "", sessionId: "" },
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
+      beforeRewrite,
       transformLine: transformMediaArchiveContent,
     });
     refreshSqlitePlannerStatistics(database);
@@ -380,7 +421,7 @@ async function migrateAgentDatabase(params: {
       ...archives,
       warnings: [...schemaWarnings, ...archives.warnings],
       initialVersion,
-      finalVersion: needsRepair ? readSqliteUserVersion(database) : userVersion,
+      finalVersion: userVersion,
     };
   } finally {
     database.close();
@@ -450,10 +491,9 @@ export async function migrateLegacyMediaPersistence(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
-    onPreparedTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
+    onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
-      beforeDatabaseTransaction?: (databasePath: string) => void;
     };
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -467,6 +507,7 @@ export async function migrateLegacyMediaPersistence(
   let recoverableWarningCount = 0;
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
+  const preparedRepairTargets: AgentDatabaseMigrationTarget[] = [];
   try {
     const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
       env,
@@ -475,7 +516,7 @@ export async function migrateLegacyMediaPersistence(
     });
     const advisory = agentDatabaseMigrationAdvisory(preparedDiscovery.discovery);
     if (advisory) {
-      params.onPreparedTargets?.([]);
+      params.onPreparedRepairTargets?.([]);
       return advisory;
     }
     const { discovery, recoveries } = await withAgentDatabaseMaintenanceLease(
@@ -541,7 +582,7 @@ export async function migrateLegacyMediaPersistence(
       }
       seenPaths.add(entry.realPath);
       try {
-        await withAgentDatabaseMaintenanceLease(
+        const preparedForRepair = await withAgentDatabaseMaintenanceLease(
           { env, processBound: true },
           async (maintenance) => {
             const result = await migrateAgentDatabase({
@@ -549,12 +590,12 @@ export async function migrateLegacyMediaPersistence(
               changes,
               env,
               canonicalArchivePaths,
-              beforeTransaction: params.hooks?.beforeDatabaseTransaction
-                ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
-                : undefined,
               pathname,
               maintenance,
               preparedArchives: preparedDiscovery.preparedTranscriptArchives,
+              migratedFromVersion: preparedDiscovery.versionMigrations?.find(
+                (migration) => migration.path === pathname,
+              )?.foundVersion,
             });
             maintenance.assertOwned();
             if (!result.deferred) {
@@ -570,7 +611,10 @@ export async function migrateLegacyMediaPersistence(
             // A prior attempt may have committed the schema before publishing its registration.
             registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
             const schemaAdvanced = result.finalVersion > result.initialVersion;
-            if (schemaAdvanced) {
+            if (
+              schemaAdvanced &&
+              !preparedDiscovery.versionMigrations?.some((migration) => migration.path === pathname)
+            ) {
               changes.push(
                 `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
               );
@@ -585,8 +629,13 @@ export async function migrateLegacyMediaPersistence(
                 `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
               );
             }
+            // Only a version-only advance postpones the following Doctor repairs.
+            return !result.deferred || !schemaAdvanced;
           },
         );
+        if (preparedForRepair) {
+          preparedRepairTargets.push(entry);
+        }
       } catch (error) {
         if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
           throw error;
@@ -650,15 +699,13 @@ export async function migrateLegacyMediaPersistence(
         }
       });
     }
-    params.onPreparedTargets?.(
-      discovery.targets.filter((target) => !recoveries.get(target.path)?.recovered),
-    );
   } catch (error) {
     if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
       throw error;
     }
     warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
   }
+  params.onPreparedRepairTargets?.(preparedRepairTargets);
   return {
     changes,
     warnings,

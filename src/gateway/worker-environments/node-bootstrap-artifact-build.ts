@@ -354,6 +354,7 @@ export async function prepareNodeBootstrapArtifact(
     [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
+    packageJson.files ?? [],
   );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
     throw new Error(

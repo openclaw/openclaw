@@ -16,6 +16,11 @@ hint without changing the package or stopping the Gateway; background checks
 skip package-registry updates. Missing or invalid markers retain normal install
 behavior, with a warning for an invalid marker.
 
+For [standalone builds](/install/standalone#update-the-complete-artifact), update
+the owning desktop app or replace the complete executable and runtime directory.
+The standalone CLI refuses package-manager and git updates with a visible next
+step; mixing artifacts from different builds is unsupported.
+
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
 image entrypoint runs Doctor before starting the Gateway and exits if mounted
@@ -29,6 +34,12 @@ backup.
 ## Update implementation contract
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
+Post-activation schema verification preserves agent databases Doctor holds after
+deletion. These stores may keep an older schema without failing the update;
+Doctor's held-store warning remains visible. Active databases and pending
+deletions still require the candidate schema, and held stores remain part of
+rollback verification.
 
 ## Retired tenant-container management
 
@@ -65,7 +76,7 @@ If you already installed the latest version, Doctor stops before rewriting confi
 that still contains these retired keys and directs you through the same bridge.
 
 The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
-before canonical tables are created. Preserve the original state and configuration,
+before current tables are created. Preserve the original state and configuration,
 then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
 Unrelated tables with these generic names remain untouched.
 
@@ -93,7 +104,7 @@ task, flow, plugin, and channel state you need. Resolve any failed or conflictin
 imports before continuing. Doctor imports channel state only for enabled channels
 and accounts. If needed, temporarily enable those channels while the Gateway is
 stopped, rerun the bridge Doctor, then restore their previous enabled settings.
-Ensure the affected plugins are installed before running their migrations.
+Install the affected plugins before running their migrations.
 Then install the current release and restart:
 
 ```bash
@@ -186,6 +197,8 @@ Service membership uses the running Gateway's process ancestry and native superv
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
 share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+On macOS, verified external launchd membership is sufficient even when a root-owned
+`login` process prevents a complete ancestry walk, including in integrated terminals.
 An already-current core update never refuses for service membership. When membership
 cannot be verified as external, it completes with `already-current` and a warning
 that plugin, runtime, and service maintenance was deferred, before that maintenance
@@ -267,7 +280,7 @@ updated package; the published updater and its handoff markers are unchanged.
 
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
-persists deterministic notes without starting optional model inference. This
+persists rule-based notes without starting optional model inference. This
 protection applies to updates **from** a release containing the shutdown fix.
 Older running Gateways, including 2026.9.6, can still fail their first shutdown
 with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
@@ -289,7 +302,7 @@ Deployment-owned definitions retain their existing installation owner.
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
 invoking CLI installation stays unchanged. The updater validates the service's
-actual Bun executable against the Bun 1.4+ and WAL-safe `node:sqlite` requirements;
+actual Bun executable against the Bun 1.4.3+ and WAL-safe `node:sqlite` requirements;
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.
@@ -509,7 +522,7 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Canonical state and recovery backups
+verification run only after all file copies succeed. Stored state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
@@ -555,6 +568,12 @@ payload where possible. Follow the reported `openclaw plugins update <id>` comma
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
+
+Shell completion-cache refresh is best effort. If it times out and its process
+cleanup is verified, finalization records the failed cache phase and deadline
+warning while allowing the update to finish. Run `openclaw completion --write-state`
+to refresh it manually. Unverified process cleanup still blocks finalization;
+the updater does not report success while owned work may remain active.
 
 ### Package-publication recovery
 
@@ -791,7 +810,7 @@ for compatibility.
 `--channel extended-stable` is package-only, and installation remains
 foreground-only. OpenClaw reads the public npm `extended-stable` selector,
 verifies the selected exact package, and installs that exact version. Missing
-or inconsistent registry data fails closed; it never falls back to `latest`.
+or inconsistent registry data stops the update; it never falls back to `latest`.
 If the selected version is older than the installed version, the normal
 downgrade confirmation still applies. The CLI persists the channel after a
 successful core update; a direct

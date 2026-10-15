@@ -26,18 +26,16 @@ type Props = SessionPanelProps & {
   showRequest?: () => string | null | undefined;
   onSessionSelect?: (sessionKey: string, options?: PaneSessionChangeOptions) => boolean | void;
 };
-type Methods = { refresh(): Promise<void> };
-export type ChatSubagentsPanel = SolidBridgeElement<Props, Methods>;
+export type ChatSubagentsPanel = SolidBridgeElement<Props>;
 let panelSequence = 0;
 
-export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
+export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
-  (props, host) => {
+  (props) => {
     const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
     const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
-    host.refresh = () => data().refresh();
     const subagentAgentId = (key: string) =>
       data().rows.find((row) => row.session.key === key)?.session.agentId ??
       parseAgentSessionKey(key)?.agentId ??
@@ -255,7 +253,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
       showRequest: { default: undefined, attribute: false },
       onSessionSelect: { default: undefined, attribute: false },
     },
-    methods: { refresh: () => Promise.resolve() },
   },
 );
 

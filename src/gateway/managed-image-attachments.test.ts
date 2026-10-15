@@ -168,6 +168,7 @@ const {
   cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
   prepareOutgoingMediaFromReplyPayload,
+  readManagedOutgoingImageThumbnail,
   resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
 } = await import("./managed-image-attachments.js");
 const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
@@ -386,11 +387,16 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const { result } = await requestManagedImage({
       ...request,
       method: "HEAD",
-      headers: {
-        "if-none-match": `"not-the-current-tag", W/${etag}`,
-        range: "bytes=2-5",
-        "if-range": '"stale"',
-      },
+      headers: [
+        "Host",
+        "127.0.0.1",
+        "if-none-match",
+        `"not-the-current-tag", W/${etag}`,
+        "range",
+        "bytes=2-5",
+        "if-range",
+        '"stale"',
+      ],
     });
 
     expect(result.statusCode).toBe(304);
@@ -584,6 +590,59 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       expect(exists.result.headers["content-length"]).toBeUndefined();
       expect(exists.result.body).toHaveLength(0);
     }
+  });
+
+  it("serves a sharp bounded 1600×800 thumbnail through local reads and the artifact ticket", async () => {
+    const source = createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
+    const canonicalPath = mediaPath({ sessionKey, attachmentId });
+    const transcriptMessages = [
+      assistantMessage([{ type: "image", url: canonicalPath, openUrl: canonicalPath }]),
+    ];
+    mockSessionEntry(path.join(stateDir, "sessions.sqlite"));
+    readSessionMessagesMock.mockResolvedValue(transcriptMessages);
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    const thumbnailUrl = `${download?.url.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`;
+    const localRequest = {
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+      maxBytes: 12 * 1024 * 1024,
+      signal: new AbortController().signal,
+    };
+    const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
+    expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
+      width: 1200,
+      height: 600,
+    });
+    await expect(
+      readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
+    ).rejects.toThrow("byte limit");
+    await expect(
+      readManagedOutgoingImageThumbnail({ ...localRequest, sessionKey: "agent:other:main" }),
+    ).resolves.toBeNull();
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: thumbnailUrl,
+      denyAuth: true,
+      transcriptMessages,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(readImageProbeFromHeader(result.body)).toMatchObject({
+      width: 1200,
+      height: 600,
+    });
+    expect(result.body).toEqual(localThumbnail);
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 
   it("rejects a managed global artifact owned by another agent", async () => {

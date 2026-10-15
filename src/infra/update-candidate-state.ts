@@ -71,6 +71,7 @@ const UpdateStateSchemaVersionsSchema = z.array(
     path: z.string(),
     userVersion: z.number().nullable(),
     contentVersion: z.number().optional(),
+    retainedAgentPaths: z.array(z.string()).optional(),
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
@@ -83,6 +84,7 @@ type StateInput = {
   stateDir: string;
   config: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
+  includeRetainedAgentPaths?: true;
   sourceBundledPlugins?: UpdateCandidateBundledSource;
 };
 type CandidateStateDatabase = Pick<
@@ -181,7 +183,7 @@ function collectRegisteredPaths(
       typeof agentId === "string" && agentId.length > 0 ? { role: "agent", agentId } : undefined,
       stored,
     );
-    return { stored, source };
+    return { stored, source, agentId };
   });
 }
 
@@ -341,17 +343,24 @@ export async function readUpdateCandidateStateInventoryInProcess(
   return measure();
 }
 
-function readSharedDatabaseVersion(
+async function readSharedDatabaseVersion(
   location: string,
   shared: string,
   files: Map<string, StateDatabaseDiscovery>,
-): Omit<UpdateStateSchemaVersion, "path"> {
+  input: StateInput,
+): Promise<Omit<UpdateStateSchemaVersion, "path">> {
   const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
-    collectRegisteredPaths(db, shared, files);
+    const registered = collectRegisteredPaths(db, shared, files);
+    let held: string[] = [];
+    if (input.includeRetainedAgentPaths) {
+      const { readUpdateHeldAgentPaths } = await import("./update-candidate-state.retained.js");
+      held = readUpdateHeldAgentPaths(db, shared, files.values(), registered, input);
+    }
     return {
       userVersion: readSqliteUserVersion(db),
       contentVersion: readStateSchemaContentVersion(db),
+      ...(held.length ? { retainedAgentPaths: held } : {}),
     };
   } finally {
     db.close();
@@ -374,9 +383,9 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
   }
   const sharedVersion = await withStateDatabaseSnapshot(
     shared,
-    (location) => ({
+    async (location) => ({
       path: shared,
-      ...readSharedDatabaseVersion(location, shared, files),
+      ...(await readSharedDatabaseVersion(location, shared, files, input)),
     }),
     input.stagingRoot,
     input.onProgress,
@@ -404,11 +413,8 @@ export async function readUpdateStateSchemaVersionsInProcess(
   for (const [identity, discovery] of files) {
     const file = discovery.spellings[0];
     if (identity === sharedIdentity && input.inspectionPlan) {
-      const { userVersion, contentVersion } = input.inspectionPlan.sharedVersion;
-      inspected.set(identity, {
-        userVersion,
-        ...(contentVersion === undefined ? {} : { contentVersion }),
-      });
+      const { path: _path, ...version } = input.inspectionPlan.sharedVersion;
+      inspected.set(identity, version);
       continue;
     }
     input.onProgress?.({
@@ -435,7 +441,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       identity,
       await withStateDatabaseSnapshot(
         file,
-        (location) => readSharedDatabaseVersion(location, shared, files),
+        (location) => readSharedDatabaseVersion(location, shared, files, input),
         input.stagingRoot,
         input.onProgress,
         input.preserveSourceArtifacts,
@@ -478,7 +484,7 @@ async function discoverLegacyUpdateStateSchemaInspection(
     }
     const sharedVersion = {
       path: shared,
-      ...readSharedDatabaseVersion(snapshot.location, shared, files),
+      ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
     };
     return { files: [...files], sharedVersion };
   });
@@ -493,6 +499,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     timeoutMs?: number;
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
+    retryAdvice?: boolean;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();
@@ -513,6 +520,8 @@ export async function readUpdateDatabaseGenerationsIsolated(
       await runUpdateStateInspectionWorker({
         ...worker,
         root,
+        retryAdvice: options.retryAdvice,
+        sources: paths,
         ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
         input: {
           mode: "database-generations",

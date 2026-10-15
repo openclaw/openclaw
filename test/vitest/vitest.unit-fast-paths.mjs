@@ -143,6 +143,8 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // This family proof belongs to the PostgreSQL conformance owner.
+  "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Planner inventory proofs retain their tooling timing and worker policy
@@ -361,35 +363,38 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFiles(cwd) {
-  const normalizedCwd = normalizeRepoPath(cwd);
-  const cached = walkedTestFilesByCwd.get(normalizedCwd);
+function collectRepoTestFiles(cwd, selected) {
+  const key = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached = walkedTestFilesByCwd.get(key);
   if (cached) {
     return cached;
   }
-  const inventory = getRepositoryFileInventory(cwd);
+  const inventory = getRepositoryFileInventory(cwd, selected);
   const files = inventory
     ? [...inventory]
         .map(normalizeRepoPath)
         .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
-    : ["src", "packages", "test"]
+    : (selected ??
+      ["src", "packages", "test"]
         .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-        .map((file) => normalizeRepoPath(path.relative(cwd, file)));
-  walkedTestFilesByCwd.set(normalizedCwd, files);
+        .map((file) => normalizeRepoPath(path.relative(cwd, file))));
+  walkedTestFilesByCwd.set(key, files);
   return files;
 }
 
 const unitFastCandidateInventoryByCwd = new Map();
 
-function collectUnitFastCandidateInventory(cwd) {
-  const cacheKey = normalizeRepoPath(cwd);
-  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+function collectUnitFastCandidateInventory(cwd, selected) {
+  const cacheKey = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached =
+    unitFastCandidateInventoryByCwd.get(JSON.stringify([normalizeRepoPath(cwd), undefined])) ??
+    unitFastCandidateInventoryByCwd.get(cacheKey);
   if (cached) {
     return cached;
   }
   const inventory = [
     ...new Set([
-      ...collectRepoTestFiles(cwd),
+      ...collectRepoTestFiles(cwd, selected),
       ...unitFastCandidateExactFiles,
       ...forcedUnitFastTestFiles,
     ]),
@@ -581,8 +586,13 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const candidates = patterns.every(
+    (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
+  )
+    ? collectUnitFastCandidateInventory(cwd, patterns)
+    : collectUnitFastCandidateInventory(cwd);
 
-  const files = collectUnitFastCandidateInventory(cwd)
+  const files = candidates
     .filter((file) => {
       return (
         isFileWithinScope(file, dir) &&
@@ -658,7 +668,7 @@ function getUnitFastTestFileAnalysis(file) {
   // Exact routing must not analyze every source before admitting one test.
   // Retain inventory membership, including ignored-file and forced-owner rules.
   return isUnitFastCandidateFile(normalized) &&
-    collectUnitFastCandidateInventory(cwd).includes(normalized)
+    collectUnitFastCandidateInventory(cwd, [normalized]).includes(normalized)
     ? analyzeUnitFastTestFile(cwd, normalized)
     : undefined;
 }
