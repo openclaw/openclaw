@@ -96,7 +96,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--no-restart", "Skip update activation; Doctor may restore a service it stops")
+    .option("--no-restart", "Skip updater restart (package Gateways may restart themselves)")
     .addHelpText(
       "after",
       () =>
@@ -155,7 +155,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
-        ["openclaw update --no-restart", "Update without restarting the service"],
+        ["openclaw update --no-restart", "Update without an updater-managed restart"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
         ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],

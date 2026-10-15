@@ -1,11 +1,11 @@
 import { For, Show } from "solid-js";
 import { nativeSetupCapability } from "../../app/native-setup.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
@@ -47,23 +47,19 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
                 </p>
               )}
             </Show>
-            <LitContent
-              render={() =>
-                renderWizardStepControls({
-                  step: current().step,
-                  value: props.setup().wizardValue,
-                  busy: current().busy,
-                  externalAuthInput: current().externalAuthInput,
-                  inputId: "custodian-setup-sign-in",
-                  validationErrorId: current().validationError
-                    ? "custodian-setup-validation"
-                    : undefined,
-                  sensitiveRevealed: props.setup().wizardSecretVisible,
-                  onValueChange: (value) => props.setup().setWizardValue(value),
-                  onAnswer: (value) => void props.setup().answerWizard(value),
-                  onToggleSensitiveVisibility: () => props.setup().toggleWizardSecretVisibility(),
-                })
+            <WizardStepControls
+              step={current().step}
+              value={props.setup().wizardValue}
+              busy={current().busy}
+              externalAuthInput={current().externalAuthInput}
+              inputId="custodian-setup-sign-in"
+              validationErrorId={
+                current().validationError ? "custodian-setup-validation" : undefined
               }
+              sensitiveRevealed={props.setup().wizardSecretVisible}
+              onValueChange={(value) => props.setup().setWizardValue(value)}
+              onAnswer={(value) => void props.setup().answerWizard(value)}
+              onToggleSensitiveVisibility={() => props.setup().toggleWizardSecretVisibility()}
             />
             <button
               class="btn btn--ghost"

@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { readCurrentConfigForResolution } from "./io.runtime.js";
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
@@ -150,6 +151,55 @@ describe("readBestEffortConfig", () => {
           },
         ],
       });
+    });
+  });
+});
+
+describe("readCurrentConfigForResolution", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    resetConfigOverrides();
+  });
+
+  it("names the rejection when directory inspection cannot load a schema-invalid config", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { port: "abc" },
+      } as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const resolution = readCurrentConfigForResolution({ configPath });
+
+        expect(resolution.config).toEqual({});
+        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+        expect(warning).toContain("Config unavailable");
+        // The degraded read must not hide why the file was rejected; doctor repairs the
+        // same file moments later, so a bare availability warning is misleading.
+        expect(warning).toContain("expected number, received string");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  it("keeps the plain availability warning for an absent config file", async () => {
+    await withTempHome(async (home) => {
+      const configPath = `${home}/.openclaw/absent.json`;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const resolution = readCurrentConfigForResolution({ configPath });
+
+        expect(resolution.config).toEqual({});
+        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+        // Absent files carry no rejection reason, so the warning stays plain.
+        expect(warning).toContain(
+          `${configPath}: Config unavailable; using environment and default agent directory settings.`,
+        );
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 });

@@ -240,6 +240,34 @@ headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
 
+## Compiler planning queue
+
+The October 15 post-batching cohort still showed a separate Blacksmith queue
+before type/lint admission. In the first three assigned planners whose PR bases
+contained both `908efae6fe8b` and `9915d01d074a`, creation-to-start wait was
+559 seconds median and 637 seconds p75. Two completed planners then took
+113 and 151 seconds. These are incomplete natural-run observations, not a
+whole-workflow speedup measurement.
+
+Same-repository hybrid PR first attempts therefore use hosted `check-plan`
+with its existing serial discovery mode. A current-source replay produced an
+identical complete plan in both modes: batched discovery took 16.7 seconds
+and serial took 87.7 seconds on the same Mac; maximum RSS fell from 16.5 GB to
+5.65 GB. A Node 24.21.0 Linux replay also returned the identical plan in 225 seconds
+under a hard two-CPU, 7-GiB limit with no swap. It reused the same pinned native
+compiler on ARM64; GitHub x64 latency remains unmeasured. These local
+measurements establish the execution tradeoff, not hosted job latency. The complete graph validator and all compiler/lint execution
+owners remain unchanged. The extra mandatory hosted row is reserved before
+optional offloads within the existing 40-row threshold and 45-row limit.
+
+Only the planner moves; memory-heavy type/lint workers retain their qualified
+runner classes. Pushes, schedules, forks, retries and manual/release overrides
+retain their routes. Natural CI must establish the new planner queue, complete
+job duration and workflow wall time. Setup plus the Linux replay suggests about
+five to six hosted runner-minutes per eligible PR, replacing one Blacksmith
+16-class assignment; this is an estimate, not billing evidence. No dispatch or
+rerun is needed for that observation.
+
 ## Ratchet admission and Node tests
 
 Selected baseline ratchets and Node rows start independently after preflight.

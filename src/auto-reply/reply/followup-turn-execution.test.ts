@@ -322,6 +322,43 @@ describe("executeFollowupTurn", () => {
     expect(onItemEvent).not.toHaveBeenCalled();
   });
 
+  it.each(["allow", "deny"] as const)(
+    "forwards quiet queued model waits only when delivery is allowed (%s)",
+    async (sendPolicy) => {
+      const turn = createTurn({ sendPolicy });
+      turn.queued.originatingChannel = "feishu";
+      turn.queued.run.messageProvider = "feishu";
+      turn.queued.run.verboseLevelOverride = "off";
+      const onItemEvent = vi.fn(async () => false as const);
+      const events = [
+        {
+          kind: "model-wait",
+          itemId: "model-wait",
+          phase: "update",
+          progressText: "Waiting for the local model to respond",
+          suppressDurableProgress: true,
+        },
+        { kind: "model-wait", itemId: "model-wait", phase: "end", suppressDurableProgress: true },
+      ] as const;
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        for (const event of events) {
+          await params.opts?.onItemEvent?.(event);
+        }
+        await params.opts?.onItemEvent?.({ kind: "tool", name: "read", status: "running" });
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeTestTurn({ turn, defaults: { opts: { onItemEvent } } });
+      await result.progress.drain();
+
+      expect(onItemEvent).toHaveBeenCalledTimes(sendPolicy === "allow" ? 2 : 0);
+      if (sendPolicy === "allow") {
+        expect(onItemEvent).toHaveBeenNthCalledWith(1, events[0]);
+        expect(onItemEvent).toHaveBeenNthCalledWith(2, events[1]);
+      }
+    },
+  );
+
   it("keeps room-event progress, tool summaries, and typing silent", async () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },

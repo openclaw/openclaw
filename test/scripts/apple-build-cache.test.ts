@@ -210,7 +210,7 @@ echo built >> "$FIXTURE_BUILDS"
     for (const event of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
       for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
         for (const allowed of ["true", "false"]) {
-          const context = {
+          const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
             eventName: event,
             ref,
             repository: "openclaw/openclaw",
@@ -222,7 +222,7 @@ echo built >> "$FIXTURE_BUILDS"
               "ios-cache-inputs": { outputs: { xcode: "xcode" } },
               "ios-packages-cache": { outputs: { "cache-hit": "false" } },
               "watch-rtc-cache": { outputs: { "cache-hit": "false" } },
-              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" },
+              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
             },
           };
           for (const step of saves) {

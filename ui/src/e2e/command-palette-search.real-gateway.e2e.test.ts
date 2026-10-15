@@ -275,8 +275,26 @@ const suite = createControlUiE2eSuite({
 });
 
 function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
+  const connection = {
+    sockets: 0,
+    challenges: 0,
+    connectRequests: 0,
+    connectReplies: 0,
+    accepted: 0,
+    rejected: 0,
+    unauthorized: 0,
+    invalidRequest: 0,
+    unavailable: 0,
+    pairingRequired: 0,
+    socketErrors: 0,
+    closes: 0,
+    pageErrors: 0,
+  };
+  page.on("pageerror", () => connection.pageErrors++);
   page.on("websocket", (socket) => {
+    connection.sockets++;
     const pending = new Map<string, RpcObservation>();
+    let connectId: string | undefined;
     socket.on("framesent", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
       if (
@@ -284,6 +302,11 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         typeof frame.id !== "string" ||
         typeof frame.method !== "string"
       ) {
+        return;
+      }
+      if (frame.method === "connect") {
+        connection.connectRequests++;
+        connectId = frame.id;
         return;
       }
       // Never retain connect/auth frames or unrelated RPC payloads.
@@ -309,6 +332,23 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
     });
     socket.on("framereceived", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
+      if (frame.type === "event" && frame.event === "connect.challenge") {
+        connection.challenges++;
+      }
+      if (frame.type === "res" && frame.id === connectId) {
+        connection.connectReplies++;
+        if (frame.ok === true) {
+          connection.accepted++;
+        } else {
+          connection.rejected++;
+          const error = isRecord(frame.error) ? frame.error : {};
+          connection.unauthorized += Number(error.code === "UNAUTHORIZED");
+          connection.invalidRequest += Number(error.code === "INVALID_REQUEST");
+          connection.unavailable += Number(error.code === "UNAVAILABLE");
+          connection.pairingRequired += Number(error.code === "PAIRING_REQUIRED");
+        }
+        return;
+      }
       const metric =
         frame.type === "res" && typeof frame.id === "string" ? pending.get(frame.id) : undefined;
       if (!metric) {
@@ -333,8 +373,13 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         pending.delete(frame.id);
       }
     });
-    socket.on("close", () => pending.clear());
+    socket.on("socketerror", () => connection.socketErrors++);
+    socket.on("close", () => {
+      connection.closes++;
+      pending.clear();
+    });
   });
+  return connection;
 }
 
 suite.define(() => {
@@ -347,6 +392,7 @@ suite.define(() => {
     const queries: QueryObservation[] = [];
     const assets: Array<{ path: string; servedSha256: string; builtSha256: string }> = [];
     const screenshots: string[] = [];
+    let connection: ReturnType<typeof observeSearchTraffic> | undefined;
     let passed = false;
     const artifactDir = suite.artifactDir;
     try {
@@ -380,7 +426,7 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
-          observeSearchTraffic(page, rpc);
+          connection = observeSearchTraffic(page, rpc);
           expect((await page.goto(url.href))?.status()).toBe(404);
           await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
@@ -744,6 +790,8 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
+        // CI retains console output; keep only counts and allowlisted error categories.
+        console.error("[search-proof] connection", JSON.stringify(connection));
         await writeFile(
           path.join(artifactDir, "gateway-failure.log"),
           owner
