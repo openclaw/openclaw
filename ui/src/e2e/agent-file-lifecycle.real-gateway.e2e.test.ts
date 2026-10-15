@@ -277,16 +277,22 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
+          // Opening refreshes the catalog; verify publication updates closed choices first.
+          const choices = () =>
+            picker.evaluate((element) =>
+              element
+                .closest("openclaw-select-picker")
+                ?.params.options.map((option) => option.value),
+            );
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
 
           await publish("published");
+          await expect.poll(choices).toContain("fixture/published");
+          await openPicker(picker);
           await expect
-            .poll(async () => {
-              await openPicker(picker);
-              return picker.locator('[role="option"][data-value="fixture/published"]').count();
-            })
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
@@ -358,11 +364,10 @@ catalogSuite.define(() => {
 
           rejectCatalog = false;
           await publish("recovered");
+          await expect.poll(choices).toContain("fixture/recovered");
+          await openPicker(picker);
           await expect
-            .poll(async () => {
-              await openPicker(picker);
-              return picker.locator('[role="option"][data-value="fixture/recovered"]').count();
-            })
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
