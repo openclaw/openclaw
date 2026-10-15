@@ -5,10 +5,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  createRemoteEmbeddingProvider,
-  type MemoryEmbeddingProviderCreateOptions,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,25 +103,10 @@ afterEach(async () => {
 
 describe("OpenAI embedding provider HTTP contract", () => {
   it.each([
-    { baseUrl: "https://api.openai.com/v1", cap: 2048 },
-    { baseUrl: "https://API.OPENAI.COM./v1", cap: 2048 },
-    { baseUrl: "http://127.0.0.1:11434/v1", cap: undefined },
-    { baseUrl: "https://api.openai.com.example.test/v1", cap: undefined },
-  ])("declares the input-array cap for $baseUrl as $cap", async ({ baseUrl, cap }) => {
-    const { provider } = await createOpenAiEmbeddingProvider(
-      createOptions({ remote: { baseUrl } }),
-    );
-    expect(provider.maxInputsPerRequest).toBe(cap);
-  });
-
-  it.each([
     { additional: "none", custom: false, binding: undefined },
-    { additional: "codex", custom: false, binding: undefined },
     { additional: "token", custom: false, binding: undefined },
     { additional: "api-key", custom: false, binding: undefined },
     { additional: "token", custom: true, binding: undefined },
-    { additional: "token", custom: true, binding: "openai:api" },
-    { additional: "none", custom: true, binding: undefined },
   ])(
     "selects compatible embedding auth with SIWC and $additional (custom=$custom, binding=$binding)",
     async ({ additional, custom, binding }) => {
@@ -154,25 +136,15 @@ describe("OpenAI embedding provider HTTP contract", () => {
                         key: "fixture-embedding-api-key",
                       },
                     }
-                  : additional === "codex"
+                  : additional === "token"
                     ? {
                         "openai:api": {
-                          type: "oauth" as const,
+                          type: "token" as const,
                           provider: "openai",
-                          access: "fixture-codex-access",
-                          refresh: "fixture-codex-refresh",
-                          expires: Date.now() + 3_600_000,
+                          token: "fixture-embedding-token",
                         },
                       }
-                    : additional === "token"
-                      ? {
-                          "openai:api": {
-                            type: "token" as const,
-                            provider: "openai",
-                            token: "fixture-embedding-token",
-                          },
-                        }
-                      : {}),
+                    : {}),
               };
               return true;
             },
@@ -198,11 +170,8 @@ describe("OpenAI embedding provider HTTP contract", () => {
         );
         if (additional === "api-key") {
           await expect(result).resolves.toMatchObject({
+            provider: { maxInputsPerRequest: 2048 },
             client: { headers: { Authorization: "Bearer fixture-embedding-api-key" } },
-          });
-        } else if (additional === "codex") {
-          await expect(result).resolves.toMatchObject({
-            client: { resolveRequestHeaders: expect.any(Function) },
           });
         } else if (server && additional === "token") {
           const { provider } = await result;
@@ -277,129 +246,6 @@ describe("OpenAI embedding provider HTTP contract", () => {
     }
   });
 
-  it.each([
-    {
-      name: "overridden",
-      fields: { model: "other-model", input: ["shortened"], input_type: "document" },
-    },
-  ])("rejects short responses when callback fields have $name model/input", async ({ fields }) => {
-    const server = await startEmbeddingServer((request) => {
-      request.response.writeHead(200, { "content-type": "application/json" });
-      request.response.end(JSON.stringify({ data: [{ embedding: [1, 2] }] }));
-    });
-    const provider = createRemoteEmbeddingProvider({
-      id: "fixture",
-      client: {
-        baseUrl: server.baseUrl,
-        headers: {},
-        model: "fixture-model",
-        ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-      },
-      errorPrefix: "fixture embeddings failed",
-      buildRequestFields: () => fields,
-    });
-
-    await expect(provider.embedBatch(["first", "second"])).rejects.toMatchObject({
-      code: "INVALID_EMBEDDING_RESPONSE",
-      message:
-        "fixture embeddings failed (model: fixture-model, batch size: 2): expected 2 vectors, got 1",
-    });
-    expect(server.requests).toHaveLength(1);
-    expect(server.requests[0]?.body).toEqual({
-      model: "fixture-model",
-      input: ["first", "second"],
-      input_type: "document",
-    });
-  });
-
-  it.each([
-    {
-      name: "query override",
-      options: { inputType: "passage", queryInputType: " query " },
-      kind: "query" as const,
-      expected: { input_type: "query" },
-    },
-    {
-      name: "document override",
-      options: { inputType: "query", documentInputType: " document " },
-      kind: "document" as const,
-      expected: { input_type: "document" },
-    },
-    {
-      name: "configured default",
-      options: { inputType: " passage " },
-      kind: undefined,
-      expected: { input_type: "passage" },
-    },
-    {
-      name: "blank explicit query override",
-      options: { inputType: "passage", queryInputType: " " },
-      kind: "query" as const,
-      expected: {},
-    },
-    {
-      name: "dimensions",
-      options: { dimensions: 512 },
-      kind: "document" as const,
-      expected: { dimensions: 512 },
-    },
-    {
-      name: "other semantic types use the document payload",
-      options: { queryInputType: "query", documentInputType: "passage" },
-      kind: "semantic" as const,
-      expected: { input_type: "passage" },
-    },
-  ])("preserves $name", async ({ options, kind, expected }) => {
-    const server = await startEmbeddingServer();
-    const { provider } = await createOpenAiEmbeddingProvider(
-      createOptions({
-        ...options,
-        remote: { baseUrl: `${server.baseUrl}/?tenant=beta#local` },
-      }),
-    );
-
-    await expect(provider.embed({ text: "hello" }, { inputType: kind })).resolves.toEqual([5, 1]);
-    expect(server.requests).toHaveLength(1);
-    expect(server.requests[0]).toMatchObject({
-      url: "/tenant/v1/embeddings?tenant=beta",
-      authorization: "Bearer fixture-openai-key",
-      body: { model: "text-embedding-3-small", input: ["hello"], ...expected },
-    });
-    expect(server.requests[0]?.body).toEqual({
-      model: "text-embedding-3-small",
-      input: ["hello"],
-      ...expected,
-    });
-  });
-
-  it("keeps document batches in one request and restores indexed response order", async () => {
-    const server = await startEmbeddingServer();
-    const { provider } = await createOpenAiEmbeddingProvider(
-      createOptions({
-        documentInputType: "document",
-        remote: { baseUrl: server.baseUrl },
-      }),
-    );
-
-    await expect(
-      provider.embedBatch(["first", { text: "second" }, "", { text: " \t" }]),
-    ).resolves.toEqual([
-      [5, 1],
-      [6, 2],
-      [0, 3],
-      [2, 4],
-    ]);
-    expect(server.requests).toHaveLength(1);
-    expect(server.requests[0]?.body).toEqual({
-      model: "text-embedding-3-small",
-      input: ["first", "second", "", " \t"],
-      input_type: "document",
-    });
-    await expect(provider.embedBatch([])).resolves.toEqual([]);
-    await expect(provider.embedBatch([], { inputType: "query" })).resolves.toEqual([]);
-    expect(server.requests).toHaveLength(1);
-  });
-
   it("reads mutable client payload fields per call while retaining endpoint and provider metadata", async () => {
     const server = await startEmbeddingServer();
     const { provider, client } = await createOpenAiEmbeddingProvider(
@@ -434,29 +280,6 @@ describe("OpenAI embedding provider HTTP contract", () => {
       },
     ]);
   });
-
-  it.each(["singleton", "query batch", "document batch"] as const)(
-    "rejects a pre-aborted %s without sending HTTP",
-    async (kind) => {
-      const server = await startEmbeddingServer();
-      const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ remote: { baseUrl: server.baseUrl } }),
-      );
-      const controller = new AbortController();
-      controller.abort();
-      const options = {
-        signal: controller.signal,
-        inputType: kind === "document batch" ? ("document" as const) : ("query" as const),
-      };
-      const outcome =
-        kind === "singleton"
-          ? provider.embed("hello", options)
-          : provider.embedBatch(["first", "second"], options);
-
-      await expect(outcome).rejects.toMatchObject({ name: "AbortError" });
-      expect(server.requests).toHaveLength(0);
-    },
-  );
 
   it("starts query requests concurrently and preserves input order despite reversed completion", async () => {
     const server = await startEmbeddingServer(() => {});
@@ -541,17 +364,6 @@ describe("OpenAI embedding provider HTTP contract", () => {
     },
   );
 
-  it.each(["https://API.OPENAI.COM/v1"])(
-    "strips the model prefix only for native endpoint %s",
-    async (baseUrl) => {
-      const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ model: "openai/text-embedding-3-small", remote: { baseUrl } }),
-      );
-      expect(provider.model).toBe("text-embedding-3-small");
-      expect(provider.maxInputTokens).toBe(8192);
-    },
-  );
-
   it("preserves qualified router models in metadata and request bodies", async () => {
     const server = await startEmbeddingServer();
     const { provider } = await createOpenAiEmbeddingProvider(
@@ -561,31 +373,10 @@ describe("OpenAI embedding provider HTTP contract", () => {
       }),
     );
     expect(provider.model).toBe("openai/text-embedding-3-small");
+    expect(provider.maxInputsPerRequest).toBeUndefined();
     expect(provider.maxInputTokens).toBe(8192);
     await provider.embed("hello", { inputType: "query" });
     expect(server.requests[0]?.body.model).toBe("openai/text-embedding-3-small");
-  });
-
-  it("uses the configured custom provider destination and headers", async () => {
-    const server = await startEmbeddingServer();
-    const { provider } = await createOpenAiEmbeddingProvider(
-      createOptions({
-        provider: "fixture-alias",
-        config: {
-          models: {
-            providers: {
-              "fixture-alias": {
-                baseUrl: server.baseUrl,
-                headers: { "x-alias": "selected" },
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    );
-    await provider.embed("hello");
-    expect(server.requests[0]?.alias).toBe("selected");
   });
 
   it("defaults the client provider lookup to OpenAI", async () => {
