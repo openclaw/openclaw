@@ -98,6 +98,7 @@ function webLoginHandler<
     request: {
       requestedAccountId?: string;
       lifecycleAccountId: string;
+      assertCredentialPersistenceCurrent: () => void;
       provider: WebLoginProvider;
       run: NonNullable<WebLoginGateway[M]>;
     },
@@ -108,49 +109,57 @@ function webLoginHandler<
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
+    const invalidRequest = (message: string) =>
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
     try {
       const provider = resolveWebLoginProvider(params.channel);
       if (!provider) {
         const repairHint = resolveMissingWebLoginPluginHint(context);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            repairHint
-              ? `web login provider is not available. ${repairHint}`
-              : "web login provider is not available",
-          ),
+        invalidRequest(
+          repairHint
+            ? `web login provider is not available. ${repairHint}`
+            : "web login provider is not available",
         );
         return;
       }
       const gateway = provider.gateway;
       const run = gateway?.[gatewayMethod];
       if (!run) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `web login is not supported by provider ${provider.id}`,
-          ),
+        invalidRequest(`web login is not supported by provider ${provider.id}`);
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const methodRegistry = context.getGatewayMethodRegistry?.();
+      const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      const requestedAccountId = params.accountId?.trim() || undefined;
+      const accountIds = provider.config.listAccountIds(cfg);
+      if (!requestedAccountId && accountIds.length > 1) {
+        invalidRequest(
+          `accountId is required for ${provider.id}; choose one of: ${accountIds.join(", ")}.`,
         );
         return;
       }
-      // Lifecycle control needs one concrete account so an omitted one does not fan out across
-      // the channel. The plugin keeps receiving the request as sent: account ids and credential
-      // profiles are not the same namespace, and some plugins resolve an omitted account
-      // differently from a named one.
-      const requestedAccountId = params.accountId;
+      // Preserve single-account providers' omitted-ID credential profile selection.
       const lifecycleAccountId =
-        requestedAccountId ??
-        resolveChannelDefaultAccountId({ plugin: provider, cfg: context.getRuntimeConfig() });
+        requestedAccountId ?? resolveChannelDefaultAccountId({ plugin: provider, cfg, accountIds });
+      const assertCredentialPersistenceCurrent = () => {
+        if (
+          context.getRuntimeConfig() !== cfg ||
+          context.getGatewayMethodRegistry?.() !== methodRegistry ||
+          (methodRegistry && requestRegistry !== methodRegistry.pluginRegistry) ||
+          !context.isConfigReloadSettled()
+        ) {
+          throw new Error(`Channel ${provider.id} changed during login; start a new QR login.`);
+        }
+      };
+      assertCredentialPersistenceCurrent();
       await handle(
         params,
         context,
         {
-          ...(requestedAccountId === undefined ? {} : { requestedAccountId }),
+          requestedAccountId,
           lifecycleAccountId,
+          assertCredentialPersistenceCurrent,
           provider,
           run: run.bind(gateway) as NonNullable<WebLoginGateway[M]>,
         },
@@ -167,7 +176,12 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.start",
     validateWebLoginStartParams,
     "loginWithQrStart",
-    async (params, context, { requestedAccountId, lifecycleAccountId, provider, run }, respond) => {
+    async (
+      params,
+      context,
+      { requestedAccountId, lifecycleAccountId, provider, run, assertCredentialPersistenceCurrent },
+      respond,
+    ) => {
       const runtime = context.getRuntimeSnapshot();
       const account = resolveRuntimeAccountSnapshot({
         runtime,
@@ -180,12 +194,15 @@ export const webHandlers: GatewayRequestHandlers = {
       if (stoppedBeforeLogin) {
         await context.stopChannel(provider.id, lifecycleAccountId);
       }
+      assertCredentialPersistenceCurrent();
       const result = await run({
         force: forceLogin,
         timeoutMs: params.timeoutMs,
         verbose: Boolean(params.verbose),
         accountId: requestedAccountId,
+        assertCredentialPersistenceCurrent,
       });
+      assertCredentialPersistenceCurrent();
       const stoppedAfterQrTakeover = !stoppedBeforeLogin && Boolean(result.qrDataUrl);
       if (stoppedAfterQrTakeover) {
         await context.stopChannel(provider.id, lifecycleAccountId);
@@ -193,6 +210,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const stoppedForLogin = stoppedBeforeLogin || stoppedAfterQrTakeover;
       // A failed start without a QR code must also restore the running account.
       if (stoppedForLogin && (result.connected || (wasRunning && !result.qrDataUrl))) {
+        assertCredentialPersistenceCurrent();
         await context.startChannel(provider.id, lifecycleAccountId);
       }
       respond(true, result, undefined);
@@ -202,7 +220,12 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.wait",
     validateWebLoginWaitParams,
     "loginWithQrWait",
-    async (params, context, { requestedAccountId, lifecycleAccountId, provider, run }, respond) => {
+    async (
+      params,
+      context,
+      { requestedAccountId, lifecycleAccountId, provider, run, assertCredentialPersistenceCurrent },
+      respond,
+    ) => {
       const result = await run({
         timeoutMs: params.timeoutMs,
         accountId: requestedAccountId,
@@ -210,6 +233,7 @@ export const webHandlers: GatewayRequestHandlers = {
         currentQrDataUrl: params.currentQrDataUrl,
       });
       if (result.connected) {
+        assertCredentialPersistenceCurrent();
         await context.startChannel(provider.id, lifecycleAccountId);
       }
       respond(true, result, undefined);

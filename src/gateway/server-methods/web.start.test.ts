@@ -48,6 +48,7 @@ function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
 ): GatewayRequestHandlerOptions {
+  const cfg = { channels: { whatsapp: { enabled: true } } };
   return {
     req: { type: "req", id: "req-1", method: "web.login.start", params },
     params,
@@ -58,13 +59,15 @@ function createOptions(
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
-      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
+      getRuntimeConfig: vi.fn(() => cfg),
+      isConfigReloadSettled: () => true,
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
 }
 
 function createRunningWhatsappContext() {
+  const cfg = { channels: { whatsapp: { enabled: true } } };
   const startChannel = vi.fn();
   const stopChannel = vi.fn();
   return {
@@ -74,7 +77,8 @@ function createRunningWhatsappContext() {
       stopChannel,
       startChannel,
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
-      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
+      getRuntimeConfig: vi.fn(() => cfg),
+      isConfigReloadSettled: () => true,
     } as unknown as GatewayRequestHandlerOptions["context"],
   };
 }
@@ -265,6 +269,7 @@ describe("webHandlers web.login.start", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -307,6 +312,7 @@ describe("webHandlers web.login.start", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -337,42 +343,66 @@ describe("webHandlers web.login.start", () => {
     );
   });
 
-  it("scopes an account-less login to the resolved default account on a multi-account channel", async () => {
-    const loginWithQrStart = vi.fn().mockResolvedValue({ qrDataUrl: "data:image/png;base64,QQ==" });
+  it.each(["web.login.start", "web.login.wait"] as const)(
+    "%s rejects an ambiguous account before plugin or listener effects",
+    async (method) => {
+      const login = vi.fn();
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          id: "whatsapp",
+          config: { listAccountIds: () => ["account-a", "account-b"] },
+          gatewayMethods: [method],
+          gateway: { loginWithQrStart: login, loginWithQrWait: login },
+        },
+      ]);
+      const { context, stopChannel, startChannel } = createRunningWhatsappContext();
+      const respond = vi.fn();
+
+      await invokeWeb(method, {}, { context, respond });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringMatching(/accountId.*account-a, account-b/),
+        }),
+      );
+      expect(login).not.toHaveBeenCalled();
+      expect(stopChannel).not.toHaveBeenCalled();
+      expect(startChannel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("revokes deferred credential writes when the account configuration changes", async () => {
+    let persist: (() => void) | undefined;
+    const writeCredentials = vi.fn();
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: {
-          listAccountIds: () => ["arnold", "valentina"],
-          defaultAccountId: () => "arnold",
-        },
+        config: { listAccountIds: () => ["account-a", "account-b"] },
         gatewayMethods: ["web.login.start"],
-        gateway: { loginWithQrStart },
+        gateway: {
+          loginWithQrStart: async (params: { assertCredentialPersistenceCurrent: () => void }) => {
+            persist = () => {
+              params.assertCredentialPersistenceCurrent();
+              writeCredentials();
+            };
+            return { qrDataUrl: "data:image/png;base64,QQ==" };
+          },
+        },
       },
     ]);
-    const { context, stopChannel } = createRunningWhatsappContext();
-    const respond = vi.fn();
+    const { context } = createRunningWhatsappContext();
+    await invokeWeb("web.login.start", { accountId: "account-b" }, { context });
+    expectDefined(persist, "credential writer")();
+    vi.mocked(context.getRuntimeConfig).mockReturnValue({ channels: {} });
 
-    await expectDefined(
-      webHandlers["web.login.start"],
-      'webHandlers["web.login.start"] test invariant',
-    )(createOptions({}, { respond, context }));
-
-    // Lifecycle control is scoped to one concrete account, so the sibling accounts on the
-    // channel are not swept up by a channel-wide stop.
-    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "arnold");
-    expect(stopChannel).not.toHaveBeenCalledWith("whatsapp", undefined);
-    // The plugin still receives the request as sent. Account ids and credential profiles are
-    // different namespaces, and some plugins resolve an omitted account differently.
-    expect(loginWithQrStart).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: undefined }),
-    );
+    expect(() => expectDefined(persist, "credential writer")()).toThrow("changed during login");
+    expect(writeCredentials).toHaveBeenCalledOnce();
   });
 
   it("keeps an omitted account omitted for the plugin so environment-selected profiles survive", async () => {
-    // Zalo Personal resolves an omitted account through ZALOUSER_PROFILE, but returns a named
-    // account verbatim. Forwarding a resolved default here would silently repoint credential
-    // writes at another profile, so the plugin must still see the request as sent.
     const loginWithQrStart = vi.fn().mockResolvedValue({ qrDataUrl: "data:image/png;base64,QQ==" });
     mocks.listChannelPlugins.mockReturnValue([
       {
@@ -388,10 +418,7 @@ describe("webHandlers web.login.start", () => {
     const { context, stopChannel } = createRunningWhatsappContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      webHandlers["web.login.start"],
-      'webHandlers["web.login.start"] test invariant',
-    )(createOptions({ channel: "zalouser" }, { respond, context }));
+    await invokeWeb("web.login.start", { channel: "zalouser" }, { respond, context });
 
     expect(loginWithQrStart).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: undefined }),

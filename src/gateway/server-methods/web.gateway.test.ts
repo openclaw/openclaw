@@ -52,8 +52,10 @@ describe("web QR login Gateway dispatch", () => {
         },
       ]),
     );
+    const cfg = {};
     const context = {
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
@@ -98,6 +100,7 @@ describe("web QR login Gateway dispatch", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(weixinWait).toHaveBeenCalledWith({
       accountId: undefined,
@@ -152,8 +155,10 @@ describe("web QR login Gateway dispatch", () => {
       pluginRegistry: scopedRegistry,
     };
     const respond = vi.fn();
+    const cfg = {};
     const context = {
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
@@ -179,6 +184,7 @@ describe("web QR login Gateway dispatch", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { connected: true }, undefined);
   });
