@@ -9,7 +9,6 @@ import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-we
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
-import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -48,6 +47,7 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { createOpenClawWebTools } from "./openclaw-tools.web.js";
 import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
 import {
   withPreparedToolConstruction,
@@ -103,7 +103,6 @@ import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
-import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
@@ -329,40 +328,14 @@ function* createOpenClawToolsSteps(
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
-  const webSearchAgentDir =
-    options?.agentDir ?? resolveAgentDir(resolvedConfig ?? {}, sessionAgentId);
-  let webSearchTool = createWebSearchTool({
-    ...options,
-    agentDir: webSearchAgentDir,
-    enabled: options?.webSearchEnabled,
-    runtimeWebSearch: runtimeWebTools?.search,
-    lateBindRuntimeConfig: true,
+  const { webSearchTool, webFetchTool } = createOpenClawWebTools({
+    options,
+    sessionAgentId,
+    resolvedConfig,
+    availabilityConfig,
+    runtimeWebTools,
+    preparedWebSearchConfigured,
   });
-  if (webSearchTool) {
-    const configured =
-      preparedWebSearchConfigured ??
-      hasConfiguredWebSearchProvider({
-        config: availabilityConfig ?? resolvedConfig,
-        agentDir: webSearchAgentDir,
-        authStore: options?.authProfileStore,
-        runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
-      });
-    options?.onWebSearchConfiguration?.(configured);
-    if (!configured) {
-      webSearchTool = null;
-    }
-  }
-  options?.recordToolPrepStage?.("openclaw-tools:web-search-tool");
-  const webFetchTool = createWebFetchTool({
-    ...options,
-    runtimeWebFetch: runtimeWebTools?.fetch,
-    lateBindRuntimeConfig: true,
-    hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
-  });
-  options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
     ? null
     : ((yield {
