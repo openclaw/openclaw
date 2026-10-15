@@ -7,10 +7,14 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
-import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
 import {
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import {
+  deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
-  writeSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
 import {
   decodeUsageCostRollupEnvelope,
@@ -199,21 +203,42 @@ export function writeSessionCostUsageRollupInDatabase(
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    const values = {
-      value_json: cacheJsonText(params.valueJson),
-      blob: params.blob,
-      expires_at: null,
-      updated_at: params.updatedAt,
-    };
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("cache_entries")
-        .values({ scope: ROLLUP_SCOPE, key: params.rollupId, ...values })
-        .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
-    );
     if (params.partitions || params.removedDates || params.replacePartitions) {
-      writeSessionCostUsagePartitionsInDatabase(db, params);
+      deleteSessionCostUsagePartitionsInDatabase(db, params);
+    }
+    const rows = [
+      {
+        scope: ROLLUP_SCOPE,
+        key: params.rollupId,
+        value_json: cacheJsonText(params.valueJson),
+        blob: params.blob,
+        expires_at: null,
+        updated_at: params.updatedAt,
+      },
+      ...(params.partitions ?? []).map((partition) => ({
+        scope: USAGE_COST_PARTITION_SCOPE,
+        key: usageCostPartitionKey(params.rollupId, partition.date),
+        value_json: partition.valueJson,
+        blob: partition.blob,
+        expires_at: null,
+        updated_at: params.updatedAt,
+      })),
+    ];
+    for (const batch of chunkItems(rows, 100)) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("cache_entries")
+          .values(batch)
+          .onConflict((conflict) =>
+            conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
+              value_json: eb.ref("excluded.value_json"),
+              blob: eb.ref("excluded.blob"),
+              expires_at: eb.ref("excluded.expires_at"),
+              updated_at: eb.ref("excluded.updated_at"),
+            })),
+          ),
+      );
     }
     return true;
   });
