@@ -570,62 +570,47 @@ describe("config cli", () => {
       {
         path: "gateway.__proto__.token",
         error: "Invalid path segment: __proto__",
+        invalidConfig: false,
+      },
+      {
+        path: "gateway.port",
+        error: "OpenClaw config is invalid",
+        invalidConfig: true,
       },
     ])(
-      "returns a JSON error without reading configuration for malformed $path",
-      async (testCase) => {
-        await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
+      "returns a JSON error for $path (invalid config=$invalidConfig)",
+      async ({ path: configPath, error, invalidConfig }) => {
+        const issues = [{ path: "gateway.bind", message: "Invalid enum value" }];
+        if (invalidConfig) {
+          setSnapshotOnce(makeInvalidSnapshot({ issues }));
+        }
+        await expect(runConfigCommand(["config", "get", configPath, "--json"])).rejects.toThrow(
           ExitError,
         );
 
-        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        if (invalidConfig) {
+          expect(mockReadConfigFileSnapshot.mock.calls.at(-1)?.[0]?.observe).toBe(false);
+        } else {
+          expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        }
+        expect(mockWriteStdout).not.toHaveBeenCalled();
         expect(mockError).not.toHaveBeenCalled();
         expect(parseLastLogPayload()).toMatchObject({
           ok: false,
           error: {
             type: "cli_error",
-            message: expect.stringContaining(testCase.error),
+            message: expect.stringContaining(error),
           },
+          ...(invalidConfig ? { issues } : {}),
         });
       },
     );
-
-    it("rejects invalid configuration in JSON mode without observing persistent state", async () => {
-      setSnapshotOnce(
-        makeInvalidSnapshot({
-          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
-        }),
-      );
-      await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
-        ExitError,
-      );
-      expect(mockReadConfigFileSnapshot.mock.calls.at(-1)?.[0]?.observe).toBe(false);
-      expect(mockWriteStdout).not.toHaveBeenCalled();
-      expect(mockError).not.toHaveBeenCalled();
-      expect(parseLastLogPayload()).toMatchObject({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: expect.stringContaining("OpenClaw config is invalid"),
-        },
-        issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
-      });
-    });
   });
 
   describe("config validate", () => {
     it("prints warnings while still reporting a valid config", async () => {
       setSnapshotOnce({
-        path: "/tmp/openclaw.json",
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        sourceConfig: {},
-        resolved: {},
-        valid: true,
-        runtimeConfig: {},
-        config: {},
-        issues: [],
+        ...buildSnapshot({ resolved: {}, config: {} }),
         warnings: [
           {
             path: "channels.mattermost.allowFrom",
@@ -633,7 +618,6 @@ describe("config cli", () => {
               'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; all DMs will be dropped.',
           },
         ],
-        legacyIssues: [],
       });
 
       await runConfigCommand(["config", "validate"]);
@@ -645,56 +629,57 @@ describe("config cli", () => {
       expectLogIncludes("all DMs will be dropped");
     });
 
-    it("replaces doctor advice for plugin packaging compiled-output failures", async () => {
-      setSnapshotOnce(
-        makeInvalidSnapshot({
-          issues: [
-            {
-              path: "plugins.slots.memory",
-              message: "plugin not found: source-only-pack",
-            },
-          ],
-          warnings: [
-            {
-              path: "plugins",
-              message:
-                "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-            },
-          ],
+    it.each([
+      {
+        name: "plugin packaging compiled-output failures",
+        snapshot: () =>
+          makeInvalidSnapshot({
+            issues: [
+              {
+                path: "plugins.slots.memory",
+                message: "plugin not found: source-only-pack",
+              },
+            ],
+            warnings: [
+              {
+                path: "plugins",
+                message:
+                  "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+              },
+            ],
+          }),
+        messages: [
+          "plugin not found: source-only-pack",
+          "This is a plugin packaging issue, not a local config problem.",
+          "disable/uninstall the plugin",
+        ],
+        excludes: ["openclaw doctor --fix"],
+      },
+      {
+        name: "a missing config file",
+        snapshot: () => ({
+          ...buildSnapshot({ resolved: {}, config: {} }),
+          exists: false,
+          raw: null,
         }),
-      );
+        messages: ["Config file not found:"],
+        excludes: [],
+      },
+    ])(
+      "reports actionable validation errors for $name",
+      async ({ snapshot, messages, excludes }) => {
+        setSnapshotOnce(snapshot());
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
-
-      expectErrorIncludes("plugin not found: source-only-pack");
-      expectErrorIncludes("This is a plugin packaging issue, not a local config problem.");
-      expectErrorIncludes("disable/uninstall the plugin");
-      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
-        "openclaw doctor --fix",
-      );
-      expect(mockLog).not.toHaveBeenCalled();
-    });
-
-    it("prints file-not-found and exits 1 when config file is missing", async () => {
-      setSnapshotOnce({
-        path: "/tmp/openclaw.json",
-        exists: false,
-        raw: null,
-        parsed: {},
-        resolved: {},
-        sourceConfig: {},
-        valid: true,
-        config: {},
-        runtimeConfig: {},
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      });
-
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
-      expectErrorIncludes("Config file not found:");
-      expect(mockLog).not.toHaveBeenCalled();
-    });
+        await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
+        messages.forEach(expectErrorIncludes);
+        for (const text of excludes) {
+          expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+            text,
+          );
+        }
+        expect(mockLog).not.toHaveBeenCalled();
+      },
+    );
 
     it.skipIf(process.platform === "win32")(
       "reports exec provider command-path errors in --json validate output",

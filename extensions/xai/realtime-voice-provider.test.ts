@@ -466,38 +466,29 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ).toEqual([]);
   });
 
-  it("rejects generic response modes that xAI server VAD cannot disable", () => {
-    const provider = buildXaiRealtimeVoiceProvider();
-    const callbacks = { onAudio: vi.fn(), onClearAudio: vi.fn() };
-    expect(() =>
-      provider.createBridge({
-        providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-        autoRespondToAudio: false,
-        ...callbacks,
-      }),
-    ).toThrow('use consultRouting: "provider-direct"');
-    expect(() =>
-      provider.createBridge({
-        providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
-        interruptResponseOnInputAudio: false,
-        ...callbacks,
-      }),
-    ).toThrow("requires automatic server-VAD interruption handling");
-    expect(() =>
-      provider.createBridge({
-        providerConfig: {
-          apiKey: "xai-test", // pragma: allowlist secret
-          interruptResponseOnInputAudio: false,
-        },
-        ...callbacks,
-      }),
-    ).toThrow("requires automatic server-VAD interruption handling");
-  });
-
-  it("rejects reasoning efforts unsupported by the xAI Voice Agent API", () => {
-    expect(() => createTestBridge({ providerConfig: { reasoningEffort: "low" } })).toThrow(
-      'reasoningEffort must be "high" or "none"',
-    );
+  it.each([
+    {
+      name: "manual audio response",
+      options: { autoRespondToAudio: false },
+      error: 'use consultRouting: "provider-direct"',
+    },
+    {
+      name: "disabled request interruption",
+      options: { interruptResponseOnInputAudio: false },
+      error: "requires automatic server-VAD interruption handling",
+    },
+    {
+      name: "disabled provider interruption",
+      options: { providerConfig: { apiKey: "xai-test", interruptResponseOnInputAudio: false } }, // pragma: allowlist secret
+      error: "requires automatic server-VAD interruption handling",
+    },
+    {
+      name: "unsupported reasoning effort",
+      options: { providerConfig: { reasoningEffort: "low" } },
+      error: 'reasoningEffort must be "high" or "none"',
+    },
+  ])("rejects $name", ({ options, error }) => {
+    expect(() => createTestBridge(options)).toThrow(error);
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
@@ -662,50 +653,49 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  it("deduplicates repeated function-call arguments done events", async () => {
+  it.each([
+    {
+      name: "streamed fallback and duplicate completion",
+      streamed: JSON.stringify({ question: "delegate this" }),
+      completed: undefined,
+      repeated: JSON.stringify({ question: "delegate this" }),
+      toolName: "openclaw_agent_consult",
+      args: { question: "delegate this" },
+    },
+    {
+      name: "explicit empty completion overriding the draft",
+      streamed: '{"city":"draft"}',
+      completed: "",
+      repeated: undefined,
+      toolName: "lookup_weather",
+      args: {},
+    },
+  ])("uses $name for tool arguments", async ({ streamed, completed, repeated, toolName, args }) => {
     const onToolCall = vi.fn();
     const { socket } = await connect({ onToolCall });
     socket.emitServer({
       type: "response.function_call_arguments.delta",
       item_id: "item_tool_1",
-      name: "openclaw_agent_consult",
       call_id: "call_1",
-      delta: JSON.stringify({ question: "delegate this" }),
+      name: toolName,
+      delta: streamed,
     });
     socket.emitServer({
       type: "response.function_call_arguments.done",
       item_id: "item_tool_1",
-      name: "openclaw_agent_consult",
       call_id: "call_1",
+      name: toolName,
+      ...(completed === undefined ? {} : { arguments: completed }),
     });
-    toolArguments(socket, "item_tool_1", "call_1", JSON.stringify({ question: "delegate this" }));
+    if (repeated !== undefined) {
+      toolArguments(socket, "item_tool_1", "call_1", repeated, toolName);
+    }
     responseDone(socket);
-    expect(onToolCall).toHaveBeenCalledTimes(1);
-    expect(onToolCall).toHaveBeenCalledWith({
+    expect(onToolCall).toHaveBeenCalledExactlyOnceWith({
       itemId: "item_tool_1",
       callId: "call_1",
-      name: "openclaw_agent_consult",
-      args: { question: "delegate this" },
-    });
-  });
-
-  it("uses explicitly empty completed tool arguments instead of the streamed draft", async () => {
-    const onToolCall = vi.fn();
-    const { socket } = await connect({ onToolCall });
-    socket.emitServer({
-      type: "response.function_call_arguments.delta",
-      item_id: "item_tool_1",
-      call_id: "call_1",
-      name: "lookup_weather",
-      delta: '{"city":"draft"}',
-    });
-    toolArguments(socket, "item_tool_1", "call_1", "", "lookup_weather");
-    responseDone(socket);
-    expect(onToolCall).toHaveBeenCalledWith({
-      itemId: "item_tool_1",
-      callId: "call_1",
-      name: "lookup_weather",
-      args: {},
+      name: toolName,
+      args,
     });
   });
 
@@ -1087,37 +1077,40 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("fails closed instead of reconnecting without a conversation id", async () => {
-    vi.useFakeTimers();
-    const onEvent = vi.fn();
-    const onClose = vi.fn();
-    const { socket } = await connect({ providerConfig: resumingConfig, onEvent, onClose });
-    socket.close(1006, "connection lost");
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.reconnect.blocked",
-      detail: "reason=websocket-close missingConversationId=true",
-    });
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
-
-  it("fails closed instead of reconnecting when xAI session resumption is disabled", async () => {
-    vi.useFakeTimers();
-    const onEvent = vi.fn();
-    const onClose = vi.fn();
-    const { socket } = await connect({ onEvent, onClose }, "conv_default");
-    socket.close(1006, "connection lost");
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "client",
-      type: "session.reconnect.blocked",
-      detail: "reason=websocket-close sessionResumption=false",
-    });
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
+  it.each([
+    {
+      name: "without a conversation id",
+      providerConfig: resumingConfig,
+      conversationId: undefined,
+      reason: "missingConversationId=true",
+    },
+    {
+      name: "with session resumption disabled",
+      providerConfig: undefined,
+      conversationId: "conv_default",
+      reason: "sessionResumption=false",
+    },
+  ])(
+    "fails closed instead of reconnecting $name",
+    async ({ providerConfig, conversationId, reason }) => {
+      vi.useFakeTimers();
+      const onEvent = vi.fn();
+      const onClose = vi.fn();
+      const { socket } = await connect(
+        { ...(providerConfig ? { providerConfig } : {}), onEvent, onClose },
+        conversationId,
+      );
+      socket.close(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "client",
+        type: "session.reconnect.blocked",
+        detail: `reason=websocket-close ${reason}`,
+      });
+      expect(onClose).toHaveBeenCalledWith("error");
+    },
+  );
 
   it("does not retry after startup websocket errors", async () => {
     vi.useFakeTimers();

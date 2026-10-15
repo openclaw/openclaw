@@ -355,6 +355,7 @@ type OrphanMarkParams = {
 
 function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
   return (
+    entry.archivedAt === undefined &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
     (hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
@@ -416,7 +417,6 @@ async function markOrphanedMainSessionStore(
       params.assertCommitAllowed?.();
       if (
         !hasOrphanedMainSessionWork(entry, sessionKey) ||
-        entry.archivedAt !== undefined ||
         isRetryableUnadoptedChatClaim(entry) ||
         entry.mainRestartRecovery?.tombstone ||
         (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||

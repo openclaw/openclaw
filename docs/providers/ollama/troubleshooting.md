@@ -104,7 +104,7 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Model outputs tool JSON as text">
+  <Accordion title="Model outputs tool calls as text">
     Usually the provider is in OpenAI-compatible mode, or the model cannot
     handle tool schemas. Prefer native mode:
 
@@ -125,8 +125,9 @@ sidebarTitle: "Troubleshooting"
     `compat.supportsTools: false` on that model entry and retest.
 
     When a reply consists of a structured tool-call attempt naming an available
-    tool, OpenClaw asks the model once to call the tool natively when recovery
-    is safe. Earlier side effects can prevent that retry. A repeated text call
+    tool, including wrapped XML, ReAct `Action`/`Action Input`, and legacy
+    `[TOOL_CALL]` blocks, OpenClaw asks the model once to call the tool natively
+    when recovery is safe. Earlier side effects can prevent that retry. A repeated text call
     fails visibly instead of reporting success. Text calls are never executed
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
@@ -236,6 +237,12 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
+
+  </Accordion>
+
+  <Accordion title="Ollama still aborts or hangs on this host">
+    If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
+    as the local server.
 
   </Accordion>
 </AccordionGroup>

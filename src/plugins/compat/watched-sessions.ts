@@ -17,7 +17,7 @@ export const WATCHED_SESSIONS_COMPAT_RECORD = {
   ],
   tests: [
     "src/plugins/compat/registry.test.ts",
-    "src/plugin-sdk/agent-harness-runtime-watched-sessions.test.ts",
+    "test/type-contracts/agent-harness-runtime-watched-sessions.ts",
     "src/agents/watched-sessions-prompt.test.ts",
   ],
   releaseNote:

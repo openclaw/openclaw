@@ -81,7 +81,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     for (const row of rows) {
       rows.push(...row.children);
     }
-    this.sessionProjection.restoreChildrenDisplay(rows);
+    this.sessionProjection.children.restore(rows);
     this.people.sortMode = model.peopleSortMode;
     this.people.statusFilter = model.peopleStatusFilter;
     this.people.presenceFilter = model.peoplePresenceFilter;
@@ -103,7 +103,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   clearSidebarSnapshot(): void {
     this.sidebarSnapshot = null;
     this.sidebarPluginSnapshot = null;
-    this.sessionProjection.restoreChildrenDisplay([]);
+    this.sessionProjection.children.restore([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
     this.people.setPresenceFilter("online");
