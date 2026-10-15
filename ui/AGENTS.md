@@ -92,4 +92,4 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 ## Visual Proof
 
 - Substantial UI design changes: follow [Control UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test); inspect states in HTML gallery + collect per-example feedback.
-- Never capture Discord invitation card. Mock/E2E harnesses seed canonical browser dismissal; invitation tests may use `communityInviteDismissed: false` without screenshots/videos.
+- Never capture the retired Discord invitation artwork. Mock/E2E harnesses default to `communityInvite: false`; compact Community entry scenarios opt in with `communityInvite: true`. Capture only the current entry and on-demand sheet, with synthetic content.

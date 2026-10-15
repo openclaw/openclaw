@@ -250,10 +250,10 @@ export function TurnRecapRow(props: {
         </span>
       </Show>
       <Show when={typeof props.recap.outputTokens === "number"}>
-        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
+        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>{" "}
         <span class="chat-turn-recap__sep" aria-hidden="true">
           ·
-        </span>
+        </span>{" "}
       </Show>
       <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
     </div>

@@ -223,12 +223,11 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("returns billed usage from the side thread without changing its answer", async () => {
-    const client = createFakeClient({ completeTurn: false });
+    const turnStarted = createDeferred<void>();
+    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const run = runCodexAppServerSideQuestion(sideParams());
-    await vi.waitFor(() =>
-      expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
-    );
+    await turnStarted.promise;
     client.emit({
       method: "rawResponse/completed",
       params: {
