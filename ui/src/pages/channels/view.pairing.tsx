@@ -337,7 +337,7 @@ function PairingPromptContent(params: {
         {approving() && ownerMissing() && !params.props.canAdmin ? (
           <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
         ) : undefined}
-        <div class="channels-pairing-dialog__actions">
+        <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
             class={approving() ? "btn primary" : "btn danger"}
@@ -354,7 +354,7 @@ function PairingPromptContent(params: {
           >
             {t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

@@ -426,7 +426,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 {state().failure}
               </div>
             ) : undefined}
-            <div class="exec-approval-actions">
+            <openclaw-modal-actions class="exec-approval-actions">
               <button
                 type="submit"
                 class="btn primary"
@@ -458,7 +458,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               >
                 {t("common.cancel")}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </form>
         </openclaw-modal-dialog>
       );

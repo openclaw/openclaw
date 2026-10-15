@@ -194,6 +194,7 @@ function resolveOpenAICompletionsCompatDefaults(
   const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
+    endpointClass === "novita-native" ||
     isMistral ||
     isMoonshot ||
     isCloudflareAiGateway ||

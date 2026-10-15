@@ -626,6 +626,7 @@ const enSettings = {
       setupDescription:
         "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
+      statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
       chooseAccount: "Choose account",
@@ -653,6 +654,7 @@ const enSettings = {
     status: {
       ok: "Signed in",
       ready: "Ready",
+      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -736,6 +738,8 @@ const enSettings = {
     readiness: {
       title: "AI setup",
       heading: "Connect a verified AI model",
+      readyHeading: "AI models available",
+      readyDescription: "Choose a default model below, or connect another provider.",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",

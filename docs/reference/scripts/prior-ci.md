@@ -27,6 +27,15 @@ The existing authoritative classic-protection absence gate remains mandatory:
 generic REST 404s and permission-projected GraphQL nulls do not prove absence.
 Missing policy-read capability is an external authority blocker, not an
 implicit fallback or permission to elevate the writer.
+This blocks the selected exception, not ordinary green-CI landing. A MAINTAIN
+writer can use ordinary `scripts/pr merge-run` when normal CI, review, and merge
+admission succeed, without organization-admin or CI-bypass authority. Repair the
+failed CI and use that route when classic policy cannot be read; do not change
+credentials or supply a policy snapshot to make the exception pass.
+Repository write access, organization membership, branch-policy read access,
+CI bypass, release environment approval, and production deployment authority are
+separate capabilities. A missing capability on one route proves nothing about
+the others.
 The original conflict-resolution route permits only
 pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure`
 attribution instead binds the current failed attempt, effective gate check-run,

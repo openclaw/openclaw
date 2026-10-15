@@ -492,13 +492,10 @@ openclaw-chat-details-progress {
   gap: 2px;
   flex: 1;
 }
-.chat-details__path,
 .chat-details__badge {
   color: var(--muted);
   font-size: 10px;
   font-weight: 400;
-}
-.chat-details__badge {
   flex: none;
   margin-inline-start: auto;
 }

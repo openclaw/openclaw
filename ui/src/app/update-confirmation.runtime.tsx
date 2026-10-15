@@ -264,7 +264,7 @@ export async function confirmAndStartUpdateRuntime(
                   />
                 )}
               </Show>
-              <div class="exec-approval-actions">
+              <openclaw-modal-actions class="exec-approval-actions">
                 <Show
                   when={view().finished || view().showRecovery}
                   fallback={
@@ -338,7 +338,7 @@ export async function confirmAndStartUpdateRuntime(
                     {t("common.close")}
                   </button>
                 </Show>
-              </div>
+              </openclaw-modal-actions>
             </div>
           </openclaw-modal-dialog>
         );

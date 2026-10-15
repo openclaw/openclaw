@@ -3671,7 +3671,6 @@ export const en: TranslationMap & {
       selectionQuoteOnly:
         "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
-      askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
@@ -3783,6 +3782,11 @@ export const en: TranslationMap & {
     composer: {
       running: "running",
       composerInput: "Chat composer",
+      usePrediction: "Use suggestion",
+      predictionShortcut: "Tab",
+      dismissPrediction: "Dismiss suggestion",
+      predictionAvailable:
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
