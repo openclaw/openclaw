@@ -253,6 +253,11 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 Existing checkout roots may use a `.git` directory or a `.git` file, including
 linked Git worktrees. All three installers validate the checkout's own commit before
 updating it and refuse incomplete checkouts or nonempty non-repository paths.
+When another worktree owns a requested branch, `install.sh` and `install-cli.sh`
+check out its selected commit detached. For `main`, they begin at the local branch
+and rebase onto `origin/main` only when Git updates are enabled; other branch
+selectors use the fetched `origin` branch.
+These remain moving-branch installs even when `HEAD` is detached.
 
 With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing

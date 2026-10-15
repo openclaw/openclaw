@@ -2859,12 +2859,8 @@ install_openclaw_from_git() {
         install_git
     fi
 
-    validate_git_checkout_head "$repo_dir" || return 1
+    validate_git_checkout "$repo_dir" || return 1
     if [[ ! -e "$repo_dir/.git" ]]; then
-        if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-            installer_error "Git install dir exists but is not a git repo: ${repo_dir}"
-            return 1
-        fi
         # Blobless clone: the installer checks out one release tag, so full blob
         # history is downloaded and then discarded. blob:none keeps ref metadata
         # (unlike --depth 1) so ref switching and later updates still work, and

@@ -422,15 +422,21 @@ fi
     expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
 
-  it.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
-    "preserves linked checkout boundaries: %s",
-    (scenario) => {
-      const result = runShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
-        FIXTURE_NODE: nodeExecutable,
-      });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-    },
-  );
+  it.each([
+    "valid",
+    "missing-head",
+    "broken-gitfile",
+    "subdirectory",
+    "main",
+    "main-no-update",
+    "latest",
+    "named-branch",
+  ])("preserves linked checkout boundaries: %s", (scenario) => {
+    const result = runShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
+      FIXTURE_NODE: nodeExecutable,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
 
   it("publishes fresh Git clones only after success and cleans failed staging directories", () => {
     const root = tempDirs.make("openclaw-install-cli-transactional-clone-");

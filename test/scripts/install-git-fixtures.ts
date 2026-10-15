@@ -320,8 +320,19 @@ ${setup}
 export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenario: string) {
   return `
     set -euo pipefail
-    source "${scriptPath}"
     tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    export HOME="$tmp/home" OPENCLAW_HOME="$tmp/home" OPENCLAW_PREFIX="$tmp/prefix" TMPDIR="$tmp"
+    export OPENCLAW_INSTALL_CLI_SH_NO_RUN=1 OPENCLAW_INSTALL_SH_NO_RUN=1 OPENCLAW_INSTALL_METHOD=npm
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$tmp/absent-gitconfig"
+    mkdir -p "$HOME"
+    [[ "$OPENCLAW_INSTALL_CLI_SH_NO_RUN" == 1 && "$OPENCLAW_INSTALL_SH_NO_RUN" == 1 ]] || exit 1
+    curl() { echo 'unexpected fixture download' >&2; exit 97; }
+    wget() { echo 'unexpected fixture download' >&2; exit 97; }
+    npm() { echo 'unexpected fixture package install' >&2; exit 97; }
+    pnpm() { echo 'unexpected fixture package install' >&2; exit 97; }
+    openclaw() { echo 'unexpected fixture service or Doctor call' >&2; exit 97; }
+    source "${scriptPath}"
     trap 'rm -rf "$tmp"' EXIT
     seed="$tmp/seed"
     repo="$tmp/linked checkout"
@@ -336,6 +347,35 @@ export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenar
     git -C "$seed" worktree add -q --detach "$repo" HEAD
     git -C "$seed" commit --allow-empty -qm selected
     selected="$(git -C "$seed" rev-parse HEAD)"
+    primary_head="$selected"
+    primary_index="$(git -C "$seed" hash-object "$seed/.git/index")"
+    OPENCLAW_VERSION="$selected"
+    GIT_UPDATE=1
+    moving=0
+    case "${scenario}" in
+      main|main-no-update|latest|named-branch)
+        moving=1
+        branch=main
+        if [[ "${scenario}" == named-branch ]]; then
+          branch=release
+          git -C "$seed" branch -m "$branch"
+        fi
+        git -C "$repo" switch -qc linked-feature
+        git clone --bare -q "$seed" "$tmp/origin.git"
+        git -C "$seed" remote add origin "$tmp/origin.git"
+        ahead="$(printf 'remote\\n' | git -C "$seed" commit-tree 'HEAD^{tree}' -p HEAD)"
+        git -C "$seed" push -q origin "$ahead:refs/heads/$branch"
+        OPENCLAW_VERSION="$branch"
+        selected="$ahead"
+        if [[ "${scenario}" == main-no-update ]]; then
+          GIT_UPDATE=0
+          selected="$primary_head"
+        elif [[ "${scenario}" == latest ]]; then
+          OPENCLAW_VERSION=latest
+        fi
+        ;;
+    esac
+    primary_ref="$(git -C "$seed" symbolic-ref HEAD)"
     if [[ "${scenario}" == missing-head ]]; then
       git -C "$repo" symbolic-ref HEAD refs/heads/missing
     elif [[ "${scenario}" == broken-gitfile ]]; then
@@ -350,10 +390,9 @@ export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenar
     fi
     before="$(git -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
     PREFIX="$tmp/prefix"
-    HOME="$tmp/home"
     mkdir -p "$PREFIX/tools/node/bin" "$HOME"
     ln -s "$FIXTURE_NODE" "$PREFIX/tools/node/bin/node"
-    OPENCLAW_VERSION="$selected"
+    installer_npm() { return 1; }
     ensure_git() { :; }
     check_git() { return 0; }
     ensure_pnpm() { touch "$tmp/build-started"; }
@@ -365,12 +404,19 @@ export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenar
       printf 'console.log("fixture-cli");\\n' > "$repo/dist/entry.js"
     }
     set +e
-    (set -e; install_openclaw_from_git "$repo")
+    (set -e; install_openclaw_from_git "$repo"; printf '%s\\n' "$GIT_REF_KIND" > "$tmp/ref-kind") > "$tmp/install.log" 2>&1
     install_exit="$?"
     set -e
-    if [[ "${scenario}" == valid ]]; then
+    cat "$tmp/install.log"
+    if [[ "${scenario}" == subdirectory ]]; then
+      grep -Fq 'checkout root containing .git or a new empty directory' "$tmp/install.log" || exit 1
+    fi
+    if [[ "${scenario}" == valid || "$moving" == 1 ]]; then
       [[ "$install_exit" -eq 0 ]] || exit 1
       [[ "$(git -C "$repo" rev-parse HEAD)" == "$selected" ]] || exit 1
+      if [[ "$moving" == 1 ]]; then
+        [[ -z "$(git -C "$repo" symbolic-ref --quiet HEAD || true)" && "$(cat "$tmp/ref-kind")" == moving ]] || exit 1
+      fi
       wrapper="$PREFIX/bin/openclaw"
       [[ -x "$wrapper" ]] || wrapper="$HOME/.local/bin/openclaw"
       [[ "$("$wrapper" --version)" == fixture-cli ]] || exit 1
@@ -388,6 +434,8 @@ export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenar
     else
       [[ "$(cat "$repo/local.txt")" == keep ]] || exit 1
     fi
-    [[ "$(git -C "$seed" rev-parse HEAD)" == "$selected" ]] || exit 1
+    [[ "$(git -C "$seed" rev-parse HEAD)" == "$primary_head" ]] || exit 1
+    [[ "$(git -C "$seed" symbolic-ref HEAD)" == "$primary_ref" ]] || exit 1
+    [[ "$(git -C "$seed" hash-object "$seed/.git/index")" == "$primary_index" ]] || exit 1
   `;
 }

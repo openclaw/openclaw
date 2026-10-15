@@ -1144,12 +1144,9 @@ install_openclaw_from_git() {
   ensure_git
   emit_json step name git-tools status ok
 
-  validate_git_checkout_head "$repo_dir" || return 1
+  validate_git_checkout "$repo_dir" || return 1
 
   if [[ ! -e "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      fail "Git install dir exists but is not a git repo: ${repo_dir}"
-    fi
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     emit_json step name git-clone status ok

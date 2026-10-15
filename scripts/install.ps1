@@ -1958,7 +1958,7 @@ function Install-OpenClawFromGit {
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path -LiteralPath (Join-Path $RepoDir ".git"))) {
         if ((Test-Path -LiteralPath $RepoDir) -and @(Get-ChildItem -LiteralPath $RepoDir -Force).Count -ne 0) {
-            throw "Git install dir exists but is not a git repo: $RepoDir"
+            throw "Git install dir exists but is not a git repo: $RepoDir. Choose the checkout root containing .git or a new empty directory, then retry."
         }
         New-TransactionalGitCheckout -RepoUrl $repoUrl -RepoDir $RepoDir
     }
