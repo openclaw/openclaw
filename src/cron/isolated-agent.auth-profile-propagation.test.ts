@@ -56,11 +56,13 @@ function runWithConfig(
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "check status" },
   }),
+  trigger?: "cron" | "event",
 ) {
   return runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({
       cfg,
       job,
+      trigger,
       message: "check status",
       sessionKey: "cron:job-1",
       lane: "cron",
@@ -336,60 +338,79 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a legacy CLI fallback rather than adopting its currently ordered account (#144047)", async () => {
-    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    setupClaudeCliBackend();
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
-    resolveSessionAuthSelectionMock.mockResolvedValue({ profileId: platformId, source: "auto" });
-    await saveProfiles({ [platformId]: apiKey(), "claude-cli:personal": oauth("claude-cli") });
-    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
-      await runInitialModelFallbackAttempt(params);
-      return {
-        result: await runFallbackModelAttempt(params, "openai", "gpt-4o", "unknown"),
-        provider: "openai",
-        model: "gpt-4o",
-        attempts: [],
-      };
-    });
-    const cfg = config();
-    cfg.agents!.defaults!.model = { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4o"] };
-    cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
-    cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
+  it.each(["cron", "event"] as const)(
+    "keeps %s CLI fallback on its account boundary (#144047)",
+    async (trigger) => {
+      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+      setupClaudeCliBackend();
+      resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+      resolveSessionAuthSelectionMock.mockResolvedValue({ profileId: platformId, source: "auto" });
+      await saveProfiles({ [platformId]: apiKey(), "claude-cli:personal": oauth("claude-cli") });
+      runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+        await runInitialModelFallbackAttempt(params);
+        return {
+          result: await runFallbackModelAttempt(params, "openai", "gpt-4o", "unknown"),
+          provider: "openai",
+          model: "gpt-4o",
+          attempts: [],
+        };
+      });
+      const cfg = config();
+      cfg.agents!.defaults!.model = { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4o"] };
+      cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "event account reply" }],
+        meta: { agentMeta: { provider: "claude-cli", model: "gpt-4o" } },
+      });
 
-    const result = await runWithConfig(cfg);
+      const result = await runWithConfig(cfg, undefined, trigger);
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Automation has no recorded inference account");
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(runCliAgentMock).not.toHaveBeenCalled();
-  });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      if (trigger === "cron") {
+        expect(result.status).toBe("error");
+        expect(result.error).toContain("Automation has no recorded inference account");
+        expect(runCliAgentMock).not.toHaveBeenCalled();
+      } else {
+        expect(result.status, result.error).toBe("ok");
+        expect(runCliAgentMock).toHaveBeenCalledOnce();
+        expect(runCliAgentMock.mock.lastCall?.[0].trigger).toBe("event");
+        expect(runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+        expect(runCliAgentMock.mock.lastCall?.[0].authProfileId).toBe("claude-cli:personal");
+      }
+    },
+  );
 
-  it("fails closed before a CLI backend can substitute a user-selected bound account (#144047)", async () => {
-    await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
-    const cfg = config();
-    const binding = await captureCronInferenceBinding({
-      cfg,
-      agentId: "main",
-      model: "openai/gpt-4.1@openai:work",
-    });
-    expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
-    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    mockRunCronFallbackPassthrough();
-    setupClaudeCliBackend();
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
-    cfg.agents!.defaults!.model = "openai/gpt-4o";
-    cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
-    cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
+  it.each(["cron", "event"] as const)(
+    "fails closed for a bound account on a %s CLI route (#144047)",
+    async (trigger) => {
+      await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
+      const cfg = config();
+      const binding = await captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "openai/gpt-4.1@openai:work",
+      });
+      expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
+      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+      mockRunCronFallbackPassthrough();
+      setupClaudeCliBackend();
+      resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
+      cfg.agents!.defaults!.model = "openai/gpt-4o";
+      cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
 
-    const result = await runWithConfig(
-      cfg,
-      makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
-    );
+      const result = await runWithConfig(
+        cfg,
+        makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
+        trigger,
+      );
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("incompatible with its recorded inference account and route");
-    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).not.toHaveBeenCalled();
-  });
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("incompatible with its recorded inference account and route");
+      expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
 });

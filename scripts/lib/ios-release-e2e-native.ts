@@ -648,41 +648,73 @@ export async function createNativeDependencies(options: {
                 operation: "setup-status" | "setup-code",
                 params: Record<string, unknown>,
               ): Promise<T> => {
+                const timings: {
+                  authenticatedMs?: number;
+                  dispatchEnteredMs?: number;
+                  responseReceivedMs?: number;
+                  elapsedMs?: number;
+                } = {};
                 const rpcEvidence = {
                   authenticated: false,
                   dispatchEntered: false,
                   responseReceived: false,
+                  timings,
                 };
                 fixtureEvidence[operation === "setup-status" ? "setupStatusRpc" : "setupRpc"] =
                   rpcEvidence;
                 try {
                   requireLiveFixture();
-                  const result = await phase(operation, () =>
-                    callGateway<T>({
-                      config: {},
-                      configPath: readyInstance.configPath,
-                      url: readyInstance.url,
-                      token: readyInstance.gatewayToken,
-                      ignoreEnvUrlOverride: true,
-                      deviceIdentity: null,
-                      sharedStateMode: "read-only",
-                      method:
-                        operation === "setup-status"
-                          ? "device.pair.setupStatus"
-                          : "device.pair.setupCode",
-                      params,
-                      timeoutMs: 30_000,
-                      signal: fixtureSignal,
-                      onHelloOk: () => {
-                        rpcEvidence.authenticated = true;
-                      },
-                      assertDispatchCurrent: () => {
-                        requireLiveFixture();
-                        rpcEvidence.dispatchEntered = true;
-                      },
-                    }),
-                  );
-                  rpcEvidence.responseReceived = true;
+                  const result = await phase(operation, async () => {
+                    const started = performance.now();
+                    const elapsed = () => Math.round(performance.now() - started);
+                    let slowDiagnostics: Promise<void> | undefined;
+                    const slowTimer =
+                      operation === "setup-code"
+                        ? setTimeout(() => {
+                            slowDiagnostics = captureSetupDiagnostics(
+                              "setup-code-slow",
+                              true,
+                            ).catch(() => {
+                              // Observation must not fail an otherwise successful setup.
+                            });
+                          }, 10_000)
+                        : undefined;
+                    try {
+                      const response = await callGateway<T>({
+                        config: {},
+                        configPath: readyInstance.configPath,
+                        url: readyInstance.url,
+                        token: readyInstance.gatewayToken,
+                        ignoreEnvUrlOverride: true,
+                        deviceIdentity: null,
+                        sharedStateMode: "read-only",
+                        method:
+                          operation === "setup-status"
+                            ? "device.pair.setupStatus"
+                            : "device.pair.setupCode",
+                        params,
+                        timeoutMs: operation === "setup-code" ? 60_000 : 30_000,
+                        signal: fixtureSignal,
+                        onHelloOk: () => {
+                          rpcEvidence.authenticated = true;
+                          timings.authenticatedMs ??= elapsed();
+                        },
+                        assertDispatchCurrent: () => {
+                          requireLiveFixture();
+                          rpcEvidence.dispatchEntered = true;
+                          timings.dispatchEnteredMs ??= elapsed();
+                        },
+                      });
+                      rpcEvidence.responseReceived = true;
+                      timings.responseReceivedMs = elapsed();
+                      return response;
+                    } finally {
+                      timings.elapsedMs = elapsed();
+                      clearTimeout(slowTimer);
+                      // A started observer must finish before the fixture can be cleaned up.
+                      await slowDiagnostics;
+                    }
+                  });
                   requireLiveFixture();
                   return result;
                 } catch (error) {

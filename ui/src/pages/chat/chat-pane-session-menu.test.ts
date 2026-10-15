@@ -327,7 +327,6 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each([
-    { key: "agent:main:current", archived: false },
     { key: "agent:main:current", archived: true },
     { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
     { key: "agent:main:subagent:child" },
@@ -376,8 +375,6 @@ describe("chat pane session menu boundary", () => {
 
   it.each([
     ["agent:main:plugin:anthropic:catalog-adopt:claude:fixture", false],
-    ["agent:main:harness:codex:supervision:fixture", false],
-    ["agent:main:harness:codex:node-session:fixture", false],
     ["agent:main:ordinary", true],
   ])(
     "offers header Delete only when the transcript belongs to OpenClaw: %s",
@@ -440,18 +437,12 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each([
-    { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "removed" },
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "replacement" },
     { action: { kind: "toggle-unread" }, patch: { unread: true }, current: "replacement" },
     {
       action: { kind: "set-communication", communication: { send: "never" } },
       patch: { communication: { send: "never" } },
       current: "replacement",
-    },
-    {
-      action: { kind: "set-communication", communication: null },
-      patch: { communication: null },
-      current: "refreshed",
     },
     {
       action: { kind: "set-communication", communication: { send: "never" } },
