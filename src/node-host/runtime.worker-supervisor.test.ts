@@ -193,6 +193,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
     expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
     const runtime = prepared.start({ client: { request } });
     let armed = false;
+    // oxlint-disable-next-line typescript/unbound-method -- call below preserves the intercepted worker as receiver.
     const execute = NodeWorkerJournalWorker.prototype.execute;
     const spy = vi.spyOn(NodeWorkerJournalWorker.prototype, "execute").mockImplementation(function (
       this: NodeWorkerJournalWorker,

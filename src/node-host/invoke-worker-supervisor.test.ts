@@ -905,9 +905,13 @@ setInterval(() => {}, 1000);
     supervisor.status.mockImplementationOnce(
       (_launchId, options) =>
         new Promise((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
-            once: true,
-          });
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted", { cause: options.signal?.reason })),
+            {
+              once: true,
+            },
+          );
         }),
     );
     const controller = new AbortController();
