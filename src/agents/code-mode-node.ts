@@ -223,8 +223,22 @@ async function releasePool(owner: NodePool): Promise<void> {
     runInDetachedAsyncContext(() =>
       lifetime.scheduler.schedule({
         id: `code-mode-worker-idle:${++nextPoolId}`,
-        delayMs: 5 * 60_000,
-        run: () => closePool(owner),
+        delayMs: 30_000,
+        run: async () => {
+          if (idlePools.keys().next().value !== owner) {
+            await closePool(owner);
+            return;
+          }
+          // Keep one warm isolate through gaps without retaining the completed burst.
+          idlePools.set(
+            owner,
+            lifetime.scheduler.schedule({
+              id: `code-mode-worker-idle:${++nextPoolId}`,
+              delayMs: 5 * 60_000 - 30_000,
+              run: () => closePool(owner),
+            }),
+          );
+        },
       }),
     ),
   );

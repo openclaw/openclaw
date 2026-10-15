@@ -245,10 +245,12 @@ describe("Node Code Mode worker custody", () => {
           pool.isClosed = true;
         });
       }
-      await vi.advanceTimersByTimeAsync(70_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(previous.isClosed).toBe(true);
+      expect(reused.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(40_000);
       expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
-      expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect(previous.isClosed).toBe(true);
       expect(reused.isClosed).toBe(false);
