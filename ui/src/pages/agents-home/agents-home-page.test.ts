@@ -195,6 +195,18 @@ afterEach(() => {
 });
 
 describe("AgentsHomePage", () => {
+  it("opens agent creation so the custodian can explain unavailable access", async () => {
+    const { page, navigate } = createPage();
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const create = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "New agent",
+    )!;
+
+    expect(create.getAttribute("href")).toBe("/custodian?intent=new-agent");
+    create.click();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { search: "?intent=new-agent" });
+  });
+
   it("waits until an initially inactive page is shown before loading its roster", async () => {
     const { page, request, setActive } = createPage(false);
     await waitForSolid(() => expect(page.querySelector(".agents-home")).not.toBeNull());

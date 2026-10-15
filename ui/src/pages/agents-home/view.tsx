@@ -27,7 +27,6 @@ type AgentsHomeProps = {
   connected: boolean;
   loading: boolean;
   error: string | null;
-  canCreate: boolean;
   onRetry: () => void;
 };
 
@@ -72,18 +71,8 @@ export function AgentsHomeView(props: AgentsHomeProps) {
               {manage()}
               <a
                 class="btn primary"
-                href={
-                  props.canCreate
-                    ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`
-                    : pathForRoute("agents", props.context.basePath)
-                }
-                onClick={(event) =>
-                  navigate(
-                    event,
-                    props.canCreate ? "custodian" : "agents",
-                    props.canCreate ? { search: "?intent=new-agent" } : undefined,
-                  )
-                }
+                href={`${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`}
+                onClick={(event) => navigate(event, "custodian", { search: "?intent=new-agent" })}
               >
                 {t("agentsHome.create")}
               </a>

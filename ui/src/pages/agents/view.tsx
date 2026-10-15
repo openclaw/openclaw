@@ -32,7 +32,6 @@ const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 export type AgentsProps = {
   access: {
-    canCreateAgent: boolean;
     canPatchConfig: boolean;
     canUpdateConfig: boolean;
     canUpdateIdentity: boolean;
@@ -148,15 +147,13 @@ export function Agents(props: AgentsProps) {
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
           <div class="agents-toolbar-actions">
-            <Show when={props.access.canCreateAgent}>
-              <button
-                class="btn btn--sm btn--ghost agents-create-btn"
-                disabled={props.loading}
-                onClick={() => props.onCreateAgent()}
-              >
-                {t("custodian.newAgent")}
-              </button>
-            </Show>
+            <button
+              class="btn btn--sm btn--ghost agents-create-btn"
+              disabled={props.loading}
+              onClick={() => props.onCreateAgent()}
+            >
+              {t("custodian.newAgent")}
+            </button>
             <Show when={selectedAgent()}>
               {(agent) => (
                 <>

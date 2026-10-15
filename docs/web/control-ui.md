@@ -349,8 +349,10 @@ agent's identity, model, current work status, last activity, and a preview from 
 main chat. **Open chat** opens that agent's
 main session. Working agents appear first, followed by the most recently active.
 
-**Manage agents** opens `/settings/agents`. **New agent** opens the existing
-agent creation flow when available, or agent settings otherwise. `/agents` now
+**Manage agents** opens `/settings/agents`. **New agent** opens the custodian's
+agent creation flow. If access is unavailable, it explains the required
+`openclaw.chat` capability and `operator.admin` scope, with steps to reconnect
+or pair this browser with the required access. `/agents` now
 opens the roster; agent configuration remains at `/settings/agents`.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
