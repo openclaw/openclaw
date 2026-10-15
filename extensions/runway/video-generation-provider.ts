@@ -20,12 +20,13 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationResult,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationResult,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_RUNWAY_BASE_URL = "https://api.dev.runwayml.com";
@@ -117,10 +118,11 @@ function resolveSourceUri(
 }
 
 function resolveDurationSeconds(value: number | undefined): number {
-  if (value === undefined || !Number.isSafeInteger(value)) {
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
+  if (duration === undefined || !Number.isSafeInteger(value)) {
     return 5;
   }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
+  return Math.max(2, Math.min(MAX_DURATION_SECONDS, duration));
 }
 
 const RUNWAY_RATIO_SIZES = new Map([

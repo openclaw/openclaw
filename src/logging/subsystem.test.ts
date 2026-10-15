@@ -147,7 +147,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     }
   });
 
-  it("tracks diagnostic log interest and enablement for a retained subsystem logger", async () => {
+  it("exports INFO diagnostics without call sites while retaining warning locations", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
     const log = createSubsystemLogger("gateway/stack");
@@ -158,6 +158,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info("unrelated listener");
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
+    log.warn("warning with listener");
     await yieldToEventLoop();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
@@ -177,23 +178,32 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
       false,
       false,
-      true,
       false,
       true,
+      false,
+      false,
       false,
     ]);
     expect(listener.mock.calls.map(([event]) => event)).toEqual([
       expect.objectContaining({
         type: "log.record",
         message: "log listener",
+      }),
+      expect.objectContaining({
+        type: "log.record",
+        message: "warning with listener",
         code: { line: expect.any(Number), functionName: expect.any(String) },
       }),
       expect.objectContaining({
         type: "log.record",
         message: "enabled diagnostics",
-        code: { line: expect.any(Number), functionName: expect.any(String) },
       }),
     ]);
+    for (const [event] of listener.mock.calls) {
+      if (event.level === "INFO") {
+        expect(event).not.toHaveProperty("code");
+      }
+    }
   });
 
   it("resolves sink enablement from thresholds and console-only subsystem filters", () => {
