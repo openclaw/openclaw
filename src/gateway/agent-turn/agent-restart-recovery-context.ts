@@ -50,6 +50,13 @@ export function resolveAgentRestartRecoveryContext(params: {
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
   }
+  if (
+    params.isRestartRecoveryResumeRun &&
+    entry.restartRecoverySourceIngress === "internal" &&
+    !entry.restartRecoveryDeliveryContext
+  ) {
+    return { messageChannel: INTERNAL_MESSAGE_CHANNEL };
+  }
   const messageChannel = normalizeMessageChannel(entry.restartRecoveryDeliveryContext?.channel);
   if (
     entry.restartRecoverySourceIngress !== "channel" ||
