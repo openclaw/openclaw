@@ -133,6 +133,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
+      modelName?: string;
       gatewayRestartRequired?: true;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {

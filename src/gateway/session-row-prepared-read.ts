@@ -9,9 +9,14 @@ import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
+export type SessionRowSelectionPreparationOptions = {
+  metadataOnly?: boolean;
+  includeCatalog?: boolean;
+};
+
 export type SessionRowPreparationOptions = {
   includeAncestors?: boolean;
-  selection?: boolean;
+  selection?: boolean | SessionRowSelectionPreparationOptions;
 };
 
 /** Synchronous selection reenters through the existing exact worker preparation owner. */

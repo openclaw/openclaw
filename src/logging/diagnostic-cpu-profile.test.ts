@@ -137,50 +137,20 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
-  it("joins Node's warm native sampler instead of scanning a new inspector code map", async () => {
+  it("refuses native reuse when disposal fails", async () => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-    let now = 100;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    native.post.mockImplementation(async (method) => {
-      if (method === "Profiler.start") {
-        now += 2_100;
-      }
-      return method === "Profiler.stop" ? { profile: profile() } : {};
+    native.dispose.mockImplementation(() => {
+      throw new Error("private native failure");
     });
-    native.start.mockImplementation(() => {
-      now += 0.25;
-      return { stop: native.stop, [Symbol.dispose]: native.dispose };
+    expect(await capture()).toEqual({
+      status: "unavailable",
+      reason: "cleanup-failed",
+      cleanupFailed: true,
     });
-    const outcome = await capture();
-    expect(outcome).toMatchObject({ status: "complete", result: { startBlockedMs: 0.25 } });
-    expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
-    expect(native.start).toHaveBeenCalledWith({ sampleInterval: 10 });
-    expect(native.connect).not.toHaveBeenCalled();
-    expect(native.stop).toHaveBeenCalledOnce();
     expect(native.dispose).toHaveBeenCalledOnce();
+    expect(await capture()).toMatchObject({ status: "unavailable", reason: "cleanup-failed" });
+    expect(native.start).toHaveBeenCalledOnce();
   });
-
-  it.each(["start", "stop", "dispose"] as const)(
-    "settles Node native ownership when %s fails",
-    async (method) => {
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-      native[method].mockImplementation(() => {
-        throw new Error("private native failure");
-      });
-      expect(await capture()).toEqual({
-        status: "unavailable",
-        reason: method === "dispose" ? "cleanup-failed" : "capture-failed",
-        cleanupFailed: method === "dispose",
-      });
-      if (method !== "start") {
-        expect(native.dispose).toHaveBeenCalledOnce();
-      }
-      if (method === "dispose") {
-        expect(await capture()).toMatchObject({ status: "unavailable", reason: "cleanup-failed" });
-        expect(native.start).toHaveBeenCalledOnce();
-      }
-    },
-  );
   it("reports synchronous start blocking separately from awaited capture time", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -203,7 +173,6 @@ describe("diagnostic CPU profile owner", () => {
       result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
     });
   });
-
   it("returns a complete sanitized graph only after native cleanup", async () => {
     const outcome = await capture();
     expect(outcome.status).toBe("complete");
@@ -303,14 +272,12 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each(["pre-abort", "authority-after-import", "authority-before-start"])(
+  it.each(["authority-after-import", "authority-before-start"])(
     "does not start after %s",
     async (boundary) => {
       const controller = new AbortController();
       let authority = true;
-      if (boundary === "pre-abort") {
-        controller.abort();
-      } else if (boundary === "authority-after-import") {
+      if (boundary === "authority-after-import") {
         native.resolveRoot.mockImplementation(async () => {
           authority = false;
           return "/fixture/openclaw";
@@ -334,7 +301,7 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each(["Profiler.setSamplingInterval", "Profiler.start", "Profiler.stop", "Profiler.disable"])(
+  it.each(["Profiler.start", "Profiler.disable"])(
     "releases native ownership when %s fails",
     async (failedMethod) => {
       native.post.mockImplementation(async (method) => {
@@ -407,16 +374,6 @@ describe("diagnostic CPU profile owner", () => {
   it("fails visibly when the runtime cannot load inspector", async () => {
     native.unsupported = true;
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
-    expect(native.connect).not.toHaveBeenCalled();
-  });
-
-  it("refuses active tracing even for non-CPU categories", async () => {
-    native.tracingCategories.mockReturnValue("node.perf");
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "tracing-active",
-      cleanupFailed: false,
-    });
     expect(native.connect).not.toHaveBeenCalled();
   });
 

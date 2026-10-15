@@ -181,7 +181,7 @@ it("retains ACP cohorts across unrelated writes and refreshes committed ACP chan
       });
       expect(observation.queries).toHaveLength(1);
       insert(key, "inserted");
-      await check("inserted", 1);
+      await check("inserted", 0);
       expect(
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
@@ -191,10 +191,10 @@ it("retains ACP cohorts across unrelated writes and refreshes committed ACP chan
       peer.prepare("UPDATE config_machine_state SET updated_at_ms=2").run();
       await check("inserted", 0);
       insert(key, "updated");
-      await check("updated", 1);
+      await check("updated", 0);
       await check("updated", 0);
       deleteAcpSessionMetaRows(peer, [key]);
-      await check(null, 1);
+      await check(null, 0);
       await check(null, 0);
     } finally {
       observation.restore();

@@ -176,14 +176,15 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
                   error: bridgeProps.props!.errors.get(active()!.id) ?? null,
                   variant: "modal",
                   queueCount: queue().length,
+                  renderPendingQueue: () =>
+                    renderApprovalQueueList({
+                      queue: queue(),
+                      activeId: active()!.id,
+                      onSelect: selectApproval,
+                    }),
                   onDecision: bridgeProps.props!.onDecision,
                 }}
               />
-              {renderApprovalQueueList({
-                queue: queue(),
-                activeId: active()!.id,
-                onSelect: selectApproval,
-              })}
             </div>
           </openclaw-modal-dialog>
         ) : undefined}

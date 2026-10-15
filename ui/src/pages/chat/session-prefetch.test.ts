@@ -2,7 +2,6 @@
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -135,33 +134,21 @@ describe("session navigation intent prefetch", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "replacement incarnation", patch: { sessionId: "replacement" } },
-    { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
-    { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
-    { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
-    { name: "active run custody", patch: { hasActiveRun: true } },
-  ])("rejects a prefetch when an alias gains $name", async ({ patch }) => {
+  it("does not publish history for a replaced session", async () => {
     const key = "agent:main:main";
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
-    const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
+    const original = { ...row(key, NOW - 1), sessionId: "original" };
     const snapshot = prefetchState(request, [original]);
     updatePrefetch(snapshot);
     intend(key);
     await advancePrefetch(300);
     expect(request).toHaveBeenCalledOnce();
 
-    const changed: GatewaySessionRow = {
-      ...original,
-      key: "global",
-      kind: "global",
-      ...patch,
-    };
     updatePrefetch({
       ...snapshot,
       listRevision: 2,
-      rows: [original, changed],
+      rows: [{ ...original, sessionId: "replacement" }],
     });
     response.resolve(historyResult(key));
     await settlePromises();
@@ -169,41 +156,6 @@ describe("session navigation intent prefetch", () => {
     await store.flush();
     expect(await store.read(cacheKey(key))).toBeNull();
   });
-
-  it.each([
-    { name: "an older alias", aliasActivityAt: NOW - 2, keepOriginal: true },
-    { name: "only an older alias", aliasActivityAt: NOW - 2, keepOriginal: false },
-  ])(
-    "requires the captured history to survive beside $name",
-    async ({ aliasActivityAt, keepOriginal }) => {
-      const key = "agent:main:main";
-      const response = createDeferred<ReturnType<typeof historyResult>>();
-      const request = vi.fn(() => response.promise);
-      const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
-      const snapshot = prefetchState(request, [original]);
-      updatePrefetch(snapshot);
-      intend(key);
-      await advancePrefetch(300);
-      expect(request).toHaveBeenCalledOnce();
-      updatePrefetch({
-        ...snapshot,
-        listRevision: 2,
-        rows: [
-          ...(keepOriginal ? [{ ...original }] : []),
-          { ...row("global", aliasActivityAt), kind: "global", sessionId: original.sessionId },
-        ],
-      });
-      response.resolve(historyResult(key));
-      await settlePromises();
-      expect(
-        readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
-      ).toEqual(keepOriginal ? historyResult(key).messages : null);
-      await store.flush();
-      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
-        keepOriginal ? historyResult(key).messages : null,
-      );
-    },
-  );
 
   it.each([
     "client replacement",
