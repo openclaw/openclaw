@@ -396,12 +396,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         if (
           command.type === "placementTurns.releaseIfOwned" &&
           !mutation.transactionGranted &&
-          !mutation.commitGranted &&
+          (!mutation.commitGranted || localTurn) &&
           mutation.settlement?.kind !== "unknown" &&
           isSqliteLockError(error)
         ) {
-          // The worker never admitted a commit. Keep this exact cleanup owner alive;
-          // SQLite waits in the worker before every new transaction attempt.
+          // A busy local autocommit statement has no effect even after admission.
+          // Keep this cleanup owner alive; SQLite waits in the worker on each attempt.
           // Never replay startup, a claim, an uncertain write, or a replaced database.
           context.admission.assertCurrent();
           if (!reportedContention) {
