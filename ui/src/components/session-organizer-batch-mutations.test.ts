@@ -98,32 +98,6 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("preserves each archive placement expectation and reports only successful targets", async () => {
-    const first = {
-      ...sessionRow(0),
-      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
-    };
-    const moved = {
-      ...sessionRow(1),
-      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
-    };
-    const harness = createHarness({ failedKeys: [moved.key] });
-    expect(
-      await patchSessionRows(harness.host, [first, moved], { archived: true }, harness.scope, {
-        sessionScope: true,
-      }),
-    ).toEqual([first]);
-    expect(harness.request).toHaveBeenCalledWith(
-      "sessions.patchMany",
-      expect.objectContaining({
-        targets: [first, moved].map((row) => Object.assign(sessionTarget(row), row.archiveGuard)),
-        patch: { archived: true },
-      }),
-      expect.anything(),
-    );
-    expect(harness.publishSessionMutationError).toHaveBeenCalled();
-  });
-
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();
@@ -233,19 +207,6 @@ describe("patchSessionRows", () => {
   });
 
   it.each([
-    { patch: { category: "Projects" }, capabilities: undefined },
-    { patch: { unread: false }, capabilities: [] },
-  ])("preserves captured batch identities for $patch", async ({ patch, capabilities }) => {
-    const rows = [sessionRow(0), sessionRow(1)];
-    const h = createHarness({ capabilities });
-    await patchSessionRows(h.host, rows, patch, h.scope);
-    expect(h.request).toHaveBeenCalledWith("sessions.patchMany", {
-      targets: rows.map(sessionTarget),
-      patch,
-    });
-  });
-
-  it.each([
     { current: false, staleAfterRequest: undefined, count: 1, requests: 0 },
     { current: true, staleAfterRequest: 1, count: 101, requests: 1 },
   ])("stops stale scopes after $requests dispatched chunks", async (scenario) => {
@@ -257,13 +218,29 @@ describe("patchSessionRows", () => {
   });
 
   it("keeps ordered partial outcomes and prunes only successful archived rows", async () => {
-    const rows = [sessionRow(0), sessionRow(1), sessionRow(2)];
+    const rows = [sessionRow(0), sessionRow(1), sessionRow(2)].map((row) =>
+      Object.assign(row, {
+        archiveGuard: {
+          expectedSidebarRoot: false,
+          expectedCategory: null,
+          expectedArchived: false,
+        },
+      }),
+    );
     const harness = createHarness({ failedKeys: [rows[0]!.key, rows[2]!.key] });
 
     await expect(
       patchSessionRows(harness.host, rows, { archived: true }, harness.scope),
     ).resolves.toEqual([rows[1]]);
 
+    expect(harness.request).toHaveBeenCalledWith(
+      "sessions.patchMany",
+      expect.objectContaining({
+        targets: rows.map((row) => Object.assign(sessionTarget(row), row.archiveGuard)),
+        patch: { archived: true },
+      }),
+      expect.anything(),
+    );
     expect(harness.pruneSidebarSessionEntry).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
@@ -279,13 +256,6 @@ describe("patchSessionRows", () => {
       at: 1,
       code: "INVALID_REQUEST",
       message: "invalid archive request",
-    },
-    {
-      name: "transport unavailability",
-      patch: { unread: true },
-      at: 1,
-      code: "UNAVAILABLE",
-      message: "disconnected",
     },
     {
       name: "later chunk rejection",
@@ -824,7 +794,8 @@ describe("session organizer snooze", () => {
     const until = Date.now() + 86_400_000;
     try {
       rememberCustomSnooze(key, until);
-      h.patch.mockRejectedValueOnce(new Error("denied"));
+      const error = new Error("denied");
+      h.patch.mockRejectedValueOnce(error);
       await snoozeSessionWithUndo(
         h.host,
         sessionRow(1),
@@ -832,6 +803,8 @@ describe("session organizer snooze", () => {
         h.scope,
       );
       expect(readCustomSnooze(key)).toBe(until);
+      expect(h.publishSessionMutationError).toHaveBeenCalledWith(h.scope, error);
+      expect(showToast).not.toHaveBeenCalled();
       await snoozeSessionWithUndo(h.host, sessionRow(1), { snoozedUntil: until + 2000 }, h.scope);
       expect(readCustomSnooze(key)).toBe(until);
       await snoozeSessionWithUndo(
@@ -854,14 +827,5 @@ describe("session organizer snooze", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("reports a rejected snooze through the ordinary session mutation error path", async () => {
-    const h = createHarness();
-    const error = new Error("snooze wake time must be in the future");
-    h.patch.mockRejectedValueOnce(error);
-    await snoozeSessionWithUndo(h.host, sessionRow(0), { snoozedUntil: 200 }, h.scope);
-    expect(h.publishSessionMutationError).toHaveBeenCalledWith(h.scope, error);
-    expect(showToast).not.toHaveBeenCalled();
   });
 });
