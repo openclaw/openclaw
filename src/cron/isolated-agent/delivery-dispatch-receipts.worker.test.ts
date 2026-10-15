@@ -9,7 +9,7 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queu
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   isCompletedDirectCronDelivery,
-  waitForCompletedDirectCronDelivery,
+  waitForDirectCronDeliveryOwner,
 } from "./delivery-dispatch-policy.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +29,7 @@ it.each([OUTBOUND_DELIVERY_QUEUE_NAME, "outbound-session-generation-v1"])(
       ["completed", "completed", now, "completed_bounded"],
       ["expired", "completed", now - 120_000, "completed_bounded"],
       ["abandoned", "pending", now, "send_attempt_started"],
+      ["unsent", "pending", now, undefined],
     ] as const) {
       seedDeliveryQueueEntry({
         queueName,
@@ -49,14 +50,17 @@ it.each([OUTBOUND_DELIVERY_QUEUE_NAME, "outbound-session-generation-v1"])(
       expect(await isCompletedDirectCronDelivery("cron-receipt:completed", queueName)).toBe(true);
       expect(await isCompletedDirectCronDelivery("cron-receipt:expired", queueName)).toBe(false);
       expect(
-        await waitForCompletedDirectCronDelivery({ id: "cron-receipt:completed", queueName }),
-      ).toBe(true);
+        await waitForDirectCronDeliveryOwner({ id: "cron-receipt:completed", queueName }),
+      ).toBe("completed");
       expect(
-        await waitForCompletedDirectCronDelivery({ id: "cron-receipt:abandoned", queueName }),
-      ).toBe(false);
-      expect(
-        await waitForCompletedDirectCronDelivery({ id: "cron-receipt:missing", queueName }),
-      ).toBe(false);
+        await waitForDirectCronDeliveryOwner({ id: "cron-receipt:abandoned", queueName }),
+      ).toBe("unknown");
+      expect(await waitForDirectCronDeliveryOwner({ id: "cron-receipt:unsent", queueName })).toBe(
+        "unsent",
+      );
+      expect(await waitForDirectCronDeliveryOwner({ id: "cron-receipt:missing", queueName })).toBe(
+        "unknown",
+      );
       expect(observer.counts).toEqual(emptySqliteCounts());
     } finally {
       observer.restore();

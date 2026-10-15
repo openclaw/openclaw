@@ -13,6 +13,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
@@ -26,7 +27,7 @@ import {
   logCronDeliveryWarn,
   maybeApplyTtsToCronPayloads,
   retryTransientDirectCronDelivery,
-  waitForCompletedDirectCronDelivery,
+  waitForDirectCronDeliveryOwner,
 } from "./isolated-agent/delivery-dispatch-policy.js";
 import {
   appendCronRunInspectionLink,
@@ -267,19 +268,27 @@ export async function sendCronAnnouncePayloadStrict(params: {
         result.status === "suppressed" &&
         result.reason === "no_visible_result" &&
         !recipientReached;
-      if (
-        (result.status === "failed" || handedOff) &&
-        intentId &&
-        (await waitForCompletedDirectCronDelivery({
-          id: intentId,
-          queueName,
-          signal: params.abortSignal,
-        }))
-      ) {
+      const ownerOutcome =
+        (result.status === "failed" || handedOff) && intentId
+          ? await waitForDirectCronDeliveryOwner({
+              id: intentId,
+              queueName,
+              signal: params.abortSignal,
+            })
+          : undefined;
+      if (ownerOutcome === "completed") {
         fence?.assertCurrent();
         return sent();
       }
       if (handedOff) {
+        // That owner's attempt ended unsent and left the send queued; retry it
+        // like this attempt's own unsent failure.
+        if (ownerOutcome === "unsent") {
+          throw new PlatformMessageNotDispatchedError(
+            "another delivery attempt of this occurrence ended unsent",
+            { cause: undefined },
+          );
+        }
         return {
           status: "unknown",
           reason:

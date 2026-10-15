@@ -13,6 +13,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
+import { waitForDirectCronDeliveryOwner } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { loadCronSessionEntryLatest } from "../cron/isolated-agent/session.js";
 import {
   createCronServiceWithStateForTest,
@@ -39,6 +40,15 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
+
+vi.mock("../cron/isolated-agent/delivery-dispatch-policy.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../cron/isolated-agent/delivery-dispatch-policy.js")>();
+  return {
+    ...actual,
+    waitForDirectCronDeliveryOwner: vi.fn(actual.waitForDirectCronDeliveryOwner),
+  };
+});
 
 const AT_MS = Date.UTC(2026, 9, 3, 9, 0, 0);
 const DAY_MS = 24 * 60 * 60_000;
@@ -80,6 +90,8 @@ describe("finalizeCronCompletionAnnouncement durable occurrence delivery", () =>
     sent: [] as { to: string; text: string }[],
     /** Holds the next dispatched send until released, after signaling that it started. */
     hold: undefined as { started: () => void; released: Promise<void> } | undefined,
+    /** Holds the next send before dispatch until released, then fails it unsent. */
+    holdThenFail: undefined as { started: () => void; released: Promise<void> } | undefined,
   };
 
   beforeEach(() => {
@@ -88,6 +100,7 @@ describe("finalizeCronCompletionAnnouncement durable occurrence delivery", () =>
     platform.failures = 0;
     platform.sent = [];
     platform.hold = undefined;
+    platform.holdThenFail = undefined;
     agentCfg = cfg;
     setActivePluginRegistry(
       createTestRegistry([
@@ -99,7 +112,13 @@ describe("finalizeCronCompletionAnnouncement durable occurrence delivery", () =>
             outbound: {
               deliveryMode: "direct",
               sendText: async ({ to, text, onPlatformSendDispatch }) => {
-                if (platform.down) {
+                const failing = platform.holdThenFail;
+                platform.holdThenFail = undefined;
+                if (failing) {
+                  failing.started();
+                  await failing.released;
+                }
+                if (platform.down || failing) {
                   platform.failures += 1;
                   throw new PlatformMessageNotDispatchedError("matrix is disconnected", {
                     cause: new Error("socket closed"),
@@ -427,6 +446,28 @@ describe("finalizeCronCompletionAnnouncement durable occurrence delivery", () =>
       runStartedAtMs: AT_MS + 60_100,
     });
     await retrySending.promise;
+    recoveryRelease.resolve();
+    await recovery;
+
+    expect(await retry).toMatchObject({ deliveryAttempted: true, delivered: true });
+    expect(platform.sent).toEqual([{ to: "!room:example", text: REMINDER }]);
+  });
+
+  it("retries a run's send after queue recovery's concurrent attempt fails unsent", async () => {
+    const job = reminderJob();
+    platform.down = true;
+    await announce(job, AT_MS + 100);
+    platform.down = false;
+    // Recovery holds the occurrence's send when the retry run reaches it, then fails before dispatch.
+    const recoverySending = createDeferred();
+    const recoveryRelease = createDeferred();
+    platform.holdThenFail = { started: recoverySending.resolve, released: recoveryRelease.promise };
+    const recovery = drainOnReconnect();
+    await recoverySending.promise;
+    vi.mocked(waitForDirectCronDeliveryOwner).mockClear();
+
+    const retry = announce(job, AT_MS + 60_100);
+    await vi.waitFor(() => expect(waitForDirectCronDeliveryOwner).toHaveBeenCalled());
     recoveryRelease.resolve();
     await recovery;
 

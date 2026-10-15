@@ -297,12 +297,16 @@ export async function isCompletedDirectCronDelivery(
   return receipt.status === "completed";
 }
 
-/** Wait only for an active recipient owner, never for crashed ambiguous sends. */
-export async function waitForCompletedDirectCronDelivery(params: {
+/**
+ * Waits only while another owner is actively sending the intent, never for a
+ * crashed ambiguous send. `unsent`: the queue holds the intent again with no
+ * send claimed or started, so that owner's attempt never reached the recipient.
+ */
+export async function waitForDirectCronDeliveryOwner(params: {
   id: string;
   queueName: string;
   signal?: AbortSignal;
-}): Promise<boolean> {
+}): Promise<"completed" | "unsent" | "unknown"> {
   const context = captureDeliveryQueueStateContext();
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -315,7 +319,10 @@ export async function waitForCompletedDirectCronDelivery(params: {
     );
     params.signal?.throwIfAborted();
     if (status === "completed") {
-      return true;
+      return "completed";
+    }
+    if (owner && owner.recoveryState === undefined) {
+      return "unsent";
     }
     if (
       !owner ||
@@ -326,13 +333,13 @@ export async function waitForCompletedDirectCronDelivery(params: {
           typeof owner.availableAt !== "number" ||
           owner.availableAt <= Date.now())
     ) {
-      return false;
+      return "unknown";
     }
     if (attempt < 119) {
       await sleepWithAbort(250, params.signal);
     }
   }
-  return false;
+  return "unknown";
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
