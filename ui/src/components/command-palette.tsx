@@ -1,4 +1,4 @@
-import { createEffect, onCleanup } from "solid-js";
+import { createEffect, onCleanup, Show } from "solid-js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
@@ -69,13 +69,14 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       controller.disconnect();
       controllers.delete(host);
     });
+    const readProps = () => {
+      lifecycle.revision();
+      return controller.readProps();
+    };
     return (
-      <CommandPaletteView
-        readProps={() => {
-          lifecycle.revision();
-          return controller.readProps();
-        }}
-      />
+      <Show when={readProps().open}>
+        <CommandPaletteView readProps={readProps} />
+      </Show>
     );
   },
   {

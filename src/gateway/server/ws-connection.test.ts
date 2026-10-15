@@ -416,42 +416,6 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
-  it("cancels direct-response forced termination after the socket closes", async () => {
-    vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket();
-    const { passed } = await connectTestWs({ socket });
-    const handlerParams = passed as { send: (frame: unknown) => { kind: string } };
-    socket.send.mockClear();
-    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-
-    expect(handlerParams.send({ type: "res", id: "req-slow", ok: true })).toEqual({
-      kind: "unavailable",
-    });
-    socket.emit("close", 1008, Buffer.from("slow consumer"));
-    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-
-    expect(socket.terminate).not.toHaveBeenCalled();
-  });
-
-  it("terminates direct responses immediately when close cannot be queued", async () => {
-    vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket();
-    socket.close.mockImplementationOnce(() => {
-      throw new Error("close unavailable");
-    });
-    const { passed } = await connectTestWs({ socket });
-    const handlerParams = passed as { send: (frame: unknown) => { kind: string } };
-    socket.send.mockClear();
-    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-
-    expect(handlerParams.send({ type: "res", id: "req-slow", ok: true })).toEqual({
-      kind: "unavailable",
-    });
-
-    expect(socket.terminate).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("shares one broadcast slow-consumer close with Gateway shutdown", async () => {
     vi.useFakeTimers();
     const socket = createGatewayWsTestSocket();

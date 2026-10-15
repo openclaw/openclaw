@@ -254,25 +254,13 @@ describe("session menu", () => {
   });
 
   it.each([false, true])(
-    "keeps archive choices in one root entry (compact=%s)",
+    "dispatches archive directly from the root entry (compact=%s)",
     async (compact) => {
       const onAction = vi.fn();
-      const menu = await mountMenu({ compact, session: { hasChildren: true }, onAction });
+      const menu = await mountMenu({ compact, onAction });
       expect(menuItemLabels(menu)).toContain("Archive session");
-      expect(menuItemLabels(menu)).not.toContain("Archive session and children…");
-      if (compact) {
-        selectMenuValue(menu, "compact:open-archive");
-        await menu.updateComplete;
-        expect(menuItem(menu, "Back").getAttribute("value")).toBe("compact:back");
-      }
-      const choices = compact ? menu : menuItem(menu, "Archive session");
-      expect(menuItemLabels(choices)).toEqual([
-        ...(compact ? ["Back"] : []),
-        "Session only",
-        "Archive session and children…",
-      ]);
-      selectMenuValue(menu, "archive-tree");
-      expect(onAction).toHaveBeenCalledWith({ kind: "archive-tree" });
+      selectMenuValue(menu, "toggle-archived");
+      expect(onAction).toHaveBeenCalledWith({ kind: "toggle-archived" });
     },
   );
 

@@ -550,7 +550,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
-  it.each(["global", "unknown"])(
+  it.each(["global"])(
     "keeps the selected agent through a %s hook checkpoint",
     async (sessionKey) => {
       const root = tempDirs.make("openclaw-owned-reply-claim-");

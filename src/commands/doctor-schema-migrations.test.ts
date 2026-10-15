@@ -154,6 +154,9 @@ it("bounds the version phase and restores a committed member when a later migrat
     const originalOutbox = database
       .prepare("SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid")
       .all();
+    const outboxSchemaQuery = `SELECT type, name, sql FROM sqlite_schema
+      WHERE tbl_name = 'context_engine_turn_outbox' ORDER BY type, name`;
+    const originalOutboxSchema = database.prepare(outboxSchemaQuery).all();
     const maintenance = createOpenClawDatabaseMaintenanceScope({
       schemaMaintenance: true,
       assertOwnerCurrent: () => {},
@@ -203,13 +206,18 @@ it("bounds the version phase and restores a committed member when a later migrat
       WHERE scope = 'migration-proof'`);
     await restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env });
     expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
-    expect(
-      database
-        .prepare(
-          "SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid",
-        )
-        .all(),
-    ).toEqual(originalOutbox);
+    {
+      // Node 24.19 retains stale SELECT * metadata across another handle's table rebuild.
+      using restored = new DatabaseSync(pathname, { readOnly: true });
+      expect(restored.prepare(outboxSchemaQuery).all()).toEqual(originalOutboxSchema);
+      expect(
+        restored
+          .prepare(
+            "SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual(originalOutbox);
+    }
     expect(
       database.prepare("SELECT value_json FROM cache_entries WHERE scope = 'migration-proof'").get()
         ?.value_json,

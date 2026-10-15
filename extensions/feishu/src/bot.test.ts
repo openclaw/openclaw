@@ -1810,7 +1810,7 @@ describe("handleFeishuMessage command authorization", () => {
     },
   ])("$name", async ({ messageId, senderOpenId, chatId, rootId, threadId, text, expected }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await receive({
+    const runtime = await receive({
       messageId,
       senderOpenId,
       chatId,
@@ -1823,6 +1823,8 @@ describe("handleFeishuMessage command authorization", () => {
     });
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(inboundContext().BodyForAgent).toContain(text);
+    expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(text);
     expect(inboundContext().Timestamp).toBe(1700000000000);
     expect(mockFormatAgentEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({ timestamp: 1700000000000 }),
@@ -2042,7 +2044,7 @@ describe("handleFeishuMessage command authorization", () => {
           contentType: "text",
         });
       }
-      await dispatchMessage({
+      const runtime = await dispatchMessage({
         cfg: createFeishuTestConfig({
           groupPolicy: "open",
           groups: { "oc-group-90177": { requireMention: true } },
@@ -2066,6 +2068,9 @@ describe("handleFeishuMessage command authorization", () => {
         expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
         expect(inboundContext().Body).toContain("[Replying to:");
         expect(inboundContext().Body).toContain("parent message with context");
+        expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(
+          "parent message with context",
+        );
       } else {
         expect(mockGetMessageFeishu).not.toHaveBeenCalled();
         expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();

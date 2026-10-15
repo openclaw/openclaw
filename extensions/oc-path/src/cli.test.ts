@@ -480,6 +480,90 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
+    describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
+      const frontmatter =
+        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
+      const body = '\n# Title\n\n## Tools ##\n- command: old\n\n## Other\n* untouched: "quoted"';
+      const before = frontmatter + body;
+      it.each([
+        [
+          "body field edit",
+          "tools/command/command",
+          "new",
+          before.replace("command: old", "command: new"),
+        ],
+        [
+          "item insertion",
+          "tools/+",
+          "added: value",
+          before.replace("## Other", "- added: value\n## Other"),
+        ],
+        ["section insertion", "+", "Added", before + "\n\n## Added"],
+        [
+          "frontmatter edit",
+          "[frontmatter]/name",
+          "updated",
+          before.replace('name: &shared "example"', "name: &shared updated"),
+        ],
+        [
+          "frontmatter insertion",
+          "[frontmatter]/+added",
+          "value",
+          before.replace("bins: [gh]\n---", "bins: [gh]\nadded: value\n---"),
+        ],
+        [
+          "empty anchored value",
+          "[frontmatter]/empty",
+          "filled",
+          before.replace("empty: &empty\n", "empty: &empty filled\n"),
+        ],
+        [
+          "block scalar replacement",
+          "[frontmatter]/description",
+          "plain",
+          before.replace("|\n  First line.\n  Second line.", "plain"),
+        ],
+        [
+          "nested metadata replacement",
+          "[frontmatter]/metadata",
+          "plain",
+          before.replace(
+            "metadata:\n  openclaw:\n    requires:\n      bins: [gh]",
+            "metadata: plain",
+          ),
+        ],
+      ])(
+        "preserves unrelated Markdown bytes during %s",
+        async (_label, target, value, expected) => {
+          const workspaceDir = tempDirs.make("oc-path-cli-");
+          const filePath = join(workspaceDir, "SKILL.md");
+          const finalNewline = ending === "\n" ? ending : "";
+          writeFileSync(filePath, before.replace(/\n/g, ending) + finalNewline);
+          const rt = createTestRuntime();
+          await pathSetCommand(
+            `oc://SKILL.md/${target}`,
+            value,
+            { cwd: workspaceDir, json: true },
+            rt,
+          );
+
+          expect(rt.exitCode, stderrText(rt)).toBe(0);
+          expect(readFileSync(filePath, "utf8")).toBe(
+            expected.replace(/\n/g, ending) + finalNewline,
+          );
+          if (target === "[frontmatter]/metadata") {
+            const readback = createTestRuntime();
+            await pathResolveCommand(
+              `oc://SKILL.md/${target}`,
+              { cwd: workspaceDir, json: true },
+              readback,
+            );
+            expect(readback.exitCode, stderrText(readback)).toBe(0);
+            expect(JSON.parse(stdoutText(readback)).match.valueText).toBe(value);
+          }
+        },
+      );
+    });
     it.each(["\n", "\r\n", "mixed"])(
       "preserves JSONL bytes outside a leaf and across append with %j separators",
       async (ending) => {
@@ -636,7 +720,7 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(after);
     });
 
-    it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
+    it("CLI-S05c --dry-run --diff preserves CRLF during a Markdown value change", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
       const before = "---\r\nname: x\r\n---\r\n";
@@ -644,14 +728,15 @@ describe("openclaw path CLI", () => {
       const rt = createTestRuntime();
       await pathSetCommand(
         "oc://AGENTS.md/[frontmatter]/name",
-        "x",
+        "y",
         { cwd: workspaceDir, json: true, dryRun: true, diff: true },
         rt,
       );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
+      expect(out.bytes).toBe("---\r\nname: y\r\n---\r\n");
       expect(out.diff).toContain("-name: x\r");
-      expect(out.diff).toContain("+name: x");
+      expect(out.diff).toContain("+name: y\r");
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 

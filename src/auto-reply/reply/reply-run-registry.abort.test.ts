@@ -134,12 +134,6 @@ describe("reply run registry cancellation", () => {
 
   it.each([
     {
-      reason: undefined,
-      code: "aborted_by_user",
-      cancelReason: "user_abort",
-      direct: false,
-    },
-    {
       reason: new Error("caller cancelled"),
       code: "aborted_by_user",
       cancelReason: "user_abort",

@@ -53,6 +53,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers,
     sharedCompute,
+    databaseAccess: "read-only",
   });
   const stores = new Map<string, RetainedStore>();
   function retainStore(storePath: string) {

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   generatePostgresSchemas,
+  generateLogbookPostgresSchema,
   generateWorkboardPostgresSchema,
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
@@ -126,6 +127,29 @@ describe("PostgreSQL schema generation", () => {
     expect(postData).not.toContain("CREATE TABLE");
     expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
     expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
+  });
+
+  it("keeps Logbook DDL and port allocation metadata current", async () => {
+    const { sql, portMetadata } = await generateLogbookPostgresSchema();
+    expect(sql).toBe(
+      fs.readFileSync(
+        path.join(root, "extensions/logbook/src/logbook-schema.postgres.sql"),
+        "utf8",
+      ),
+    );
+    expect(portMetadata).toEqual(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(root, "src/infra/database-engine/logbook-port.generated.json"),
+          "utf8",
+        ),
+      ),
+    );
+    expect(portMetadata.tables.flatMap((table) => table.identities)).toEqual(
+      Array.from({ length: 4 }, () => ({ column: "id", autoIncrement: true })),
+    );
+    expect(sql).not.toContain("sqlite_sequence");
+    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
   });
 
   it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
