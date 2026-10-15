@@ -240,6 +240,21 @@ it.each([
   },
 );
 
+it("requires confirmation when only the UI-selected agent remembers consent", async () => {
+  const sessionKey = "agent:other-agent:chat";
+  const { host } = fixture({
+    remembered: true,
+    sessionKey,
+    rememberedAgentId: "selected-agent",
+  });
+  const selection = switchChatModel(host, "fixture/selected", sessionKey, "opencode");
+  const modal = await dialog();
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+  click(modal, "Cancel");
+  await expect(selection).resolves.toBe(false);
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+});
+
 it.each([
   {
     name: "mandatory sandbox",
