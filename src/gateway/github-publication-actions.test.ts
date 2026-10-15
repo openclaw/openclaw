@@ -29,9 +29,16 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
-vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
-}));
+vi.mock("./worker-environments/session-repository-checkpoints.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("./worker-environments/session-repository-checkpoints.js")
+    >();
+  return {
+    ...actual,
+    withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  };
+});
 
 async function fixture(backend: "local" | "repository" = "local") {
   const f = await createRequesterPublicationFixture(checkpoint, backend, {
