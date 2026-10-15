@@ -8,6 +8,7 @@ import {
   getRenderedModalDialog,
   installDialogPolyfill,
 } from "../../../test-helpers/modal-dialog.ts";
+import { settleWebAwesome } from "../../../test-helpers/web-awesome.ts";
 import "../../../components/modal-dialog.ts";
 import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
@@ -398,7 +399,7 @@ describe("chat picker overlay", () => {
     expect(document.activeElement).toBe(effortTrigger);
   });
 
-  it("keeps ancestor pickers open and dismisses nested menus from the inside out", () => {
+  it("keeps ancestor pickers open and dismisses nested menus from the inside out", async () => {
     onTestFinished(installChatComposerPickerDismissal(document));
     const composer = document.createElement("div");
     composer.className = "agent-chat__input";
@@ -417,6 +418,7 @@ describe("chat picker overlay", () => {
     dropdown.addEventListener("wa-show", handleChatComposerDropdownShow);
     dropdown.dispatchEvent(new Event("wa-show"));
 
+    await settleWebAwesome(composer);
     expect(model.open).toBe(true);
     expect(peer.open).toBe(false);
     accountTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

@@ -9,7 +9,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
 
-type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
+type DeepPartial<T> = T extends object ? { [P in keyof T]?: DeepPartial<T[P]> } : T;
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
   reasoning?: string;

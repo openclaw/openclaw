@@ -20,7 +20,7 @@ For an eligible repository with committed content, OpenClaw:
 3. Removes worker identity and session state, then fixes the snapshot capture point before node enrollment.
 4. Enrolls the node, binds the session workspace, runs post-create/start commands, and starts the first turn.
 
-With Crabbox 0.78.0 or newer on AWS, the first session continues to enrollment once Crabbox confirms the capture point is fixed. The snapshot upload finishes in the background; later sessions start cold until it is available. Older Crabbox, refresh captures, reserves, and other backends still wait for completion. Daytona may stop and restore the source machine during capture.
+With Crabbox 0.79.0 or newer on AWS, the first session continues to enrollment once Crabbox confirms the capture point is fixed. The snapshot upload finishes in the background; later sessions start cold until it is available. Older Crabbox, refresh captures, reserves, and other backends still wait for completion. Daytona may stop and restore the source machine during capture.
 
 This works for both Gateway checkouts and repository-only GitHub sessions. Only committed repository content enters preparation. Session edits and enrollment credentials arrive after the capture point is fixed. Private repository preparation transfers Git content without putting GitHub credentials in worker files or snapshots; it needs temporary Gateway disk space, and the outgoing pack is limited to 4 GiB.
 

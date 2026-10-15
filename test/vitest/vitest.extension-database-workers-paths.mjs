@@ -42,6 +42,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
   "extensions/qa-lab/src/suite-runtime-agent-session.test.ts",
   "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
+  // Host exec reads the shared secret store through the main-thread broker.
+  "extensions/codex/src/app-server/host-credential-execution.test.ts",
   "extensions/codex/src/app-server/responses-oauth.authority.test.ts",
   "extensions/codex/src/app-server/auth-bridge.test.ts",
   "extensions/codex/src/app-server/isolated-completion.auth-boundary.test.ts",

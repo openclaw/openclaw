@@ -117,6 +117,48 @@ describe("SidebarSessionProjection created order", () => {
 });
 
 describe("SidebarSessionProjection child expansion", () => {
+  it("reveals newly added children while preserving a manual collapse through ordinary updates", () => {
+    const projection = new SidebarSessionProjection();
+    const parent = sessionRow("parent", { childSessionKeys: ["first", "second"] });
+    projection.project(projectionInput([sessionRow(parent.key)]));
+    projection.project(projectionInput([parent]));
+    expect(projection.isChildrenExpanded(parent.key)).toBe(true);
+    expect(projection.toggleChildren(parent)).toEqual({ expanded: false });
+
+    projection.project(
+      projectionInput([sessionRow(parent.key, { childSessionKeys: ["second", "first"] })]),
+    );
+    expect(projection.isChildrenExpanded(parent.key)).toBe(false);
+
+    // Compare identities, not counts: one child can replace another between snapshots.
+    const replacement = sessionRow(parent.key, { childSessionKeys: ["second", "third"] });
+    projection.project(projectionInput([replacement]));
+    expect(projection.isChildrenExpanded(parent.key)).toBe(true);
+
+    projection.showMoreChildren(parent.key);
+    projection.project(
+      projectionInput([
+        sessionRow(parent.key, { childSessionKeys: ["second", "third", "fourth"] }),
+      ]),
+    );
+    expect(projection.isChildrenFullyShown(parent.key)).toBe(true);
+  });
+
+  it("baselines restored collapsed children before revealing later additions", () => {
+    const projection = new SidebarSessionProjection();
+    const parent = sessionRow("parent", { childSessionKeys: ["first"] });
+    projection.restoreChildrenDisplay([
+      { key: parent.key, childrenDisplayMode: "collapsed-by-user" },
+    ]);
+    projection.project(projectionInput([parent]));
+    expect(projection.isChildrenExpanded(parent.key)).toBe(false);
+
+    projection.project(
+      projectionInput([sessionRow(parent.key, { childSessionKeys: ["first", "second"] })]),
+    );
+    expect(projection.isChildrenExpanded(parent.key)).toBe(true);
+  });
+
   it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
     const projection = new SidebarSessionProjection();
     const rows = [
