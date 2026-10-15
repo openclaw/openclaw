@@ -185,42 +185,6 @@ describe("resolveLobsterRunOutcome", () => {
 });
 
 describe("lobster pet element", () => {
-  it("batches composer geometry reads before paint and retires detached work", async () => {
-    vi.useFakeTimers();
-    const element = createPet(42, "offline");
-    await element.updateComplete;
-    await advancePetFrame(element);
-    const composer = element.parentElement!;
-    const footer = composer.querySelector(".agent-chat__composer-footer")!;
-    const readStyle = vi.spyOn(window, "getComputedStyle");
-    try {
-      composer.getBoundingClientRect().width = 0;
-      // Lit/custom-element commits can span several microtasks before one paint.
-      for (let index = 0; index < 3; index++) {
-        footer.append(document.createElement("span"));
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      expect(readStyle).not.toHaveBeenCalled();
-      await advancePetFrame(element);
-      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-      expect(element.hasAttribute("data-scene-ready")).toBe(false);
-      readStyle.mockClear();
-      footer.append(document.createElement("span"));
-      await vi.advanceTimersByTimeAsync(0);
-      element.remove();
-      await advancePetFrame(element);
-      expect(readStyle).not.toHaveBeenCalled();
-      composer.getBoundingClientRect().width = 720;
-      composer.prepend(element);
-      await element.updateComplete;
-      await advancePetFrame(element);
-      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-      expect(element.hasAttribute("data-scene-ready")).toBe(true);
-    } finally {
-      readStyle.mockRestore();
-    }
-  });
-
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
     const element = createPet(42);

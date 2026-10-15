@@ -3,6 +3,7 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_ROWS_DELTA_PREFIX,
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
@@ -73,7 +74,12 @@ type Publication = {
   rows: PublicationRows;
   lists: Map<
     string,
-    { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection; selectedAt?: number }
+    {
+      rows?: GatewaySessionRow[];
+      previousRows?: GatewaySessionRow[];
+      selection?: SessionEntrySelection;
+      selectedAt?: number;
+    }
   >;
 };
 type PublicationView = () => Publication;
@@ -157,16 +163,45 @@ const sharedLists = new WeakMap<
 export function shareSidebarSessionRows(
   rows: GatewaySessionRow[],
   ifRowsRevision?: string,
-): Pick<SessionsListResult, "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged"> {
+  previousRows?: GatewaySessionRow[],
+): Pick<
+  SessionsListResult,
+  "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
+> {
   let shared = sharedLists.get(rows);
   if (!shared) {
     shared = { ...shareSessionRowFacts(rows), rowsRevision: randomUUID() };
     registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
     sharedLists.set(rows, shared);
   }
-  return ifRowsRevision === shared.rowsRevision
-    ? { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true as const }
-    : shared;
+  const baseRevision = ifRowsRevision?.startsWith(SESSION_ROWS_DELTA_PREFIX)
+    ? ifRowsRevision.slice(SESSION_ROWS_DELTA_PREFIX.length)
+    : undefined;
+  const revision = baseRevision ?? ifRowsRevision;
+  if (revision === shared.rowsRevision) {
+    return { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true };
+  }
+  if (
+    baseRevision !== undefined &&
+    previousRows &&
+    sharedLists.get(previousRows)?.rowsRevision === baseRevision
+  ) {
+    const previous = new Map(previousRows.map((row, index) => [row, index]));
+    const changed: GatewaySessionRow[] = [];
+    const order = rows.map(
+      (row) => previous.get(row) ?? previousRows.length + changed.push(row) - 1,
+    );
+    if (changed.length < rows.length) {
+      const delta = shareSessionRowFacts(changed);
+      registerSerializedJsonArray(delta.sessions, delta.sessions.map(serializeSessionRow));
+      return {
+        ...delta,
+        rowsRevision: shared.rowsRevision,
+        rowsDelta: { baseRevision, order },
+      };
+    }
+  }
+  return shared;
 }
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
@@ -212,7 +247,10 @@ export function prepareSessionRowPublication(
         retained.factsRevision++;
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of retained.lists.values()) {
-          if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
+          if (change.kind === "reset") {
+            list.previousRows = list.rows = undefined;
+          } else if (list.rows?.some((row) => row.key === change.key)) {
+            list.previousRows = list.rows[0]?.rowMode === "sidebar" ? list.rows : undefined;
             list.rows = undefined;
           }
         }
@@ -614,15 +652,17 @@ export function prepareProjectedSessionPresentation(
       const view = listView(opts);
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return previous;
+        return { sessions: previous, previousRows: view.previousRows };
       }
       Object.freeze(rows);
       // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
       if (opts.rowMode !== "sidebar") {
         registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      } else if (previous) {
+        view.previousRows = previous;
       }
       view.rows = rows;
-      return rows;
+      return { sessions: rows, previousRows: view.previousRows };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

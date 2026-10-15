@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { createComponent, createMemo, Show } from "solid-js";
+import { createComponent, createMemo, lazy, Loading, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
@@ -8,7 +8,6 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import {
   avatarArtwork,
-  renderAgentAvatarFallback,
   renderAgentAvatarHatContents,
   resolveAgentIdentityAvatarView,
   type AgentIdentity,
@@ -17,6 +16,10 @@ import "../theme-brand-icon.ts";
 import { Icon } from "./icon.tsx";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import "../../styles/identity-avatar.css";
+
+const AgentAvatarFace = lazy(() => import("../agent-avatar-face.tsx"), {
+  export: "AgentAvatarFace",
+});
 
 export function AgentIdentityAvatar(props: {
   agent: AgentIdentity;
@@ -52,10 +55,18 @@ export function AgentIdentityAvatar(props: {
             onImageError={props.onImageError}
           />
         </Show>
-        <span
-          ref={avatarArtwork(() => renderAgentAvatarFallback(props.agent))}
-          class="identity-avatar__fallback"
-        />
+        <span class="identity-avatar__fallback">
+          <Show
+            when={props.agent.textAvatar}
+            fallback={
+              <Loading>
+                <AgentAvatarFace agentId={props.agent.id} />
+              </Loading>
+            }
+          >
+            <span class="identity-avatar__text" data-avatar={props.agent.textAvatar} />
+          </Show>
+        </span>
         <Show when={!props.agent.pending && hat()}>
           <span
             ref={avatarArtwork(() => renderAgentAvatarHatContents(hat(), branding.read()))}

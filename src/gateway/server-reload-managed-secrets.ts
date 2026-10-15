@@ -12,7 +12,7 @@ import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.
 import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
-  hasActiveSecretsRuntimeSnapshotLineage,
+  getActiveSecretsRuntimeSnapshotLineageRevisionState,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
 } from "../secrets/runtime-state.js";
@@ -125,6 +125,7 @@ export function createManagedReloadSecretHandlers(options: {
       const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
       const previousSecretsSnapshot = getActiveSecretsRuntimeSnapshotState();
       const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+      const previousSecretsLineage = getActiveSecretsRuntimeSnapshotLineageRevisionState();
       const previousRuntimeMetadata = getRuntimeConfigSnapshotMetadata();
       const nextSecretsSourceConfig = prepareRuntimeCandidate(
         nextConfig,
@@ -194,11 +195,12 @@ export function createManagedReloadSecretHandlers(options: {
       if (!previousRuntimeMetadata || !transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
-        if (hasActiveSecretsRuntimeSnapshotLineage(previousSecretsRevision)) {
-          continue;
-        }
+      // Equal config values can still replace the secrets activation owner.
+      if (getActiveSecretsRuntimeSnapshotLineageRevisionState() !== previousSecretsLineage) {
         throw new GatewayConfigReloadSupersededError();
+      }
+      if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
+        continue;
       }
       if (
         !preparation ||

@@ -7,12 +7,11 @@ import {
   type NativeDeviceSettingsCapability,
 } from "../../../app/native-device-settings.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
 
 let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
@@ -30,7 +29,7 @@ async function mountPermissionCard(
     ? createApplicationContextProvider(context)
     : document.createElement("div");
   document.body.append(container);
-  const view = mountSolid(() => <LitContent value={renderChatPermissionCard(request, onRetry)} />, {
+  const view = mountSolid(() => <ChatPermissionCard request={request} onRetry={onRetry} />, {
     container,
   });
   onTestFinished(async () => {
