@@ -1,13 +1,12 @@
 import { encodeClawAgentOwnership } from "./provenance-agent-origin.js";
-import type { PersistedClawInstall } from "./provenance-types.js";
-import type { ClawAddPlan } from "./types.js";
+import type { ClawInstallRecordUpdate, PersistedClawInstall } from "./provenance-types.js";
 
-export function clawAgentOwnedPaths(plan: ClawAddPlan): string[] {
+export function clawAgentOwnedPaths(plan: Pick<ClawInstallRecordUpdate, "actions">): string[] {
   return plan.actions.filter((action) => action.kind === "agent").map((action) => action.target);
 }
 
 export function prepareClawInstallRecord(
-  plan: ClawAddPlan,
+  plan: ClawInstallRecordUpdate,
   fields: Pick<
     PersistedClawInstall,
     "agentOrigin" | "agentConfigDigest" | "status" | "addedAtMs" | "updatedAtMs" | "bootstrap"

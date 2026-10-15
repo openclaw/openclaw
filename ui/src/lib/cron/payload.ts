@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { toNumber } from "../format.ts";
@@ -21,7 +20,7 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
-  return isSystemOwnedCronPayloadKind(value.kind);
+  return false;
 }
 
 export function getCronJobPayload(job: CronJob): CronPayload | null {
@@ -77,10 +76,16 @@ export function buildCronPayload(
         ? { timeoutSeconds: null }
         : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
+    ...(form.payloadSkipIfScratchEmpty || original?.skipIfScratchEmpty !== undefined
+      ? { skipIfScratchEmpty: form.payloadSkipIfScratchEmpty }
+      : {}),
     ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
     ...(cloned?.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
+      : {}),
+    ...(form.payloadIncludeReasoning || original?.includeReasoning !== undefined
+      ? { includeReasoning: form.payloadIncludeReasoning }
       : {}),
   };
 }

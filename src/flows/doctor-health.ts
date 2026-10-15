@@ -193,6 +193,12 @@ async function runDoctorHealthFlowWithResult(
     const { assertDoctorRetiredStateAdmission } =
       await import("../commands/doctor-retired-state-admission.js");
     assertDoctorRetiredStateAdmission();
+    const { prepareAutomaticHeartbeatRepair } =
+      await import("../commands/doctor-automatic-heartbeat-repair.js");
+    const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
+    // This opts only custody and backup into maintenance. All other repairs keep
+    // the original options and prompter, including diagnostic-only invocations.
+    const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
     if (options.repair === true || options.yes === true || interactiveRepair) {
       preparedArchiveDiscovery = await prepareDoctorMaintenanceArchives(
         databasePreflight,
@@ -206,7 +212,7 @@ async function runDoctorHealthFlowWithResult(
     ]);
     maintenance = await measureGatewayBootstrapStep("doctor.maintenance.begin", () =>
       beginDoctorMaintenance({
-        options,
+        options: maintenanceOptions,
         interactiveRepair,
         root,
         runtime: repairRuntime,
@@ -279,63 +285,16 @@ async function runDoctorHealthFlowWithResult(
         },
       });
 
-      if (maintenance && (options.repair === true || options.yes === true)) {
-        const {
-          repairOpenClawStateDatabaseIndexesForDoctor,
-          repairOpenClawStateDatabaseReadabilityForDoctor,
-        } = await import("../state/openclaw-state-db.js");
-        // Restore physical indexes, then legacy catalog readability before config discovery.
-        let repairedState = false;
-        for (const repair of [
-          repairOpenClawStateDatabaseIndexesForDoctor,
-          repairOpenClawStateDatabaseReadabilityForDoctor,
-        ]) {
-          const result = repair({ env: process.env });
-          repairedState ||= result.changes.length > 0;
-          if (result.warnings.length > 0) {
-            throw new Error(result.warnings.join("\n"));
-          }
-          for (const change of result.changes) {
-            effectiveRuntime.log(change);
-          }
-        }
-        if (repairedState) {
-          schemas = await prepareDoctorDatabasePreflight();
-        }
-      }
       if (maintenance) {
-        const { backupDoctorMigrationDatabases } =
-          await import("../commands/doctor-migration-backup.js");
-        const { createOpenClawAgentDatabasePathMatcher } =
-          await import("../state/openclaw-agent-db.paths.js");
-        const { normalizeAgentId } = await import("../routing/session-key.js");
-        const samePath = createOpenClawAgentDatabasePathMatcher();
-        const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-        const databaseTargets = discovery?.schemaTargets.filter(
-          ({ agentId, path: databasePath, realPath }) =>
-            !schemas.agentRefusals?.some(
-              (refusal) =>
-                normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
-                refusal.paths.some((pathname) => samePath(pathname, databasePath)),
-            ) &&
-            !schemas.indeterminate.some(
-              (failure) =>
-                failure.kind === "agent" &&
-                (failure.path === databasePath ||
-                  discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
-            ),
-        );
-        const backups = await backupDoctorMigrationDatabases({
-          env: process.env,
-          databasePaths: databaseTargets?.map((database) => database.path) ?? [],
-          agentDatabaseTargets: databaseTargets,
-          pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
-          pendingMigrations: schemas.pendingMigrations,
+        const { prepareDoctorHealthDatabaseBackups } =
+          await import("./doctor-health-database-backup.js");
+        schemas = await prepareDoctorHealthDatabaseBackups({
+          schemas,
+          repairState: options.repair === true || options.yes === true,
+          automaticHeartbeatRepair: Boolean(automaticHeartbeatRepair),
           verifiedSnapshots,
+          runtime: effectiveRuntime,
         });
-        for (const message of [...backups.changes, ...backups.warnings]) {
-          effectiveRuntime.log(message);
-        }
       }
 
       const stateSchemaPreparation = await prepareDoctorStateSchema(schemas, prompter.shouldRepair);
@@ -389,6 +348,7 @@ async function runDoctorHealthFlowWithResult(
           options,
           retiredStateAdmitted: true,
           stateSchemaPreparation,
+          ...(automaticHeartbeatRepair ? { automaticHeartbeatRepair } : {}),
           agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
           confirm: (p) => prompter.confirm(p),
           runtime: doctorRuntime,

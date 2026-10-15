@@ -33,7 +33,7 @@ export function createChatTranscriptPublication(params: {
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    options: { controlUiVisible?: boolean; isHeartbeat?: boolean },
+    options: { controlUiVisible?: boolean },
   ) => void;
 }) {
   const { chatRunState, agentRunSeq } = params;
@@ -226,7 +226,7 @@ export function createChatTranscriptPublication(params: {
         clientRunId,
         sourceRunId,
         agentRunSeq.get(sourceRunId) ?? 0,
-        { controlUiVisible: context?.isControlUiVisible, isHeartbeat: context?.isHeartbeat },
+        { controlUiVisible: context?.isControlUiVisible },
       );
     },
   };

@@ -3,17 +3,20 @@ import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 export function registerSystemEventAdmissionCases({
   runPrepared,
   requireRunReplyAgentCall,
+  internalEventOptions,
 }: {
   runPrepared: (
     overrides?: Partial<Parameters<typeof runPreparedReply>[0]>,
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
+  internalEventOptions: InternalGetReplyOptions;
 }): void {
   it("keeps delivery-owned restart occurrences queued through production reply admission", async () => {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
@@ -33,7 +36,7 @@ export function registerSystemEventAdmissionCases({
       agentId: "main",
       sessionKey,
       opts: withReplySystemEventContext(
-        { isHeartbeat: true },
+        { ...internalEventOptions },
         {
           sessionKey,
           events: captured,
@@ -68,7 +71,7 @@ export function registerSystemEventAdmissionCases({
       agentId: "alpha",
       sessionKey: "global",
       opts: withReplySystemEventContext(
-        { isHeartbeat: true },
+        { ...internalEventOptions },
         { sessionKey: "global", events: peekSystemEventEntries("agent:alpha:global") },
       ),
     });

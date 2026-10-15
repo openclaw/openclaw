@@ -187,8 +187,8 @@ for participant-aware admission.
 
 ## Internal turn sources
 
-`MsgContext.InternalTurnSource` identifies an internal wake: `"heartbeat"`,
-`"cron"`, or `"exec"`. Leave it unset for ordinary channel messages. It keeps
+`MsgContext.InternalTurnSource` identifies an internal wake: `"cron"`, `"exec"`,
+`"event"`, or `"progress-card-refresh"`. Leave it unset for ordinary channel messages. It keeps
 internal turns from resetting sessions or replacing the conversation binding;
 it does not grant execution authority or replace `InputProvenance`.
 
@@ -197,10 +197,10 @@ Keep `Provider` and `Surface` for transport identity, and keep the reply route i
 or explicit reply target. Do not put a wake label in those channel fields.
 
 For existing SDK callers, inbound finalization and session-recording entrypoints
-translate legacy `Provider` values `"heartbeat"`, `"cron-event"`, and
-`"exec-event"` into `InternalTurnSource`. They remove those labels from channel
-fields while preserving a real reply route. New callers should set the typed
-source directly.
+translate legacy `Provider` values `"cron-event"` and `"exec-event"` into
+`InternalTurnSource`. They remove those labels from channel fields while
+preserving a real reply route. The retired `"heartbeat"` label is not mapped.
+New callers should set the typed source directly.
 
 ## Receive acknowledgment policy
 

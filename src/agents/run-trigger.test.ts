@@ -23,10 +23,8 @@ describe("resolveModelCallUrgency", () => {
 
   it.each([
     ["cron trigger", { trigger: "cron" }],
-    ["heartbeat trigger", { trigger: "heartbeat" }],
     ["memory trigger", { trigger: "memory" }],
     ["cron bootstrap", { bootstrapContextRunKind: "cron" }],
-    ["heartbeat bootstrap", { bootstrapContextRunKind: "heartbeat" }],
   ] as const)(
     "keeps %s behind interactive work despite inherited user provenance",
     (_name, provenance) => {

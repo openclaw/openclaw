@@ -16,7 +16,7 @@ type PrivateMessageToolFinalContext = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
   successfulSourceReplyDelivery: boolean;
-  isHeartbeat: boolean;
+
   isRoomEvent: boolean;
 };
 
@@ -25,7 +25,6 @@ export function shouldClassifyPrivateMessageToolFinal(
   params: PrivateMessageToolFinalContext,
 ): boolean {
   return !(
-    params.isHeartbeat ||
     params.isRoomEvent ||
     params.sourceReplyDeliveryMode !== "message_tool_only" ||
     params.sendPolicyDenied ||

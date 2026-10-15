@@ -19,8 +19,8 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
 - `system-presence` returns the current presence snapshot for connected operator/node devices.
 - `system-event` appends a system event and can update/broadcast presence context.
-- `last-heartbeat` returns the latest persisted heartbeat event.
-- `set-heartbeats` toggles heartbeat processing on the gateway.
+- `last-heartbeat` is a deprecated protocol v4 adapter for the latest migrated/default monitor result in ordinary automation state.
+- `set-heartbeats` is a deprecated protocol v4 adapter that enables or disables only the corresponding migrated/default monitor jobs. It does not control unrelated automations or immediate session follow-ups. See [Heartbeat migration](/gateway/heartbeat).
 - `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
 - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. While prepared, authenticated WebSocket connects remain available, but only `gateway.suspend.*` and an exact targeted non-safe `gateway.restart.request` may run; safe and untargeted restarts remain fenced. `gateway.suspend.status` checks the lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
 

@@ -134,6 +134,7 @@ function createMaintenanceRuntime(params: {
       subscribeChanges: (
         listener: Parameters<WorkerSessionPlacementStore["subscribeChanges"]>[0],
       ) => params.preservationStore?.subscribeChanges(listener) ?? (() => {}),
+      registerTurnClaimClosedHandler: () => () => {},
       workspaceResultInstanceId: () => "gateway-test",
       getAsync: async (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),

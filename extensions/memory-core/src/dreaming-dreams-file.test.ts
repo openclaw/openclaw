@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
@@ -24,6 +28,7 @@ function setNarrativeTestEnv(stateDir: string): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -31,6 +36,8 @@ describe("dream diary file behavior", () => {
   it("does not restore deleted diary content from an update already in progress", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-forget-update-");
     setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+    const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
+    setRuntimeConfigSnapshot(cfg);
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     const claim = "A private cobalt archive phrase.";
     await fs.writeFile(dreamsPath, `# Diary\n\n## Session ID: forgotten\n${claim}\n`);
@@ -49,7 +56,7 @@ describe("dream diary file behavior", () => {
     try {
       await prepared.promise;
       forgotten = forgetMemoryEntries({
-        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+        cfg,
         agentId: "main",
         sessionIds: ["forgotten"],
       });

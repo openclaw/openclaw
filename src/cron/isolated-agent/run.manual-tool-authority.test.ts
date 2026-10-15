@@ -203,7 +203,7 @@ describe("manual run tool authority after the initiating invocation closes", () 
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runSchedulerOwned: createScheduledGatewayRunner(() => context),
       onEvent: (event) => {
         if (event.action === "finished") {

@@ -105,7 +105,6 @@ describe("agent-runner-utils", () => {
             assertCurrent: vi.fn(),
           },
         },
-        isHeartbeat: false,
       };
     }
 
@@ -139,6 +138,13 @@ describe("agent-runner-utils", () => {
     it("rejects inherited dashboard options outside their admitted source", () => {
       const turn = makeTurn();
       const queued = { ...turn, opts: { ...turn.opts, runId: "followup-run" } };
+      const event = makeTurn();
+      event.sessionCtx = { Provider: "internal", InternalTurnSource: "event" };
+      event.followupRun.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+      event.opts = {
+        ...event.opts,
+        internalEventExecution: event.followupRun.run.internalEventExecution,
+      };
       const mismatches = [
         { agentId: "another-agent" },
         { sessionKey: "agent:agent-1:dashboard:another" },
@@ -151,7 +157,7 @@ describe("agent-runner-utils", () => {
       for (const candidate of [
         queued,
         ...mismatches,
-        { ...turn, isHeartbeat: true },
+        event,
         { ...turn, opts: { runId: source.runId } },
       ]) {
         const token = mintReplyMessageActionTurnCapability(

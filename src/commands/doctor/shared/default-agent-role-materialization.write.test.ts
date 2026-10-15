@@ -96,7 +96,7 @@ describe("default role materialization authored writes", () => {
       agentId: "ops",
       match: { channel: "telegram", accountId: "*" },
     });
-    expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+    expect(persisted).not.toHaveProperty("agents.defaults.heartbeat");
     expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
 

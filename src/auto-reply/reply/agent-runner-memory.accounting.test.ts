@@ -80,7 +80,6 @@ function runAccounting(
     },
     sessionKey: "main",
     storePath: path.join(followupRun.run.workspaceDir, "sessions.json"),
-    isHeartbeat: false,
     abortSignal: signal,
     cfg: withTestModelContextTokens({
       cfg: {

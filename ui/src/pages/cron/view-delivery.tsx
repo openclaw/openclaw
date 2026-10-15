@@ -51,20 +51,43 @@ export function DeliverySection(
         <>
           <CronSelect
             {...props}
+            field="deliveryTarget"
+            label={t("cron.form.deliveryTarget")}
+            help={t("cron.form.ownerTargetHelp")}
+            options={[
+              { value: "", label: t("cron.form.channelTarget") },
+              { value: "owner", label: t("cron.form.ownerTarget") },
+            ]}
+          />
+          <CronSelect
+            {...props}
+            field="deliveryDirectPolicy"
+            label={t("cron.form.directPolicy")}
+            errorKey="deliveryDirectPolicy"
+            options={[
+              { value: "", label: t("cron.form.defaultPolicy") },
+              { value: "allow", label: t("cron.form.allowDirect") },
+              { value: "block", label: t("cron.form.blockDirect") },
+            ]}
+          />
+          <CronSelect
+            {...props}
             field="deliveryChannel"
             label={t("cron.form.channel")}
             help={t("cron.form.channelHelp")}
             options={channelOptions()}
             channel
           />
-          <CronInput
-            {...props}
-            field="deliveryTo"
-            label={t("cron.form.to")}
-            help={t("cron.form.toHelp")}
-            list="cron-delivery-to-suggestions"
-            placeholder={t("cron.form.toPlaceholder")}
-          />
+          {props.form.deliveryTarget !== "owner" ? (
+            <CronInput
+              {...props}
+              field="deliveryTo"
+              label={t("cron.form.to")}
+              help={t("cron.form.toHelp")}
+              list="cron-delivery-to-suggestions"
+              placeholder={t("cron.form.toPlaceholder")}
+            />
+          ) : undefined}
         </>
       ) : undefined}
       {props.selectedDeliveryMode === "webhook" ? (
@@ -106,6 +129,52 @@ export function Advanced(
         </summary>
         <p class="settings-section__desc">{t("cron.form.advancedHelp")}</p>
         <div class="settings-group">
+          <ToggleRow
+            {...props}
+            field="activeHoursEnabled"
+            label={t("cron.form.activeHours")}
+            help={t("cron.form.activeHoursHelp")}
+          />
+          {props.form.activeHoursEnabled ? (
+            <>
+              <CronInput
+                {...props}
+                field="activeHoursStart"
+                label={t("cron.form.activeHoursStart")}
+                errorKey="activeHoursStart"
+                placeholder="09:00"
+              />
+              <CronInput
+                {...props}
+                field="activeHoursEnd"
+                label={t("cron.form.activeHoursEnd")}
+                errorKey="activeHoursEnd"
+                placeholder="17:00"
+              />
+              <CronInput
+                {...props}
+                field="activeHoursTimezone"
+                label={t("cron.form.timezoneOptional")}
+                errorKey="activeHoursTimezone"
+                list="cron-tz-suggestions"
+                placeholder={t("cron.form.timezonePlaceholder")}
+              />
+            </>
+          ) : undefined}
+          <ToggleRow
+            {...props}
+            field="idleOnly"
+            label={t("cron.form.idleOnly")}
+            help={t("cron.form.idleOnlyHelp")}
+          />
+          {props.isAgentTurn ? (
+            <ToggleRow
+              {...props}
+              field="payloadSkipIfScratchEmpty"
+              label={t("cron.form.skipIfScratchEmpty")}
+              help={t("cron.form.skipIfScratchEmptyHelp")}
+            />
+          ) : undefined}
           <TriggerRows {...props} />
           <CronInput
             {...props}
@@ -116,16 +185,6 @@ export function Advanced(
           {props.mode === "create" ? (
             <ToggleRow {...props} field="enabled" label={t("cron.form.startEnabled")} />
           ) : undefined}
-          <CronSelect
-            {...props}
-            field="wakeMode"
-            label={t("cron.form.wakeMode")}
-            help={t("cron.form.wakeModeHelp")}
-            options={[
-              { value: "now", label: t("cron.form.now") },
-              { value: "next-heartbeat", label: t("cron.form.nextHeartbeat") },
-            ]}
-          />
           {props.isAgentTurn ? (
             <CronInput
               {...props}
@@ -184,6 +243,12 @@ export function Advanced(
                 field="payloadLightContext"
                 label={t("cron.form.lightContext")}
                 help={t("cron.form.lightContextHelp")}
+              />
+              <ToggleRow
+                {...props}
+                field="payloadIncludeReasoning"
+                label={t("cron.form.includeReasoning")}
+                help={t("cron.form.includeReasoningHelp")}
               />
               <FailureAlertRows {...props} channelOptions={channelOptions()} />
             </>

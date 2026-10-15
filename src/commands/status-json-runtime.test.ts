@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
   resolveStatusUsageSummary: vi.fn(),
+  resolveStatusLastHeartbeat: vi.fn(),
 }));
 
 // mock-isolation: Keep config I/O out of this fixture while exercising the real snapshot owner.
@@ -46,6 +47,7 @@ vi.mock("./status-json-payload.ts", () => ({
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary: mocks.resolveStatusUsageSummary,
+  resolveStatusLastHeartbeat: mocks.resolveStatusLastHeartbeat,
 }));
 
 function createScan() {
@@ -95,12 +97,12 @@ describe("status-json-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
+    mocks.resolveStatusLastHeartbeat.mockResolvedValue({ status: "ok" });
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
       health: { ok: true },
-      lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
@@ -237,7 +239,6 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
-      lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
@@ -269,6 +270,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.usage).toBeUndefined();
     expect(payloadInput.health).toBeUndefined();
     expect(payloadInput.lastHeartbeat).toBeNull();
+    expect(mocks.resolveStatusLastHeartbeat).not.toHaveBeenCalled();
     expect(payloadInput.pluginCompatibility).toBeUndefined();
   });
 
@@ -277,7 +279,6 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: { error: "gateway health probe timed out" },
-      lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });

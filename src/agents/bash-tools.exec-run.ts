@@ -162,7 +162,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
@@ -576,7 +575,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,

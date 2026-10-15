@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type {
-  ChannelHealthMonitorSchema,
-  ChannelHeartbeatVisibilitySchema,
-} from "./zod-schema.channels.js";
+import type { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
 
-export type ChannelHeartbeatVisibilityConfig = NonNullable<
-  z.input<typeof ChannelHeartbeatVisibilitySchema>
->;
+/** @deprecated Doctor input only; visibility is migrated into automation delivery policy. */
+export type ChannelHeartbeatVisibilityConfig = {
+  showOk?: boolean;
+  showAlerts?: boolean;
+  useIndicator?: boolean;
+};
 export type ChannelHealthMonitorConfig = NonNullable<z.input<typeof ChannelHealthMonitorSchema>>;

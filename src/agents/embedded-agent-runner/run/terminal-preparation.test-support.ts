@@ -78,7 +78,7 @@ export async function prepareAttempt(input: {
   admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
-  heartbeat?: { continuesConversation: boolean };
+  trigger?: "cron" | "event";
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -89,8 +89,7 @@ export async function prepareAttempt(input: {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: input.heartbeat ? "heartbeat" : "user",
-      ...(input.heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
+      trigger: input.trigger ?? "user",
       timeoutMs: 60_000,
       ...(input.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }

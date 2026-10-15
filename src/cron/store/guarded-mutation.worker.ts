@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareClawPortableRemoval } from "../../claws/portable-heartbeat-removal.kernel.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -132,7 +133,9 @@ function cancelChangedQueuedRuns(
         receiptSchema,
         handle: receipt,
         pendingReceiptId:
-          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
+          current?.state.runningAtMs === undefined
+            ? receipt.receiptId
+            : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,
@@ -212,6 +215,21 @@ export function mutateCronJobsInWorker(
           }
           const plan = planCronJobMutation(previous, input.jobMutation, mutationSnapshot);
           const changes = prepareCronStoreChanges(previous, plan.next);
+          const claw = input.clawPrecondition;
+          if (
+            claw &&
+            (input.jobMutation.kind !== "remove" ||
+              input.jobMutation.ids.length !== 1 ||
+              input.jobMutation.ids[0] !== claw.jobId ||
+              !changes.changedIds.has(claw.jobId) ||
+              changes.nextById.has(claw.jobId) ||
+              [...changes.changedIds].some((id) => id !== claw.jobId && !changes.nextById.has(id)))
+          ) {
+            throw new Error("Portable removal does not own these automation changes.");
+          }
+          const assertRemovalCurrent = claw
+            ? prepareClawPortableRemoval(database, input.storeKey, claw)
+            : undefined;
           const hooks: CronAdmittedStoreTransactionHooks = {
             receiptSchema,
             hooks: {
@@ -229,6 +247,7 @@ export function mutateCronJobsInWorker(
             hooks,
           );
           cancelChangedQueuedRuns(db, input, changes, previous.jobs, store, receiptSchema);
+          assertRemovalCurrent?.();
           return {
             outcome: {
               store,

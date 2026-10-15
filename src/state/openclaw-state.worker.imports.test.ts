@@ -77,7 +77,7 @@ it.each([
         expect(backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type)).toBeUndefined();
         expect(runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toEqual(
           command.type === "pluginState.lookup"
-            ? { ok: true, value: undefined }
+            ? { ok: true, value: undefined, readRows: [] }
             : command.type === "plugins.deferredMigrations.read"
               ? []
               : undefined,

@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  CronStreamOutput,
+  type CronStreamFireDisposition,
+  type CronStreamLossReason,
+} from "../gateway/cron-stream-output.js";
+import { fireStreamJob } from "../gateway/server-cron-event-dispatch.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { isCronExecutionIdle } from "./execution-idle.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -31,7 +42,7 @@ async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDep
     cronConfig: { triggers: { enabled: triggersEnabled } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -352,10 +363,11 @@ describe("cron stream trigger composition", () => {
   });
 });
 
-it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+it("skips invalid main jobs with command payloads loaded from disk", async () => {
   const { storePath } = await makeStorePath();
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
+  const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
+  const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
   await writeCronStoreSnapshot({
     storePath,
     jobs: [
@@ -368,7 +380,7 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
         sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "agentTurn", message: "bad" },
+        payload: { kind: "command", argv: ["echo", "bad"] },
         state: {},
       },
     ],
@@ -380,7 +392,8 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent,
-    requestHeartbeat,
+    runSessionEvent,
+    runCommandJob,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   try {
@@ -388,11 +401,284 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await cron.run("job-1", "due");
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(runSessionEvent).not.toHaveBeenCalled();
+    expect(runCommandJob).not.toHaveBeenCalled();
     const [job] = await cron.list({ includeDisabled: true });
     expect(job?.state.lastStatus).toBe("skipped");
     expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);
   } finally {
     cron.stop();
   }
+});
+
+async function withIdleStreamOutput(
+  deps: Partial<CronServiceDeps>,
+  run: (fixture: {
+    cron: CronService;
+    job: CronJob;
+    clock: ReturnType<typeof createGatewaySchedulerClock>;
+    attempts: Array<{
+      batch: string;
+      sourceIdentity: string;
+      result: Promise<CronStreamFireDisposition>;
+    }>;
+    losses: CronStreamLossReason[];
+    accept: (chunk: string) => Promise<void>;
+    settleAttempt: (index: number) => Promise<CronStreamFireDisposition>;
+    stop: () => Promise<void>;
+  }) => Promise<void>,
+  input: Partial<CronJobCreate> = {},
+) {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const { cron } = await createCron(true, {
+    scheduler,
+    nowMs: clock.clock.now,
+    isExecutionIdle: (job) => isCronExecutionIdle({}, job, "main"),
+    ...deps,
+  });
+  const job = await cron.add(
+    streamJob({
+      idleOnly: true,
+      agentId: "main",
+      schedule: { kind: "stream", command: ["source"], batchMs: 50 },
+      ...input,
+    }),
+  );
+  if (job.schedule.kind !== "stream" || !job.state.streamSourceIdentity) {
+    throw new Error("expected a persisted stream source");
+  }
+  const attempts: Array<{
+    batch: string;
+    sourceIdentity: string;
+    result: Promise<CronStreamFireDisposition>;
+  }> = [];
+  const losses: CronStreamLossReason[] = [];
+  let tail = Promise.resolve();
+  let running = true;
+  const output = new CronStreamOutput({
+    job: { ...job, schedule: job.schedule },
+    scheduleKey: cronStreamScheduleKey(job.schedule),
+    sourceIdentity: job.state.streamSourceIdentity,
+    scheduler: scheduler.scope(),
+    minIntervalMs: 100,
+    settleTimeoutMs: 10_000,
+    enqueue: (_label, operation) => {
+      tail = tail.then(operation);
+      return tail;
+    },
+    fireBatch: (sourceJob, batch, streamScheduleKey, streamSourceIdentity) => {
+      const result = fireStreamJob(sourceJob, {
+        run: async (jobId, onTriggerDisposition) => ({
+          ...(await cron.run(jobId, "force", {
+            evaluateTrigger: true,
+            streamBatch: batch,
+            streamScheduleKey,
+            streamSourceIdentity,
+            onTriggerDisposition,
+          })),
+          enabled: cron.getJob(jobId)?.enabled,
+        }),
+      });
+      attempts.push({ batch, sourceIdentity: streamSourceIdentity, result });
+      return result;
+    },
+    recordLoss: async (reason) => {
+      losses.push(reason);
+    },
+    getGeneration: () => 1,
+    getState: () => (running ? "running" : "stopped"),
+    isDesiredRunning: () => running,
+    requestTriggerDisabledStop: () => {
+      running = false;
+    },
+    requestMatchFailureStop: (error) => {
+      throw new Error(error);
+    },
+    logger,
+  });
+  const stop = async () => {
+    running = false;
+    await tail;
+    await output.finishStop(await output.beginStop());
+  };
+  try {
+    await run({
+      cron,
+      job,
+      clock,
+      attempts,
+      losses,
+      stop,
+      accept: async (chunk) => {
+        output.enqueueChunk("stdout", chunk, 1);
+        await tail;
+      },
+      settleAttempt: async (index) => {
+        const attempt = attempts[index];
+        if (!attempt) {
+          throw new Error(`stream attempt ${index} did not start`);
+        }
+        const disposition = await attempt.result;
+        await tail;
+        return disposition;
+      },
+    });
+  } finally {
+    await stop();
+    cron.stop();
+    await scheduler.stop();
+  }
+}
+
+describe("idle stream source custody", () => {
+  it.each(["preflight", "runner-entry"] as const)(
+    "retains %s-refused source bytes ahead of the next batch until foreground settles",
+    async (admission) => {
+      const foreground = createReplyOperation({
+        sessionKey: "agent:main:chat:stream-foreground",
+        sessionId: "stream-foreground",
+        resetTriggered: false,
+        turnKind: "visible",
+      });
+      const runIsolatedAgentJob = vi.fn<NonNullable<CronServiceDeps["runIsolatedAgentJob"]>>(
+        async () => ({ status: "ok" }),
+      );
+      if (admission === "runner-entry") {
+        runIsolatedAgentJob.mockResolvedValueOnce({
+          status: "skipped",
+          admissionDeferred: true,
+          admissionDeferredReason: "busy",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+        });
+      }
+      try {
+        await withIdleStreamOutput(
+          {
+            runIsolatedAgentJob,
+            ...(admission === "runner-entry" ? { isExecutionIdle: () => true } : {}),
+          },
+          async (fixture) => {
+            const { cron, job, clock, attempts, losses, accept, settleAttempt } = fixture;
+            const first = "  α first  ";
+            const second = "β second";
+            await accept(`${first}\n`);
+            await clock.advanceBy(50);
+            expect(await settleAttempt(0)).toBe("busy");
+            expect(runIsolatedAgentJob).toHaveBeenCalledTimes(admission === "preflight" ? 0 : 1);
+            expect(losses).toEqual([]);
+            expect(cron.getJob(job.id)?.state).toMatchObject({
+              streamSourceIdentity: job.state.streamSourceIdentity,
+            });
+            expect(cron.getJob(job.id)?.state.lastRunStatus).toBeUndefined();
+            expect(cron.getJob(job.id)?.state.runningAtMs).toBeUndefined();
+
+            await accept(`${second}\n`);
+            await clock.advanceBy(50);
+            expect(attempts).toHaveLength(1);
+            foreground.complete();
+            await clock.advanceBy(50);
+            expect(await settleAttempt(1)).toBe("fired");
+            expect(
+              attempts.map(({ batch, sourceIdentity }) => ({ batch, sourceIdentity })),
+            ).toEqual([
+              { batch: first, sourceIdentity: job.state.streamSourceIdentity },
+              { batch: `${first}\n${second}`, sourceIdentity: job.state.streamSourceIdentity },
+            ]);
+            expect(runIsolatedAgentJob).toHaveBeenCalledTimes(admission === "preflight" ? 1 : 2);
+            expect(runIsolatedAgentJob).toHaveBeenLastCalledWith(
+              expect.objectContaining({
+                message: `handle events\n\n${first}\n${second}`,
+              }),
+            );
+            expect(losses).toEqual(["coalesced"]);
+            await clock.advanceBy(100);
+            expect(attempts).toHaveLength(2);
+            expect(cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+          },
+        );
+      } finally {
+        foreground.complete();
+      }
+    },
+  );
+
+  it.each(["disable", "replacement"] as const)(
+    "%s retires the buffered refusal and refuses the old source identity",
+    async (mutation) => {
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      let idle = false;
+      await withIdleStreamOutput(
+        { runIsolatedAgentJob, isExecutionIdle: () => idle },
+        async (fixture) => {
+          const { cron, job, clock, attempts, losses, accept, settleAttempt, stop } = fixture;
+          await accept("retire me\n");
+          await clock.advanceBy(50);
+          expect(await settleAttempt(0)).toBe("busy");
+          await stop();
+          await cron.update(
+            job.id,
+            mutation === "disable"
+              ? { enabled: false }
+              : { schedule: { kind: "stream", command: ["replacement"] } },
+          );
+          idle = true;
+          await accept("obsolete output\n");
+          await clock.advanceBy(100);
+          expect(attempts).toHaveLength(1);
+          expect(losses).toEqual(["not-running"]);
+          expect(cron.getJob(job.id)?.state.streamSourceIdentity).not.toBe(
+            job.state.streamSourceIdentity,
+          );
+          if (job.schedule.kind !== "stream") {
+            throw new Error("expected a stream schedule");
+          }
+          const refused = await cron.run(job.id, "force", {
+            streamBatch: "retire me",
+            streamScheduleKey: cronStreamScheduleKey(job.schedule),
+            streamSourceIdentity: job.state.streamSourceIdentity,
+          });
+          expect(refused).toMatchObject({ ok: true, ran: false });
+          expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  it("consumes an evaluated trigger even when payload admission subsequently defers", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      fire: true,
+      state: { evaluated: 1 },
+    }));
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "skipped" as const,
+      admissionDeferred: true,
+      admissionDeferredReason: "busy" as const,
+      executionStarted: false,
+      delivered: false,
+      deliveryAttempted: false,
+    }));
+    await withIdleStreamOutput(
+      { evaluateCronTrigger, runIsolatedAgentJob },
+      async (fixture) => {
+        const { cron, job, clock, attempts, losses, accept, settleAttempt } = fixture;
+        await accept("trigger spent this batch\n");
+        await clock.advanceBy(50);
+        expect(await settleAttempt(0)).toBe("dropped");
+        await clock.advanceBy(100);
+        expect(attempts).toHaveLength(1);
+        expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(losses).toEqual(["gate-drop"]);
+        expect(cron.getJob(job.id)?.state).toMatchObject({
+          lastRunStatus: "skipped",
+          triggerEvalCount: 1,
+        });
+      },
+      { trigger: { script: "json({ fire: true })" } },
+    );
+  });
 });

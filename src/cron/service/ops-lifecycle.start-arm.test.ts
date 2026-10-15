@@ -16,6 +16,7 @@ import { createCronServiceWithStateForTest } from "../service.test-harness.js";
 import { saveCronStore } from "../store.js";
 import { waitForCronRunQueue } from "./run-queue.js";
 import { captureCronSchedulerWakeForTest } from "./scheduler-actor.test-support.js";
+import type { CronServiceDeps } from "./state.js";
 
 const gateway = vi.hoisted(() => ({ state: undefined as GatewayCronState | undefined }));
 vi.mock("../../gateway/server-cron.js", () => ({
@@ -34,8 +35,7 @@ it.each([false, true])(
       createDueIsolatedJob({ id: "upcoming", nowMs: now, nextRunAtMs: now + 12_000 }),
     ];
     for (const job of jobs) {
-      job.sessionTarget = "main";
-      job.payload = { kind: "systemEvent", text: job.id };
+      job.payload = { kind: "command", argv: ["fixture-task", job.id] };
     }
     await saveCronStore(storePath, { version: 1, jobs });
     const database = openOpenClawStateDatabase().db;
@@ -49,7 +49,9 @@ it.each([false, true])(
       END;
     `);
     }
-    const enqueueSystemEvent = vi.fn();
+    const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>(async () => ({
+      status: "ok" as const,
+    }));
     const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
@@ -58,8 +60,8 @@ it.each([false, true])(
       storePath,
       cronEnabled: true,
       log,
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runCommandJob,
       runIsolatedAgentJob: vi.fn(),
     });
     gateway.state = {
@@ -69,7 +71,6 @@ it.each([false, true])(
       reconcileExitWatchers: async () => {},
       reconcileStreamWatchers: async () => {},
       stopStreamWatchers: async () => {},
-      reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
       storePath,
@@ -87,20 +88,20 @@ it.each([false, true])(
         }
       });
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue"]);
       cron.pauseScheduling();
       clock.setTime(clock.clock.now() + 15_000);
       await wake(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue"]);
       cron.resumeScheduling();
       clock.setTime(clock.clock.now() + 15_000);
       await wake(state);
       await waitForCronRunQueue(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue", "upcoming"]);
       clock.setTime(clock.clock.now() + 60_000);
       await wake(state);
       await waitForCronRunQueue(state);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue", "upcoming"]);
     } finally {
       cron.stop();
       await scheduler.stop();

@@ -99,7 +99,9 @@ export type PluginStateWorkerOperations = {
       : PluginStateWorkerRequests[Request]["input"] & {
           sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
         };
-    output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
+    output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure> & {
+      readRows?: PluginStateReadRow[];
+    };
   };
 };
 

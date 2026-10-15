@@ -82,6 +82,10 @@ describe("gateway health collection deadline", () => {
         readSessionStoreSummaryReadOnly,
       ),
     }));
+    // mock-isolation: Keep receipt SQLite reads outside the fake-clock health deadline fixture.
+    vi.doMock("../../cron/proactive-job-receipt.js", () => ({
+      readDefaultProactiveJobsAsync: async () => [],
+    }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
     }));

@@ -140,7 +140,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  isHeartbeat: boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;

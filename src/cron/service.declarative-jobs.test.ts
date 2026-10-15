@@ -33,7 +33,7 @@ function createCronService(storePath: string, cronEnabled = true) {
     cronEnabled,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   services.add(service);
@@ -126,7 +126,7 @@ describe("CronService declarative jobs", () => {
   });
 
   it("creates, no-ops, and converges in place while preserving state and enablement", async () => {
-    const { cron } = await setup();
+    const { cron, storePath } = await setup();
 
     const created = await add(cron, declaration({ declarationKey: "  agent:ops:daily-report  " }), {
       enabledExplicit: true,
@@ -181,6 +181,20 @@ describe("CronService declarative jobs", () => {
       id: created.id,
       enabled: true,
     });
+    const activeHours = { start: "09:00", end: "17:00", timezone: "UTC" };
+    for (const executionPolicy of [{ activeHours }, { activeHours, idleOnly: true }]) {
+      const input = declaration({ ...summary, ...executionPolicy });
+      const updatedPolicy = await add(cron, input);
+      expect(updatedPolicy).toMatchObject({
+        id: created.id,
+        updated: true,
+        job: { ...executionPolicy, enabled: true, state: previousFailure },
+      });
+      expect(
+        (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
+      ).toMatchObject(executionPolicy);
+      expect((await add(cron, input)).updated).toBe(false);
+    }
     const cleared = await cron.update(created.id, { displayName: null });
     expect(cleared).not.toHaveProperty("displayName");
   });

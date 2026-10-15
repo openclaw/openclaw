@@ -144,9 +144,7 @@ export async function gatherDispatchRequest(
     params: normalizedParams,
     turnAdoption,
     messageAuditTerminal,
-    allowInboundHandlers:
-      replyOperationRunState.heartbeat === undefined &&
-      !params.replyOptions?.internalEventExecution,
+    allowInboundHandlers: !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -367,21 +365,6 @@ export async function gatherDispatchRequest(
   const initialDispatchReplyOperation = dispatchOperationSessionKey
     ? replyRunRegistry.get(dispatchOperationSessionKey)
     : undefined;
-  if (
-    params.replyOptions?.isHeartbeat === true &&
-    dispatchOperationSessionKey &&
-    initialDispatchReplyOperation
-  ) {
-    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
-    messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
-    return {
-      status: "complete" as const,
-      result: {
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      },
-    };
-  }
   const markProgress = () => {
     if (!canTrackSession || !sessionKey) {
       return;
@@ -475,7 +458,7 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
-          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
+          demand: params.replyOptions?.scheduledAutomation ? "scheduled" : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
           onRuntimeLease,
         });

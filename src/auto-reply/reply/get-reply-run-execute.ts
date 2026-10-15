@@ -39,8 +39,8 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
-import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
+import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -102,7 +102,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const {
     params,
     runtimePolicySessionKey,
-    isHeartbeat,
     traceRunPhase,
     promptSessionCtx,
     inboundEventKind,
@@ -197,7 +196,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const freshChannelCronAuthorityTurn = isFreshChannelCronAuthorityTurn({
     messageProvider,
     senderId: sessionCtx.SenderId,
-    isHeartbeat,
     isRoomEvent,
     inputProvenance,
     spawnedBy: preparedSessionState.sessionEntry?.spawnedBy,
@@ -304,15 +302,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
-          ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
-          ...(isHeartbeat
-            ? {
-                provenance: resolveInternalTurnTranscript({
-                  InputProvenance: inputProvenance,
-                  InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
-                }).provenance,
-              }
-            : {}),
+          ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(Object.keys(transport).length > 0 ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           ...(mediaImageLayout ? { mediaImageLayout } : {}),
@@ -440,6 +430,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      scheduledAutomation: opts?.scheduledAutomation,
+      scheduledToolPolicy: resolveReplyScheduledToolPolicy({
+        scheduledAutomation: opts?.scheduledAutomation,
+      }),
       internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
@@ -560,6 +554,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
+      bootstrapContextMode: opts?.bootstrapContextMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,

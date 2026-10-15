@@ -12,11 +12,6 @@ export class CronAgentDeletionBlockedError extends Error {
   }
 }
 
-export function isCronAgentDeletionBlockedError(error: unknown): boolean {
-  // The SQLite worker transports the error name without its JavaScript prototype.
-  return error instanceof Error && error.name === "CronAgentDeletionBlockedError";
-}
-
 export function describeUnavailableCronAgent(agentId: string, env?: NodeJS.ProcessEnv): string {
   const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env });
   return refusal

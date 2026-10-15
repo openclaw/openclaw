@@ -119,7 +119,6 @@ async function resolveHelloWithModelDefaults(params: {
       prepareReplyConversation({
         ctx: sessionCtx,
         sessionEntry: params.sessionStore?.["agent:main:whatsapp:+2000"] ?? sessionEntry,
-        isHeartbeat: params.opts?.isHeartbeat,
       }),
     isGroup: false,
     triggerBodyNormalized: "hello",
@@ -130,7 +129,7 @@ async function resolveHelloWithModelDefaults(params: {
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
     provider: params.provider ?? "openai",
     model: params.model ?? "gpt-4o-mini",
-    hasResolvedHeartbeatModelOverride: false,
+    hasResolvedTurnModelOverride: false,
     typing,
     opts: params.opts,
     skillFilter: undefined,
@@ -284,8 +283,8 @@ describe("resolveReplyDirectives", () => {
     await resolveHelloWithModelDefaults({
       sessionEntry: wrapperSessionEntry,
       sessionStore: { "agent:main:whatsapp:+2000": targetSessionEntry },
-      ctx: { InternalTurnSource: "heartbeat" },
-      sessionCtx: { InternalTurnSource: "heartbeat", Provider: undefined },
+      ctx: { InternalTurnSource: "event" },
+      sessionCtx: { InternalTurnSource: "event", Provider: undefined },
     });
 
     expect(mockCallInput(mocks.resolveGroupRequireMention).group).toMatchObject({

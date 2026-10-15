@@ -167,7 +167,6 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: { main: { workspace: state.statePath("workspace") }, worker: {} },
@@ -349,7 +348,6 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: { main: { workspace: state.statePath("workspace") }, cleaner: {} },

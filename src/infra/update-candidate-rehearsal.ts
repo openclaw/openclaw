@@ -105,11 +105,10 @@ function isolatedConfig(
           resolveUserPath(agent.agentDir, sourceEnv),
         )
       : path.join(stateDir, "agents", id, "agent"),
-    heartbeat: { every: "0m" },
   });
   copied.agents = {
     ...copied.agents,
-    defaults: { ...copied.agents?.defaults, workspace, cwd: workspace, heartbeat: { every: "0m" } },
+    defaults: { ...copied.agents?.defaults, workspace, cwd: workspace },
     ...(entries
       ? {
           entries: Object.fromEntries(

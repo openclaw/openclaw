@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   clearActiveCredentialDegradedOwner,
@@ -19,6 +20,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
     typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
   >(async () => true),
+  readHeartbeatSummarySnapshot: vi.fn(async () => [] as import("../cron/types.js").CronJob[]),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
   getPreparedModelCatalogSnapshot:
@@ -117,6 +119,11 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../infra/heartbeat-summary-snapshot.js", async (original) => ({
+  ...(await original<typeof import("../infra/heartbeat-summary-snapshot.js")>()),
+  readHeartbeatSummarySnapshot: statusSummaryMocks.readHeartbeatSummarySnapshot,
 }));
 
 // mock-isolation: Status aggregation consumes fixture summaries and counts without starting session storage.
@@ -218,6 +225,7 @@ describe("getStatusSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
+    statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([]);
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
@@ -294,7 +302,6 @@ describe("getStatusSummary", () => {
         agents: {
           ownership: "explicit",
           entries: { research: {}, ops: {} },
-          defaults: { heartbeat: { agentId: "ops", every: "0m" } },
         },
         session: { scope, mainKey: "inbox" },
       },
@@ -309,27 +316,42 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it.each([false, true])("reads the configured heartbeat route (empty=%s)", async (empty) => {
-    const main = "agent:main:main";
-    const configured = "agent:main:telegram:alerts";
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
-      {
-        sessionKey: empty ? main : configured,
-        entry: {
-          delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
+  it.each([
+    { globalScope: false, empty: false },
+    { globalScope: false, empty: true },
+    { globalScope: true, empty: false },
+    { globalScope: true, empty: true },
+  ])(
+    "reads the converted automation session route (global=$globalScope, empty=$empty)",
+    async ({ globalScope, empty }) => {
+      const main = "agent:main:main";
+      const configured = globalScope ? "global" : "agent:main:telegram:alerts";
+      statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+        {
+          sessionKey: empty ? main : configured,
+          entry: {
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "123" },
+            }),
+          },
         },
-      },
-      { sessionKey: empty ? configured : main, entry: {} },
-    ]);
-    const summary = await getStatusSummary({
-      config: {
-        agents: { defaults: { heartbeat: { target: "last", session: "telegram:alerts" } } },
-      },
-    });
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
-  });
+        { sessionKey: empty ? configured : main, entry: {} },
+      ]);
+      statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([
+        makeCronJob({
+          agentId: "main",
+          sessionTarget: globalScope ? "isolated" : "session:agent:main:telegram:alerts",
+          delivery: { mode: "announce", channel: "last" },
+        }),
+      ]);
+      const summary = await getStatusSummary({
+        config: globalScope ? { session: { scope: "global" } } : {},
+      });
+      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
+    },
+  );
 
-  it("keeps global heartbeat routes separate across agent stores", async () => {
+  it("keeps converted automation global routes separate across agent stores", async () => {
     // Distinct physical stores keep each agent's literal global row separate.
     vi.mocked(resolveSessionStorePathCore).mockImplementation(
       (_store, options) => `/tmp/${options?.agentId}/sessions.json`,
@@ -356,12 +378,22 @@ describe("getStatusSummary", () => {
       },
     ]);
 
+    statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue(
+      ["research", "ops"].map((agentId) =>
+        makeCronJob({
+          id: `converted-${agentId}`,
+          agentId,
+          sessionTarget: "session:global",
+          delivery: { mode: "announce", channel: "last" },
+        }),
+      ),
+    );
+
     const summary = await getStatusSummary({
       config: {
         agents: {
           ownership: "explicit",
           entries: { research: {}, ops: {} },
-          defaults: { heartbeat: { target: "last", every: "30m" } },
         },
         session: { scope: "global" },
       },
@@ -381,10 +413,14 @@ describe("getStatusSummary", () => {
   });
 
   it("does not read an unused route for a disabled heartbeat", async () => {
-    const summary = await getStatusSummary({
-      config: { agents: { defaults: { heartbeat: { target: "owner", every: "0m" } } } },
-      includeChannelSummary: false,
-    });
+    statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([
+      makeCronJob({
+        agentId: "main",
+        enabled: false,
+        delivery: { mode: "announce", target: "owner" },
+      }),
+    ]);
+    const summary = await getStatusSummary({ config: {}, includeChannelSummary: false });
     expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
     expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
   });

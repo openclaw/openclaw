@@ -10,7 +10,10 @@ import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
-  it("skips context injection for completed limited bootstrap turns", async () => {
+  it.each([
+    { name: "limited bootstrap", mode: "limited", runKind: "default", contextMode: "full" },
+    { name: "lightweight automation", mode: "none", runKind: "cron", contextMode: "lightweight" },
+  ] as const)("skips context injection for completed $name turns", async (testCase) => {
     const hasCompletedBootstrapTurn = vi.fn(async () => true);
     const resolveBootstrapContextForRun = vi.fn(async () => ({
       bootstrapFiles: [],
@@ -19,9 +22,9 @@ describe("embedded attempt context injection", () => {
     expect(
       await resolveAttemptBootstrapContext({
         contextInjectionMode: "continuation-skip",
-        bootstrapMode: "limited",
-        bootstrapContextRunKind: "default",
-        bootstrapContextMode: "full",
+        bootstrapMode: testCase.mode,
+        bootstrapContextRunKind: testCase.runKind,
+        bootstrapContextMode: testCase.contextMode,
         deliversCompleteWorkspaceContext: false,
         hasCompletedBootstrapTurn,
         resolveBootstrapContextForRun,
@@ -64,8 +67,8 @@ describe("embedded attempt context injection", () => {
     {
       mode: "continuation-skip",
       bootstrapMode: "none",
-      runKind: "heartbeat",
-      contextMode: "full",
+      runKind: "cron",
+      contextMode: "lightweight",
       complete: true,
       expected: false,
     },

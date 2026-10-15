@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
@@ -37,7 +38,24 @@ export function createDoctorConfigRepairPlanner(params: {
   const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
     params.runWithPluginMetadataSnapshot(
       { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
-      () => planAutomaticConfigRepair(snapshot),
+      async () => {
+        if (params.options.doctorOnlyStateMigrations === true) {
+          const { normalizeHeartbeatRepairSource } =
+            await import("./doctor-automatic-heartbeat-repair.js");
+          const { tryProjectRetiredHeartbeatConfig } = await import("./doctor-heartbeat-legacy.js");
+          const migrated = normalizeHeartbeatRepairSource(snapshot);
+          const projected = tryProjectRetiredHeartbeatConfig(migrated.sourceConfig);
+          if (projected && !isDeepStrictEqual(projected, snapshot.sourceConfig)) {
+            // Validate the destination; preflight retires the original data before publication.
+            return planAutomaticConfigRepair(snapshot, {
+              config: projected,
+              changes: migrated.changes,
+              pendingStateMigration: true,
+            });
+          }
+        }
+        return planAutomaticConfigRepair(snapshot);
+      },
     );
   const planAdmittedConfigRepair = (
     snapshot: ConfigFileSnapshot,

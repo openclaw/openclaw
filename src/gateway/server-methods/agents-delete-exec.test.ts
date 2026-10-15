@@ -141,7 +141,6 @@ it("drains an independent agent service through exit while preserving another ag
       cronEnabled: false,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const deleting = deleteGatewayAgent(

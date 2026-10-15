@@ -30,6 +30,9 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { CronService } from "../cron/service.js";
+import { runCronSessionTurn } from "../cron/session-run.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -37,10 +40,9 @@ import {
 } from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
-import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
@@ -61,11 +63,27 @@ function nodeCommand(source: string): string {
   return process.platform === "win32" ? `& ${command}` : command;
 }
 
+function createAutomationFixture(config: OpenClawConfig, storePath: string, sessionKey: string) {
+  return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: false,
+    defaultAgentId: "main",
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    runIsolatedAgentJob: async () => {
+      throw new Error("Expected ordinary shared-session execution");
+    },
+    runSessionEvent: (request) =>
+      runCronSessionTurn({ ...request, cfg: config, agentId: "main", sessionKey }),
+  });
+}
+
 it.for(["none", "alerts-disabled", "visible"] as const)(
-  "retains periodic delivery policy through a real background exec: %s",
+  "retains ordinary automation delivery policy through a real background exec: %s",
   async (policy, { signal, onTestFinished }) => {
     const fixtureWork = withOpenClawTestState(
-      { label: "heartbeat-exec-delivery", env: { OPENCLAW_TEST_FAST: "0" } },
+      { label: "automation-exec-delivery", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const visible = policy === "visible";
         const destination = "-1001234567890";
@@ -77,18 +95,11 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
               skipBootstrap: true,
               model: { primary: "mock-openai/gpt-5.6-luna" },
               models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-              heartbeat: {
-                every: "5m",
-                target: policy === "none" ? "none" : "telegram",
-                to: destination,
-                isolatedSession: false,
-              },
             },
           },
           messages: { visibleReplies: "automatic" },
           channels: {
             telegram: { botToken: "test-token", allowFrom: ["*"] },
-            defaults: { heartbeatVisibility: { showAlerts: policy !== "alerts-disabled" } },
           },
           plugins: { enabled: false },
           skills: { load: { watch: false } },
@@ -107,7 +118,29 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
             context: { channel: "telegram", to: destination },
           }),
         });
-        await seedHeartbeatScratchForTest({ content: "- Run the background status check\n" });
+        const storePath = state.statePath("cron", "jobs.json");
+        const cron = createAutomationFixture(config, storePath, scope.sessionKey);
+        const job = await cron.add({
+          name: `Migrated periodic ${policy}`,
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 300_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Run the background status check",
+            toolsAllow: ["exec"],
+          },
+          delivery: visible
+            ? { mode: "announce", channel: "telegram", to: destination }
+            : { mode: "none" },
+        });
+        await writeCronJobScratch({
+          storePath,
+          jobId: job.id,
+          content: "- Run the background status check\n",
+        });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         const registry = createTestRegistry([
           { pluginId: "telegram", plugin: heartbeatRunnerTelegramPlugin, source: "test" },
@@ -116,9 +149,6 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         const runtimeRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
           .mockReturnValue(registry);
-        const sendHeartbeat = vi
-          .fn()
-          .mockResolvedValue({ messageId: "periodic-send", chatId: destination });
         const sendCompletion = vi
           .spyOn(routedReplies, "routeReply")
           .mockResolvedValue({ ok: true, delivered: true, messageId: "completion-send" });
@@ -140,7 +170,8 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
           params.onExecutionPhase?.({ phase: "model_call_started" });
           await params.onExecutionStarted?.();
           await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-          if (params.trigger === "heartbeat") {
+          if (params.trigger === "cron") {
+            expect(params.prompt).toContain("Run the background status check");
             const exec = createExecTool({
               config: params.config,
               agentId: params.agentId,
@@ -155,6 +186,7 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
               ask: "off",
               allowBackground: true,
               notifyOnExit: true,
+              trigger: params.trigger,
             });
             const identity = expectDefined(
               createAdmittedGatewayToolCallerIdentity({
@@ -180,15 +212,9 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         });
         let completion: ReturnType<typeof sessionEvents.enqueueSessionEventForHost> | undefined;
         try {
-          const periodic = await runHeartbeatOnce({
-            cfg: config,
-            agentId: "main",
-            source: "interval",
-            intent: "scheduled",
-            reason: "interval",
-            deps: { telegram: sendHeartbeat },
-          });
-          expect(periodic).toMatchObject({ status: "ran" });
+          await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+          const periodic = cron.getJob(job.id)?.state;
+          expect(periodic, periodic?.lastError).toMatchObject({ lastRunStatus: "ok" });
           completion = await withinTest(completionCreated.promise, signal);
           await expect(completion.accepted).resolves.toEqual({ ok: true });
           const outcome = await completion.settled;
@@ -198,14 +224,17 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
             delivered: visible,
           });
           expect(model).toHaveBeenCalledTimes(2);
-          expect(sendHeartbeat).toHaveBeenCalledTimes(visible ? 1 : 0);
-          expect(sendCompletion).toHaveBeenCalledTimes(visible ? 1 : 0);
+          expect(sendCompletion.mock.calls.map(([request]) => request.payload.text)).toEqual(
+            visible ? ["Periodic work completed", "Background result is ready"] : [],
+          );
           if (visible) {
             expect(sendCompletion).toHaveBeenCalledWith(
               expect.objectContaining({ channel: "telegram", to: destination }),
             );
           }
         } finally {
+          cron.stop();
+          await cron.waitForIdle();
           await waitForExecScope(scope.sessionKey);
           await Promise.allSettled([completion?.settled]);
           observeCompletion.mockRestore();
@@ -237,26 +266,31 @@ type CompletionRoutingCase = {
   groupMessageToolOnly?: true;
 };
 const completionRoutingCases: CompletionRoutingCase[] = [
-  { name: "isolated monitor", isolatedSession: true },
-  { name: "shared monitor", isolatedSession: false },
+  { name: "isolated automation", isolatedSession: true },
+  { name: "shared-session automation", isolatedSession: false },
   { name: "quiet outcome", reply: "quiet" },
   { name: "report redirected to a file", redirected: true },
   { name: "global session", global: true },
-  { name: "heartbeat alerts off", alerts: false },
+  { name: "migrated alerts-disabled delivery", alerts: false },
   { name: "group-only message-tool delivery policy", groupMessageToolOnly: true },
   { name: "conversation moved to another topic", changeRoute: "topic" },
   { name: "command started on another account", changeRoute: "account" },
   { name: "failed turn", reply: "failed" },
-  { name: "failed turn, heartbeat alerts off", reply: "failed", target: "last", alerts: false },
-  { name: "failed turn, owner monitor without an owner", reply: "failed", target: "owner" },
-  { name: "failed turn, visible heartbeat", reply: "failed", target: "last" },
+  {
+    name: "failed turn, migrated alerts-disabled delivery",
+    reply: "failed",
+    target: "last",
+    alerts: false,
+  },
+  { name: "failed turn, owner automation without an owner", reply: "failed", target: "owner" },
+  { name: "failed turn, announcing automation", reply: "failed", target: "last" },
   {
     name: "failed turn with actionable provider guidance",
     reply: "failed",
     actionableFailure: true,
   },
   { name: "failed tool, no final text", reply: "tool-warning" },
-  { name: "failed tool, visible heartbeat", reply: "tool-warning", target: "last" },
+  { name: "failed tool, announcing automation", reply: "tool-warning", target: "last" },
   { name: "answer with a trailing status notice", reply: "status" },
   { name: "answer cut off by the output limit", reply: "truncated" },
   { name: "command started by the conversation's own completion turn", reply: "chain" },
@@ -284,13 +318,6 @@ it.for(completionRoutingCases)(
               skipBootstrap: true,
               model: { primary: "mock-openai/gpt-5.6-luna" },
               models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-              heartbeat: {
-                every: "5m",
-                target: testCase.target ?? "none",
-                isolatedSession: testCase.isolatedSession ?? true,
-                lightContext: true,
-                activeHours: { start: "00:00", end: "00:01", timezone: "UTC" },
-              },
             },
           },
           messages: {
@@ -303,7 +330,6 @@ it.for(completionRoutingCases)(
             telegram: {
               botToken: "test-token",
               allowFrom: ["*"],
-              heartbeatVisibility: { showAlerts: testCase.alerts !== false },
             },
           },
           session: { scope: testCase.global ? "global" : "per-sender" },
@@ -323,6 +349,27 @@ it.for(completionRoutingCases)(
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: topic, accountId, threadId: 42 },
           }),
+        });
+        const cron = createAutomationFixture(
+          config,
+          state.statePath("cron", "jobs.json"),
+          scope.sessionKey,
+        );
+        await cron.add({
+          name: "Unrelated periodic automation",
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 300_000 },
+          activeHours: { start: "00:00", end: "00:00", timezone: "UTC" },
+          sessionTarget: testCase.isolatedSession === false ? "main" : "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Periodic check", lightContext: true },
+          delivery:
+            testCase.alerts === false || !testCase.target || testCase.target === "none"
+              ? { mode: "none" }
+              : testCase.target === "owner"
+                ? { mode: "announce", target: "owner" }
+                : { mode: "announce", channel: "last" },
         });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         const registry = createTestRegistry([
@@ -573,6 +620,8 @@ it.for(completionRoutingCases)(
             [],
           );
         } finally {
+          cron.stop();
+          await cron.waitForIdle();
           routeReady.resolve();
           await waitForExecScope(scope.sessionKey);
           for (const receipt of receipts) {

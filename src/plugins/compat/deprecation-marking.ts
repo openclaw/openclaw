@@ -307,7 +307,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "PluginRuntime.channel.session.recordInboundSession",
       "PluginRuntime.channel.inbound.runPreparedReply",
       "PluginRuntime.channel.turn",
-      "PluginRuntime.system.requestHeartbeatNow",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations on plugin API and runtime aliases",

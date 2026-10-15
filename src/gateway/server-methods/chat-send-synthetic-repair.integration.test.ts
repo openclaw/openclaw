@@ -118,7 +118,6 @@ it("chat.send replays synthetic repairs through session history and the register
           skipBootstrap: true,
           model: { primary: modelRef, fallbacks: [] },
           models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
-          heartbeat: { every: "0m" },
         },
       },
       models: {

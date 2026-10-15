@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
@@ -179,6 +180,80 @@ it("advances a consumed scheduled slot without reclaiming its terminal receipt",
   expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
   expect((await queue.drain()).launches).toEqual([]);
 });
+
+it.each([0, 64])(
+  "does not replay a cancelled admission retry after %i earlier deferrals",
+  async (priorDeferrals) => {
+    const original = job("cancelled-admission-retry", {
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+    });
+    const queue = await store(`cancelled-admission-retry-${priorDeferrals}`, [original]);
+    const request = scheduled(queue.storeKey, original);
+    await queue.request([request]);
+    const first = (await queue.drain()).launches[0]!;
+    const defer = (run: typeof first, endedAt: number) =>
+      executeOpenClawStateWorker(context, {
+        type: "cron.finalizeRuns",
+        input: {
+          storeKey: queue.storeKey,
+          snapshot: {
+            nowMs: endedAt,
+            defaultAgentId: "main",
+            outcomes: [
+              {
+                jobId: original.id,
+                job: run.job,
+                runReceipt: run.runReceipt,
+                status: "skipped",
+                completionStatus: "failed",
+                deliveryState: {
+                  status: "not-requested",
+                  failureNotification: { status: "not-requested" },
+                },
+                admissionDeferred: true,
+                executionStarted: false,
+                startedAt: run.runReceipt.startedAtMs,
+                endedAt,
+              },
+            ],
+          },
+        },
+      });
+    await defer(first, now + 1);
+    for (let index = 0; index < priorDeferrals; index += 1) {
+      await queue.request([request]);
+      const next = (await queue.drain()).launches[0]!;
+      await defer(next, now + index + 2);
+    }
+    if (priorDeferrals > 0) {
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT receipt_id FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(first.runReceipt.receiptId),
+      ).toBeUndefined();
+    }
+    expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+    expect(await readCronRunRecords(queue.storeKey, original.id)).toEqual([]);
+    const retried = (await queue.request([request])).accepted[0]!;
+    expect(retried.runReceipt.receiptId).not.toBe(first.runReceipt.receiptId);
+    // Cancellation can follow a backward clock adjustment after the deferrals.
+    await queue.cancel([retried.runReceipt.receiptId]);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(retried.runReceipt.receiptId),
+    ).toEqual({ status: "skipped" });
+    expect((await queue.request([request])).rejected).toEqual([
+      { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
+    ]);
+    expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
+    expect(
+      projectCronRunHistoryPage(await readCronRunRecords(queue.storeKey, original.id), {
+        storeKey: queue.storeKey,
+      }).entries,
+    ).toMatchObject([{ status: "skipped", error: "synthetic cancellation" }]);
+  },
+);
 
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const original = job("edited");

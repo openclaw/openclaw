@@ -53,7 +53,6 @@ export function registerCodexCompletionCommandTest() {
         params.agentId = "main";
         params.sessionKey = sessionKey;
         params.trigger = "event";
-        params.continuesConversation = true;
         params.abortSignal = controller.signal;
         params.execOverrides = { host: "gateway", mode: "full" };
         params.messageProvider = route.channel;
@@ -110,7 +109,6 @@ export function registerCodexCompletionCommandTest() {
           expect(factory.mock.calls[0]?.[0]).toMatchObject({
             sessionKey,
             trigger: "event",
-            continuesConversation: true,
           });
           const launched = await tool("exec").execute("continuation-exec", {
             command: "echo codex-chain-ok",

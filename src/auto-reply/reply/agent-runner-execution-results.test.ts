@@ -1,5 +1,5 @@
 import { assert, describe, expect, it, vi } from "vitest";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -26,13 +26,16 @@ const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
   it.each([
-    { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
-    { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
+    { stopReason: "error", event: true, failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+    { stopReason: "superseded", event: false, failureText: undefined },
   ])(
-    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
+    "preserves canonical $stopReason after private partial output (event=$event)",
     async (testCase) => {
       const followupRun = createFollowupRun();
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      if (testCase.event) {
+        followupRun.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+      }
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "Private partial output before the run ended." }],
         meta: { stopReason: testCase.stopReason },
@@ -41,7 +44,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
-        isHeartbeat: testCase.isHeartbeat,
+        opts: { internalEventExecution: followupRun.run.internalEventExecution },
       });
 
       expect(result.kind).toBe("success");

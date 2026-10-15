@@ -4,6 +4,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { CronStatusSummary } from "../cron/service/state.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -122,8 +123,47 @@ export async function resolveStatusGatewayDiagnosticsSafe(
     : { ok: false, error: formatStatusGatewayFailure(result.error, "diagnostics") };
 }
 
-/** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-async function resolveStatusLastHeartbeat(
+export type StatusAutomationsResult = Result<
+  Pick<CronStatusSummary, "enabled" | "jobs" | "nextWakeAtMs">,
+  string
+>;
+
+export async function resolveStatusAutomations(params: {
+  config: OpenClawConfig;
+  timeoutMs?: number;
+  gatewayProbeDeadlineMs: number;
+  gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
+  callOverrides?: { url: string; token?: string; password?: string };
+}): Promise<StatusAutomationsResult> {
+  if (params.gatewayStartupPhase) {
+    return {
+      ok: false,
+      error: `gateway still starting; phase ${params.gatewayStartupPhase}`,
+    };
+  }
+  if (!params.gatewayReachable) {
+    return { ok: false, error: "gateway unreachable" };
+  }
+  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
+  if (timeoutMs === 0) {
+    return { ok: false, error: "Gateway probe budget exhausted before automation status." };
+  }
+  const { callGateway } = await import("../gateway/call.js");
+  return callGateway<CronStatusSummary>({
+    method: "cron.status",
+    params: {},
+    ...params.callOverrides,
+    config: params.config,
+    timeoutMs,
+  }).then<StatusAutomationsResult, StatusAutomationsResult>(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error: String(error) }),
+  );
+}
+
+/** Reads the deprecated deep-JSON receipt without running heartbeat work. */
+export async function resolveStatusLastHeartbeat(
   params: Omit<StatusGatewayQuery, "callOverrides"> & { gatewayReachable: boolean },
 ) {
   if (!params.gatewayReachable) {
@@ -229,22 +269,11 @@ export async function resolveStatusRuntimeSnapshot(params: {
               : undefined,
           )
       : undefined;
-  // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
-  const lastHeartbeat =
-    params.deep && !params.gatewayStartupPhase
-      ? await resolveStatusLastHeartbeat({
-          config: params.config,
-          timeoutMs: params.timeoutMs,
-          gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-          gatewayReachable: params.gatewayReachable,
-        })
-      : null;
   const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
   return {
     securityAudit,
     usage,
     health,
-    lastHeartbeat,
     gatewayService,
     nodeService,
   };

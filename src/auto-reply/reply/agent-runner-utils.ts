@@ -51,6 +51,7 @@ import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildReplyRunStateParams,
   resolveModelFallbackOptions,
+  resolveReplyScheduledToolPolicy,
   resolveRunModelHasVision,
 } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -343,10 +344,7 @@ export function buildModelResolveContext(
 
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
-  turn: Pick<
-    AgentTurnParams,
-    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
-  >,
+  turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
   // An event's captured delivery route is not a new trusted channel turn.
@@ -355,7 +353,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
+  if (!channelIngress && turn.sessionCtx.Provider !== "webchat") {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -450,6 +448,10 @@ export async function buildEmbeddedRunExecutionParams(params: {
   // Retain the base-input snapshot across thinking and vision discovery.
   const snapshot = { ...params };
   const config = snapshot.run.config;
+  const automation = snapshot.run.scheduledAutomation;
+  automation?.assertCurrent();
+  const job = automation?.job;
+  const scheduledToolPolicy = resolveReplyScheduledToolPolicy(snapshot.run);
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
     resolveModelFallbackOptions(snapshot.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
@@ -484,6 +486,8 @@ export async function buildEmbeddedRunExecutionParams(params: {
         workspaceDir: snapshot.run.workspaceDir,
         modelId: snapshot.model,
       }));
+  const modelHasVision = await resolveRunModelHasVision(snapshot);
+  automation?.assertCurrent();
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
@@ -495,7 +499,14 @@ export async function buildEmbeddedRunExecutionParams(params: {
     agentDir: snapshot.run.agentDir,
     config,
     trustedInternalHandoff: snapshot.run.trustedInternalHandoff,
-    scheduledToolPolicy: snapshot.run.scheduledToolPolicy,
+    scheduledToolPolicy,
+    ...(job
+      ? {
+          jobId: job.id,
+          scheduledRuntimeAuthority: job.runtimeAuthority,
+          scheduledRuntimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired === true,
+        }
+      : {}),
     runtimePluginToolGrant: snapshot.run.runtimePluginToolGrant,
     enforceFinalTag,
     silentExpected: snapshot.run.silentExpected,
@@ -505,7 +516,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     skillLibraryAuthoring: snapshot.run.skillLibraryAuthoring,
     provider: snapshot.provider,
     model: snapshot.model,
-    modelHasVision: await resolveRunModelHasVision(snapshot),
+    modelHasVision,
     ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: snapshot.run.modelSelectionLocked,

@@ -16,7 +16,6 @@ const COPILOT_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
 const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
-  ["heartbeat.md", 30],
   ["bootstrap.md", 40],
   ["tools.md", 50],
   ["user.md", 60],

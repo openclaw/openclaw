@@ -281,7 +281,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             defaults: {
               model: "openai/gpt-4.1",
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
             entries: { keeper: { workspace: state.workspaceDir } },
           },
@@ -320,7 +319,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           cronEnabled: false,
           log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const context = createDirectChatContext({ cron, getRuntimeConfig });

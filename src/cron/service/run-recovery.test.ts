@@ -157,7 +157,7 @@ describe("worker-owned startup recovery", () => {
       nowMs: () => now + 1_000,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       runCommandJob,
       onEvent,

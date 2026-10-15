@@ -86,56 +86,53 @@ export function normalizeReplyPayloadOutcome(
   }
 
   let text = payload.text ?? undefined;
-  // Monitoring already applied its configured acknowledgment and error-text policy.
-  if (!getReplyPayloadMetadata(payload)?.heartbeatReply) {
-    const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
-    if (text && isSilentReplyPayloadText(text, silentToken)) {
-      if (!hasContent("")) {
-        return suppress("silent");
-      }
-      text = "";
-    }
-    // Mixed-content silent tokens must not leak to channel delivery.
-    if (text) {
-      const stripped = stripMixedSilentReplyTokens(text, silentToken);
-      if (stripped !== null) {
-        text = stripped;
-        if (!hasContent(text)) {
-          return suppress("silent");
-        }
-      }
-    }
-    if (text && !trimmed) {
-      // Keep empty text when media exists so media-only replies still send.
-      text = "";
-    }
-
-    if (text?.includes(HEARTBEAT_TOKEN)) {
-      const stripped = stripHeartbeatToken(text, { mode: "message" });
-      if (stripped.didStrip) {
-        opts.onHeartbeatStrip?.();
-      }
-      if (stripped.shouldSkip && !hasContent(stripped.text)) {
-        return suppress("heartbeat");
-      }
-      text = stripped.text;
-    }
-
-    if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
+  if (text && isSilentReplyPayloadText(text, silentToken)) {
+    if (!hasContent("")) {
       return suppress("silent");
     }
+    text = "";
+  }
+  // Mixed-content silent tokens must not leak to channel delivery.
+  if (text) {
+    const stripped = stripMixedSilentReplyTokens(text, silentToken);
+    if (stripped !== null) {
+      text = stripped;
+      if (!hasContent(text)) {
+        return suppress("silent");
+      }
+    }
+  }
+  if (text && !trimmed) {
+    // Keep empty text when media exists so media-only replies still send.
+    text = "";
+  }
 
-    if (text) {
-      text = payload.isError
-        ? renderUserFacingText(text, {
-            errorContext: true,
-            conversationContext: opts.conversationContext,
-          })
-        : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
+  if (text?.includes(HEARTBEAT_TOKEN)) {
+    const stripped = stripHeartbeatToken(text, { mode: "message" });
+    if (stripped.didStrip) {
+      opts.onHeartbeatStrip?.();
     }
-    if (!hasContent(text) && !hasSpeechContent) {
-      return suppress("empty");
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
+      return suppress("heartbeat");
     }
+    text = stripped.text;
+  }
+
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    return suppress("silent");
+  }
+
+  if (text) {
+    text = payload.isError
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
+  }
+  if (!hasContent(text) && !hasSpeechContent) {
+    return suppress("empty");
   }
 
   let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });

@@ -178,7 +178,6 @@ it("model reads recover a failed shared-worker publication and retain the failed
       agents: {
         defaults: {
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: `${provider}/original` },
           modelPolicy: { allow: providers.map((id) => `${id}/*`) },
         },

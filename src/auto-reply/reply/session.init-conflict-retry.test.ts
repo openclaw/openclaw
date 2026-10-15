@@ -240,8 +240,8 @@ describe("initSessionState conflict retry wiring", () => {
         { sessionKey, storePath: targetStorePath },
         {
           ...currentEntry,
-          lastHeartbeatSentAt: 100 + lateWrites,
-          lastHeartbeatText: `concurrent metadata ${lateWrites}`,
+          lastReadAt: 100 + lateWrites,
+          label: `concurrent metadata ${lateWrites}`,
         },
       );
       if (lateWrites === 2) {
@@ -274,16 +274,16 @@ describe("initSessionState conflict retry wiring", () => {
       expect(lateWrites).toBe(2);
       expect(result.sessionEntry).toMatchObject({
         displayName: "reply initialization update",
-        lastHeartbeatSentAt: 102,
-        lastHeartbeatText: "concurrent metadata 2",
+        lastReadAt: 102,
+        label: "concurrent metadata 2",
         sessionId: "existing-session",
       });
       expect(
         loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
       ).toMatchObject({
         displayName: "reply initialization update",
-        lastHeartbeatSentAt: 102,
-        lastHeartbeatText: "concurrent metadata 2",
+        lastReadAt: 102,
+        label: "concurrent metadata 2",
         sessionId: "existing-session",
       });
     } finally {

@@ -8,16 +8,15 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
-import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import {
+  hasDeliveryTargetFields,
+  normalizeDeliveryContext,
+} from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
-import {
-  hasSessionLocalHeartbeatRelayRoute,
-  isHeartbeatEnabledForSessionAgent,
-} from "./acp-spawn-heartbeat.js";
 
 type AcpSpawnRequesterContext = {
   agentChannel?: string;
@@ -32,8 +31,7 @@ export type AcpSpawnRequesterState = {
   isSubagentSession: boolean;
   hasActiveSubagentBinding: boolean;
   hasThreadContext: boolean;
-  heartbeatEnabled: boolean;
-  heartbeatRelayRouteUsable: boolean;
+  sessionRelayRouteUsable: boolean;
   origin: ReturnType<typeof normalizeDeliveryContext>;
 };
 
@@ -80,21 +78,12 @@ export async function resolveAcpSpawnRequesterState(params: {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
-  const [hasActiveSubagentBinding, heartbeatRelayRouteUsable] = await Promise.all([
+  const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
-      ? listSessionBindingsBySessionAsync(params.parentSessionKey).then((records) =>
-          records.some((record) => record.targetKind === "subagent" && record.status !== "ended"),
+      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
+          (record) => record.targetKind === "subagent" && record.status !== "ended",
         )
-      : false,
-    params.parentSessionKey && params.requesterAgentId
-      ? hasSessionLocalHeartbeatRelayRoute({
-          cfg: params.cfg,
-          parentSessionKey: params.parentSessionKey,
-          requesterAgentId: params.requesterAgentId,
-          assertActive: params.assertActive,
-        })
-      : false,
-  ]);
+      : false;
   params.assertActive?.();
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
@@ -104,12 +93,20 @@ export async function resolveAcpSpawnRequesterState(params: {
     isSubagentSession,
     hasActiveSubagentBinding,
     hasThreadContext,
-    heartbeatEnabled: isHeartbeatEnabledForSessionAgent({
-      cfg: params.cfg,
-      requesterAgentId: params.requesterAgentId,
-      sessionKey: params.parentSessionKey,
-    }),
-    heartbeatRelayRouteUsable,
+    sessionRelayRouteUsable: Boolean(
+      isSubagentSession &&
+      !hasActiveSubagentBinding &&
+      !hasThreadContext &&
+      params.parentSessionKey &&
+      params.cfg.session?.scope !== "global" &&
+      hasDeliveryTargetFields(
+        await readAcpSpawnParentDeliveryContext({
+          parentSessionKey: params.parentSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          assertActive: params.assertActive,
+        }),
+      ),
+    ),
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
       targetAgentId: params.ownerAgentId,
@@ -137,8 +134,7 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.isSubagentSession &&
     !params.requester.hasActiveSubagentBinding &&
     !params.requester.hasThreadContext &&
-    params.requester.heartbeatEnabled &&
-    params.requester.heartbeatRelayRouteUsable;
+    params.requester.sessionRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
 }

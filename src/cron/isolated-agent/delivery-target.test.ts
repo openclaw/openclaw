@@ -324,6 +324,56 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("directory auth failed");
   });
 
+  it.each(["allow", "block"] as const)(
+    "honors directPolicy=%s for plugin-resolved directory targets",
+    async (directPolicy) => {
+      setSingleOutboundTestPlugin({
+        id: "alpha",
+        outbound: createStubOutbound("Alpha"),
+        messaging: {
+          targetPrefixes: ["alpha"],
+          targetResolver: {
+            resolveTarget: async ({ input }) =>
+              input === "alice"
+                ? { to: "user:123", kind: "user" as const, source: "directory" as const }
+                : null,
+          },
+          resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+            const isUser = target.startsWith("user:");
+            return buildChannelOutboundSessionRoute({
+              cfg,
+              agentId,
+              channel: "alpha",
+              accountId,
+              peer: { kind: isUser ? "direct" : "channel", id: target },
+              chatType: isUser ? "direct" : "channel",
+              from: target,
+              to: isUser ? target : `channel:${target}`,
+            });
+          },
+        },
+      });
+
+      const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+        channel: "alpha",
+        to: "alice",
+        directPolicy,
+      });
+
+      if (directPolicy === "block") {
+        expect(result).toMatchObject({
+          ok: false,
+          deliverySuppressionReason: "channel_transform",
+          error: expect.objectContaining({ message: expect.stringContaining("directPolicy") }),
+        });
+      } else {
+        expect(result.ok).toBe(true);
+        expect(result.to).toBe("user:123");
+        expect(result.threadId).toBeUndefined();
+      }
+    },
+  );
+
   it("resolves cron reserved explicit targets through directory entries", async () => {
     const listGroups = vi.fn(async () => [
       {

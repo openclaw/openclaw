@@ -38,7 +38,6 @@ import {
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as backoff from "../infra/backoff.js";
-import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -282,16 +281,6 @@ const directAgentScenarios: Scenario[] = [
   },
 ];
 
-function drainHeartbeatWakes() {
-  // The global immediate wake settles older delayed notices before this Gateway closes.
-  return requestHeartbeatAndWait({
-    source: "manual",
-    intent: "immediate",
-    reason: "wake",
-    coalesceMs: 0,
-  });
-}
-
 // Each Gateway owns a fresh state directory; completed children must not cross fixtures.
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
@@ -333,7 +322,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               defaults: {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
-                heartbeat: { every: "0m" },
                 ...(scenario.inherited ? { model: ladder } : {}),
                 subagents: {
                   allowAgents: ["*"],
@@ -583,7 +571,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             expect(entry?.modelOverride).not.toContain("@");
           }
         },
-        () => gateway && drainHeartbeatWakes(),
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "spawn fallback proof complete" }),
         () => provider?.stop(),
@@ -743,7 +730,6 @@ describe("CLI model inheritance through MCP", () => {
               defaults: {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
-                heartbeat: { every: "0m" },
                 model: CHILD_BACKUP,
                 models: {
                   [PRIMARY]: { params: { transport: "sse", openaiWsWarmup: false } },
@@ -842,7 +828,6 @@ describe("CLI model inheritance through MCP", () => {
           );
           expect(provider.errors).toEqual([]);
         },
-        () => gateway && drainHeartbeatWakes(),
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "CLI model inheritance proof complete" }),
         () => provider?.stop(),

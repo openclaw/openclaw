@@ -263,7 +263,6 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
-    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

@@ -37,7 +37,7 @@ OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
 fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
+browser, nodes, gateway, and `web_search`, are available
 through Codex tool search under that namespace. This keeps the initial model
 context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or

@@ -336,6 +336,7 @@ function makeParams(
     }
   > = {},
 ): AgentHarnessAttemptParams {
+  setRuntimeConfigSnapshot(overrides.config ?? {});
   const prompt = overrides.prompt ?? "hello";
   const transcriptPrompt = overrides.transcriptPrompt ?? prompt;
   return {
@@ -387,6 +388,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetGlobalHookRunner();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
@@ -590,9 +592,9 @@ describe("runCopilotAttempt", () => {
         failure: { error: "delivery failed" },
       });
       input.attemptParams?.observeToolTerminal?.({
-        toolCallId: "heartbeat-1",
-        toolName: "heartbeat_respond",
-        arguments: { summary: "ok" },
+        toolCallId: "status-1",
+        toolName: "session_status",
+        arguments: {},
         outcome: "success",
       });
       return createStubToolBridge();

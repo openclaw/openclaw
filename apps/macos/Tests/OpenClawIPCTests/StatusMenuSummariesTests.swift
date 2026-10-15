@@ -416,7 +416,7 @@ private final class UsageGatewayFixture {
                         return #"""
                         {"id":"\#(id)","name":"Automation \#(index)","enabled":true,
                         "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
-                        "sessionTarget":"main","wakeMode":"now",
+                        "sessionTarget":"main",
                         "payload":{"kind":"systemEvent","text":"fixture"},"state":{}}
                         """#
                     }.joined(separator: ",")

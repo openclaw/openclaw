@@ -27,7 +27,7 @@ speed or start a new incognito conversation. No turn is sent with mismatched set
 
 When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
+scheduled turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
 This host compaction does not itself replace or rewrite Codex's
 native thread.

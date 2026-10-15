@@ -10,7 +10,6 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
@@ -21,27 +20,12 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
-import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
 function compactSystemEvent(event: SystemEvent): string | null {
   const trimmed = event.text.trim();
   if (!trimmed) {
-    return null;
-  }
-  // Creation metadata may mention heartbeat work; it is not a retired wake prompt.
-  if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
-    return trimmed;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (
-    lower.includes("reason periodic") ||
-    lower.startsWith("read heartbeat.md") ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
-  ) {
     return null;
   }
   if (trimmed.startsWith("Node:")) {
@@ -96,11 +80,11 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
+  // Claimed turns retain their own execution and delivery owner.
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),
+      (event) => !isSystemEventTurnOwned(queueKey, event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

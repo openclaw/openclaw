@@ -117,7 +117,6 @@ describe("memory manager reindex recovery", () => {
   });
 
   afterEach(async () => {
-    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     if (manager) {
       await manager.close();
@@ -134,6 +133,8 @@ describe("memory manager reindex recovery", () => {
     resetPluginStateStoreForTests();
     clearRuntimeConfigSnapshot();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
   });
 
   function createCfg(params: {

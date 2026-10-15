@@ -1,5 +1,4 @@
 import { isStringOption } from "../utils/string-readers.js";
-import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "./heartbeat.js";
 import type { MsgContext } from "./templating.js";
 
 type InternalTurnContext = Pick<
@@ -7,28 +6,7 @@ type InternalTurnContext = Pick<
   "InternalTurnSource" | "Provider" | "Surface" | "OriginatingChannel"
 >;
 
-/** Keep wake history compact while preserving the producer's actual event identity. */
-export function resolveInternalTurnTranscript(
-  ctx: Pick<MsgContext, "InputProvenance" | "InternalTurnSource">,
-) {
-  const provenance =
-    ctx.InputProvenance?.kind === "internal_system"
-      ? ctx.InputProvenance
-      : { kind: "internal_system" as const, sourceTool: ctx.InternalTurnSource ?? "heartbeat" };
-  const source = provenance.sourceTool ?? ctx.InternalTurnSource ?? "heartbeat";
-  const text =
-    source === "heartbeat"
-      ? INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat
-      : source === "exec" || source === "exec-event"
-        ? INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec
-        : source === "cron"
-          ? INTERNAL_WAKE_TRANSCRIPT_PROMPTS.cron
-          : INTERNAL_WAKE_TRANSCRIPT_PROMPTS.event;
-  return { text, provenance };
-}
-
 const LEGACY_INTERNAL_TURN_SOURCES = new Map<string, MsgContext["InternalTurnSource"]>([
-  ["heartbeat", "heartbeat"],
   ["cron-event", "cron"],
   ["exec-event", "exec"],
 ]);
@@ -40,7 +18,6 @@ function legacyInternalTurnSource(value: string | undefined): MsgContext["Intern
 /** Fold shipped SDK source labels at ingress; runtime channels describe transport only. */
 export function normalizeInternalTurnContext(ctx: InternalTurnContext): void {
   const source = isStringOption(ctx.InternalTurnSource, [
-    "heartbeat",
     "cron",
     "exec",
     "event",

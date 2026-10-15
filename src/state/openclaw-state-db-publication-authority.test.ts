@@ -182,6 +182,7 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "github-publication-requester-authority-v18", path: databasePath },
         { kind: "predicate-columns-v21", path: databasePath },
         { kind: "portable-identity-columns-v22", path: databasePath },
+        { kind: "automation-policy-fence-v23", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({

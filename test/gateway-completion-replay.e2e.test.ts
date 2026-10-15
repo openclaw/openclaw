@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -41,6 +41,9 @@ describe("Gateway completed requester replay", () => {
     },
     async () => {
       const model = await startModel();
+      onTestFailed(() =>
+        console.error("[completion-replay-request-trace]", JSON.stringify(model.requestTrace())),
+      );
       servers.push(model);
       const instance = await createOpenClawTestInstance({
         name: "gateway-completion-replay",
@@ -186,7 +189,6 @@ function config(url: string): OpenClawConfig {
     messages: { groupChat: { visibleReplies: "message_tool" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
@@ -231,7 +233,7 @@ type ModelInput = {
   role?: string;
   name?: string;
   call_id?: string;
-  content?: unknown;
+  content?: string | Array<{ type?: string; text?: string }>;
   output?: unknown;
 };
 
@@ -257,6 +259,7 @@ async function startModel() {
   let childStarted = false;
   let effectCalls = 0;
   let sequence = 0;
+  const requestTrace: Array<Record<string, unknown>> = [];
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       failures.push(String(error));
@@ -300,6 +303,34 @@ async function startModel() {
       );
     }
     const last = input.at(-1);
+    const lastUserText = modelInputText(input.findLast((item) => item.role === "user")?.content);
+    if (requestTrace.length < 24) {
+      requestTrace.push({
+        request: sequence + 1,
+        selectedUserText: selectedUserText.slice(0, 400),
+        lastUserText: lastUserText.slice(0, 400),
+        lastUserIsCarrier: isInternalRuntimeContextCarrierText(lastUserText),
+        lastUserHasNotice: lastUserText.includes("Subagent completion delivery is blocked:"),
+        lastUserHasFollowup: lastUserText.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART"),
+        selectedUserCount: serializedUserTexts.length,
+        carrierCount: serializedUserTexts.filter(isInternalRuntimeContextCarrierText).length,
+        anyUserHasNotice: serializedUserTexts.some((value) =>
+          value.includes("Subagent completion delivery is blocked:"),
+        ),
+        anyUserHasFollowup: serializedUserTexts.some((value) =>
+          value.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART"),
+        ),
+        lastType: last?.type,
+        lastRole: last?.role,
+        lastCallName:
+          last?.type === "function_call_output"
+            ? input.findLast(
+                (item) => item.type === "function_call" && item.call_id === last.call_id,
+              )?.name
+            : undefined,
+        effectCallsBefore: effectCalls,
+      });
+    }
     const id = String(++sequence);
     const final = (value: string) =>
       writeOpenAiResponsesText(response, {
@@ -374,6 +405,7 @@ async function startModel() {
     releaseChild: () => child.resolve(undefined),
     childStarted: () => childStarted,
     effectCalls: () => effectCalls,
+    requestTrace: () => requestTrace,
     failures: () => failures,
     close: async () => {
       child.resolve(undefined);

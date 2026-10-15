@@ -118,7 +118,6 @@ export function baseParams(
         sessionEntry:
           overrides.sessionStore?.[overrides.sessionKey ?? defaults.sessionKey] ??
           overrides.sessionEntry,
-        isHeartbeat: overrides.opts?.isHeartbeat,
       }),
     ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
     sessionCtx: {

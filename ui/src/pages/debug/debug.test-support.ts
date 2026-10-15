@@ -37,8 +37,8 @@ export function diagnosticResponse(method: string, marker = "initial"): unknown 
       return { marker, ok: true };
     case "models.list":
       return { models: [{ id: marker }] };
-    case "last-heartbeat":
-      return { source: marker };
+    case "cron.status":
+      return { enabled: true, triggersEnabled: true, jobs: marker.length, nextWakeAtMs: null };
     case "diagnostics.lanes":
       return {
         ts: 1,

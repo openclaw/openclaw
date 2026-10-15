@@ -91,6 +91,7 @@ describe("gateway restart handoff state migration", () => {
       { kind: "creator-namespace-v14", path: databasePath },
       { kind: "predicate-columns-v21", path: databasePath },
       { kind: "portable-identity-columns-v22", path: databasePath },
+      { kind: "automation-policy-fence-v23", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);

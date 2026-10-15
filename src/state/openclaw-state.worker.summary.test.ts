@@ -17,6 +17,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import type { PluginStateReadRow } from "../plugin-state/plugin-state-store.kernel.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -68,6 +69,13 @@ it("retains the shared native handle until its last actor closes and preserves r
   await second[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
   const database = openOpenClawStateDatabase();
   const key = { pluginId: "native-borrow-fixture", namespace: "shared", key: "answer" };
+  const createdAtMs = Date.now();
+  const expectedRow: PluginStateReadRow = {
+    entry_key: key.key,
+    value_json: "1",
+    created_at: createdAtMs,
+    expires_at: null,
+  };
   const register = (backend: typeof first, value: number) => {
     const stages: string[] = [];
     const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -83,6 +91,7 @@ it("retains the shared native handle until its last actor closes and preserves r
         nativePost(message, transferList);
         admission.service();
       });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
     try {
       const result = runWithSqliteWorkerStateContext(context, () =>
         withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
@@ -100,6 +109,7 @@ it("retains the shared native handle until its last actor closes and preserves r
       expect(stages).toEqual(["transaction", "commit"]);
       return result;
     } finally {
+      clock.mockRestore();
       dispatch.mockRestore();
       admission.finish();
     }
@@ -111,7 +121,7 @@ it("retains the shared native handle until its last actor closes and preserves r
     runWithSqliteWorkerStateContext(context, () =>
       second.execute({ type: "pluginState.lookup", input: key }),
     ),
-  ).toEqual({ ok: true, value: 1 });
+  ).toEqual({ ok: true, value: 1, readRows: [expectedRow] });
 
   await first.close();
   expect(database.db.isOpen).toBe(true);
@@ -129,7 +139,11 @@ it("retains the shared native handle until its last actor closes and preserves r
     runWithSqliteWorkerStateContext(reopenedContext, () =>
       reopened.execute({ type: "pluginState.lookup", input: key }),
     ),
-  ).toEqual({ ok: true, value: 2 });
+  ).toEqual({
+    ok: true,
+    value: 2,
+    readRows: [{ ...expectedRow, value_json: "2" }],
+  });
 });
 
 it.each(["kv", "health"] as const)(
@@ -138,6 +152,13 @@ it.each(["kv", "health"] as const)(
     const context = createExistingStateContext();
     const databasePath = context.admission.databasePath;
     const key = { pluginId: "borrow-fixture", namespace: "shared", key: "answer" };
+    const createdAtMs = Date.now();
+    const expectedRow: PluginStateReadRow = {
+      entry_key: key.key,
+      value_json: '{"value":42}',
+      created_at: createdAtMs,
+      expires_at: null,
+    };
     const kv = runWithSqliteWorkerStateContext(context, () =>
       openExistingSqliteWorkerBackend(undefined, {
         databasePath,
@@ -150,7 +171,7 @@ it.each(["kv", "health"] as const)(
       runWithSqliteWorkerStateContext(context, () =>
         kv.execute({ type: "pluginState.lookup", input: key }),
       ),
-    ).toEqual({ ok: true, value: undefined });
+    ).toEqual({ ok: true, value: undefined, readRows: [] });
     expect(readFileSync(databasePath)).toEqual(Buffer.alloc(0));
     const stages: string[] = [];
     withStateDatabaseSchemaMaintenance({ databasePath }, () => {
@@ -173,6 +194,7 @@ it.each(["kv", "health"] as const)(
           nativePost(message, transferList);
           admission.service();
         });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
       try {
         expect(
           runWithSqliteWorkerStateContext(context, () =>
@@ -191,6 +213,7 @@ it.each(["kv", "health"] as const)(
         ).toEqual({ ok: true, value: undefined });
         expect(stages).toEqual(["transaction", "commit"]);
       } finally {
+        clock.mockRestore();
         dispatch.mockRestore();
         admission.finish();
       }
@@ -242,7 +265,7 @@ it.each(["kv", "health"] as const)(
         runWithSqliteWorkerStateContext(context, () =>
           kv.execute({ type: "pluginState.lookup", input: key }),
         ),
-      ).toEqual({ ok: true, value: { value: 42 } });
+      ).toEqual({ ok: true, value: { value: 42 }, readRows: [expectedRow] });
     }
     await (firstToClose === "kv" ? health : kv).close();
     expect(database.db.isOpen).toBe(false);
@@ -257,7 +280,7 @@ it.each(["kv", "health"] as const)(
       runWithSqliteWorkerStateContext(reopenedContext, () =>
         reopened.execute({ type: "pluginState.lookup", input: key }),
       ),
-    ).toEqual({ ok: true, value: { value: 42 } });
+    ).toEqual({ ok: true, value: { value: 42 }, readRows: [expectedRow] });
     expect(readConfigHealthStateInDatabase(openOpenClawStateDatabase().db)).toMatchObject({
       entries: {
         [configPath]: {

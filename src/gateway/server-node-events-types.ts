@@ -45,7 +45,6 @@ export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;
 };
-
 export type NodeEventHandleResult = {
   ok: true;
   event: string;
@@ -61,4 +60,10 @@ export type NodeEventHandlerOptions = {
   isConnectionCurrent?: () => boolean | Promise<boolean>;
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   assertApnsRegistrationCurrent?: () => void;
+  assertSessionEventCurrent?: () => void;
 };
+
+export type NodeEventConnectionOptions = Pick<
+  NodeEventHandlerOptions,
+  "connId" | "isConnectionCurrent" | "assertSessionEventCurrent"
+>;

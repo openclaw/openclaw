@@ -90,7 +90,6 @@ it("keeps deletion draining until every connection terminal exits, without touch
       cronEnabled: false,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

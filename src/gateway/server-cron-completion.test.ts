@@ -116,7 +116,6 @@ async function createCompletionFixture(
     cronEnabled: true,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   const marker = markServiceCronJobActive(service, job, receipt);

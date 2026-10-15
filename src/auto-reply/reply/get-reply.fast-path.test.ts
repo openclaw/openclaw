@@ -100,10 +100,10 @@ function expectNoBootstrap() {
 describe("getReplyFromConfig fast test bootstrap", () => {
   let state: OpenClawTestState;
   let storePath: string;
-  const config = (model = "openai/gpt-5.5", heartbeat?: Record<string, never>) =>
+  const config = (model = "openai/gpt-5.5") =>
     markCompleteReplyConfig({
       agents: {
-        defaults: { model, workspace: state.workspaceDir, ...(heartbeat ? { heartbeat } : {}) },
+        defaults: { model, workspace: state.workspaceDir },
       },
       session: { store: storePath },
     });
@@ -219,36 +219,29 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "clears stale ack-only heartbeat pending delivery",
-      text: "HEARTBEAT_OK",
-      cleared: true,
-    },
-    {
-      name: "does not replay private pending delivery during heartbeat",
-      text: "private prior user answer",
-      cleared: false,
-    },
-  ])("$name", async ({ text, cleared }) => {
+  it("does not replay an earlier user final into an internal event", async () => {
+    const text = "private prior user answer";
     await seedSession({
       sessionId: "pending-final",
-      updatedAt: Date.now() - (cleared ? 0 : 60_000),
+      updatedAt: Date.now() - 60_000,
       pendingFinalDelivery: {
         kind: "replayable",
         text,
         createdAt: 1,
-        intentId: "stale-heartbeat-intent",
+        intentId: "earlier-user-final",
       },
     });
     await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, config("openai/gpt-5.5", {})),
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
+          InternalTurnSource: "event",
+        }),
+        undefined,
+        config(),
+      ),
     ).resolves.toEqual({ text: "ok" });
-    if (cleared) {
-      expect(readSession().pendingFinalDelivery).toBeUndefined();
-    } else {
-      expect(readSession().pendingFinalDelivery).toMatchObject({ kind: "replayable", text });
-    }
+    expect(readSession().pendingFinalDelivery).toMatchObject({ kind: "replayable", text });
   });
 
   it("uses the target session thinking override for native /status", async () => {

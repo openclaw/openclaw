@@ -84,6 +84,12 @@
   gap: 12px;
 }
 
+.debug-overlay__events .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .debug-overlay__events time {
   flex: none;
   color: var(--muted);

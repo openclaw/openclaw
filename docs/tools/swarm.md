@@ -328,7 +328,6 @@ it can be spawned but cannot start swarms from its own top-level sessions:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

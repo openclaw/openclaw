@@ -41,5 +41,10 @@ it("seeds isolated auth credentials and usage without loading plugin runtime", a
     expect(loadPersistedAuthProfileStore(state.agentDir("seeded"))?.profiles).toEqual(
       store.profiles,
     );
+    await state.writeAuthProfiles({ version: 1, profiles: store.profiles }, "seeded");
+    const replaced = loadPersistedAuthProfileStore(state.agentDir("seeded"));
+    expect(replaced?.order).toBeUndefined();
+    expect(replaced?.lastGood).toBeUndefined();
+    expect(replaced?.usageStats).toBeUndefined();
   });
 });

@@ -505,7 +505,6 @@ class MainViewModelTest {
         deleteAfterRun = false,
         schedule = GatewayCronScheduleEdit.At("2026-07-10T09:00:00Z"),
         sessionTarget = "isolated",
-        wakeMode = "now",
         payload = GatewayCronPayloadEdit.SystemEvent("Wake up"),
       )
     return CronEditorDraftState(

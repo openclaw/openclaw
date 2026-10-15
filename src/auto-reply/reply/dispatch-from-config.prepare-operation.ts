@@ -103,7 +103,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         state.hookState.inboundClaimContext,
       );
       const metadata =
-        sessionKey && commandId
+        sessionKey &&
+        commandId &&
+        !(state.isInternalWebchatTurn && params.replyOptions?.userTurnTranscriptRecorder)
           ? {
               sessionKey,
               agentId: sessionAgentId,

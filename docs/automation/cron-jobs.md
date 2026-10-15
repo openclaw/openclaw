@@ -4,7 +4,7 @@ summary: "Automations: scheduled jobs, webhooks, and Gmail PubSub triggers for t
 read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
-  - Deciding between heartbeat and automations for scheduled work
+  - Migrating heartbeat monitoring to ordinary scheduled jobs
 title: "Automations"
 sidebarTitle: "Automations"
 ---
@@ -59,6 +59,8 @@ This page is an index. Each section below moved to a child page, and every ancho
 
 - <a id="schedule-types"></a>[Schedule types](/automation/cron-jobs/schedules#schedule-types)
 - <a id="heartbeat-task-migration"></a>[Heartbeat task migration](/automation/cron-jobs/schedules#heartbeat-task-migration)
+- <a id="monitoring-policies"></a>[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies)
+- <a id="job-scratch-and-quiet-results"></a>[Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results)
 - <a id="stream-sources"></a>[Stream sources](/automation/cron-jobs/schedules#stream-sources)
 - <a id="dynamic-cadence-pacing"></a><a id="dynamic-cadence-(pacing)"></a>[Dynamic cadence (pacing)](/automation/cron-jobs/schedules#dynamic-cadence-pacing)
 - <a id="%2Floop-chat-shortcut"></a><a id="/loop-chat-shortcut"></a>[`/loop` chat shortcut](/automation/cron-jobs/schedules#%2Floop-chat-shortcut)
@@ -151,13 +153,13 @@ This page is an index. Each section below moved to a child page, and every ancho
 - <a id="command-ladder"></a>[Command ladder](/automation/cron-jobs/troubleshooting#command-ladder)
 - <a id="automations-not-firing"></a>[Automations not firing](/automation/cron-jobs/troubleshooting#automations-not-firing)
 - <a id="job-fired-but-no-delivery"></a>[Job fired but no delivery](/automation/cron-jobs/troubleshooting#job-fired-but-no-delivery)
-- <a id="automations-or-heartbeat-appear-to-prevent-new-style-rollover"></a>[Automations or heartbeat appear to prevent /new-style rollover](/automation/cron-jobs/troubleshooting#automations-or-heartbeat-appear-to-prevent-new-style-rollover)
+- <a id="automations-or-heartbeat-appear-to-prevent-new-style-rollover"></a>[Automations appear to prevent /new-style rollover](/automation/cron-jobs/troubleshooting#automations-or-heartbeat-appear-to-prevent-new-style-rollover)
 - <a id="timezone-gotchas"></a>[Timezone gotchas](/automation/cron-jobs/troubleshooting#timezone-gotchas)
 
 ## Related
 
 - [Automation](/automation) — all automation mechanisms at a glance
-- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Heartbeat migration](/gateway/heartbeat) — migrate periodic monitoring to editable jobs
 - [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
 - [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
 - [Timezone](/concepts/timezone) — timezone configuration

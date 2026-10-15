@@ -135,27 +135,24 @@ describe("resolveCronSession", () => {
     {
       sessionKey: "agent:main:main",
       forceNew: true,
-      heartbeat: false,
       initializing: false,
       error: "is archived. Restore it before starting new work.",
     },
     {
-      sessionKey: "agent:main:main:heartbeat",
+      sessionKey: "agent:main:cron:initializing",
       forceNew: true,
-      heartbeat: true,
       initializing: true,
       error: "is still initializing. Retry after initialization completes.",
     },
     {
-      sessionKey: "agent:main:main:heartbeat",
+      sessionKey: "agent:main:cron:archived",
       forceNew: false,
-      heartbeat: true,
       initializing: false,
       error: "is archived. Restore it before starting new work.",
     },
   ])(
     "blocks $sessionKey (forced=$forceNew, initializing=$initializing)",
-    ({ sessionKey, forceNew, heartbeat, initializing, error }) => {
+    ({ sessionKey, forceNew, initializing, error }) => {
       expect(() =>
         resolveWithStoredEntry({
           sessionKey,
@@ -164,31 +161,12 @@ describe("resolveCronSession", () => {
             sessionId: "blocked-session",
             updatedAt: NOW_MS - 1_000,
             archivedAt: NOW_MS,
-            ...(heartbeat ? { heartbeatIsolatedBaseSessionKey: "agent:main:main" } : {}),
             ...(initializing ? { initializationPending: true as const } : {}),
           },
         }),
       ).toThrow(`Session "${sessionKey}" ${error}`);
     },
   );
-
-  it("rolls an archived isolated heartbeat session into a fresh run", () => {
-    const result = resolveWithStoredEntry({
-      sessionKey: "agent:main:main:heartbeat",
-      forceNew: true,
-      entry: {
-        sessionId: "archived-heartbeat-session",
-        updatedAt: NOW_MS - 1_000,
-        archivedAt: NOW_MS,
-        heartbeatIsolatedBaseSessionKey: "agent:main:main",
-      },
-    });
-    expect(result.isNewSession).toBe(true);
-    expect(result.previousSessionId).toBe("archived-heartbeat-session");
-    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
-    expect(result.sessionEntry.archivedAt).toBeUndefined();
-    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
-  });
 
   it.each([
     { forceNew: false, existingTarget: false },

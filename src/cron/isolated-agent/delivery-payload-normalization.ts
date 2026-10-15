@@ -1,6 +1,10 @@
 // Normalizes cron result and notification payloads before custody, TTS, or transport.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplyOutcome } from "../../auto-reply/reply/normalize-reply.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeSilentReplyText } from "./delivery-dispatch-policy.js";
@@ -39,9 +43,12 @@ export function normalizeDirectCronDeliveryPayloads(params: {
       normalizeOptionalString(params.synthesizedText),
   );
   const fallbackText = fallback.strippedTrailingSilentToken ? undefined : fallback.text;
-  const candidates = params.deliveryPayloads
-    .map(normalizeDirectPayload)
-    .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
+  const candidates = params.deliveryPayloads.map(normalizeDirectPayload).filter((payload) =>
+    hasReplyPayloadContent(payload, {
+      trimText: true,
+      extraContent: hasReplyPayloadSpeechContent(payload),
+    }),
+  );
   if (candidates.length === 0 && fallbackText) {
     candidates.push({ text: fallbackText });
   }

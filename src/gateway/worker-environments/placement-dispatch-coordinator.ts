@@ -241,6 +241,27 @@ export function coordinateWorkerPlacementDispatch(
       if (!sessionPreparation) {
         throw new Error("Session placement preparation is unavailable");
       }
+      if (params.waitForReady !== false) {
+        const pending = pendingOperations(params.request.sessionId).find(
+          (operation) => operation.kind === "dispatch",
+        );
+        if (pending?.kind === "dispatch") {
+          const { request } = params;
+          if (
+            pending.request.sessionKey !== request.sessionKey ||
+            pending.request.agentId !== request.agentId ||
+            pending.request.profileId !== request.profileId ||
+            pending.request.executionMode !== request.executionMode
+          ) {
+            throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
+          }
+          // Initial setup owns its pending publications; acquire ready authority after it settles.
+          await racePromiseWithAbortSignal(
+            joinOperation(pending.operation, params.assertCurrent),
+            params.signal,
+          );
+        }
+      }
       return await ensureWorkerSessionPlacement({
         ...sessionPreparation,
         ...params,

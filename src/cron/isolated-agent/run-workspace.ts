@@ -8,6 +8,10 @@ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { resolveUserPath } from "../../utils.js";
+import {
+  resolveCronRunAdmissionSource,
+  resolveCronSessionWorkspaceOwnershipError,
+} from "../run-authority.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
@@ -31,6 +35,7 @@ export async function prepareCronSessionWorkspace(params: {
   const { sessionWorkAdmission, sessionKey } = params;
   const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
+    params.input.assertCurrent?.();
     abortSignal?.throwIfAborted();
     if (!sessionWorkAdmission.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
@@ -40,7 +45,8 @@ export async function prepareCronSessionWorkspace(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     sessionTarget: params.input.job.sessionTarget,
-    admissionSource: params.input.admissionSource,
+    admissionSource:
+      params.input.admissionSource ?? resolveCronRunAdmissionSource(params.input.job),
     ownerSessionKey: params.input.job.owner?.sessionKey,
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
@@ -79,8 +85,8 @@ async function resolveCronSessionWorkspace(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionTarget: string;
-  admissionSource: RunCronAgentTurnParams["admissionSource"];
-  ownerSessionKey?: string;
+  admissionSource: NonNullable<RunCronAgentTurnParams["admissionSource"]>;
+  ownerSessionKey: string | undefined;
   sessionKey: string;
   entry?: SessionEntry;
   defaultWorkspaceDir: string;
@@ -114,25 +120,17 @@ async function resolveCronSessionWorkspace(params: {
     cwd: entry.spawnedCwd,
   });
   const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
-  if (
-    params.admissionSource === "requester-schedule" &&
-    (override || requestedCwd || entry.worktree)
-  ) {
-    const ownerSessionKey = normalizeOptionalString(params.ownerSessionKey);
-    if (
-      !ownerSessionKey ||
-      resolveCronAgentSessionKey({
-        sessionKey: ownerSessionKey,
-        agentId: params.agentId,
-        cfg: params.cfg,
-        mainKey: params.cfg.session?.mainKey,
-      }) !== params.sessionKey
-    ) {
-      throw new CronSessionLifecycleClaimError(
-        params.sessionKey,
-        "Requester-scoped automation can only use its owning conversation’s workspace.",
-      );
-    }
+  params.assertCurrent();
+  const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    admissionSource: params.admissionSource,
+    ownerSessionKey: params.ownerSessionKey,
+    hasWorkspaceBinding: Boolean(override || requestedCwd || entry.worktree),
+  });
+  if (ownershipError) {
+    throw new CronSessionLifecycleClaimError(params.sessionKey, ownershipError);
   }
   const workspaceDir = override
     ? await fs.realpath(resolveUserPath(override))

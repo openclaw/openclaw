@@ -139,7 +139,11 @@ export function projectMainSessionRecoveryLifecycle(params: {
     | (Partial<MainRecoveryStateFields> &
         Pick<
           Partial<SessionEntry>,
-          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds"
+          | "status"
+          | "pendingFinalDelivery"
+          | "restartRecoveryHarnessCompletion"
+          | "restartRecoveryDeliveryRunId"
+          | "restartRecoveryTerminalRunIds"
         >)
     | null;
   event: MainRecoveryLifecycleEvent;
@@ -161,6 +165,24 @@ export function projectMainSessionRecoveryLifecycle(params: {
     });
   }
   const patch = { ...params.snapshotPatch };
+  const state = params.entry?.mainRestartRecovery;
+  if (
+    params.event.data?.phase === "start" &&
+    runId &&
+    lifecycleGeneration === params.currentLifecycleGeneration &&
+    !matchesFence &&
+    params.entry?.status === "interrupted" &&
+    params.entry.abortedLastRun === true &&
+    state &&
+    !state.foregroundClaims &&
+    !state.reservation &&
+    !params.entry.restartRecoveryDeliveryRunId &&
+    !params.entry.pendingFinalDelivery &&
+    !params.entry.restartRecoveryHarnessCompletion
+  ) {
+    // An accepted successor retires the interrupted episode, never another live recovery owner.
+    Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
+  }
   if (interrupted || isAgentLifecycleYieldedWaiting(params.event.data ?? {})) {
     return lifecycleGeneration && lifecycleGeneration !== params.currentLifecycleGeneration
       ? { action: "suppress" }

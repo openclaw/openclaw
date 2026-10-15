@@ -248,7 +248,7 @@ export function registerGatewaySupersededReloadTests({
             publish: async (commit) => await commit(),
           },
         );
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
         expect(requestRecoveryRestart).toHaveBeenCalledWith(
@@ -274,11 +274,13 @@ export function registerGatewaySupersededReloadTests({
         prepareRuntimeConfig: prepareA,
       });
       let current = true;
+      const tailEntered = createDeferred();
       let rejectTail: ((error: Error) => void) | undefined;
       refreshContextWindowCache.mockImplementationOnce(
         async () =>
           await new Promise<never>((_resolve, reject) => {
             rejectTail = reject;
+            tailEntered.resolve();
           }),
       );
       const plan = createHotTailPlan({
@@ -292,7 +294,7 @@ export function registerGatewaySupersededReloadTests({
           isCurrent: () => current,
           publish: async (commit) => await commit(),
         });
-        await vi.advanceTimersByTimeAsync(0);
+        await tailEntered.promise;
         expect(refreshContextWindowCache).toHaveBeenCalledOnce();
 
         current = false;
@@ -301,7 +303,7 @@ export function registerGatewaySupersededReloadTests({
         expect(acceptedBeforeTailFailure.debt).toBeUndefined();
         rejectTail?.(new Error("stale A tail failed"));
         await staleTail;
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(requestRecoveryRestart).not.toHaveBeenCalled();
         expect(prepareA).not.toHaveBeenCalled();
@@ -321,7 +323,7 @@ export function registerGatewaySupersededReloadTests({
           prepareRuntimeConfig: prepareC,
         });
         restart.settle("committed");
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(requestRecoveryRestart).toHaveBeenCalledOnce();
         expect(prepareC).toHaveBeenCalledOnce();

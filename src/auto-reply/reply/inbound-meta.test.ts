@@ -125,7 +125,7 @@ function createChatWindowContext(params: {
 describe("buildInboundMetaSystemPrompt", () => {
   it("uses one prepared conversation for system-event metadata", () => {
     const conversation = prepareReplyConversation({
-      ctx: { InternalTurnSource: "heartbeat" },
+      ctx: { InternalTurnSource: "event" },
       sessionEntry: {
         sessionId: "conversation",
         updatedAt: 1,

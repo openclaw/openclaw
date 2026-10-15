@@ -29,6 +29,23 @@ const updateCases = [
 
 const kindChangeCases = [
   {
+    label: "command to scratch-backed agent turn",
+    existing: { kind: "command", argv: ["echo", "before"], toolsAllow: ["read"] },
+    patch: {
+      kind: "agentTurn",
+      message: "Read scratch.",
+      skipIfScratchEmpty: true,
+      includeReasoning: false,
+    },
+    expected: {
+      kind: "agentTurn",
+      message: "Read scratch.",
+      skipIfScratchEmpty: true,
+      includeReasoning: false,
+      toolsAllow: ["read"],
+    },
+  },
+  {
     label: "agentTurn to command",
     existing: { kind: "agentTurn", message: "before", toolsAllow: ["read", "cron"] },
     patch: { kind: "command", argv: ["echo", "after"] },

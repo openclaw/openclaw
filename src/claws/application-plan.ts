@@ -35,7 +35,6 @@ export function clawAgentCapabilityChange(
     ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
     ...(settings.tools ? { tools: settings.tools } : {}),
     ...(settings.memory ? { memory: settings.memory } : {}),
-    ...(settings.heartbeat ? { heartbeat: settings.heartbeat } : {}),
   };
   if (Object.keys(effect).length === 0) {
     return undefined;
@@ -47,8 +46,8 @@ export function clawAgentCapabilityChange(
     action: "create",
     reason:
       settings.model || settings.subagents
-        ? "The new agent declares model, delegation, sandbox, tool, memory-search, or recurring heartbeat configuration."
-        : "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+        ? "The new agent declares model, delegation, sandbox, tool, or memory-search configuration."
+        : "The new agent declares sandbox, tool, or memory-search capabilities.",
     effect,
   });
 }

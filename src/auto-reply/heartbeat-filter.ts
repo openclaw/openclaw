@@ -9,7 +9,6 @@ import {
   isContractToolResultBlock,
   readToolCallName,
 } from "../shared/tool-block-contract.js";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -19,6 +18,7 @@ import {
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
+const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [

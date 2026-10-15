@@ -23,10 +23,9 @@ project-doc behavior, and OpenClaw disables Codex's built-in personality for
 native threads so agent workspace personality files stay authoritative.
 OpenClaw contributes only runtime context to native Codex threads: channel
 delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
-OpenClaw skills. The heartbeat-guidance text from this same contribution is the
-one exception: native Codex heartbeat turns do get it, injected as dedicated
-collaboration instructions rather than through the shared prompt-contribution
-hook.
+OpenClaw skills. Scheduled checks carry their instructions in the ordinary
+automation payload and scratch; they do not install a separate heartbeat
+collaboration mode.
 
 The GPT-5 contribution adds a tagged behavior contract for persona
 persistence, execution safety, tool discipline, output shape, completion

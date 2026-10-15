@@ -11,7 +11,6 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
@@ -20,13 +19,10 @@ import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -287,7 +283,6 @@ export async function runAgentHarnessAttempt(
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
       recorder: internalParams.userTurnTranscriptRecorder,
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       sessionTarget: internalParams.sessionTarget,
     });
     internalParams = {
@@ -315,8 +310,6 @@ export async function runAgentHarnessAttempt(
     (awaitBaseline &&
       (!selection.builtIn ||
         WORKSPACE_EFFECT_HOOKS.some((hook) => hasGlobalHooks(hook)) ||
-        (internalParams.trigger === "heartbeat" &&
-          hasGlobalHooks("heartbeat_prompt_contribution")) ||
         hasInternalHookListeners("agent", "bootstrap")))
   ) {
     const assertCurrent = resolveAdmittedRunActiveAssertion(
@@ -413,32 +406,7 @@ export async function runAgentHarnessAttempt(
                       ? { ...input, toolsAllow: [] }
                       : input;
                   },
-              (prepared) =>
-                pluginAttempt.runWithHostScope(async () => {
-                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
-                    return runPreparedAttempt(prepared);
-                  }
-                  const note = await claimHeartbeatContextForUserRun({
-                    ...prepared,
-                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
-                    storePath: prepared.sessionTarget?.storePath,
-                    detached: prepared.sessionPersistence === "detached",
-                    assertCurrent: resolveAdmittedRunActiveAssertion(
-                      internalParams.admittedRunContext,
-                      prepared.abortSignal,
-                    ),
-                  });
-                  if (!note) {
-                    return runPreparedAttempt(prepared);
-                  }
-                  return runPreparedAttempt({
-                    ...prepared,
-                    currentInboundContext: appendCurrentInboundContext(
-                      prepared.currentInboundContext,
-                      [{ kind: "heartbeat-outcome", text: note }],
-                    ),
-                  });
-                }),
+              (prepared) => pluginAttempt.runWithHostScope(() => runPreparedAttempt(prepared)),
             ),
         );
       }),
@@ -468,7 +436,6 @@ export async function runAgentHarnessAttempt(
           result.terminal.aborted === true),
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       // Native model identity does not attest the host's window or context cap.
       runtimeContext:
         nativeSessionRuntime && result.runtimeModelSelection

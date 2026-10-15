@@ -26,7 +26,8 @@ import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-sta
 import {
   countLivePluginStateNamespaceEntries,
   deletePluginStateEntry,
-  lookupPluginStateEntry,
+  parseStoredJson,
+  selectPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
@@ -168,24 +169,34 @@ export function executePluginStateCommand(
   ) {
     try {
       switch (command.type) {
-        case "pluginState.lookup":
-          return ok(
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntry(store, command.input),
-              options,
-            ),
+        case "pluginState.lookup": {
+          const read = withPluginStateDatabaseReadOnly(
+            "lookup",
+            (store) => {
+              const row = selectPluginStateEntry(store.db, { ...command.input, now: Date.now() });
+              return {
+                value: row ? parseStoredJson(row.value_json, "lookup", store.path) : undefined,
+                row,
+              };
+            },
+            options,
           );
+          return { ...ok(read?.value), readRows: read?.row ? [read.row] : [] };
+        }
         case "pluginState.lookupMany": {
-          const rows =
-            withPluginStateDatabaseReadOnly(
-              "lookup",
-              (store) => lookupPluginStateEntries(store, command.input),
-              options,
-            ) ?? command.input.keys.map(() => ok(undefined));
-          return ok(
-            rows.map((row) => (row.ok ? row : err(capturePluginStateWorkerFailure(row.error)))),
-          );
+          const read = withPluginStateDatabaseReadOnly(
+            "lookup",
+            (store) => lookupPluginStateEntries(store, command.input),
+            options,
+          ) ?? { values: command.input.keys.map(() => ok(undefined)), rows: [] };
+          return {
+            ...ok(
+              read.values.map((row) =>
+                row.ok ? row : err(capturePluginStateWorkerFailure(row.error)),
+              ),
+            ),
+            readRows: read.rows,
+          };
         }
         case "pluginState.entriesInKeyRange":
           return ok(

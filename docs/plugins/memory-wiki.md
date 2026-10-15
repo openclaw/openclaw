@@ -436,7 +436,6 @@ normalized agent id:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
       authInheritance: { agentId: "support" },
     },

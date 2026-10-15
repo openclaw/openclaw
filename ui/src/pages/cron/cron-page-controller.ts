@@ -1,4 +1,4 @@
-import type { CronJob, CronScratchGetResult } from "../../api/types.ts";
+import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -61,7 +61,6 @@ export class CronPageController {
   modelSuggestionsError: string | null = null;
   listTab: CronListTab = "tasks";
   detailTab: CronDetailTab = "settings";
-  heartbeatScratch = "";
   private active = true;
   private readonly cleanups: Array<() => void> = [];
   private readonly gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -112,7 +111,6 @@ export class CronPageController {
     isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
     notify: () => this.publish(),
   });
-  private heartbeatScratchRequest = 0;
   private pageHidden = document.visibilityState === "hidden";
   private readonly observeAgentScope = watchAgentScope((scopeId, intentChanged) => {
     if (!intentChanged) {
@@ -171,7 +169,6 @@ export class CronPageController {
       if (first || changed) {
         this.resetGatewayState(snapshot);
       } else if (!readGatewayOperatorAccess(snapshot).canAdmin) {
-        this.clearHeartbeatScratch();
         this.deliveryDirectory.clear();
       }
       if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
@@ -254,7 +251,6 @@ export class CronPageController {
     this.stopModelSuggestions?.();
     this.stopModelSuggestions = undefined;
     this.runTranscript.close();
-    this.clearHeartbeatScratch();
     this.eventSource.reset();
     invalidateCronRefresh(this.cron);
     const connected = snapshot.phase === "connected";
@@ -486,7 +482,6 @@ export class CronPageController {
   }
 
   selectJob(job: CronJob, runId: string | null = null) {
-    this.clearHeartbeatScratch();
     this.routeSelection.select(job.id, runId);
     this.pendingRunScroll = Boolean(runId);
     if (runId) {
@@ -499,49 +494,9 @@ export class CronPageController {
       await loadCronRunsForJob(cronState, job.id, runId);
     });
     this.deliveryDirectory.openEditor();
-    if (job.payload?.kind === "heartbeat") {
-      void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
-    }
-  }
-
-  private clearHeartbeatScratch() {
-    this.heartbeatScratchRequest += 1;
-    this.heartbeatScratch = "";
-  }
-
-  private async loadHeartbeatScratch(cronState: CronState, jobId: string, requestId: number) {
-    const client = cronState.client;
-    if (!this.canManageCron || !client || !cronState.connected) {
-      return;
-    }
-    const connectionScope = this.gateway.capture();
-    if (!connectionScope) {
-      return;
-    }
-    // Revalidate scratch access, connection, and selection after the request.
-    const isCurrent = () =>
-      this.cron === cronState &&
-      this.heartbeatScratchRequest === requestId &&
-      this.gateway.isCurrent(connectionScope) &&
-      this.canManageCron &&
-      cronState.cronEditingJob?.id === jobId &&
-      cronState.cronForm.payloadKind === "heartbeat";
-    try {
-      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
-      if (isCurrent()) {
-        this.heartbeatScratch = result.scratch?.content ?? "";
-        this.publishCronState(cronState);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        cronState.cronError = formatUiError(error);
-        this.publishCronState(cronState);
-      }
-    }
   }
 
   private resetEditor(createOpen: boolean) {
-    this.clearHeartbeatScratch();
     this.routeSelection.target = null;
     // Retire discovery before resetting its editor's form.
     this.eventSource.reset();
@@ -566,7 +521,6 @@ export class CronPageController {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
     this.routeSelection.target = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);

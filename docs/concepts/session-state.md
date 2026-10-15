@@ -154,6 +154,6 @@ Current limits:
 
 - [Session tools](/concepts/session-tool) — `sessions_send`, `session_status`, `sessions_list`
 - [Sub-agents](/tools/subagents) — spawn edges and completion announcements
-- [Heartbeat](/gateway/heartbeat) — how queued notices wake main sessions
+- [Immediate follow-ups](/gateway/heartbeat#immediate-follow-ups) — how owned events continue a session
 - [Session management](/concepts/session) — session keys, scopes, lifecycle
 - [Codex session catalog and supervision](/plugins/codex-supervision) — native session discovery and adoption

@@ -138,7 +138,6 @@ class CronJobDetailTest {
           "configRevision": "sha256:fixture",
           "schedule": {"kind":"cron","expr":"0 9 * * *","tz":"Europe/Vienna","staggerMs":300000},
           "sessionTarget": "isolated",
-          "wakeMode": "now",
           "payload": $payload,
           "delivery": {"mode":"announce","channel":"telegram","to":"chat-42","accountId":"primary"},
           "failureAlert": {"after":3,"mode":"announce","channel":"telegram","to":"ops","cooldownMs":3600000},

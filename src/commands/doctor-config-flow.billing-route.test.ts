@@ -5,6 +5,7 @@ import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-ru
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronJobsStore, resolveCronJobsStorePath } from "../cron/store.js";
 import {
   runInitialConfigWriteHealth,
   runWriteConfigHealth,
@@ -23,6 +24,13 @@ import {
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome("billing-route");
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+
+async function readMigratedHeartbeatJob(agentId = "main") {
+  const { jobs } = await loadCronJobsStore(resolveCronJobsStorePath());
+  const mainJobs = jobs.filter((job) => job.agentId === agentId);
+  expect(mainJobs).toHaveLength(1);
+  return mainJobs[0]!;
+}
 
 async function writeBillingFixture(
   home: string,
@@ -81,13 +89,14 @@ async function writeBillingFixture(
 
 describe("Doctor model billing route migration", () => {
   it.each([
-    { multiagent: false, successor: "gpt-5.6-luna" },
-    { multiagent: true, successor: "gpt-5.4-mini" },
+    { name: "single", multiagent: false, inheritedWorker: false, successor: "gpt-5.6-luna" },
+    { name: "explicit", multiagent: true, inheritedWorker: false, successor: "gpt-5.4-mini" },
+    { name: "inherited", multiagent: false, inheritedWorker: true, successor: "gpt-5.6-luna" },
   ])(
-    "records inherited billing changes once (multiagent: $multiagent)",
-    async ({ multiagent, successor }) => {
+    "records inherited billing changes once ($name)",
+    async ({ multiagent, inheritedWorker, successor }) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const { configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
+        const { configPath, agentDir } = await writeBillingFixture(home, "gpt-4o-mini", {
           defaults: {
             model: "openai/gpt-5.4",
             models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
@@ -104,27 +113,76 @@ describe("Doctor model billing route migration", () => {
                   models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
                 },
               }
-            : { main: {} },
+            : {
+                main: {},
+                ...(inheritedWorker
+                  ? {
+                      worker: {
+                        modelPolicy: {
+                          allow: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.6-luna"],
+                        },
+                      },
+                    }
+                  : {}),
+              },
         });
+        if (inheritedWorker) {
+          await fs.cp(agentDir, path.join(path.dirname(configPath), "agents", "worker", "agent"), {
+            recursive: true,
+          });
+        }
         await using ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
           prepareDoctorContext(configPath),
         );
         await observeDoctorConfigStep("write-config-health", () =>
           runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
         );
+        expect((await readMigratedHeartbeatJob()).payload).toMatchObject({
+          kind: "agentTurn",
+        });
+        expect((await readMigratedHeartbeatJob()).payload).not.toHaveProperty("model");
+        if (inheritedWorker) {
+          expect((await readMigratedHeartbeatJob("worker")).payload).toMatchObject({
+            model: "openai/gpt-5.4-mini",
+          });
+        }
+        expect(await fs.readFile(configPath, "utf8")).not.toContain('"heartbeat"');
+        await observeDoctorConfigStep("post-write-repairs", () => runWriteConfigHealth(ctx));
+        expect((await readMigratedHeartbeatJob()).payload).toMatchObject({
+          kind: "agentTurn",
+        });
+        expect((await readMigratedHeartbeatJob()).payload).not.toHaveProperty("model");
+        if (inheritedWorker) {
+          expect((await readMigratedHeartbeatJob("worker")).payload).toMatchObject({
+            model: `openai/${successor}`,
+          });
+        }
+        expect(ctx.cfg.agents?.defaults?.modelPolicy?.allow).toEqual([
+          multiagent ? "openai/gpt-5.4" : "openai/gpt-5.6-terra",
+        ]);
         const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
         expect(ctx.updateWarnings).toEqual([
           expect.stringContaining(
-            `Billing route changed for agents.defaults.heartbeat.model (agent main): ${expectedRoute}`,
+            "Billing route changed for agents.defaults.heartbeat.model (agent main): openai/gpt-4o-mini via metered API-key profile openai:default -> openai/gpt-5.6-terra via subscription/OAuth profile openai:chatgpt-default.",
           ),
           expect.stringContaining(
             `Billing route changed for agents.defaults.subagents.model (agent main): ${expectedRoute}`,
           ),
+          ...(inheritedWorker
+            ? [
+                expect.stringContaining(
+                  `Billing route changed for agents.defaults.heartbeat.model (agent worker): ${expectedRoute}`,
+                ),
+                expect.stringContaining(
+                  `Billing route changed for agents.defaults.subagents.model (agent worker): ${expectedRoute}`,
+                ),
+              ]
+            : []),
         ]);
         await observeDoctorConfigStep("repeat-write-config-health", () =>
           runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
         );
-        expect(ctx.updateWarnings).toHaveLength(2);
+        expect(ctx.updateWarnings).toHaveLength(inheritedWorker ? 4 : 2);
         await using repeated = await observeDoctorConfigStep(
           "repeat-prepare-context-outer-unmeasured",
           () => prepareDoctorContext(configPath),
@@ -143,7 +201,10 @@ describe("Doctor deferred model retirement", () => {
     const { configPath, agentDir } = await writeBillingFixture(home, "gpt-5.4-mini", {
       defaults: {
         model: "openai/gpt-5.5",
-        models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+        models: {
+          "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          "openai/gpt-5.4-mini": {},
+        },
         heartbeat: { model: "openai/gpt-5.4-mini" },
       },
       entries: { main: {} },
@@ -179,7 +240,12 @@ describe("Doctor deferred model retirement", () => {
           async () => {
             await using swap = await prepareDoctorContext(f.configPath);
             await runInitialConfigWriteHealth(swap);
-            expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
+            expect(swap.cfg.agents?.defaults?.heartbeat).toBeUndefined();
+            const migratedJob = await readMigratedHeartbeatJob();
+            expect(migratedJob.payload).toMatchObject({
+              kind: "agentTurn",
+              model: "openai/gpt-5.4-mini",
+            });
             expect(f.receipt()).toMatchObject({ status: "skipped" });
             for (const [index, detail] of [
               "Heartbeat billing route changed.",
@@ -195,7 +261,8 @@ describe("Doctor deferred model retirement", () => {
 
             await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
               await using converged = await prepareDoctorContext(f.configPath);
-              expect(converged.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
+              expect(converged.cfg.agents?.defaults?.heartbeat).toBeUndefined();
+              expect((await readMigratedHeartbeatJob()).payload).toEqual(migratedJob.payload);
               expect(
                 createModelAuthAvailabilityResolver({
                   cfg: converged.cfg,
@@ -213,7 +280,12 @@ describe("Doctor deferred model retirement", () => {
               expect(f.receipt()).toMatchObject({ status: "skipped" });
               await runInitialConfigWriteHealth(converged);
               expect(f.receipt()).toMatchObject({ status: "completed" });
-              expect(await fs.readFile(f.configPath, "utf8")).toContain("openai/gpt-5.6-luna");
+              expect(await fs.readFile(f.configPath, "utf8")).not.toContain('"heartbeat"');
+              await runWriteConfigHealth(converged);
+              expect(await readMigratedHeartbeatJob()).toMatchObject({
+                id: migratedJob.id,
+                payload: { kind: "agentTurn", model: "openai/gpt-5.6-luna" },
+              });
               const completedRun = getUpdateRun(f.runId);
               if (!completedRun) {
                 throw new Error("Expected the update run after Doctor committed its repair.");
@@ -249,7 +321,11 @@ describe("Doctor deferred model retirement", () => {
         async () => {
           await using ctx = await prepareDoctorContext(f.configPath);
           await runInitialConfigWriteHealth(ctx);
-          expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
+          expect(ctx.cfg.agents?.defaults?.heartbeat).toBeUndefined();
+          expect((await readMigratedHeartbeatJob()).payload).toMatchObject({
+            kind: "agentTurn",
+            model: "openai/gpt-5.4-mini",
+          });
           expect(getUpdateRun(f.runId)).toEqual(before);
         },
       );
@@ -269,13 +345,21 @@ describe("Doctor deferred model retirement", () => {
         },
         async () => {
           await using ctx = await prepareDoctorContext(f.configPath);
-          expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
+          expect(ctx.cfg.agents?.defaults?.heartbeat).toBeUndefined();
+          expect((await readMigratedHeartbeatJob()).payload).toMatchObject({
+            kind: "agentTurn",
+            model: "openai/gpt-5.4-mini",
+          });
           const before = await fs.readFile(f.configPath, "utf8");
           ctx.cfg.gateway = { ...ctx.cfg.gateway, port: -1 };
           await runInitialConfigWriteHealth(ctx);
           expect(ctx.configWriteRefusal).toBe("validation");
           expect(f.receipt()).toMatchObject({ status: "skipped" });
           expect(await fs.readFile(f.configPath, "utf8")).toBe(before);
+          expect((await readMigratedHeartbeatJob()).payload).toMatchObject({
+            kind: "agentTurn",
+            model: "openai/gpt-5.4-mini",
+          });
         },
       );
     });

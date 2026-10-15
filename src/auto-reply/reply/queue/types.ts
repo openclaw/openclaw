@@ -34,7 +34,10 @@ import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ThinkLevel, TraceLevel, VerboseLevel } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
-import type { SessionEventExecution } from "../session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "../session-event-contract.js";
 
 export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
@@ -243,6 +246,7 @@ export type FollowupRun = {
     | "scheduledToolPolicy"
     | "runtimePluginToolGrant"
     | "extraSystemPrompt"
+    | "bootstrapContextMode"
     | "sourceReplyDeliveryMode"
     | "taskSuggestionDeliveryMode"
     | "silentReplyPromptMode"
@@ -253,6 +257,7 @@ export type FollowupRun = {
     | "suppressTranscriptOnlyAssistantPersistence"
     | "skillLibraryAuthoring"
   > & {
+    scheduledAutomation?: ScheduledSessionAutomation;
     internalEventExecution?: SessionEventExecution;
     agentId: string;
     agentDir: string;

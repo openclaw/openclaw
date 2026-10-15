@@ -49,6 +49,7 @@ function resetGatewayState(): void {
 function cronJob(params: {
   id: string;
   startedAtMs: number;
+  atMs?: number;
   enabled?: boolean;
   nextRunAtMs: number;
   recurring?: boolean;
@@ -62,7 +63,7 @@ function cronJob(params: {
     updatedAtMs: params.startedAtMs - 1,
     schedule: params.recurring
       ? { kind: "every", everyMs: 60_000, anchorMs: params.startedAtMs }
-      : { kind: "at", at: new Date(params.startedAtMs).toISOString() },
+      : { kind: "at", at: new Date(params.atMs ?? params.startedAtMs).toISOString() },
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "Gateway startup recovery proof" },
@@ -74,7 +75,7 @@ describe("Gateway cron startup recovery", () => {
   beforeEach(resetGatewayState);
   afterEach(resetGatewayState);
 
-  it("reports lifecycle-owned retry and disable state through cron.list", async () => {
+  it("preserves separate one-shot occurrences and recorded retries through cron.list", async () => {
     const envSnapshot = captureEnv([...GATEWAY_ENV_KEYS]);
     const tempHome = tempDirs.make("openclaw-gateway-cron-recovery-");
     const stateDir = path.join(tempHome, ".openclaw");
@@ -112,9 +113,15 @@ describe("Gateway cron startup recovery", () => {
       cronJob({
         id: "persisted-retry-without-history",
         startedAtMs,
+        atMs: persistedRetryAtMs,
         nextRunAtMs: persistedRetryAtMs,
       }),
-      cronJob({ id: "persisted-retry", startedAtMs, nextRunAtMs: persistedRetryAtMs }),
+      cronJob({
+        id: "persisted-retry",
+        startedAtMs,
+        atMs: persistedRetryAtMs,
+        nextRunAtMs: persistedRetryAtMs,
+      }),
       cronJob({ id: "history-retry", startedAtMs, nextRunAtMs: startedAtMs }),
       cronJob({
         id: "persisted-disable",
@@ -145,7 +152,6 @@ describe("Gateway cron startup recovery", () => {
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       nowMs: () => endedAtMs,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
 

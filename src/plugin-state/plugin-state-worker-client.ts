@@ -1,3 +1,4 @@
+import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { assertSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type {
@@ -5,7 +6,10 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
-import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
+import {
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+  readSqliteDatabaseWriteRevisionForIdentity,
+} from "../infra/sqlite-database-admission.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -137,6 +141,9 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
+  let installLookups:
+    | Array<{ key: string; install: ReturnType<typeof preparePluginStateObservationCacheRead> }>
+    | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -173,6 +180,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         typedCommand.type === "pluginState.entries")
     ) {
       const identity = context.admission.identity.key;
+      const writeRevision = readSqliteDatabaseWriteRevisionForIdentity(context.admission.identity);
       const keys =
         typedCommand.type === "pluginState.entries"
           ? []
@@ -181,10 +189,10 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
             : [typedCommand.input.key];
       const cachedEntries =
         typedCommand.type === "pluginState.entries"
-          ? readPluginStateEntriesCache(identity, typedCommand.input)
+          ? readPluginStateEntriesCache(identity, typedCommand.input, writeRevision)
           : undefined;
       const cached = keys.map((key) =>
-        readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
+        readPluginStateObservationCache(identity, { ...typedCommand.input, key }, writeRevision),
       );
       if (
         cached.every((entry) => entry !== undefined) &&
@@ -247,9 +255,26 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         operationStarted = false;
       }
       if (typedCommand.type === "pluginState.observe") {
-        installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
+        installObservation = preparePluginStateObservationCacheRead(
+          identity,
+          typedCommand.input,
+          writeRevision,
+        );
       } else if (typedCommand.type === "pluginState.entries") {
-        installEntries = preparePluginStateEntriesCacheRead(identity, typedCommand.input);
+        installEntries = preparePluginStateEntriesCacheRead(
+          identity,
+          typedCommand.input,
+          writeRevision,
+        );
+      } else {
+        installLookups = keys.map((key) => ({
+          key: toUSVString(key),
+          install: preparePluginStateObservationCacheRead(
+            identity,
+            { ...typedCommand.input, key },
+            writeRevision,
+          ),
+        }));
       }
     }
     // A write-only await here would let later reads overtake it before broker admission.
@@ -277,6 +302,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       );
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
+      }
+      if (installLookups && result.readRows) {
+        const rows = new Map(result.readRows.map((row) => [row.entry_key, row]));
+        for (const { key, install } of installLookups) {
+          install(rows.get(key));
+        }
       }
       if (command.type === "pluginState.observe") {
         const observation =

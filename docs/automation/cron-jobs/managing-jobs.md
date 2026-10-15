@@ -22,8 +22,7 @@ Run links from automation messages and notifications open the exact recorded run
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Next heartbeat: check calendar." \
-      --wake now
+      --system-event "Check the calendar for upcoming events."
     ```
   </Tab>
   <Tab title="Recurring isolated job">

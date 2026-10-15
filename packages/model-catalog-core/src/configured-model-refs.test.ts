@@ -41,11 +41,13 @@ describe("configured model refs", () => {
             utilityModel: "google/gemini-3.1-flash-lite-preview",
             mediaModels: { image: "openai/gpt-image-2" },
             compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
+            heartbeat: { model: "retired-provider/ignored-before-doctor" },
           },
           entries: {
             custom: {
               model: "xai/grok-4-fast",
               utilityModel: "openai/gpt-5.5-nano",
+              heartbeat: { model: "retired-provider/ignored-before-doctor" },
             },
           },
         },

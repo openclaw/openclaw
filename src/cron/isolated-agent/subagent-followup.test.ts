@@ -420,7 +420,7 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(readLatestAssistantReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["NO_REPLY", "**HEARTBEAT_OK**", '{"action":"HEARTBEAT_OK"}'])(
+  it.each(["NO_REPLY", "**NO_REPLY**", '{"action":"NO_REPLY"}'])(
     "skips the %s control-only parent reply instead of treating it as child output",
     async (parentReply) => {
       vi.useFakeTimers();
@@ -441,22 +441,20 @@ describe("waitForDescendantSubagentSummary", () => {
   );
 
   it.each([
-    "HEARTBEAT_OK child completed the scheduled reminder",
-    '{"action":"HEARTBEAT_OK","message":"child completed the scheduled reminder"}',
-  ])(
-    "preserves substantive synthesis that also contains a heartbeat token: %s",
-    async (synthesis) => {
-      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
-      vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
+    "<b>NO_REPLY</b>",
+    "NO_REPLY child completed the scheduled reminder",
+    '{"action":"NO_REPLY","message":"child completed the scheduled reminder"}',
+  ])("preserves literal synthesis that also contains a silent token: %s", async (synthesis) => {
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
 
-      const result = await waitForDescendantSubagentSummary({
-        sessionKey: "cron-session",
-        initialReply: undefined,
-        timeoutMs: 100,
-        observedActiveDescendants: true,
-      });
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: undefined,
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
 
-      expect(result).toBe(synthesis);
-    },
-  );
+    expect(result).toBe(synthesis);
+  });
 });

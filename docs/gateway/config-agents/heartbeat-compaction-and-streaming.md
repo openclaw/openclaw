@@ -1,56 +1,57 @@
 ---
-summary: "Heartbeat runs, system agent, compaction, context pruning, block streaming, and typing indicators"
+doc-schema-version: 1
+summary: "Heartbeat migration, system agent, compaction, context pruning, block streaming, and typing indicators"
 read_when:
-  - Scheduling heartbeat runs or the system agent
+  - Migrating heartbeat settings or choosing the system agent
   - Tuning auto-compaction or context pruning
   - Changing how partial replies and typing indicators are sent
-title: "Configuration — agent heartbeat, compaction, and streaming"
+title: "Configuration — heartbeat migration, compaction, and streaming"
 ---
 
-`agents.defaults.*` keys that govern when an agent runs on its own, how its transcript is compacted and pruned, and how partial output reaches a chat.
+`agents.defaults.*` keys that govern ambient system ownership, how an agent's transcript is compacted and pruned, and how partial output reaches a chat. Periodic check-ins are ordinary [Automation jobs](/automation/cron-jobs).
 
 ## `agents.defaults.heartbeat`
 
-Periodic heartbeat runs.
+Retired configuration. Do not add `agents.defaults.heartbeat` or
+`agents.entries.*.heartbeat` to a new config. For existing July 2026 or newer
+heartbeat settings, run:
 
-```json5
-{
-  agents: {
-    defaults: {
-      heartbeat: {
-        agentId: "ops", // ambient owner when no per-agent heartbeat is configured
-        every: "30m", // 0m disables recurring cadence
-        activeHours: { start: "08:00", end: "24:00" },
-        model: "openai/gpt-5.4-mini",
-        session: "main",
-        target: "owner", // default | options: last | none | whatsapp | telegram | discord | ...
-        directPolicy: "allow", // allow (default) | block
-        to: "+15555550123",
-        accountId: "ops-bot",
-        prompt: "Follow the heartbeat monitor scratch context...",
-        timeoutSeconds: 45,
-        lightContext: false, // default: false; true skips workspace bootstrap files for heartbeat runs
-        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-      },
-    },
-  },
-}
+```bash
+openclaw doctor --fix
+openclaw cron list --all
 ```
 
-- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable recurring cadence. Targeted event-driven wakes, including background exec completion follow-ups, can still run one agent turn.
-- `agentId`: explicit owner for ambient heartbeat runs when no `agents.entries.*.heartbeat` block exists. A shared heartbeat block without `agentId` keeps the existing all-agent enrollment behavior.
-- Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
-- The heartbeat object is strict. Its supported fields are `agentId`, `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.
-- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
-- `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
-- `target`: `owner` (default) sends only to a direct-message identity from `commands.ownerAllowFrom` or channel `allowFrom`. `last` explicitly follows the latest conversation, including groups. `none` keeps results internal.
-- `to`: used only with an explicit channel target. `owner` and an unset target ignore it.
-- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
-- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
-- Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-- Heartbeat runs use the ordinary agent system prompt. Acknowledgment suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
-- Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
-- Heartbeats run full agent turns — shorter intervals burn more tokens.
+Doctor transfers each enrolled agent's heartbeat settings and monitor scratch to
+ordinary `agentTurn` jobs, then removes the retired config blocks. Earlier
+configuration shapes are outside the supported migration window.
+
+| Retired setting                                     | Automation job setting                    |
+| --------------------------------------------------- | ----------------------------------------- |
+| `agentId` and per-agent enrollment                  | Job `agentId`                             |
+| `every`, including disabled `0m`                    | Job schedule and enabled state            |
+| `activeHours`                                       | Job `activeHours`, including its timezone |
+| `session`, `isolatedSession`                        | Job `sessionTarget` and `sessionKey`      |
+| `prompt`, `model`, `timeoutSeconds`, `lightContext` | `agentTurn` payload fields                |
+| `target`, `to`, `accountId`, `directPolicy`         | Job delivery policy                       |
+
+The converted job keeps idle deferral and scratch-based skipping. Its delivery
+policy preserves operator-DM targeting (`owner`), latest-conversation targeting
+(`last`, including groups), explicit channel destinations, and internal-only
+delivery (`none`). An owner target does not use the retired `to` override.
+
+After migration, edit or disable the job in **Automations** or with
+`openclaw cron edit <job-id>`. For example:
+
+```bash
+openclaw cron edit <job-id> --every 2h
+openclaw cron disable <job-id>
+```
+
+Job edits are authoritative. Deleting a converted job is permanent: Doctor,
+Gateway startup, and config reload do not recreate it. Disabling a periodic job
+does not disable event-driven follow-ups such as background exec completions.
+Each scheduled check is an ordinary agent turn, so shorter intervals can use more
+tokens. See [Heartbeat migration](/gateway/heartbeat) for the full cutover guide.
 
 ## `agents.defaults.systemAgent`
 

@@ -12,7 +12,6 @@ import {
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
-import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import type {
   CronJobMutation,
@@ -65,15 +64,6 @@ export function planCronJobMutation(
   const { nowMs: now, defaultAgentId, cronConfig, configuredChannels } = snapshot;
   if (mutation.kind === "remove") {
     const ids = new Set(mutation.ids);
-    for (const job of next.jobs) {
-      if (
-        ids.has(job.id) &&
-        isSystemMonitorDeclaration(job.declarationKey) &&
-        !mutation.systemOwned
-      ) {
-        throw new Error("system-owned monitor jobs cannot be removed by cron clients");
-      }
-    }
     next.jobs = next.jobs.filter((job) => !ids.has(job.id));
   } else {
     const options = mutation.options;
@@ -136,9 +126,6 @@ export function planCronJobMutation(
       previousJob = previous.jobs.find((job) => job.id === mutation.id);
       if (!previousJob) {
         throw new Error(`unknown cron job id: ${mutation.id}`);
-      }
-      if (isSystemMonitorDeclaration(previousJob.declarationKey)) {
-        throw new Error("system-owned monitor jobs cannot be edited by cron clients");
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });

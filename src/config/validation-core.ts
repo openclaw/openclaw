@@ -4,11 +4,9 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
-  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
-  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
@@ -46,25 +44,6 @@ import {
 } from "./validation-issues.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
-
-export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  const agentEntries = listAgentEntries(config);
-  // Match heartbeat enrollment so validation never warns for an owner the runner can use.
-  const unresolved =
-    listAgentIds(config).length > 1 &&
-    !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
-    !config.agents?.defaults?.heartbeat &&
-    tryResolveAmbientOwnerAgentId(config) === undefined;
-  return unresolved
-    ? [
-        {
-          path: "agents.defaults.heartbeat.agentId",
-          message:
-            "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-        },
-      ]
-    : [];
-}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;

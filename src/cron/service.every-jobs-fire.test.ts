@@ -47,23 +47,21 @@ async function startEveryJob(text: string) {
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
-  const expectMainSystemEvent = (
-    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+  const expectMainSessionTurn = (
+    runSessionEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
   ) => {
-    const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
+    const matchingCall = runSessionEvent.mock.calls.find(
+      ([request]) => request.text === expectedText,
+    );
     if (!matchingCall) {
       throw new Error(`missing system event ${expectedText}`);
     }
-    const options = matchingCall[1] as Record<string, unknown>;
-    expect(options.agentId).toBe("main");
-    expect(options.sessionKey).toBeUndefined();
-    expect(typeof options.contextKey).toBe("string");
-    expect(String(options.contextKey).startsWith("cron:")).toBe(true);
+    expect(matchingCall[0].job.sessionTarget).toBe("main");
   };
 
   it("resumes due cron work after a busy suspension attempt", async () => {
-    const { cron, state, enqueueSystemEvent, finished, store, clock, job, wake } =
+    const { cron, state, runSessionEvent, finished, store, clock, job, wake } =
       await startEveryJob("recovered-tick");
     resetGatewayWorkAdmission();
 
@@ -83,7 +81,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       await wake(state);
       await finishedRun;
       await waitForCronRunQueue(state);
-      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
+      expectMainSessionTurn(runSessionEvent, "recovered-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -95,7 +93,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     const {
       cron,
       state,
-      enqueueSystemEvent,
+      runSessionEvent,
       finished,
       store,
       clock,
@@ -111,13 +109,13 @@ describe("CronService interval/cron jobs fire on time", () => {
       const finishedRun = finished.waitForOk(job.id);
       clock.setTime(job.state.nextRunAtMs! + 5);
       wake = wakeScheduler(state);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runSessionEvent).not.toHaveBeenCalled();
 
       expect(pendingSignal?.rollback()).toBe(true);
       await wake;
       await finishedRun;
       await waitForCronRunQueue(state);
-      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick");
+      expectMainSessionTurn(runSessionEvent, "rollback-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -129,7 +127,7 @@ describe("CronService interval/cron jobs fire on time", () => {
   it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runSessionEvent = vi.fn(async (_params: { text: string }) => ({ status: "ok" as const }));
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     const clock = createGatewaySchedulerClock(nowMs);
 
@@ -168,7 +166,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      runSessionEvent,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -185,9 +183,11 @@ describe("CronService interval/cron jobs fire on time", () => {
     const sfRun = await cron.run("loaded-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
-    const sfRuns = enqueueSystemEvent.mock.calls.filter(([text]) => text === "sf-tick").length;
-    const minuteRuns = enqueueSystemEvent.mock.calls.filter(
-      ([text]) => text === "minute-tick",
+    const sfRuns = runSessionEvent.mock.calls.filter(
+      ([request]) => request.text === "sf-tick",
+    ).length;
+    const minuteRuns = runSessionEvent.mock.calls.filter(
+      ([request]) => request.text === "minute-tick",
     ).length;
     expect(minuteRuns).toBeGreaterThan(0);
     expect(sfRuns).toBeGreaterThan(0);

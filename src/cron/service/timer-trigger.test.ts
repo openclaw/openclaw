@@ -30,7 +30,6 @@ describe("resolveTransientCronRetryDecision", () => {
         log: createNoopLogger(),
         nowMs: () => endedAt,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         runCommandJob: vi.fn(async () => ({
           status: "error" as const,
@@ -81,7 +80,6 @@ describe("resolveTransientCronRetryDecision", () => {
         log: createNoopLogger(),
         nowMs: () => endedAt,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
           error,

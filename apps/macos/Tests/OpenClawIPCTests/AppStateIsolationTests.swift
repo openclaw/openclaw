@@ -256,7 +256,6 @@ struct AppStateIsolationTests {
             showDockIconKey,
             talkPhaseSoundsEnabledKey,
             talkShiftToStopEnabledKey,
-            heartbeatsEnabledKey,
             iconOverrideKey,
         ]
         var defaults = Dictionary(uniqueKeysWithValues: seededKeys.map { ($0, nil as Any?) })
@@ -296,7 +295,6 @@ struct AppStateIsolationTests {
             #expect(absent.showDockIcon)
             #expect(absent.talkPhaseSoundsEnabled)
             #expect(absent.talkShiftToStopEnabled)
-            #expect(absent.heartbeatsEnabled)
             #expect(absent.iconOverride == .system)
             #expect(absent.talkRealtimeRelayEnabled)
             for key in seededKeys.dropLast() {

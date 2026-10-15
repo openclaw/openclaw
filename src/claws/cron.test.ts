@@ -9,12 +9,14 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
+  CLAW_PORTABLE_HEARTBEAT_ID,
   clawCronGatewayInput,
   clawCronGatewayJobMatchesRef,
   deleteClawCronRef,
   installClawCronJobs,
   markClawCronRefRemoved,
   readClawCronRefs,
+  readClawHeartbeatRefInDatabase,
   upsertClawCronRef,
 } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -375,6 +377,29 @@ describe("installClawCronJobs", () => {
     const options = { env: current.env };
     const gateway = { add: vi.fn().mockResolvedValue({ id: "scheduler-valid" }) };
     const [original] = await installClawCronJobs(current.plan, { ...options, gateway });
+    const db = openOpenClawStateDatabase(options).db;
+    upsertClawCronRef(
+      {
+        ...original!,
+        manifestId: CLAW_PORTABLE_HEARTBEAT_ID,
+        declarationKey: `claw:worker-two:${CLAW_PORTABLE_HEARTBEAT_ID}`,
+        schedulerJobId: "scheduler-portable",
+        job: { heartbeat: { every: "37m" }, configRevision: "portable-revision" },
+      },
+      options,
+    );
+    expect(readClawCronRefs("worker-two", options)).toEqual([original]);
+    expect(readClawHeartbeatRefInDatabase(db, "worker-two")?.job.heartbeat.every).toBe("37m");
+    db.prepare("UPDATE claw_cron_refs SET job_json = ? WHERE manifest_id = ?").run(
+      JSON.stringify({
+        heartbeat: { every: "37m" },
+        configRevision: "portable-revision",
+        extra: true,
+      }),
+      CLAW_PORTABLE_HEARTBEAT_ID,
+    );
+    expect(() => readClawHeartbeatRefInDatabase(db, "worker-two")).toThrow();
+    expect(readClawCronRefs("worker-two", options)).toEqual([original]);
     upsertClawCronRef(
       {
         ...original!,
@@ -384,7 +409,6 @@ describe("installClawCronJobs", () => {
       },
       options,
     );
-    const db = openOpenClawStateDatabase(options).db;
     db.prepare("UPDATE claw_cron_refs SET job_json = ? WHERE manifest_id = ?").run(
       "{",
       "zz-malformed",

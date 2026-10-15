@@ -307,7 +307,6 @@ it.each(["completed", "interrupted"] as const)(
             sessionStore: { [scope.sessionKey]: entry },
             sessionKey: scope.sessionKey,
             storePath: scope.storePath,
-            isHeartbeat: false,
             abortSignal: interrupted.signal,
           }),
         );

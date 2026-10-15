@@ -16,7 +16,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
-  isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
   resetCronActiveJobs,
@@ -69,7 +68,6 @@ async function createManualRunHarness(jobId: string) {
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: () => {},
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       entered.resolve();
       return await release.promise;
@@ -136,21 +134,6 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     expect(isCronJobActive("manual-token-reuse")).toBe(false);
   });
 
-  it("retires preserved main-session markers at the lifecycle cutoff", () => {
-    const marker = markCronJobActive("manual-main-cutoff", {
-      preserveAcrossGenerationAdvance: true,
-    });
-
-    advanceCronActiveJobGeneration();
-
-    expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
-
-    resetCronActiveJobs();
-
-    expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
-    expect(isCronJobActive("manual-main-cutoff")).toBe(false);
-  });
-
   it("clears the active marker even when the inner agent run throws", async () => {
     const { cron, entered, release, store } = await createManualRunHarness("manual-isolated-throw");
 
@@ -197,7 +180,6 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent: () => {},
-      requestHeartbeat: () => {},
       onIsolatedAgentSetupTimeout,
       runIsolatedAgentJob: async ({ abortSignal }) => {
         startedCount += 1;

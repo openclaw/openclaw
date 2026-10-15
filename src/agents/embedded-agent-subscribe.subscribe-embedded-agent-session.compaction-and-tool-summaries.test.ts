@@ -10,7 +10,6 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
@@ -160,47 +159,6 @@ describe("compaction accounting", () => {
       }
     }
     expect(observed).toEqual(expected);
-  });
-
-  it("preserves an accepted heartbeat response and private scratch through retry", async () => {
-    const onHeartbeatToolResponse = vi.fn();
-    const { emit, subscription } = harness({
-      sessionPersistence: "detached",
-      onHeartbeatToolResponse,
-    });
-    const tool = createHeartbeatResponseTool();
-    const response = {
-      outcome: "done" as const,
-      notify: true,
-      summary: "The monitored task completed.",
-      notificationText: "Your report is ready.",
-      scratch: "Private monitor notes: report completion confirmed.",
-    };
-    emit({
-      type: "tool_execution_start",
-      toolName: tool.name,
-      toolCallId: "heartbeat",
-      args: response,
-    });
-    const result = await tool.execute("heartbeat", response);
-    emit({
-      type: "tool_execution_end",
-      toolName: tool.name,
-      toolCallId: "heartbeat",
-      isError: false,
-      result,
-    });
-    await subscription.waitForPendingEvents();
-    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
-    emit(completed());
-    const reply = assistant(0);
-    message(emit, reply);
-    emit({ type: "agent_end", messages: [reply] });
-    await subscription.waitForPendingEvents();
-    await subscription.waitForCompactionRetry();
-    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
-    expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
-    expect(subscription.getCompactionCount()).toBe(1);
   });
 
   it("clears the assistant and its exact usage when compaction starts a new attempt", () => {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
@@ -113,16 +113,21 @@ describe("backup commands", () => {
       const running = backupCreateCommand(createTestRuntime(), {
         output: path.join(tempHome.home, `backup-${outcome}.tgz`),
         includeWorkspace: false,
-      }).catch((error: unknown) => error);
-      await entered.promise;
+      });
+      const observed = running.catch((error: unknown) => error);
       try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          running,
+          "Backup settled before entering the archive stream",
+        );
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
         const signalDrain =
           outcome === "SIGINT" || outcome === "SIGTERM"
             ? waitForSignalExitBarriers(outcome)
             : undefined;
         settled.resolve();
-        const result = await running;
+        const result = await observed;
         await signalDrain;
         expect(result instanceof Error).toBe(outcome !== "success");
         expect(hasCommandProcessCleanupError(result)).toBe(outcome === "uncertain");
@@ -131,7 +136,7 @@ describe("backup commands", () => {
         );
       } finally {
         settled.resolve();
-        await running;
+        await observed;
         await waitForCliSignalExit();
         releaseCustody?.();
       }

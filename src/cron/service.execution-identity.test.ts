@@ -78,7 +78,7 @@ describe("scheduled cron execution identity", () => {
         nowMs: () => clock.now,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob,
       });
       cron = service.cron;

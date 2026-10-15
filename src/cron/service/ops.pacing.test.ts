@@ -33,7 +33,6 @@ async function withState(run: (state: ReturnType<typeof createCronServiceState>)
       log: logger,
       nowMs: () => NOW,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     }),
   );

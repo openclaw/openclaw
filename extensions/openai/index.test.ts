@@ -438,7 +438,7 @@ describe("openai plugin", () => {
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,
-        trigger: "heartbeat",
+        trigger: "cron",
       }),
     ).toEqual({
       stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,

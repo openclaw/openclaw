@@ -11,6 +11,7 @@ import type {
   CronJobsSortBy,
   CronSortDir,
 } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { updateCronJobsFilter } from "../../lib/cron/index.ts";
 import type { CronRunsViewState } from "../../lib/cron/runs.ts";
 import type {
@@ -23,6 +24,7 @@ import type { CronEventSourceView } from "./event-source.ts";
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
 export type CronProps = {
+  gateway: ApplicationContext["gateway"] | null;
   loading: boolean;
   /** True once a cron.list response has completed (initial load finished). */
   hasLoaded: boolean;
@@ -45,7 +47,6 @@ export type CronProps = {
   busy: boolean;
   form: CronFormState;
   eventSource?: CronEventSourceView;
-  heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJob: CronJob | null;

@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
+import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   listConfigCorpusFixtureNames,
   readConfigCorpusFixture,
@@ -93,8 +97,14 @@ const expectations: Record<
   },
 };
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
 
 describe("operator config startup corpus", () => {
   it("preserves ambient channel ownership when retiring Copilot discovery", async () => {
@@ -248,7 +258,8 @@ describe("operator config startup corpus", () => {
       const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
         sourceRaw: snapshot.parsed,
       });
-      fs.writeFileSync(configPath, JSON.stringify(normalized.config));
+      const retired = await retireHeartbeatWithDoctor(normalized.config, env);
+      fs.writeFileSync(configPath, JSON.stringify(retired));
       const startup = await loadGatewayStartupConfigSnapshot({
         initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
         minimalTestGateway: false,
@@ -256,6 +267,26 @@ describe("operator config startup corpus", () => {
         log: console,
       });
       const config = startup.snapshot.config;
+      if (normalized.config.agents?.defaults?.heartbeat) {
+        const cron = await loadCronJobsStore(resolveCronJobsStorePathFromConfig(config, env));
+        expect(cron.jobs).toContainEqual(
+          expect.objectContaining({
+            agentId: "main",
+            payload: expect.objectContaining({ kind: "agentTurn" }),
+          }),
+        );
+        if (name === "peanutto.json") {
+          expect(cron.jobs).toContainEqual(
+            expect.objectContaining({
+              agentId: "main",
+              schedule: expect.objectContaining({ kind: "every", everyMs: 3_600_000 }),
+              sessionTarget: "isolated",
+              activeHours: { start: "08:00", end: "23:00", timezone: "UTC" },
+              delivery: { mode: "none", directPolicy: "allow" },
+            }),
+          );
+        }
+      }
       Object.assign(env, config.env?.vars);
       if (
         [

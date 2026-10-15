@@ -279,7 +279,7 @@ export function pluginStateLookupMany(params: {
         ...dependency,
         identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
       });
-      return lookupPluginStateEntries(store, params);
+      return lookupPluginStateEntries(store, params).values;
     },
     params.env,
   );

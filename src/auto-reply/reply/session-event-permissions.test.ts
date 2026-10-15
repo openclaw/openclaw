@@ -4,32 +4,38 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { extractMessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging-extraction.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
-import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
+  loadTranscriptEvents,
   loadSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCronServiceState } from "../../cron/service/state.js";
+import { enqueueCronNotification } from "../../cron/service/wake.js";
+import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueRequiredSystemEventEntry,
-  peekDeliverableSystemEventEntries,
+  isSystemEventTurnOwned,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -41,6 +47,7 @@ import {
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
 import * as sessionEventHandoff from "./session-event-handoff.js";
@@ -48,6 +55,10 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import {
+  describeToolCap,
+  enqueueGuardedCliWatchdog,
+} from "./session-event-watchdog.test-support.js";
 // mock-isolation: Use synthetic model execution with real admission and native filesystem guards.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -66,120 +77,48 @@ await Promise.all([
   ),
 ]);
 
-function describeToolCap(allow: readonly string[] | undefined) {
-  return { allow, intersections: allow ? readToolAllowlistIntersection(allow) : undefined };
-}
-
-async function enqueueGuardedCliWatchdog(params: {
-  config: OpenClawConfig;
-  workspaceDir: string;
-  sessionKey: string;
-  entry: SessionEntry;
-  signal: AbortSignal;
-  diagnostic: Record<string, unknown>;
-}) {
-  const { prepareSystemAgentRunAdmission } = await import("../../agents/admitted-run-context.js");
-  const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
-  const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
-  const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
-  const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
-    await import("../../config/sessions/paths.js");
-  const sessionTarget = {
-    agentId: "main",
-    sessionKey: params.sessionKey,
-    sessionId: params.entry.sessionId,
-    storePath: resolveSessionStorePathCore(params.config.session?.store, { agentId: "main" }),
-  };
-  const runId = "guarded-cli-watchdog";
-  const admission = prepareSystemAgentRunAdmission(params.config, runId, "main", "watchdog-proof");
-  cliBackends.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "watchdog-cli",
-        pluginId: "watchdog-proof",
-        nativeToolMode: "selectable",
-        toolAvailabilityEnforcement: "execution-args",
-        resolveExecutionArgs: ({ baseArgs }) => baseArgs,
-        config: {
-          command: process.execPath,
-          args: [],
-          output: "text",
-          input: "arg",
-          sessionMode: "none",
-        },
-      },
-    ],
-  });
+async function enqueueCronSafetyNotice(env: NodeJS.ProcessEnv) {
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = executeDeps.enqueueSessionEvent;
-  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    params.diagnostic.target = {
-      tools: describeToolCap(args[1].expectedTarget?.toolsAllow),
-      settings: args[1].expectedTarget?.settings,
-    };
-    receipt = enqueue(...args);
-    return receipt;
-  });
-  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
-    acquireScopeCleanup: () => async () => {},
-    spawn: async () => ({
-      runId,
-      startedAtMs: Date.now(),
-      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-      cancel: () => {},
-      wait: async () => ({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 1,
-        stdout: "partial progress before stall",
-        stderr: "",
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    }),
-    cancel: () => {},
-    cancelScope: () => {},
-  });
-  try {
-    const context = await prepareCliRunContext({
-      preparedRunAdmission: admission,
-      config: params.config,
-      agentId: "main",
-      sessionId: params.entry.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: resolveSessionFilePathCore(
-        params.entry.sessionId,
-        params.entry,
-        resolveSessionFilePathOptions(sessionTarget),
-      ),
-      sessionTarget,
-      sessionEntry: { ...params.entry, permissionMode: "guarded" },
-      workspaceDir: params.workspaceDir,
-      cwd: params.workspaceDir,
-      skillsSnapshot: { prompt: "", skills: [] },
-      toolsAllow: ["read"],
-      sourceReplyDeliveryMode: "message_tool_only",
-      provider: "watchdog-cli",
-      model: "synthetic-watchdog-model",
-      prompt: "Read the completion status.",
-      timeoutMs: 180_000,
-      runId,
-      abortSignal: params.signal,
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  const observed = vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation((...args) => {
+      receipt = enqueue(...args);
+      return receipt;
     });
-    params.diagnostic.prepared = {
-      tools: describeToolCap(context.sessionEventSourcePolicy?.toolsAllow),
-      settings: context.sessionEventSourcePolicy?.settings,
-    };
-    await expect(runPreparedCliAgent(context)).rejects.toThrow("produced no output");
-    return expectDefined(receipt, "ordinary watchdog occurrence");
+  const scheduler = createTestGatewayScheduler();
+  const log = { debug() {}, info() {}, warn() {}, error() {} };
+  try {
+    const state = createCronServiceState({
+      scheduler,
+      cronEnabled: false,
+      storePath: "unused-notification-store",
+      defaultAgentId: "main",
+      log,
+      enqueueSystemEvent() {},
+      enqueueSessionEvent: createGatewayCronTargetResolver(env, { warn() {} }).enqueueSessionEvent,
+      runIsolatedAgentJob: async () => {
+        throw new Error("Unexpected scheduled execution");
+      },
+    });
+    await enqueueCronNotification(
+      state,
+      {
+        id: "safety-notice",
+        name: "Safety notice",
+        agentId: "main",
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        state: {},
+      },
+      "Automation requires attention",
+      "auto-disabled",
+      {},
+    );
+    return expectDefined(receipt, "ordinary safety notice receipt");
   } finally {
-    observer.mockRestore();
-    supervisor.mockRestore();
-    cliBackends.resetDepsForTest();
-    admission.close();
+    observed.mockRestore();
+    await scheduler.stop();
   }
 }
 
@@ -235,6 +174,7 @@ it.for([
 it.for([
   "allowed",
   "new-session",
+  "cron-safety-notice",
   "creation-retry",
   "cancelled-creation",
   "downgrade",
@@ -247,12 +187,16 @@ it.for([
   "failed-adoption",
   "tool-only-delivery",
   "cli-watchdog-guarded",
+  "source-tool",
+  "source-session-replacement",
+  "source-lifecycle-replacement",
 ] as const)(
   "bounds a production background completion by current and retained permissions: %s",
   async (change, { signal, onTestFinished }) => {
     const fixtureWork = withOpenClawTestState(
       { label: "session-event-permissions", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
+        const sourceTool = change.startsWith("source-");
         const config: OpenClawConfig = {
           agents: {
             entries: { main: { workspace: state.workspaceDir } },
@@ -263,7 +207,12 @@ it.for([
               models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
             },
           },
-          tools: { profile: "coding", codeMode: false, toolSearch: false },
+          tools: {
+            profile: "coding",
+            codeMode: false,
+            toolSearch: false,
+            ...(sourceTool ? { alsoAllow: ["message"] } : {}),
+          },
           skills: { load: { watch: false } },
           plugins: { enabled: false },
         };
@@ -274,7 +223,11 @@ it.for([
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const filePath = path.join(state.workspaceDir, "completion.txt");
         await fs.writeFile(filePath, "original\n");
-        const scope = { agentId: "main", sessionKey: "agent:main:permission-completion" };
+        const safetyNotice = change === "cron-safety-notice";
+        const scope = {
+          agentId: "main",
+          sessionKey: safetyNotice ? "agent:main:main" : "agent:main:permission-completion",
+        };
         const sessionId = "permission-completion";
         const lifecycleRevision = "same-generation";
         const setMode = async (permissionMode: SessionEntry["permissionMode"]) =>
@@ -288,6 +241,7 @@ it.for([
           });
         const fresh =
           change === "new-session" ||
+          safetyNotice ||
           change === "creation-retry" ||
           change === "cancelled-creation";
         if (!fresh) {
@@ -330,6 +284,7 @@ it.for([
         const diagnostic: Record<string, unknown> = {};
         let observedMode: SessionEntry["permissionMode"];
         let retainedWriteRejected = false;
+        let sourceToolFailure: unknown;
         const retainedDowngrade =
           change === "retained-tool-downgrade" || change === "retained-config-downgrade";
         runEmbeddedAgentMock
@@ -406,12 +361,14 @@ it.for([
                 sessionKey: params.sessionKey,
                 workspaceDir: workspace.effectiveWorkspace,
                 cwd: workspace.effectiveCwd,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider ?? params.messageChannel,
                 sessionPermissionPolicy: workspace.sessionPermissionPolicy,
                 toolConstructionPlan: {
                   ...construction.codingToolConstructionPlan,
                   includeShellTools: false,
                   includeChannelTools: false,
-                  includeOpenClawTools: false,
+                  includeOpenClawTools: sourceTool,
                   includePluginTools: false,
                 },
               });
@@ -419,6 +376,44 @@ it.for([
                 boundTools,
                 construction.runtimeToolAllowlist,
               );
+              if (sourceTool) {
+                const message = expectDefined(
+                  tools.find((tool) => tool.name === "message"),
+                  "source message tool",
+                );
+                if (change !== "source-tool") {
+                  await replaceSessionEntry(scope, {
+                    ...expectDefined(loadSessionEntry(scope), "original source"),
+                    ...(change === "source-session-replacement"
+                      ? { sessionId: "replacement-session" }
+                      : { lifecycleRevision: "replacement-lifecycle" }),
+                  });
+                }
+                const result = await message
+                  .execute("completion-source-send", {
+                    action: "send",
+                    message: "TARGETLESS_COMPLETION_PROOF",
+                  })
+                  .catch((error: unknown) => {
+                    sourceToolFailure = error;
+                    throw error;
+                  });
+                const sourceReply = expectDefined(
+                  extractMessagingToolSourceReplyPayload(result),
+                  "source reply",
+                );
+                return {
+                  payloads: buildEmbeddedRunPayloads({
+                    assistantTexts: [],
+                    lastAssistant: undefined,
+                    sessionKey: scope.sessionKey,
+                    agentId: "main",
+                    sourceReplyDeliveryMode: "message_tool_only",
+                    messagingToolSourceReplyPayloads: [sourceReply],
+                  }),
+                  meta: { durationMs: 1 },
+                };
+              }
               Object.assign(diagnostic, {
                 model: { tools: describeToolCap(params.toolsAllow), mode: params.permissionMode },
                 projection: describeToolCap(construction.runtimeToolAllowlist),
@@ -508,8 +503,9 @@ it.for([
                   "passive occurrence",
                 )
               : undefined;
-          const receipt =
-            change === "cli-watchdog-guarded"
+          const receipt = safetyNotice
+            ? await enqueueCronSafetyNotice(state.env)
+            : change === "cli-watchdog-guarded"
               ? await enqueueGuardedCliWatchdog({
                   config,
                   workspaceDir: state.workspaceDir,
@@ -524,7 +520,7 @@ it.for([
                   abortSignal: AbortSignal.any([signal, cancellation.signal]),
                   expectedTarget: target,
                   createIfMissing: fresh ? true : undefined,
-                  deliver: toolOnly ? undefined : false,
+                  deliver: toolOnly || sourceTool ? undefined : false,
                   ...(toolOnly
                     ? { deliveryContext: { channel: "telegram", to: "synthetic-tool-only-target" } }
                     : {}),
@@ -592,9 +588,34 @@ it.for([
           return;
         }
         expect(accepted).toEqual({ ok: true });
+        if (sourceTool) {
+          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+          const current = expectDefined(loadSessionEntry(scope), "current destination");
+          for (const transcriptSessionId of new Set([target.sessionId, current.sessionId])) {
+            const messages = (
+              await loadTranscriptEvents({ ...scope, sessionId: transcriptSessionId })
+            )
+              .map(readTranscriptEventMessage)
+              .filter(
+                (message) =>
+                  message?.role === "assistant" &&
+                  JSON.stringify(message.content).includes("TARGETLESS_COMPLETION_PROOF"),
+              );
+            expect(messages).toHaveLength(change === "source-tool" ? 1 : 0);
+          }
+          expect(outcome.status, outcome.error).toBe(
+            change === "source-tool" ? "completed" : "failed",
+          );
+          if (change !== "source-tool") {
+            expect(String(sourceToolFailure)).toMatch(
+              /reset|replaced|active|authority|destination/i,
+            );
+          }
+          return;
+        }
         const evidence = JSON.stringify({ outcome, diagnostic });
         expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-          change === "allowed" || change === "new-session" || remapped || toolOnly
+          change === "allowed" || change === "new-session" || safetyNotice || remapped || toolOnly
             ? "completed\n"
             : "original\n",
         );
@@ -606,19 +627,22 @@ it.for([
               ? "guarded"
               : remapped
                 ? producerMode
-                : change === "new-session"
+                : change === "new-session" || safetyNotice
                   ? undefined
                   : "full",
         );
         expect(attempted, evidence).toBe(
           change === "allowed" ||
             change === "new-session" ||
+            safetyNotice ||
             retainedDowngrade ||
             remapped ||
             toolOnly,
         );
         expect(retainedWriteRejected).toBe(retainedDowngrade);
-        if (change === "new-session") {
+        if (safetyNotice) {
+          expect(loadSessionEntry(scope)?.sessionId).toEqual(expect.any(String));
+        } else if (change === "new-session") {
           expect(loadSessionEntry(scope)?.sessionId).toBe(target.sessionId);
         } else {
           expect(loadSessionEntry(scope)).toMatchObject({ sessionId, lifecycleRevision });
@@ -816,9 +840,8 @@ it.for([
               status: "failed",
               executionStarted: false,
             });
-            expect(peekDeliverableSystemEventEntries(scope.sessionKey)).toContainEqual(
-              retainedOverflow,
-            );
+            expect(peekSystemEventEntries(scope.sessionKey)).toContainEqual(retainedOverflow);
+            expect(isSystemEventTurnOwned(scope.sessionKey, retainedOverflow)).toBe(false);
           }
           expect(starts).toHaveLength(1);
           for (const noticeState of observed) {

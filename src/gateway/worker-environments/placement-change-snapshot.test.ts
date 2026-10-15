@@ -19,10 +19,83 @@ import {
   subscribeGatewayWorkerPlacementMetadataChanges,
 } from "../server-worker-placement-change-events.js";
 import { readWorkerPlacementIdentity } from "./placement-projector.js";
-import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
+import {
+  placementTurnOwner,
+  type WorkerSessionPlacementChangeSnapshot,
+} from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+
+for (const state of ["active", "draining"] as const) {
+  it(`publishes a public placement change after the ${state} workspace result settles`, async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawStateDatabase();
+      const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+      const identity = {
+        sessionId: "workspace-settlement",
+        sessionKey: "agent:main:workspace-settlement",
+        agentId: "main",
+      };
+      const active = await advancePlacementFixtureToActive(store, database, identity);
+      const claim = await store.claimTurn({
+        ...identity,
+        owner: placementTurnOwner(active),
+        claimId: "settled-claim",
+        runId: "settled-run",
+      });
+      await store.markWorkspaceResultPending(claim);
+      if (state === "draining") {
+        await store.startWorkspaceResultDrain(claim);
+      }
+      expect(
+        (await store.readProjection([identity.sessionId])).workspaceResultReconcilingSessionIds,
+      ).toEqual(new Set([identity.sessionId]));
+      const published = createDeferredCore();
+      const abort = () => published.reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      const broadcastToConnIds = vi.fn(() => published.resolve());
+      const context = {
+        broadcastToConnIds,
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        getSessionEventSubscriberConnIds: () => new Set(["synthetic-client"]),
+      };
+      const warn = vi.fn();
+      const changes = subscribeGatewayWorkerPlacementMetadataChanges({
+        placements: store,
+        runnerAvailability: { read: () => undefined, version: () => 0 },
+        environments: { subscribeMachineShapeChanged: () => () => {} },
+        getSessionChangeContext: () => context,
+        warn,
+      });
+      try {
+        await store.acceptWorkspaceResult(claim);
+        await store.completeWorkspaceResultAndReleaseTurn(claim);
+        const settled = await store.readProjection([identity.sessionId]);
+        expect(settled.workspaceResultReconcilingSessionIds.size).toBe(0);
+        expect(settled.placements.get(identity.sessionId)?.turnClaim).toBeNull();
+        await published.promise;
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({ reason: "placement", ...identity }),
+          new Set(["synthetic-client"]),
+          expect.any(Object),
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        signal.removeEventListener("abort", abort);
+        await changes.stop();
+        await flushPendingSessionsChangedEvents(context);
+      }
+    });
+  });
+}
 
 it("coalesces machine metadata bursts off thread and selects only correlated profile placements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

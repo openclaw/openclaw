@@ -3,6 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -50,6 +54,7 @@ describe("memory manager Unicode query round trip", () => {
         },
         agents: { defaults: { workspace }, entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const result = await getMemorySearchManager({
         cfg,
         agentId: "main",
@@ -86,6 +91,7 @@ describe("memory manager Unicode query round trip", () => {
       } finally {
         await manager.close();
         await closeAllMemorySearchManagers();
+        clearRuntimeConfigSnapshot();
         vi.unstubAllEnvs();
       }
     },

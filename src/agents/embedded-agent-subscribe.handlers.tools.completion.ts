@@ -1,9 +1,5 @@
 import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
-  normalizeHeartbeatToolResponse,
-} from "../auto-reply/heartbeat-tool-response.js";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -39,7 +35,6 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
@@ -398,21 +393,6 @@ export async function handleToolExecutionEnd(
   ) {
     ctx.state.successfulCronAdds += 1;
   }
-  if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
-    const response = normalizeHeartbeatToolResponse(resultRecord?.details);
-    if (response) {
-      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
-      ctx.state.heartbeatToolResponse = response;
-      if (isFirstHeartbeatResponse) {
-        runBestEffortCallback({
-          label: "heartbeat tool response",
-          log: ctx.log,
-          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
-        });
-      }
-    }
-  }
-
   const planUpdate =
     !isToolError && toolName === "progress_card"
       ? projectProgressCardChannelUpdate(startArgs)

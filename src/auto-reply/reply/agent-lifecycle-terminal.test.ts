@@ -1,14 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import * as agentEvents from "../../infra/agent-events.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
-const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
-
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+const emitAgentEvent = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+afterAll(() => emitAgentEvent.mockRestore());
 
 describe("createAgentLifecycleTerminalBackstop", () => {
   it("publishes a preparation failure once instead of its cancellation side effect", async () => {
@@ -62,6 +63,8 @@ describe("createAgentLifecycleTerminalBackstop", () => {
         phase: "finishing",
         error: "first failure",
         assistantTranscriptIdempotencyKey: "saved-A",
+        executionStarted: false,
+        providerStarted: false,
       },
     });
     terminal.capture("error", new Error("first failure"));
@@ -72,10 +75,12 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     }
     terminal.emit("error", new Error(retry ? "preparation failed" : "first failure"));
     expect(emitAgentEvent).toHaveBeenCalledOnce();
-    const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
+    const data = expectDefined(emitAgentEvent.mock.calls[0]?.[0], "terminal event").data;
     expect(data.assistantTranscriptIdempotencyKey).toBe(retry ? undefined : "saved-A");
     expect(data.error).toBe(retry ? "preparation failed" : "first failure");
     expect(data.executionSettled).toBe(true);
+    expect(data.executionStarted).toBe(retry ? undefined : false);
+    expect(data.providerStarted).toBe(retry ? undefined : false);
   });
 
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {
@@ -100,7 +105,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
 
     terminal.emit("error", error);
 
-    const event = emitAgentEvent.mock.calls[0]?.[0];
+    const event = expectDefined(emitAgentEvent.mock.calls[0]?.[0], "terminal event");
     expect(event.data.error).toBe(`⚠️ ${summary}`);
     expect(event.data.errorObservation).toEqual({
       provider: "openai",
@@ -144,7 +149,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
               });
         terminal.emit("error", error);
 
-        const event = emitAgentEvent.mock.calls[0]?.[0];
+        const event = expectDefined(emitAgentEvent.mock.calls[0]?.[0], "terminal event");
         expect(event.data.error).toBe(
           renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
         );

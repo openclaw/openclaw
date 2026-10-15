@@ -42,7 +42,7 @@ function createStoreTestState(storePath: string, onEvent = vi.fn()) {
     log: logger,
     nowMs: () => STORE_TEST_NOW,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent,
   });

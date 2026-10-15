@@ -56,12 +56,12 @@ suite.define(() => {
         userHeader: "x-forwarded-user",
       };
       await state.writeConfig({
+        cron: { enabled: false },
         agents: {
           ownership: "explicit",
           defaults: {
             workspace: state.workspaceDir,
             systemAgent: { agentId: "clipper" },
-            heartbeat: { agentId: "clipper" },
             authInheritance: { agentId: "clipper" },
             sessionStore: { agentId: "clipper" },
           },

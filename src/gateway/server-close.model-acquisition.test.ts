@@ -91,6 +91,8 @@ it("joins managed reload acquisition during Gateway close", async () => {
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port)!;
+    // Finish disabled-scheduler imports before simulating a rotated model chunk.
+    await kernel.runtimeState.cronState.cron.start();
     const reloader = kernel.runtimeState.configReloader;
     const stopReloader = reloader.stop.bind(reloader);
     const observedStop = vi.spyOn(reloader, "stop").mockImplementation(() => {
@@ -244,7 +246,6 @@ it.each(["static catalog", "synthetic auth"] as const)(
       defaults: {
         workspace: fixture.state.workspaceDir,
         model: `${provider}/model`,
-        heartbeat: { agentId: "main" },
         systemAgent: { agentId: "main" },
       },
       entries: {

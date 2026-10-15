@@ -66,7 +66,7 @@ Notes:
 - The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
 - When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
 - The flush runs once per compaction cycle (tracked in the session row).
-- The flush runs only for embedded OpenClaw sessions; CLI backends and heartbeat turns skip it.
+- The flush runs only for embedded OpenClaw sessions; CLI backends skip it. Scheduled checks follow the ordinary session policy.
 - Memory Core's file flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`). A tools-arm provider does not require writable workspace access.
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 

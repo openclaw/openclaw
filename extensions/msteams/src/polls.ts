@@ -287,7 +287,17 @@ export function createMSTeamsPollStoreState(params?: {
     pollId: string,
     cachedRows?: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>>,
   ): Promise<void> => {
-    for (const row of cachedRows?.values() ?? (await voteBucketStore.entries())) {
+    const pollDigest = buildMSTeamsPollStateKey(pollId);
+    const rows =
+      cachedRows?.values() ??
+      (voteBucketStore.entriesInKeyRange
+        ? await voteBucketStore.entriesInKeyRange({
+            keyStartInclusive: `${pollDigest}:`,
+            keyEndExclusive: `${pollDigest};`,
+            limit: MSTEAMS_POLL_VOTE_BUCKET_COUNT,
+          })
+        : await voteBucketStore.entries());
+    for (const row of rows) {
       if (row.value.pollId === pollId) {
         await voteBucketStore.delete(row.key);
         cachedRows?.delete(row.key);

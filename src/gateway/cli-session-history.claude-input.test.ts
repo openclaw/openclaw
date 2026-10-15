@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,6 +18,7 @@ import {
 import {
   buildLegacyReseedPrompt,
   claudeUser,
+  LEGACY_EXEC_EVENT_PROMPT,
   mergeImportedChatHistoryMessages,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
@@ -47,15 +47,15 @@ const internalInputs = [
     "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
-  ["exec", buildExecEventPrompt(["Exec completed (example, code 0) :: done"])],
+  ["exec", LEGACY_EXEC_EVENT_PROMPT],
   [
     "exec-with-queued-system-event",
-    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
+    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${LEGACY_EXEC_EVENT_PROMPT}`,
   ],
   [
     "exec-after-interrupted-run",
     applySessionHints({
-      baseBody: buildExecEventPrompt(["Exec completed (example, code 0) :: done"]),
+      baseBody: LEGACY_EXEC_EVENT_PROMPT,
       abortedLastRun: true,
     }),
   ],

@@ -1,3 +1,4 @@
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { CronService } from "../../cron/service.js";
@@ -27,6 +28,7 @@ export async function withCronMessageRun<T>(
   params: { cfg: OpenClawConfig; storePath: string; sessionKey: string; sessionId: string },
   run: (owner: CronMessageRun) => Promise<T>,
 ): Promise<T> {
+  setRuntimeConfigSnapshot(params.cfg);
   const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
   const job = {
     ...makeCronReceiptJob("message-entrypoint", "main"),
@@ -47,7 +49,6 @@ export async function withCronMessageRun<T>(
     defaultAgentId: "main",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async (execution) => {
       const runId = "message-entrypoint-run";
       const admission = prepareCronRunAdmission({

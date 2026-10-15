@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
@@ -23,6 +27,7 @@ function expectLogIncludes(source: ReturnType<typeof vi.fn>, text: string) {
 }
 afterEach(() => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -192,6 +197,8 @@ describe("runDreamNarrative deletion boundary", () => {
     async ({ source, mutation }) => {
       const workspaceDir = await createTempWorkspace("dreaming-forget-generated-");
       setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
+      setRuntimeConfigSnapshot(cfg);
       const nowMs = Date.now();
       const claim = "The private cobalt archive opens every midnight.";
       const retainedClaim = "A public archive is open throughout the afternoon.";
@@ -272,7 +279,7 @@ describe("runDreamNarrative deletion boundary", () => {
         expect(subagent.complete.mock.calls[0]?.[0].message).toContain(claim);
         if (mutation === "forget") {
           const forgotten = await forgetMemoryEntries({
-            cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+            cfg,
             agentId: "main",
             sessionIds: ["forgotten-narrative-source"],
           });

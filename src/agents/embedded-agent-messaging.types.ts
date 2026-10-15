@@ -1,7 +1,7 @@
 /**
  * Shared messaging-tool metadata types captured from embedded-agent runs.
  */
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../shared/reply-payload.types.js";
 
 export type MessagingToolSend = {
   tool: string;

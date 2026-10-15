@@ -125,9 +125,86 @@ it("retains committed initial turns through fencing and denies their final write
   const requests: Promise<unknown>[] = [];
   const waitForRelease = (scenario: (typeof cases)[number]) =>
     getSessionWorkAdmissionRelease({ scope: scenario.scope.storePath, identities: [scenario.key] });
+  let restoreCapture: (() => void) | undefined;
   try {
     await gateway.server.startupSettled;
+    const executionOwner = await import("../state/openclaw-agent-execution.js");
+    const executionScope = await import("../state/openclaw-agent-execution-scope.js");
+    const { readGlobalSingleton } = await import("../shared/global-singleton.js");
+    const ownerFor = (pathname: string) => {
+      const state = readGlobalSingleton(Symbol.for("openclaw.agentDatabaseExecutionOwners"));
+      return isRecord(state) && state.owners instanceof Map
+        ? state.owners.get(pathname)
+        : undefined;
+    };
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+    const captureSpy = vi
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementation((options, constraints) => {
+        let owner: unknown;
+        const report = (
+          stage: string,
+          error: unknown,
+          pathname = options.path,
+          observedScope: "synchronous-throw" | "promise-catch-continuation" = "synchronous-throw",
+        ) => {
+          try {
+            console.error("[admission-diagnostic]", {
+              stage,
+              agentId: options.agentId,
+              path: pathname,
+              observedScope,
+              supported: executionScope.supportsAgentDatabaseExecutionScope(options),
+              sameOwner:
+                pathname === undefined || owner === undefined
+                  ? undefined
+                  : ownerFor(pathname) === owner,
+              stack: error instanceof Error ? error.stack : String(error),
+            });
+          } catch {}
+        };
+        let execution: ReturnType<typeof capture>;
+        try {
+          execution = capture(options, constraints);
+          owner = ownerFor(execution.path);
+        } catch (error) {
+          report("capture", error);
+          throw error;
+        }
+        return new Proxy(execution, {
+          get(target, property, receiver) {
+            if (property === "assertCurrent") {
+              return () => {
+                try {
+                  return target.assertCurrent();
+                } catch (error) {
+                  report("assertCurrent", error, target.path);
+                  throw error;
+                }
+              };
+            }
+            if (property === "prepare") {
+              return (...args: Parameters<typeof target.prepare>) =>
+                target.prepare(...args).catch((error: unknown) => {
+                  report("prepare", error, target.path, "promise-catch-continuation");
+                  throw error;
+                });
+            }
+            if (property === "runExisting") {
+              return (...args: Parameters<typeof target.runExisting>) =>
+                target.runExisting(...args).catch((error: unknown) => {
+                  report("runExisting", error, target.path, "promise-catch-continuation");
+                  throw error;
+                });
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      });
+    Object.assign(captureSpy, capture);
+    restoreCapture = () => captureSpy.mockRestore();
     for (const scenario of cases) {
+      console.info(`[admission-diagnostic] request=${scenario.key}`);
       const ws = await gateway.openWs({ origin: `http://127.0.0.1:${gateway.port}` });
       sockets.push(ws);
       await connectOk(ws, {
@@ -209,6 +286,7 @@ it("retains committed initial turns through fencing and denies their final write
     }
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   } finally {
+    restoreCapture?.();
     resumeTurns.resolve();
     for (const scenario of cases) {
       scenario.allowWrite.resolve();

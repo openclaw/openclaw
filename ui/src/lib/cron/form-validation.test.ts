@@ -34,6 +34,10 @@ describe("cron form validation", () => {
       triggerScript: "",
       deliveryMode: "webhook",
       deliveryTo: "ftp://bad",
+      activeHoursEnabled: true,
+      activeHoursStart: "24:00",
+      activeHoursEnd: "25:00",
+      activeHoursTimezone: "Invalid/Timezone",
     });
     expect(errors.name).toBe("cron.errors.nameRequired");
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
@@ -41,5 +45,27 @@ describe("cron form validation", () => {
     expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
+    expect(errors.activeHoursStart).toBe("cron.errors.activeHoursTime");
+    expect(errors.activeHoursEnd).toBe("cron.errors.activeHoursTime");
+    expect(errors.activeHoursTimezone).toBe("cron.errors.activeHoursTimezone");
+  });
+
+  it("requires an explicit deliverable policy when an owner DM is selected", () => {
+    const form = {
+      ...DEFAULT_CRON_FORM,
+      name: "Daily check",
+      payloadText: "Check notes",
+      deliveryMode: "announce" as const,
+      deliveryTarget: "owner" as const,
+      deliveryDirectPolicy: "block" as const,
+      activeHoursEnabled: true,
+      activeHoursStart: "22:00",
+      activeHoursEnd: "24:00",
+      activeHoursTimezone: "user",
+    };
+    expect(validateCronForm(form)).toEqual({
+      deliveryDirectPolicy: "cron.errors.ownerDirectBlocked",
+    });
+    expect(validateCronForm({ ...form, deliveryDirectPolicy: "allow" })).toEqual({});
   });
 });

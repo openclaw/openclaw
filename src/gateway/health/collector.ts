@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../../agents/agent-roster.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
@@ -21,7 +20,10 @@ import type { SessionEntrySummary } from "../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummariesForAgents } from "../../infra/heartbeat-summary-projection.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummarySnapshot,
+} from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -157,18 +159,22 @@ export async function buildHealthAgentSummaries(
   const reader = await createHealthSessionStoreReader(agentIds, projection);
   // One roster pass for every agent: per-agent resolution re-walks the roster
   // and froze large fleets for tens of seconds each refresh (#137570).
-  const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
+  const heartbeatJobs = await readHeartbeatSummarySnapshot(cfg);
+  const heartbeatByAgent = new Map(heartbeatJobs.toReversed().map((job) => [job.agentId, job]));
   const agents: AgentHealthSummary[] = [];
-  for (const [index, entry] of ordered.entries()) {
+  for (const entry of ordered) {
     const store = await reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
+    );
+    const { deliveryPolicy: _deliveryPolicy, ...heartbeat } = projectHeartbeatSummary(
+      heartbeatByAgent.get(entry.id),
     );
     agents.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
-      heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
+      heartbeat,
       sessions: projectHealthSessions(store.path, store),
     });
   }
@@ -508,19 +514,7 @@ export async function collectGatewayHealthSnapshot(params: {
     params.sessionRowProjection,
   );
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const configuredHeartbeatAgentId = normalizeOptionalString(
-    cfg.agents?.defaults?.heartbeat?.agentId,
-  );
-  const heartbeatSummaryAgent =
-    (configuredHeartbeatAgentId
-      ? agents.find(
-          (agent) =>
-            agent.heartbeat.enabled &&
-            agent.agentId === normalizeAgentId(configuredHeartbeatAgentId),
-        )
-      : undefined) ??
-    agents.find((agent) => agent.heartbeat.enabled) ??
-    summaryAgent;
+  const heartbeatSummaryAgent = agents.find((agent) => agent.heartbeat.enabled) ?? summaryAgent;
   const heartbeatSeconds = heartbeatSummaryAgent?.heartbeat.everyMs
     ? Math.round(heartbeatSummaryAgent.heartbeat.everyMs / 1000)
     : 0;

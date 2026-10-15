@@ -15,7 +15,6 @@ import { requireGit } from "../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import type { Deferred } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -291,9 +290,7 @@ it(
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    const heartbeats = areHeartbeatsEnabled();
     try {
-      setHeartbeatsEnabled(false);
       await requireGit(repo, ["init", "-b", "main"]);
       await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
       await requireGit(repo, ["config", "user.email", "test@example.invalid"]);
@@ -324,7 +321,6 @@ it(
             workspace: repo,
             skipBootstrap: true,
             utilityModel: "",
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef },
             models: {
               [provider.modelRef]: {
@@ -637,7 +633,6 @@ it(
       } finally {
         creationObserver.mockRestore();
         readinessObserver.mockRestore();
-        setHeartbeatsEnabled(heartbeats);
         await state.cleanup();
       }
     }

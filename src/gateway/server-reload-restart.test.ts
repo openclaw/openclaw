@@ -43,7 +43,6 @@ const restartPlan = {
   reloadHooks: false,
   restartGmailWatcher: false,
   restartCron: false,
-  restartHeartbeat: false,
   reloadPlugins: false,
   restartChannels: new Set(),
   disposeMcpRuntimes: false,

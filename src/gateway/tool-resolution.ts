@@ -487,7 +487,6 @@ export async function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
-          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults

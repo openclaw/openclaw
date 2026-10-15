@@ -88,13 +88,6 @@ function createHeartbeatChannelPlugin(params: {
   };
 }
 
-/** Slack heartbeat channel fixture. */
-export const heartbeatRunnerSlackPlugin = createHeartbeatChannelPlugin({
-  id: "slack",
-  label: "Slack",
-  docsPath: "/channels/slack",
-});
-
 /** Telegram heartbeat channel fixture with thread preservation. */
 export const heartbeatRunnerTelegramPlugin = createHeartbeatChannelPlugin({
   id: "telegram",
@@ -106,28 +99,5 @@ export const heartbeatRunnerTelegramPlugin = createHeartbeatChannelPlugin({
       return target.chatType === "unknown" ? undefined : target.chatType;
     },
     preserveHeartbeatThreadIdForGroupRoute: true,
-  },
-});
-
-/** WhatsApp heartbeat channel fixture with readiness checks. */
-export const heartbeatRunnerWhatsAppPlugin = createHeartbeatChannelPlugin({
-  id: "whatsapp",
-  label: "WhatsApp",
-  docsPath: "/channels/whatsapp",
-  heartbeat: {
-    checkReady: async ({ cfg, deps }) => {
-      if (cfg.channels?.whatsapp?.enabled === false) {
-        return { ok: false, reason: "whatsapp-disabled" };
-      }
-      const authExists = await (deps?.webAuthExists ?? (async () => true))();
-      if (!authExists) {
-        return { ok: false, reason: "whatsapp-not-linked" };
-      }
-      const listenerActive = deps?.hasActiveWebListener ? deps.hasActiveWebListener() : true;
-      if (!listenerActive) {
-        return { ok: false, reason: "whatsapp-not-running" };
-      }
-      return { ok: true, reason: "ok" };
-    },
   },
 });

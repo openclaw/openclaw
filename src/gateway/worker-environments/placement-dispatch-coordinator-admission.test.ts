@@ -18,6 +18,112 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 type DispatchService = WorkerPlacementDispatchService;
 
 describe("worker placement session admission", () => {
+  it.each(["ready", "revoked", "abort", "wrong-profile"] as const)(
+    "joins initial setup before acquiring ready placement authority (%s)",
+    async (outcome) => {
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const environment = {
+        ...createDispatchEnvironmentFixtures().attached,
+        profileId: REQUEST.profileId,
+        environmentId: "worker-active",
+        ownerEpoch: 1,
+      };
+      const placement = {
+        ...ACTIVE_PLACEMENT,
+        workerBundleHash: environment.bootstrapReceipt.bundleHash,
+      };
+      const acquisition = vi.fn(async () => ({
+        prepareRead: () => undefined,
+        current: () => placement,
+        release: () => {},
+      }));
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch: async (_request, report) => {
+            report?.(placement);
+            entered.resolve();
+            await finish.promise;
+            return placement;
+          },
+        }),
+        (_request, run) => run(),
+        undefined,
+        undefined,
+        {
+          placements: { prepareSessionPlacement: acquisition },
+          environments: { get: () => environment },
+          redispatchPlacement: async () => {
+            throw new Error("Unexpected redispatch");
+          },
+          warn: () => {},
+        },
+      );
+      const dispatch = coordinated.dispatch(REQUEST);
+      void dispatch.catch(entered.reject);
+      await entered.promise;
+      const controller = new AbortController();
+      const cancellation = new Error("Ready input cancelled");
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Session source revoked");
+        }
+      };
+      const ready = coordinated.ensurePlacement({
+        request: {
+          ...REQUEST,
+          profileId: outcome === "wrong-profile" ? "another-profile" : REQUEST.profileId,
+        },
+        assertCurrent,
+        authorizeDispatch: assertCurrent,
+        signal: controller.signal,
+        prepareWorkspace: async () => {
+          throw new Error("Unexpected workspace preparation");
+        },
+      });
+      const result = ready.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(acquisition).not.toHaveBeenCalled();
+        if (outcome === "revoked") {
+          current = false;
+        } else if (outcome === "abort") {
+          controller.abort(cancellation);
+          await expect(ready).rejects.toMatchObject({ name: "AbortError", cause: cancellation });
+          expect(coordinated.isPlacementOperationInFlight(REQUEST.sessionId)).toBe(true);
+        }
+        // Setup still owns publication until its operation settles.
+        await Promise.resolve();
+        finish.resolve();
+        await dispatch;
+        const settled = await result;
+        if ("error" in settled) {
+          expect(outcome).not.toBe("ready");
+          expect(String(settled.error)).toContain(
+            outcome === "revoked"
+              ? "Session source revoked"
+              : outcome === "abort"
+                ? "Operation aborted"
+                : "another request",
+          );
+        } else {
+          try {
+            expect(outcome).toBe("ready");
+            settled.value.assertCurrent();
+          } finally {
+            settled.value.release();
+          }
+        }
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([dispatch, result]);
+      }
+    },
+  );
+
   it.each(["dispatch", "reclaim"] as const)(
     "admits unrelated device %s while a reconciliation provider teardown never settles",
     async (kind) => {

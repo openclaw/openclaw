@@ -5,6 +5,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { loadCronJobsStore, resolveCronJobsStorePath } from "../cron/store.js";
 import { setupCommand } from "./setup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -70,6 +71,12 @@ describe("setupCommand", () => {
       );
       expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
       expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
+      expect((await loadCronJobsStore(resolveCronJobsStorePath())).jobs).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          payload: expect.objectContaining({ kind: "agentTurn", skipIfScratchEmpty: true }),
+        }),
+      ]);
     });
   });
 
@@ -140,7 +147,7 @@ describe("setupCommand", () => {
         const defaults = {
           workspace: oldWorkspace,
           skipBootstrap: skip,
-          heartbeat: { every: "30m" },
+          timeoutSeconds: 30,
         };
         const agents = { defaults, entries: { ops: {} } };
         const gateway = missingGateway ? {} : { mode: "local" };
@@ -186,7 +193,7 @@ describe("setupCommand", () => {
         expect(root.agents?.defaults?.skipBootstrap).toBe(true);
         expect(root.agents.defaults.workspace).toBe(changeWorkspace ? nextWorkspace : undefined);
         expect(root.agents.entries).toEqual(scope === "defaults" ? agents.entries : undefined);
-        expect(root.agents.defaults.heartbeat).toBeUndefined();
+        expect(root.agents.defaults.timeoutSeconds).toBeUndefined();
         expect(root.gateway?.mode).toBe(
           missingGateway ? "local" : scope === "root" ? undefined : "local",
         );

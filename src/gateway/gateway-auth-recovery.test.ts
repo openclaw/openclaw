@@ -148,7 +148,6 @@ describe("Gateway profile failure recovery", () => {
                 defaults: {
                   workspace: gateway.state.workspaceDir,
                   skipBootstrap: true,
-                  heartbeat: { every: "0m" },
                   model: { primary: provider.modelRef, fallbacks: [] },
                   models: {
                     [rateModelRef]: {
@@ -492,7 +491,6 @@ describe("Gateway configured catalog authentication", () => {
               defaults: {
                 workspace: gateway.state.workspaceDir,
                 skipBootstrap: true,
-                heartbeat: { every: "0m" },
                 model: { primary: provider.modelRef, fallbacks: [] },
                 models: Object.fromEntries(
                   models.map((model) => [

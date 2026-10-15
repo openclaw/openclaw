@@ -128,7 +128,6 @@ it.for([true, false])(
             cronEnabled: false,
             log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
             runIsolatedAgentJob: async () => {
               throw new Error("Unexpected cron dispatch in upgrade fixture");
             },
@@ -159,7 +158,7 @@ it.for([true, false])(
           const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
           expect(config.agents.entries.keeper).toEqual(fixture.config.agents.entries.keeper);
           expect(config.agents.entries.main).toEqual(fixture.config.agents.entries.main);
-          expect(config.agents.defaults.model).toEqual(fixture.config.agents.defaults.model);
+          expect(config.agents.defaults.model).toBe("openai/gpt-5.5");
           expect(config.update).toEqual(fixture.config.update);
         };
         const assertClosedStorage = () => {
@@ -274,6 +273,9 @@ it.for([true, false])(
               log: { info: vi.fn(), warn: vi.fn() },
             });
             setRuntimeConfigSnapshot(startup.snapshot.config);
+            expect(JSON.parse(await fs.readFile(`${state.configPath}.bak`, "utf8"))).toEqual(
+              fixture.config,
+            );
             await runStartupSessionMaintenanceForTest({
               cfg: startup.snapshot.config,
               log: { info: vi.fn(), warn: vi.fn() },

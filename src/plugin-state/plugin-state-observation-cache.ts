@@ -9,12 +9,18 @@ import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateEntry } from "./plugin-state-store.types.js";
 
 type Key = { pluginId: string; namespace: string; key: string };
-type Entry = { identity: string; loaded: boolean; row?: PluginStateReadRow };
+type Entry = {
+  identity: string;
+  loaded: boolean;
+  row?: PluginStateReadRow;
+  writeRevision?: number;
+};
 type NamespaceEntry = {
   identity: string;
   keyPrefix: string;
   entries?: PluginStateEntry<unknown>[];
   bytes: number;
+  writeRevision?: number;
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservationCache"), () => {
@@ -49,6 +55,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
         }
       }
     } else if (change.kind === "committed") {
+      const writeRevision = change.receipt.writeRevision;
       for (const [key, fact] of change.receipt.facts) {
         const entryKey = JSON.stringify([identity, key]);
         if (fact.kind === "unknown") {
@@ -58,19 +65,50 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
             identity,
             loaded: true,
             row: fact.kind === "postimage" ? fact.value : undefined,
+            writeRevision,
           });
         }
       }
     }
     if (change.kind === "unknown" || change.kind === "committed") {
+      const writeRevision = change.kind === "committed" ? change.receipt.writeRevision : undefined;
+      const knownKeys =
+        change.kind === "committed" &&
+        change.receipt.facts.size > 0 &&
+        [...change.receipt.facts.values()].every((fact) => fact.kind !== "unknown")
+          ? [...change.receipt.facts.keys()]
+          : undefined;
+      if (knownKeys && writeRevision !== undefined) {
+        // The receipt already replaced affected keys; contiguous sibling writes preserve the rest.
+        for (const key of entries.keys()) {
+          const entry = entries.peek(key)!;
+          if (
+            entry.identity === identity &&
+            entry.writeRevision !== undefined &&
+            (entry.writeRevision === writeRevision ||
+              writeRevision === ((entry.writeRevision + 1) | 0))
+          ) {
+            entry.writeRevision = writeRevision;
+          }
+        }
+      }
       for (const key of namespaces.keys()) {
         const entry = namespaces.peek(key)!;
+        if (entry.identity !== identity) {
+          continue;
+        }
+        // Only fully described sibling writes can carry a snapshot across its next revision.
         if (
-          entry.identity === identity &&
-          (change.kind === "unknown" ||
-            [...change.receipt.facts.keys()].some((factKey) => factKey.startsWith(entry.keyPrefix)))
+          !knownKeys ||
+          writeRevision === undefined ||
+          entry.writeRevision === undefined ||
+          (writeRevision !== entry.writeRevision &&
+            writeRevision !== ((entry.writeRevision + 1) | 0)) ||
+          knownKeys.some((factKey) => factKey.startsWith(entry.keyPrefix))
         ) {
           namespaces.delete(key);
+        } else {
+          entry.writeRevision = writeRevision;
         }
       }
     }
@@ -89,8 +127,16 @@ function cacheKey(identity: string, key: Key): string {
   ]);
 }
 
-export function readPluginStateObservationCache(identity: string, key: Key) {
-  if (state.pending.has(identity)) {
+export function readPluginStateObservationCache(
+  identity: string,
+  key: Key,
+  writeRevision: number | undefined,
+) {
+  if (
+    state.pending.has(identity) ||
+    writeRevision === undefined ||
+    state.entries.peek(cacheKey(identity, key))?.writeRevision !== writeRevision
+  ) {
     return undefined;
   }
   return readCommittedPluginStateObservationCache(identity, key);
@@ -106,37 +152,50 @@ export function readCommittedPluginStateObservationCache(identity: string, key: 
   return { row: row?.expires_at != null && row.expires_at <= Date.now() ? undefined : row };
 }
 
-export function preparePluginStateObservationCacheRead(identity: string, key: Key) {
+export function preparePluginStateObservationCacheRead(
+  identity: string,
+  key: Key,
+  writeRevision: number | undefined,
+) {
   const id = cacheKey(identity, key);
   const entry: Entry = { identity, loaded: false };
   state.entries.set(id, entry);
   return (row: PluginStateReadRow | undefined) => {
     // A commit or unknown settlement while the read was in flight wins over its reply.
     if (state.entries.peek(id) === entry) {
-      state.entries.set(id, { identity, loaded: true, row });
+      state.entries.set(id, { identity, loaded: true, row, writeRevision });
     }
   };
 }
 
-export function readPluginStateEntriesCache(identity: string, key: Omit<Key, "key">) {
-  const entries = state.namespaces.get(
-    JSON.stringify([identity, key.pluginId, key.namespace]),
-  )?.entries;
+export function readPluginStateEntriesCache(
+  identity: string,
+  key: Omit<Key, "key">,
+  writeRevision: number | undefined,
+) {
+  const entry = state.namespaces.get(JSON.stringify([identity, key.pluginId, key.namespace]));
+  if (writeRevision === undefined || entry?.writeRevision !== writeRevision) {
+    return undefined;
+  }
+  const entries = entry.entries;
   if (!entries) {
     return undefined;
   }
   const now = Date.now();
-  return structuredClone(
-    entries.filter((entry) => entry.expiresAt == null || entry.expiresAt > now),
-  );
+  return structuredClone(entries.filter((row) => row.expiresAt == null || row.expiresAt > now));
 }
 
-export function preparePluginStateEntriesCacheRead(identity: string, key: Omit<Key, "key">) {
+export function preparePluginStateEntriesCacheRead(
+  identity: string,
+  key: Omit<Key, "key">,
+  writeRevision: number | undefined,
+) {
   const id = JSON.stringify([identity, key.pluginId, key.namespace]);
   const entry: NamespaceEntry = {
     identity,
     keyPrefix: `${JSON.stringify([key.pluginId, key.namespace]).slice(0, -1)},`,
     bytes: 128,
+    writeRevision,
   };
   state.namespaces.set(id, entry);
   return (entries: PluginStateEntry<unknown>[]) => {

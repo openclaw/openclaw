@@ -29,7 +29,10 @@ import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./qu
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import type { SessionEventExecution } from "./session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -50,6 +53,10 @@ export type ReplyRunVerbosity = {
 type InternalReplySessionOptions = {
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** One-shot model selection for host-owned turns; never persisted as a user preference. */
+  modelOverride?: string;
+  /** Host-owned scheduling authority retained through ordinary session execution. */
+  scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
@@ -84,9 +91,7 @@ type InternalReplySessionOptions = {
   resolveReplyDelivery?: ReplyDeliveryObserver;
   /** Distinguishes committed source-tool custody from ordinary transcript presentation. */
   resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
-  /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
-  requireExplicitMessageTarget?: boolean;
-  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
+  /** Retire the run's bundle MCP runtime at settlement for one-shot sessions. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;

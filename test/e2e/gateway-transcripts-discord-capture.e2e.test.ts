@@ -495,7 +495,6 @@ describe("Gateway admitted Discord transcript capture", () => {
             skipBootstrap: true,
             systemAgent: { agentId: "main" },
             sessionStore: { agentId: "main" },
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef, fallbacks: [] },
             models: {
               [provider.modelRef]: {

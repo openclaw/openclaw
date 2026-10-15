@@ -7,7 +7,7 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-it.for(["bounded-drain", "store-drain", "command-drain", "terminal", "wake"])(
+it.for(["bounded-drain", "store-drain", "command-drain", "terminal"])(
   "releases completed caller context while the real %s owner remains reusable",
   async (resource, { signal }) => {
     const root = fixture.createTempDir("openclaw-queue-timer-retention-");

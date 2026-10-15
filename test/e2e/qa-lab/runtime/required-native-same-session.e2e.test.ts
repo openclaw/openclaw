@@ -113,12 +113,14 @@ it.skipIf(process.platform === "win32")(
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
+    let gatewayLogs: (() => string) | undefined;
     // Observers only inspect/call through. Surface their first failed assertion
     // instead of leaving the test suspended at a later gate.
     const checkpoint = async (promise: PromiseLike<void>, message: string) => {
       try {
         return await withinTest(Promise.race([promise, observationFailure.promise]), signal);
       } catch (error) {
+        record("checkpoint-stopped", { message, gatewayLog: gatewayLogs?.().slice(-12_000) });
         if (signal.aborted) {
           throw new Error(message, { cause: error });
         }
@@ -297,6 +299,7 @@ it.skipIf(process.platform === "win32")(
             tempParentDir: root,
           },
         });
+        gatewayLogs = () => gateway.logs();
         const config = JSON.parse(await readFile(gateway.configPath, "utf8"));
         expect(config.cloudWorkers.requiredProfile).toBe("native");
         expect(config.auth).toBeUndefined();

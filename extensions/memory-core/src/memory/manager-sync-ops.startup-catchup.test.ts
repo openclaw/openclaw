@@ -150,24 +150,64 @@ describe("session startup catch-up", () => {
       entry: { sessionId, updatedAt: Date.now() },
     });
     const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
-    await appendSessionTranscriptMessageByIdentity({
-      ...identity,
-      message: {
-        role: "user",
-        content: "Scheduled internal maintenance reminder.",
-        provenance: { kind: "internal_system", sourceTool: "cron" },
-      },
-    });
-    const harness = await SessionStartupCatchupHarness.create([]);
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
-    expect(harness.isSessionsDirty()).toBe(false);
+    const appendFlags: Array<boolean | undefined> = [];
+    try {
+      const internalAppend = await appendSessionTranscriptMessageByIdentity({
+        ...identity,
+        message: {
+          role: "user",
+          content: "Scheduled internal maintenance reminder.",
+          provenance: { kind: "internal_system", sourceTool: "cron" },
+        },
+      });
+      appendFlags.push(internalAppend?.appended);
+      const harness = await SessionStartupCatchupHarness.create([]);
+      await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
+      expect(harness.isSessionsDirty()).toBe(false);
 
-    await appendSessionTranscriptMessageByIdentity({
-      ...identity,
-      message: { role: "user", content: "Remember my favorite fruit is mango." },
-    });
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([sessionKey]);
-    expect(harness.isSessionsDirty()).toBe(true);
+      const userAppend = await appendSessionTranscriptMessageByIdentity({
+        ...identity,
+        message: { role: "user", content: "Remember my favorite fruit is mango." },
+      });
+      appendFlags.push(userAppend?.appended);
+      await expect(harness.markStartupDirtyFiles()).resolves.toEqual([sessionKey]);
+      expect(harness.isSessionsDirty()).toBe(true);
+    } catch (error) {
+      try {
+        const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+        const transcript = db
+          .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+          .get(sessionId);
+        const window = db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM session_windows WHERE session_key = ? AND session_id = ?",
+          )
+          .get(sessionKey, sessionId);
+        const options = { ...identity, sessionKind: "interactive" as const, updatedAtMs: 10 };
+        const exported = await buildSessionEntry(sessionKey, options);
+        let observedMessages = 0;
+        const observed = await buildSessionEntry(sessionKey, {
+          ...options,
+          onTranscriptMessage() {
+            observedMessages += 1;
+          },
+        });
+        console.error("MEMORY_STARTUP_CATCHUP_FAILURE", {
+          appendFlags,
+          canonicalDatabase:
+            db.location() ===
+            path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+          transcriptRows: Number(transcript?.count ?? 0),
+          matchingWindows: Number(window?.count ?? 0),
+          exportedOrigins: exported?.lineProvenance.map((line) => line.originClass) ?? null,
+          observedOrigins: observed?.lineProvenance.map((line) => line.originClass) ?? null,
+          observedMessages,
+        });
+      } catch {
+        console.error("MEMORY_STARTUP_CATCHUP_FAILURE", { appendFlags, diagnosticFailed: true });
+      }
+      throw error;
+    }
   });
 
   it("prunes indexed sessions that are absent from the live corpus", async () => {

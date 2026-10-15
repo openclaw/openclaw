@@ -4,7 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
@@ -108,110 +112,120 @@ it("continues one cron user turn when the primary times out after provider dispa
         },
       },
     };
+    const previousConfig = getRuntimeConfigSnapshot();
     setRuntimeConfigSnapshot(config);
-    await persistAuthProfileBatch({
-      stateDir: state.stateDir,
-      profiles: [
-        {
-          profileId: "mock-openai:cron-fixture",
-          credential: { type: "api_key", provider: "mock-openai", key: "synthetic-cron-key" },
-        },
-      ],
-    });
-    const inferenceBinding = expectDefined(
-      await captureCronInferenceBinding({ cfg: config, agentId: "main" }),
-      "stored inference account",
-    );
-    const requests: string[] = [];
-    const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
-    const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {
-      const request = new Request(_url, options);
-      expect(request.headers.get("authorization")).toBe("Bearer synthetic-cron-key");
-      const body = JSON.parse(await request.text()) as { model: string };
-      requests.push(body.model);
-      if (body.model !== "primary") {
-        return successfulResponse(body.model);
-      }
-      const { signal } = request;
-      return await new Promise<Response>((_resolve, reject) => {
-        const abort = () => {
-          vi.useRealTimers();
-          reject(toErrorObject(signal.reason, "request aborted"));
-        };
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) {
-          abort();
-        }
-        const advance = vi.advanceTimersByTimeAsync(2_001);
-        advance.catch(reject);
-        timeoutAdvances.push(advance);
+    try {
+      await persistAuthProfileBatch({
+        stateDir: state.stateDir,
+        profiles: [
+          {
+            profileId: "mock-openai:cron-fixture",
+            credential: { type: "api_key", provider: "mock-openai", key: "synthetic-cron-key" },
+          },
+        ],
       });
-    });
-    vi.spyOn(globalThis, "fetch").mockImplementation(fetchProvider);
-
-    const running = runCronIsolatedAgentTurn({
-      cfg: config,
-      onExecutionPhase: ({ phase, model }) => {
-        if (phase === "model_call_started" && model === "primary") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const inferenceBinding = expectDefined(
+        await captureCronInferenceBinding({ cfg: config, agentId: "main" }),
+        "stored inference account",
+      );
+      const requests: string[] = [];
+      const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
+      const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {
+        const request = new Request(_url, options);
+        expect(request.headers.get("authorization")).toBe("Bearer synthetic-cron-key");
+        const body = JSON.parse(await request.text()) as { model: string };
+        requests.push(body.model);
+        if (body.model !== "primary") {
+          return successfulResponse(body.model);
         }
-      },
-      deps: {},
-      deliveryAttemptFence: null,
-      agentId: "main",
-      sessionKey: "cron:fallback-transcript",
-      message: "Reply exactly Fallback report",
-      job: {
-        id: "fallback-transcript",
-        inferenceBinding,
-        name: "Fallback transcript proof",
-        enabled: false,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply exactly Fallback report",
-          timeoutSeconds: 120,
-          toolsAllow: [],
+        const { signal } = request;
+        return await new Promise<Response>((_resolve, reject) => {
+          const abort = () => {
+            vi.useRealTimers();
+            reject(toErrorObject(signal.reason, "request aborted"));
+          };
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) {
+            abort();
+          }
+          const advance = vi.advanceTimersByTimeAsync(2_001);
+          advance.catch(reject);
+          timeoutAdvances.push(advance);
+        });
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchProvider);
+
+      const running = runCronIsolatedAgentTurn({
+        cfg: config,
+        onExecutionPhase: ({ phase, model }) => {
+          if (phase === "model_call_started" && model === "primary") {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          }
         },
-        delivery: { mode: "none" },
-        state: {},
-      },
-    });
+        deps: {},
+        deliveryAttemptFence: null,
+        agentId: "main",
+        sessionKey: "cron:fallback-transcript",
+        message: "Reply exactly Fallback report",
+        job: {
+          id: "fallback-transcript",
+          inferenceBinding,
+          name: "Fallback transcript proof",
+          enabled: false,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Reply exactly Fallback report",
+            timeoutSeconds: 120,
+            toolsAllow: [],
+          },
+          delivery: { mode: "none" },
+          state: {},
+        },
+      });
 
-    const result = await running;
-    await Promise.all(timeoutAdvances);
-    vi.useRealTimers();
+      const result = await running;
+      await Promise.all(timeoutAdvances);
+      vi.useRealTimers();
 
-    expect(result, JSON.stringify({ result, requests })).toMatchObject({
-      status: "ok",
-      outputText: "Fallback report",
-    });
-    expect(requests).toEqual(["primary", "backup"]);
-    const messages = await readTranscriptMessages({
-      sessionId: result.sessionId!,
-      sessionKey: result.sessionKey!,
-      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-    });
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(messages.map(readModelFallbackNotice).filter(Boolean)).toMatchObject([
-      {
-        kind: "model-fallback",
-        fromModel: "mock-openai/primary",
-        toModel: "mock-openai/backup",
-        reason: "timeout",
-      },
-    ]);
-    expect(
-      messages.filter(
-        (message) =>
-          message.role === "assistant" &&
-          message.stopReason === "stop" &&
-          !readModelFallbackNotice(message),
-      ),
-    ).toHaveLength(1);
+      expect(result, JSON.stringify({ result, requests })).toMatchObject({
+        status: "ok",
+        outputText: "Fallback report",
+      });
+      expect(requests).toEqual(["primary", "backup"]);
+      const messages = await readTranscriptMessages({
+        sessionId: result.sessionId!,
+        sessionKey: result.sessionKey!,
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      });
+      expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+      expect(messages.map(readModelFallbackNotice).filter(Boolean)).toMatchObject([
+        {
+          kind: "model-fallback",
+          fromModel: "mock-openai/primary",
+          toModel: "mock-openai/backup",
+          reason: "timeout",
+        },
+      ]);
+      expect(
+        messages.filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.stopReason === "stop" &&
+            !readModelFallbackNotice(message),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
   });
 });

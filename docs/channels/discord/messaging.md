@@ -21,7 +21,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
-- Text-only cron/heartbeat announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
+- Text-only automation announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
 - A send response without a Discord message ID stays unconfirmed. Queued delivery records the missing identity for recovery instead of reporting success or immediately sending a duplicate; inspect delivery warnings with `openclaw health --verbose`.
 
 Messages in the same channel continue reaching the [reply queue](/concepts/queue) while an earlier message waits for its turn. Discord messages use durable ingress admission, so `collect` keeps queued messages as separate followup turns, like `followup`. This prevents one message from committing before another rejects a combined turn. Deferring a message preserves its durable recovery state.

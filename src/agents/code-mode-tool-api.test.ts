@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { expect, it } from "vitest";
 import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
@@ -27,6 +27,13 @@ it("preserves extended action results within the shared declaration allowance", 
         ),
         warn: Type.Object({ ...fields, warning: Type.String() }, { additionalProperties: false }),
         numeric: Type.Object({ ...fields, id: Type.Number() }, { additionalProperties: false }),
+        wrapped: Type.Union([
+          Type.Object(
+            { ...structuredClone(fields), warning: Type.Optional(Type.String()) },
+            { additionalProperties: false },
+          ),
+          Type.Literal(false),
+        ]),
       },
     }),
   });
@@ -44,6 +51,11 @@ async function consume() {
   updated.warning.toUpperCase();
   const warned = await records({ action: "warn" });
   const warning: string = warned.warning;
+  const wrapped = await records({ action: "wrapped" });
+  if (wrapped !== false) {
+    const wrappedId: string = wrapped.id;
+    const wrappedWarning: string | undefined = wrapped.warning;
+  }
   const numeric = await records({ action: "numeric" });
   const numericId: number = numeric.id;
   // @ts-expect-error The alternate result changes the inherited field type.
@@ -93,4 +105,35 @@ async function consume() {
 }`,
     }),
   ).toEqual([]);
+});
+
+it("keeps bounded unknown leaves when a union adds another schema depth", async () => {
+  let branch: TSchema = Type.String();
+  for (let depth = 0; depth < 10; depth += 1) {
+    branch = Type.Object({ child: branch }, { additionalProperties: false });
+  }
+  const file = await createCodeModeToolApiFile("bounded", {
+    source: "openclaw",
+    parameters: Type.Object({ action: Type.String() }),
+    outputSchema: defineToolOutputSchema({
+      inputProperty: "action",
+      variants: {
+        direct: branch,
+        nested: Type.Union([structuredClone(branch), Type.Literal(false)]),
+      },
+    }),
+  });
+  const leaf = ".child".repeat(10);
+  const diagnostics = typeCheckSources({
+    "/bounded-consumer.ts": `${file.content}
+async function consume() {
+  const direct = await bounded({ action: "direct" });
+  const known: string = direct${leaf};
+  const nested = await bounded({ action: "nested" });
+  if (nested !== false) {
+    const stillUnknown: string = nested${leaf};
+  }
+}`,
+  });
+  expect(diagnostics.map((entry) => entry.code)).toEqual([2322]);
 });

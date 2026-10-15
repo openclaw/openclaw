@@ -33,7 +33,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
     expect(recovery.kind).toBe("retry");
@@ -87,7 +86,6 @@ describe("resolveStrandedReplyRecovery", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         sendPolicyDenied: false,
         successfulSourceReplyDelivery: false,
-        isHeartbeat: false,
         isRoomEvent: false,
       });
 
@@ -116,7 +114,6 @@ describe("resolveStrandedReplyRecovery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
 
@@ -144,7 +141,6 @@ describe("resolveStrandedReplyRecovery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
 
@@ -167,7 +163,6 @@ describe("resolveStrandedReplyRecovery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
 
@@ -176,7 +171,6 @@ describe("resolveStrandedReplyRecovery", () => {
 
   it.each([
     { label: "room events", isRoomEvent: true },
-    { label: "heartbeats", isHeartbeat: true },
     { label: "send-policy denial", sendPolicyDenied: true },
     { label: "completed delivery", successfulSourceReplyDelivery: true },
   ])("does not recover $label", (override) => {
@@ -189,7 +183,6 @@ describe("resolveStrandedReplyRecovery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
       ...override,
     });

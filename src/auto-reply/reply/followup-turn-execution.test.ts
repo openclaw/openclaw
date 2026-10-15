@@ -13,7 +13,6 @@ import {
 } from "./followup-turn-execution.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
@@ -133,8 +132,8 @@ describe("executeFollowupTurn", () => {
       },
     });
 
-    expect(receipts.map(resolveReplyOperationAgentTurn)).toEqual(["failed", "failed"]);
-    expect(resolveReplyOperationAgentTurn(newerReceipt)).toBeUndefined();
+    expect(receipts.map((receipt) => receipt.agentTurn)).toEqual(["failed", "failed"]);
+    expect(newerReceipt.agentTurn).toBeUndefined();
     expect(state.execute).not.toHaveBeenCalled();
   });
 
@@ -697,7 +696,7 @@ describe("executeFollowupTurn lifecycle", () => {
           : { text: "NO_REPLY" },
       });
       expect(fail).toHaveBeenCalledWith("run_failed", failure);
-      expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");
+      expect(receipt.agentTurn).toBe("failed");
     },
   );
 

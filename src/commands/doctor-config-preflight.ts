@@ -56,7 +56,10 @@ export async function runDoctorConfigPreflight(
   await using snapshots = createConfigPreflightSnapshotReader();
   let result: DoctorConfigPreflightResult;
   // Reuse child imports for this state operation; every read still acquires fresh admission.
-  if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
+  if (
+    options.migrateState !== false &&
+    (options.doctorOnlyStateMigrations === true || options.automaticHeartbeatRepair)
+  ) {
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
     result = await withSqliteReadOnlyWorkerScope(() =>
       runDoctorConfigPreflightOperation(options, snapshots),
@@ -91,6 +94,7 @@ async function runDoctorConfigPreflightOperation(
     noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
   );
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
+  let heartbeatMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
   let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
@@ -347,12 +351,46 @@ async function runDoctorConfigPreflightOperation(
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
   }
+  const automaticHeartbeatRepair = options.automaticHeartbeatRepair;
+  if (automaticHeartbeatRepair) {
+    const { commitAutomaticHeartbeatRepair } =
+      await import("./doctor-automatic-heartbeat-repair.js");
+    const changes = await measurePreflightStep("automatic-heartbeat-config-repair", () =>
+      pluginMetadata.run({ config: snapshot.sourceConfig }, () =>
+        commitAutomaticHeartbeatRepair(automaticHeartbeatRepair, snapshot),
+      ),
+    );
+    noteDoctorMigrationResult({ changes, warnings: [] });
+    configSnapshotRead = await readConfigSnapshotForPreflight(false);
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
+  }
   if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+    const repair = automaticConfigRepair;
     await measurePreflightStep("automatic-config-repair", () =>
-      pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
-        commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
+      pluginMetadata.run({ config: repair.config }, () =>
+        commitAutomaticConfigRepair(
+          repair,
+          snapshot,
+          options.doctorOnlyStateMigrations === true
+            ? async (currentSnapshot) => {
+                // Roster promotion must see canonical jobs, including implicit monitors
+                // written by a published Gateway without authored heartbeat settings.
+                const { retireHeartbeatWithDoctor } =
+                  await import("./doctor-heartbeat-retirement.js");
+                const { normalizeHeartbeatRepairSource } =
+                  await import("./doctor-automatic-heartbeat-repair.js");
+                const source = normalizeHeartbeatRepairSource(currentSnapshot).sourceConfig;
+                await measurePreflightStep("heartbeat-retirement", () =>
+                  retireHeartbeatWithDoctor(source),
+                );
+                heartbeatMigrationSource = source;
+              }
+            : undefined,
+        ),
       ),
     );
     note(
@@ -371,6 +409,7 @@ async function runDoctorConfigPreflightOperation(
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),
     ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
+    ...(heartbeatMigrationSource ? { heartbeatMigrationSource } : {}),
     ...(configSnapshotRead.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }
       : {}),

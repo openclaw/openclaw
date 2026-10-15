@@ -1,4 +1,4 @@
-// Unit coverage for the active-job accounting the heartbeat busy guard depends on.
+// Unit coverage for active-job accounting and execution authority.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,8 +14,7 @@ import {
   bindCronSelfRemovalCommitGuard,
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
-  hasActiveCronJobs,
-  hasActiveCronJobsExceptMarkers,
+  getActiveCronJobCount,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
@@ -28,47 +27,6 @@ import { prepareCronRunAdmission } from "./run-admission.js";
 
 afterEach(() => {
   resetCronActiveJobs();
-});
-
-describe("hasActiveCronJobsExceptMarkers", () => {
-  it("discounts only the named job's own marker", () => {
-    const marker = markCronJobActive("nightly-report");
-
-    expect(hasActiveCronJobs()).toBe(true);
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(false);
-  });
-
-  it("still reports busy while an unrelated job is active", () => {
-    const marker = markCronJobActive("nightly-report");
-    markCronJobActive("different-job");
-
-    // The owning job must not be waved through while another run holds a marker:
-    // Cron executes jobs up to the built-in concurrency limit.
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(true);
-  });
-
-  it("discounts every exact coalesced owner", () => {
-    const first = markCronJobActive("first-report");
-    const second = markCronJobActive("second-report");
-
-    expect(hasActiveCronJobsExceptMarkers([first!, second!])).toBe(false);
-  });
-
-  it("reports idle once the unrelated job clears", () => {
-    const marker = markCronJobActive("nightly-report");
-    const otherMarker = markCronJobActive("different-job");
-    clearCronJobActive("different-job", otherMarker);
-
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(false);
-  });
-
-  it("does not discount a replacement marker with the same job id", () => {
-    const staleMarker = markCronJobActive("nightly-report");
-    const replacementMarker = markCronJobActive("nightly-report");
-
-    expect(hasActiveCronJobsExceptMarkers([staleMarker!])).toBe(true);
-    expect(hasActiveCronJobsExceptMarkers([replacementMarker!])).toBe(false);
-  });
 });
 
 describe("cron message action authority", () => {
@@ -214,7 +172,7 @@ describe("cron message action authority", () => {
         });
         expect(assertReplacementCurrent).toBeTypeOf("function");
         expect(assertReplacementCurrent).toThrow();
-        expect(hasActiveCronJobs()).toBe(true);
+        expect(getActiveCronJobCount()).toBe(1);
       } finally {
         first.close();
         replacement.close();
@@ -316,7 +274,7 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
         expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
         expect(currentMarker.jobRemoved).toBe(true);
         expect(assertMessageCurrent).toThrow();
-        expect(hasActiveCronJobs()).toBe(true);
+        expect(getActiveCronJobCount()).toBe(1);
         if (scenario === "active owner") {
           expect(cancel).not.toHaveBeenCalled();
         } else {
@@ -355,7 +313,7 @@ describe("active cron schedule ownership", () => {
       kind: "requested",
       reason: "Cron job removed by operator.",
     });
-    expect(hasActiveCronJobs()).toBe(true);
+    expect(getActiveCronJobCount()).toBe(1);
   });
 
   it("does not mistake an ordinary schedule edit for job removal", () => {
@@ -370,7 +328,7 @@ describe("active cron schedule ownership", () => {
   it("does not create active markers when removing an idle job", () => {
     noteActiveCronJobRemoval("idle-removed-job");
 
-    expect(hasActiveCronJobs()).toBe(false);
+    expect(getActiveCronJobCount()).toBe(0);
   });
 
   it("records trigger mutations without retiring schedule ownership", () => {
@@ -385,7 +343,7 @@ describe("active cron schedule ownership", () => {
   it("does not create trigger markers for an idle job", () => {
     noteActiveCronJobTriggerMutation("idle-trigger-job");
 
-    expect(hasActiveCronJobs()).toBe(false);
+    expect(getActiveCronJobCount()).toBe(0);
   });
 
   it("attributes later edits only to the replacement active run", () => {
@@ -402,7 +360,7 @@ describe("active cron schedule ownership", () => {
   it("does not create ownership markers for jobs without an active run", () => {
     noteActiveCronJobScheduleMutation("idle-job");
 
-    expect(hasActiveCronJobs()).toBe(false);
+    expect(getActiveCronJobCount()).toBe(0);
   });
 
   it("keeps schedule ownership isolated across concurrent active jobs", () => {

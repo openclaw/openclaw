@@ -13,6 +13,7 @@ import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-c
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -82,7 +83,9 @@ function seedStoppedWalDatabase(filename: string, sql: string): void {
   }
   // Preserve a stopped writer's WAL family, including uncheckpointed schema and row changes.
   for (const artifact of family) {
-    fs.writeFileSync(artifact.filename, artifact.bytes);
+    const replacement = `${artifact.filename}.previous-process`;
+    fs.writeFileSync(replacement, artifact.bytes);
+    fs.renameSync(replacement, artifact.filename);
   }
 }
 
@@ -289,6 +292,9 @@ it.each([
             }),
           ]),
         );
+        // Pending cron and delivery migrations do not change the canonical registry.
+        expect(await inspectOpenClawRegisteredAgentDatabases({ env: state.env })).toEqual([]);
+        expect(snapshotSqliteFiles(state.stateDir)).toEqual(before);
       },
     );
   },

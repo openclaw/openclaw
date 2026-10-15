@@ -64,7 +64,6 @@ async function withCronStore(
         defaultAgentId: options.defaultAgentId ?? "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       try {

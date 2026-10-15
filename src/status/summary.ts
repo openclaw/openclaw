@@ -1,7 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
@@ -12,6 +10,7 @@ import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -20,12 +19,15 @@ import {
   type SessionEntry,
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { CronJob } from "../cron/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
-import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
-import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummarySnapshot,
+} from "../infra/heartbeat-summary-snapshot.js";
+import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -348,70 +350,47 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent route inputs:
-  // outside it every resolveAgentConfig re-walks the roster and
-  // a large fleet stalls the loop for the whole projection (#137570).
-  const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
-    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
-      cfg,
-      agentList.agents.map((agent) => agent.id),
-    );
-    return agentList.agents.map((agent, index) => {
-      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
-      let routeTarget:
-        | {
-            storePath: string;
-            sessionKey: string;
-            target: "last" | "owner";
-            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
-          }
-        | undefined;
-      if (
-        summary.enabled &&
-        !agent.admissionRefusal &&
-        (summary.target === "last" || summary.target === "owner")
-      ) {
-        const heartbeatSession = resolveHeartbeatSessionKey(
-          cfg,
-          agent.id,
-          summary.session === undefined ? undefined : { session: summary.session },
-        );
-        // Only these enabled targets consume the session route. Keep the probe
-        // read-only so status cannot create, register, or migrate an absent store.
-        routeTarget = {
-          storePath: heartbeatSession.storePath,
-          sessionKey: heartbeatSession.sessionKey,
-          target: summary.target,
-          heartbeat: {
-            ...cfg.agents?.defaults?.heartbeat,
-            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-          },
-        };
-      }
-      const status: HeartbeatStatus = {
-        agentId: agent.id,
-        enabled: summary.enabled && !agent.admissionRefusal,
-        every: summary.every,
-        everyMs: summary.everyMs,
-        waitingForRoute: false,
-      };
-      return { status, routeTarget };
-    });
-  });
+  const heartbeatJobs = new Map<string | undefined, CronJob>();
+  for (const job of await readHeartbeatSummarySnapshot(cfg)) {
+    if (!heartbeatJobs.has(job.agentId)) {
+      heartbeatJobs.set(job.agentId, job);
+    }
+  }
+  // Prepare the fleet once; the read-only legacy projection follows the converted jobs.
+  const heartbeatInputs = withAgentRosterFactsBatch(cfg, () =>
+    agentList.agents.map((agent) => {
+      const summary = projectHeartbeatSummary(heartbeatJobs.get(agent.id));
+      const enabled = summary.enabled && !agent.admissionRefusal;
+      const session =
+        enabled && (summary.target === "last" || summary.target === "owner")
+          ? {
+              sessionKey:
+                summary.session ??
+                resolveCanonicalMainSessionKey({
+                  agentId: agent.id,
+                  mainKey: cfg.session?.mainKey,
+                  sessionScope: cfg.session?.scope,
+                }),
+              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
+            }
+          : undefined;
+      return { agentId: agent.id, summary, enabled, session };
+    }),
+  );
   const heartbeatStores = new Map<
     string,
     { agentId: string; storePath: string; sessionKeys: string[] }
   >();
-  for (const { status, routeTarget } of heartbeatInputs) {
-    if (!routeTarget) {
+  for (const { agentId, session } of heartbeatInputs) {
+    if (!session) {
       continue;
     }
-    let store = heartbeatStores.get(routeTarget.storePath);
+    let store = heartbeatStores.get(session.storePath);
     if (!store) {
-      store = { agentId: status.agentId, storePath: routeTarget.storePath, sessionKeys: [] };
-      heartbeatStores.set(routeTarget.storePath, store);
+      store = { agentId, storePath: session.storePath, sessionKeys: [] };
+      heartbeatStores.set(session.storePath, store);
     }
-    store.sessionKeys.push(routeTarget.sessionKey);
+    store.sessionKeys.push(session.sessionKey);
   }
   const heartbeatStoreInputs = [...heartbeatStores.values()];
   const heartbeatEntries = heartbeatStoreInputs.length
@@ -438,22 +417,28 @@ export async function getStatusSummary(
       )
     : new Map<string, SessionEntry>();
   const heartbeatAgents: HeartbeatStatus[] = [];
-  for (const { status, routeTarget } of heartbeatInputs) {
-    if (routeTarget) {
-      const entry = heartbeatEntries.get(`${routeTarget.storePath}\0${routeTarget.sessionKey}`);
-      if (routeTarget.target === "last") {
-        const route = deliveryContextFromSession(entry);
-        status.waitingForRoute = !(route?.channel && route.to);
-      } else {
-        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
-          cfg,
-          agentId: status.agentId,
-          entry,
-          heartbeat: routeTarget.heartbeat,
-        }));
-      }
+  for (const { agentId, summary, enabled, session } of heartbeatInputs) {
+    let waitingForRoute = false;
+    if (session) {
+      const entry = heartbeatEntries.get(`${session.storePath}\0${session.sessionKey}`);
+      const route = deliveryContextFromSession(entry);
+      waitingForRoute =
+        summary.target === "last"
+          ? !(route?.channel && route.to)
+          : !(await hasResolvableProactiveOwnerRoute({
+              cfg,
+              agentId,
+              entry,
+              policy: summary.deliveryPolicy,
+            }));
     }
-    heartbeatAgents.push(status);
+    heartbeatAgents.push({
+      agentId,
+      enabled,
+      every: summary.every,
+      everyMs: summary.everyMs,
+      waitingForRoute,
+    });
   }
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>

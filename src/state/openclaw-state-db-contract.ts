@@ -6,6 +6,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
 // v22 promotes ACP resume keys and explicit portable cursor identities.
+// v23 fences ordinary automation timing and delivery policies from older schedulers.
 // v21 derives meeting transcript selectors and bounded delivery retention columns.
 // v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
@@ -23,7 +24,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 22;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 23;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -165,6 +166,8 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "GitHub publication receipts → original requesting authority",
   "portable-identity-columns-v22": "ACP resume keys and receipt cursors → portable columns",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
+  "automation-policy-fence-v23":
+    "Heartbeat monitors → ordinary automation timing and delivery policy fence",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

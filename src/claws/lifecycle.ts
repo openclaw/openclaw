@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
@@ -15,6 +16,7 @@ import {
 } from "./application-plan.js";
 import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { planPortableHeartbeat } from "./portable-heartbeat.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -167,6 +169,7 @@ export async function buildClawAddPlan(params: {
     context.sourceReferenceRoot ? sourceReferencePath(context.sourceReferenceRoot, path) : fallback;
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
+  const diagnostics: ClawDiagnostic[] = [...(params.diagnostics ?? [])];
   const actions: ClawAddPlanAction[] = [];
   const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
@@ -186,9 +189,10 @@ export async function buildClawAddPlan(params: {
   const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
     ? openClawAgentSettings
     : materializeClawToolProfile(openClawAgentSettings);
+  const { heartbeat: _portableHeartbeat, ...runtimeAgentSettings } = persistedOpenClawAgentSettings;
   const agentConfig: ClawAddPlan["agent"]["config"] = {
     ...params.manifest.agent,
-    ...persistedOpenClawAgentSettings,
+    ...runtimeAgentSettings,
     id: finalId,
     workspace,
   };
@@ -391,6 +395,22 @@ export async function buildClawAddPlan(params: {
           maxBytes: MAX_MANAGED_FILE_BYTES,
           symlinks: "reject",
         });
+        if (pending.action.id === "HEARTBEAT.md") {
+          const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            read.buffer,
+          );
+          assertCronJobScratchContent(content);
+          if (/\b(?:heartbeat_respond|HEARTBEAT_OK)\b/.test(content)) {
+            diagnostics.push({
+              level: "warning",
+              phase: "plan",
+              code: "obsolete_heartbeat_instructions",
+              path: pending.manifestPath,
+              message:
+                "HEARTBEAT.md mentions retired heartbeat tools/tokens. Its bytes are preserved; review the instructions for ordinary automation tools and NO_REPLY.",
+            });
+          }
+        }
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestClawBytes(read.buffer);
       } catch (error) {
@@ -401,6 +421,27 @@ export async function buildClawAddPlan(params: {
         blockers.push(diagnostic);
       }
     }
+  }
+
+  const portableAction = planPortableHeartbeat(
+    actions,
+    params.openClawProfile?.agent.heartbeat,
+    finalId,
+  );
+  if (portableAction) {
+    capabilityChanges.push(
+      clawAddCapabilityChange({
+        kind: "cronJob",
+        id: portableAction.id,
+        path: "agent.heartbeat",
+        action: "schedule",
+        reason: portableAction.reason!,
+        effect: {
+          heartbeat: portableAction.details?.heartbeat,
+          scratchDigest: portableAction.digest,
+        },
+      }),
+    );
   }
 
   for (const [index, pkg] of params.manifest.packages.entries()) {
@@ -643,6 +684,6 @@ export async function buildClawAddPlan(params: {
     },
     extensions,
     blockers,
-    diagnostics: [...(params.diagnostics ?? []), ...notices],
+    diagnostics: [...diagnostics, ...notices],
   };
 }

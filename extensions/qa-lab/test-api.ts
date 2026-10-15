@@ -31,3 +31,4 @@ export {
   qaMaturityTaxonomyIdentity,
   readQaMaturityTaxonomySource,
 } from "./src/scorecard-taxonomy.js";
+export { isInternalRuntimeContextCarrierText } from "./src/providers/shared/runtime-context.js";

@@ -251,7 +251,18 @@ it("lists off-page controller links and deleted-collector totals while a sibling
           await runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
             worker.execute({ type: "pluginState.lookup", input: key }),
           ),
-        ).toEqual({ ok: true, value: true });
+        ).toEqual({
+          ok: true,
+          value: true,
+          readRows: [
+            {
+              entry_key: key.key,
+              value_json: "true",
+              created_at: expect.any(Number),
+              expires_at: null,
+            },
+          ],
+        });
       } finally {
         getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();

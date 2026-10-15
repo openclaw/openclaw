@@ -43,8 +43,8 @@ describe("prepared reply conversation", () => {
   it.each([
     { name: "matching exec", input: current, inherits: true },
     {
-      name: "heartbeat without a current route",
-      input: { InternalTurnSource: "heartbeat" },
+      name: "event without a current route",
+      input: { InternalTurnSource: "event" },
       inherits: true,
     },
     { name: "cron without a current route", input: { InternalTurnSource: "cron" }, inherits: true },

@@ -6,11 +6,18 @@ const enDebug = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle:
-      "Refresh to update status and health snapshots. Heartbeat data updates live.",
+      "Refresh to update status and health snapshots. Scheduler data updates live.",
     offlineSnapshots: "Connect to the Gateway to refresh diagnostics.",
     status: "Status",
     health: "Health",
-    lastHeartbeat: "Last heartbeat",
+    automations: "Automations",
+    automationsSubtitle:
+      "Gateway-wide scheduler. Job totals include disabled jobs. Inspect individual jobs and run history on the Automations page.",
+    automationsSummary: "Scheduler {state} · {count} total jobs · Next wake: {next}",
+    noWakeScheduled: "none scheduled",
+    rawProtocolTitle: "Raw protocol inspection",
+    rawProtocolSubtitle:
+      "Raw Gateway status and health snapshots retained for protocol diagnostics.",
     security: {
       audit: "Security audit",
       critical: "{count} critical",
@@ -55,6 +62,8 @@ const enDebug = {
       status: en.debug.overlay.status,
       activeRuns: en.debug.overlay.activeRuns,
       events: en.debug.overlay.events,
+      eventJob: "Job {id}",
+      eventRun: "Run {id}",
       cpu: en.debug.overlay.cpu,
       memory: en.debug.overlay.memory,
       ping: "Ping",

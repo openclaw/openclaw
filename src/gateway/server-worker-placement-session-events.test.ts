@@ -196,6 +196,7 @@ describe("worker placement session events", () => {
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
           subscribeChanges: () => () => {},
+          registerTurnClaimClosedHandler: () => () => {},
           workspaceResultInstanceId: () => "gateway-test",
           getAsync: async () => undefined,
           getManyAsync: async () => new Map(),
@@ -274,6 +275,7 @@ describe("worker placement session events", () => {
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         subscribeChanges: () => () => {},
+        registerTurnClaimClosedHandler: () => () => {},
         workspaceResultInstanceId: () => "gateway-test",
         getAsync: async () => undefined,
         getManyAsync: async () => new Map(),

@@ -132,9 +132,11 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     registerAgentRunContext("test-session-id", { sessionKey, verboseLevel: "off" });
     const expectedContext = { ...getAgentRunContext("test-session-id") };
     const onExecutionStarted = vi.fn();
+    const onExecutionPhase = vi.fn();
     let invocationRunId = "";
     runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
       invocationRunId = expectCronInvocationContext(runParams);
+      runParams.onExecutionPhase?.({ phase: "model_call_started" });
       await runParams.onExecutionStarted?.();
       return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
     });
@@ -142,12 +144,16 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
       const result = await runCronIsolatedAgentTurn({
         ...makeParams("current"),
         onExecutionStarted,
+        onExecutionPhase,
       });
       expect(result).toMatchObject({ status: "ok" });
       expect(invocationRunId).not.toBe("");
       expect(getAgentRunContext(invocationRunId)).toBeUndefined();
       expect(getAgentRunContext("test-session-id")).toEqual(expectedContext);
       expect(cronSession.store).toEqual({});
+      expect(onExecutionPhase).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: invocationRunId, phase: "model_call_started" }),
+      );
       expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
       );

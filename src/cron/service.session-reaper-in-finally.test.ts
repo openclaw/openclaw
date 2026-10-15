@@ -53,7 +53,7 @@ async function fixture(jobs: CronJob[] = [], deps: Partial<CronServiceDeps> = {}
     log,
     nowMs: () => baseNow,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     defaultAgentId: "main",
     sessionStorePath,

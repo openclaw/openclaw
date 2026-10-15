@@ -117,15 +117,18 @@ where to run the Gateway see
   </Accordion>
 
   <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
-    | Skip reason | Meaning |
+    Former heartbeat monitors are ordinary automation jobs after migration.
+    Inspect `openclaw automations show <job-id>` and the job's run history:
+
+    | Policy | Meaning |
     | --- | --- |
-    | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist markup |
-    | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
+    | `activeHours` | The occurrence is outside the configured execution window |
+    | `idleOnly` | Foreground work has priority |
+    | `payload.skipIfScratchEmpty` | Stored scratch has only blank, comment, header, fence, or empty-checklist markup; missing scratch still runs |
 
-    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
+    Run `openclaw doctor --fix` to convert supported July 2026 and later heartbeat settings and checklists. Migrated jobs use ordinary delivery: a missing route no longer skips execution, and repeated updates can be delivered.
 
-    Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
+    Docs: [Heartbeat migration](/gateway/heartbeat), [Automation](/automation).
 
   </Accordion>
 

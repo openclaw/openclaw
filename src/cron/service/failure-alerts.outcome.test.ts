@@ -98,11 +98,8 @@ describe("cron failure alert outcome write-back", () => {
       });
       if (initialOwner) {
         expect(settlement).toMatchObject({ status: "fulfilled" });
-        expect(state.deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+        expect(state.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.any(String),
-          expect.objectContaining({ agentId: "alpha" }),
-        );
-        expect(state.deps.requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ agentId: "alpha" }),
         );
       } else {
@@ -110,8 +107,7 @@ describe("cron failure alert outcome write-back", () => {
           status: "rejected",
           reason: new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE),
         });
-        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       }
     },
   );
@@ -171,17 +167,11 @@ describe("cron failure alert outcome write-back", () => {
           lastFailureNotificationDelivered: true,
           lastFailureNotificationDeliveryStatus: "delivered",
         });
-        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       } else {
         expect(send).not.toHaveBeenCalled();
-        expect(state.deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+        expect(state.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining('Automation "alert-owned-without-default" failed 1 times'),
-          expect.objectContaining({
-            agentId: "session-owner",
-            sessionKey: "agent:session-owner:main",
-          }),
-        );
-        expect(state.deps.requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             agentId: "session-owner",
             sessionKey: "agent:session-owner:main",
@@ -309,7 +299,7 @@ describe("cron failure alert outcome write-back", () => {
               }
             : { lastFailureNotificationDeliveryStatus: "unknown" },
         );
-        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       }
     },
   );
@@ -352,7 +342,7 @@ describe("cron failure alert outcome write-back", () => {
       expect(durable?.lastFailureNotificationDeliveryStatus).toBe("unknown");
       expect(durable?.lastFailureNotificationDelivered).toBeUndefined();
       expect(durable?.lastFailureNotificationDeliveryError).toBeUndefined();
-      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_outcome_write;");
     }

@@ -32,7 +32,6 @@ async function invoke(params: Record<string, unknown>, jobs: CronJob[] = []) {
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   vi.spyOn(cron, "list").mockResolvedValue(jobs);

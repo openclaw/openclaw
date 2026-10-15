@@ -13,7 +13,6 @@ Dreaming is the background memory consolidation system in `memory-core`. It move
 <Note>
 Dreaming is enabled by default. Set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
-Disabled dreaming does not inspect heartbeat system-event queues.
 </Note>
 
 When the cron scheduler is disabled (`cron.enabled: false` or

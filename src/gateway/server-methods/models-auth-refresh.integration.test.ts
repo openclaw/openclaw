@@ -156,6 +156,7 @@ describe("models.authRefresh", () => {
       for (const resolved of [state.home, resolveStateDir(), resolveConfigPath()]) {
         expect(isPathInside(state.root, resolved)).toBe(true);
       }
+      await state.writeAuthProfiles({ version: 1, profiles: {} });
       const { client, server, port } = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,

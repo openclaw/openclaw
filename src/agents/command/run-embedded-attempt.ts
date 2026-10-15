@@ -25,7 +25,6 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { buildRunEntryTerminal } from "../embedded-agent-runner/run-entry-terminal.js";
 import {
   runEmbeddedAgentEntry,
@@ -510,9 +509,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
-              preserveCliSessionBinding:
-                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
-                params.preserveUserFacingSessionModelState,
+              preserveCliSessionBinding: params.preserveUserFacingSessionModelState,
               resolvedThinkLevel: candidateThinkLevel,
               thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
               fastMode,

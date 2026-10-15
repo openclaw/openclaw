@@ -184,6 +184,9 @@ export function createSessionLifecyclePublisher(
               agentId,
               event: {
                 ...event,
+                // These private owner fields are non-enumerable on agent events.
+                lifecycleGeneration: event.lifecycleGeneration,
+                contextClaimId: event.contextClaimId,
                 ...(clientRunId !== event.runId ? { clientRunId } : {}),
               },
             })

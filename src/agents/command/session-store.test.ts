@@ -625,7 +625,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("preserves the visible runtime model during a heartbeat using another model", async () => {
+  it("preserves the visible runtime model during an automation using another model", async () => {
     await withSession(async ({ seed, update, read, sessionStore }) => {
       const visible = {
         modelProvider: "anthropic",
@@ -651,7 +651,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           model: "claude-sonnet-4-6",
           agentHarnessId: "codex",
           contextTokens: 128_000,
-          cliSessionBinding: { sessionId: "heartbeat-cli-session" },
+          cliSessionBinding: { sessionId: "automation-cli-session" },
           contextBudgetStatus: contextBudgetStatus({ provider: "ollama", model: "llama3.2:1b" }),
         }),
       });

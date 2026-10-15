@@ -296,22 +296,31 @@ async function emitSlackModalLifecycleEvent(params: {
       })
     : undefined;
 
-  enqueueSlackInteractionEvent({ ...eventPayload, ...pluginEventFields }, sessionRouting, {
-    contextKey: [
-      isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
-      params.teamId,
-      callbackId,
-      viewId,
-      userId,
-    ]
-      .filter(Boolean)
-      .join(":"),
-    deliveryContext: {
-      channel: "slack",
-      ...(deferredTarget ? { to: deferredTarget.target } : {}),
-      accountId: params.ctx.accountId,
+  enqueueSlackInteractionEvent(
+    { ...eventPayload, ...pluginEventFields },
+    sessionRouting,
+    {
+      contextKey: [
+        isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
+        params.teamId,
+        callbackId,
+        viewId,
+        userId,
+      ]
+        .filter(Boolean)
+        .join(":"),
+      ...(deferredTarget
+        ? {
+            deliveryContext: {
+              channel: "slack",
+              to: deferredTarget.target,
+              accountId: params.ctx.accountId,
+            },
+          }
+        : {}),
     },
-  });
+    params.ctx.runtime.log,
+  );
 }
 
 export function registerModalLifecycleHandler(params: {

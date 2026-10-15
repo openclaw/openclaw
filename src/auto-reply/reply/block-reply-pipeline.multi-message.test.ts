@@ -90,7 +90,6 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
       const finalPayload = blockFor("Same answer", 1);
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [finalPayload],
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: true,
         blockReplyPipeline: pipeline,
@@ -124,7 +123,6 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
     await pipeline.flush({ force: true });
     const { replyPayloads } = await buildReplyPayloads({
       payloads: [setReplyPayloadMetadata({ text: "Done." }, { assistantMessageIndex: 1 })],
-      isHeartbeat: false,
       didLogHeartbeatStrip: false,
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,

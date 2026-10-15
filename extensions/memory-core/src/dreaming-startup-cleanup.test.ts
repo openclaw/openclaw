@@ -179,6 +179,7 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("reclaims every stale dreaming phase without touching active, unrelated, or other-agent sessions", async () => {
     const now = Date.now();
+    const gateway = createGateway();
     const stale = await Promise.all(
       ["light", "rem", "deep", "consolidation"].map((phase) =>
         seedSession({
@@ -214,8 +215,6 @@ describe("dreaming gateway restart cleanup", () => {
       updatedAt: now - ORPHAN_AGE_MS - 1,
       transcriptAt: now - ORPHAN_AGE_MS - 1,
     });
-    const gateway = createGateway();
-
     await gateway.start();
 
     expect(stale.map(hasSession)).toEqual([false, false, false, false]);
@@ -228,13 +227,12 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("does not reclaim post-startup runs when the deferred cleanup callback runs late", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
+    const gateway = createGateway();
     const interruptedAtStartup = await seedSession({
       suffix: "dreaming-narrative-deep-interrupted",
       updatedAt: Date.now() - 1,
       transcriptAt: Date.now() - 1,
     });
-    const gateway = createGateway();
-
     await gateway.start();
     const postStartupUpdatedAt = Date.now();
     const activeWithTranscript = await seedSession({
@@ -260,13 +258,13 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("does not reclaim post-startup runs when cron startup reconciliation stalls", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
+    const gateway = createGateway();
     const staleAtStartup = await seedSession({
       suffix: "dreaming-narrative-deep-interrupted",
       updatedAt: Date.now() - ORPHAN_AGE_MS - 1,
     });
     const postStartupSessions: Array<{ agentId: string; sessionKey: string }> = [];
     let postStartupUpdatedAt = 0;
-    const gateway = createGateway();
     gateway.cron.list.mockImplementationOnce(async () => {
       await vi.advanceTimersByTimeAsync(1);
       postStartupUpdatedAt = Date.now();
@@ -294,6 +292,7 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("preserves unconfigured agents sharing a configured agent's SQLite store", async () => {
     const storePath = path.join(stateDir, "shared.sqlite");
+    const gateway = createGateway({ sessionStore: storePath });
     const staleUpdatedAt = Date.now() - ORPHAN_AGE_MS - 1;
     const main = await seedSession({
       agentId: "main",
@@ -307,8 +306,6 @@ describe("dreaming gateway restart cleanup", () => {
       updatedAt: staleUpdatedAt,
       storePath,
     });
-    const gateway = createGateway({ sessionStore: storePath });
-
     await gateway.start();
 
     expect(getSessionEntry({ ...main, storePath })).toBeUndefined();
@@ -319,13 +316,12 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("does not repeat restart cleanup when the dreaming service is replaced", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
+    const gateway = createGateway();
     const interrupted = await seedSession({
       suffix: "dreaming-narrative-light-interrupted",
       updatedAt: Date.now() - 1,
       transcriptAt: Date.now() - 1,
     });
-    const gateway = createGateway();
-
     await gateway.start();
     await vi.advanceTimersByTimeAsync(120_000);
     const currentRun = await seedSession({
@@ -346,13 +342,12 @@ describe("dreaming gateway restart cleanup", () => {
 
   it("cleans historical artifacts while automatic scheduling is disabled", async () => {
     const now = Date.now();
+    const gateway = createGateway({ cronEnabled: false });
     const interrupted = await seedSession({
       suffix: "dreaming-narrative-light-interrupted",
       updatedAt: now - ORPHAN_AGE_MS - 1,
       transcriptAt: now - ORPHAN_AGE_MS - 1,
     });
-    const gateway = createGateway({ cronEnabled: false });
-
     await gateway.start();
 
     expect(hasSession(interrupted)).toBe(false);

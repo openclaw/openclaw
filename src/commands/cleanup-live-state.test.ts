@@ -155,7 +155,6 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
         agents: {
           ownership: "explicit",
           defaults: {
-            heartbeat: { agentId: "main" },
             systemAgent: { agentId: "main" },
           },
           entries: {

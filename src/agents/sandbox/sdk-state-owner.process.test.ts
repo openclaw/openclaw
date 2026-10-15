@@ -77,6 +77,9 @@ type Reply = {
 describe("plugin SDK sandbox process ownership", () => {
   it("refuses foreign live-owner mutations while preserving disabled and standalone SDK calls", async () => {
     const root = roots.make("openclaw-sdk-state-owner-");
+    const runtimeArtifacts = roots.make("openclaw-sdk-runtime-artifacts-");
+    // Runtime caches and diagnostics must stay outside the SDK state tree being compared.
+    vi.stubEnv("BUN_RUNTIME_TRANSPILER_CACHE_PATH", runtimeArtifacts);
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
     vi.stubEnv("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0");

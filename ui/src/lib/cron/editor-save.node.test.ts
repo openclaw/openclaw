@@ -57,6 +57,76 @@ function applyWirePatch(stored: CronStoredJob, params: unknown) {
 }
 
 describe("automation save editor ownership", () => {
+  it("edits a migrated job's policies without preserving its old monitor lock or stale channel recipient", async () => {
+    const job: CronJob = {
+      ...createCronJob({ id: "migrated-job", name: "Evening notes" }),
+      declarationKey: "heartbeat:main",
+      sessionTarget: "session:agent:main:main",
+      activeHours: { start: "22:00", end: "06:00", timezone: "Europe/Vienna" },
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Check notes",
+        skipIfScratchEmpty: true,
+        includeReasoning: true,
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        accountId: "operator",
+        to: "old-group",
+        threadId: 5,
+        directPolicy: "block",
+      },
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "cron.update"
+        ? job
+        : method === "cron.list"
+          ? cronJobsListResponse([job])
+          : { enabled: true, jobs: 1 },
+    );
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, job);
+    expect(state.cronForm.payloadLocked).toBe(false);
+    state.cronForm = {
+      ...state.cronForm,
+      deliveryTarget: "owner",
+      deliveryDirectPolicy: "allow",
+      activeHoursEnabled: false,
+      idleOnly: false,
+      payloadSkipIfScratchEmpty: false,
+      payloadIncludeReasoning: false,
+    };
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: job.id });
+    expect(request).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({
+        id: job.id,
+        expectedConfigRevision: job.configRevision,
+        patch: expect.objectContaining({
+          activeHours: null,
+          idleOnly: false,
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: "Check notes",
+            skipIfScratchEmpty: false,
+            includeReasoning: false,
+          }),
+          delivery: expect.objectContaining({
+            mode: "announce",
+            target: "owner",
+            channel: "telegram",
+            accountId: "operator",
+            to: null,
+            threadId: null,
+            directPolicy: "allow",
+          }),
+        }),
+      }),
+    );
+  });
+
   it.each(["save", "conflict read", "conflict read failure"] as const)(
     "preserves a reopened editor when an earlier %s settles",
     async (pendingPhase) => {
@@ -240,7 +310,7 @@ describe("automation default timing", () => {
         storePath: "unused-paused-automation-store",
         cronEnabled: false,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob: async () => {
           throw new Error("Paused automation must not execute");
         },

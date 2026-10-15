@@ -365,12 +365,15 @@ it("persists the five-immediate limit, overflow staggering, and pending requests
   expect(scheduler.read().slice(5)).toEqual(deferred);
 });
 
-it("defers missed agent and heartbeat work for two minutes without blocking command work", () => {
+it("defers missed agent and main-session event work for two minutes without blocking command work", () => {
   const scheduler = storedScheduler("agent-startup", [
     job("agent", now - 3 * minute, {
       payload: { kind: "agentTurn", message: "synthetic startup task" },
     }),
-    job("heartbeat", now - 2 * minute, { payload: { kind: "heartbeat" } }),
+    job("main-event", now - 2 * minute, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "synthetic startup reminder" },
+    }),
     job("command", now - minute),
   ]);
   const started = scheduler.start(now, { deferAgentWork: true });
@@ -382,7 +385,7 @@ it("defers missed agent and heartbeat work for two minutes without blocking comm
       .map(({ id, state }) => [id, state.nextRunAtMs, state.startupCatchupAtMs]),
   ).toEqual([
     ["agent", now + 120_000, now + 120_000],
-    ["heartbeat", now + 125_000, now + 125_000],
+    ["main-event", now + 125_000, now + 125_000],
   ]);
   expect(scheduler.tick(now + 119_999, 119_999).accepted).toEqual([]);
   expect(scheduler.tick(now + 120_000, 120_000).accepted.map(({ job: entry }) => entry.id)).toEqual(

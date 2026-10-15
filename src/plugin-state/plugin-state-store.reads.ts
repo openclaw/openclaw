@@ -29,7 +29,10 @@ import {
 export function lookupPluginStateEntries(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; keys: readonly string[] },
-): Array<Result<unknown, PluginStateStoreError>> {
+): {
+  values: Array<Result<unknown, PluginStateStoreError>>;
+  rows: PluginStateReadRow[];
+} {
   for (const key of params.keys) {
     assertPluginStateKey(store.db, key, "lookup");
   }
@@ -38,14 +41,14 @@ export function lookupPluginStateEntries(
     store.db,
     getPluginStateKysely(store.db)
       .selectFrom("plugin_state_entries")
-      .select(["entry_key", "value_json"])
+      .select(["entry_key", "value_json", "created_at", "expires_at"])
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where("entry_key", "in", sqliteStringSet(params.keys))
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
   ).rows;
   const values = new Map(rows.map((row) => [row.entry_key, row.value_json]));
-  return params.keys.map((key): Result<unknown, PluginStateStoreError> => {
+  const parsed = params.keys.map((key): Result<unknown, PluginStateStoreError> => {
     // Match node:sqlite text binding, including lone UTF-16 surrogates.
     const raw = values.get(toUSVString(key));
     try {
@@ -58,6 +61,7 @@ export function lookupPluginStateEntries(
       throw error;
     }
   });
+  return { values: parsed, rows };
 }
 
 export function listPluginStateEntries(

@@ -1,4 +1,3 @@
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
@@ -137,11 +136,6 @@ function* assembleOpenClawCodingTools(
   const executionSessionKey = options?.runSessionKey ?? options?.sessionKey;
   const attachmentReadRoot = subagentAttachmentRootForRun(executionAgentId, executionSessionKey);
 
-  const enableHeartbeatTool =
-    options?.enableHeartbeatTool === true ||
-    (options?.trigger === "heartbeat" &&
-      options?.config?.messages?.visibleReplies === "message_tool");
-  const forceHeartbeatTool = options?.forceHeartbeatTool === true || enableHeartbeatTool;
   const toolSearchConfig = resolveToolSearchConfig(options?.config);
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
@@ -167,7 +161,6 @@ function* assembleOpenClawCodingTools(
   const runtimeProfileAlsoAllow = [
     ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
-    ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
@@ -284,7 +277,6 @@ function* assembleOpenClawCodingTools(
             reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
             reviewTranscript: options?.exec?.reviewTranscript,
             trigger: options?.trigger,
-            continuesConversation: options?.continuesConversation,
             node: options?.exec?.node ?? execConfig.node,
             pathPrepend: mergeGatewayAgentCliPath(
               options?.exec?.pathPrepend ?? execConfig.pathPrepend,
@@ -504,7 +496,6 @@ function* assembleOpenClawCodingTools(
                 : (options?.computerTransport ??
                   resolveSessionPlacementComputer(options?.operationalRunInstance)),
             sourceReplyOnly,
-            enableHeartbeatTool,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),

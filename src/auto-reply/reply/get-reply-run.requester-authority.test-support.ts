@@ -34,7 +34,7 @@ export function registerPendingRequesterAuthorityCases({
   ) => ReturnType<typeof runPreparedReply>;
   loadSessionEntryMock: { mockReturnValue(value: SessionEntry): unknown };
 }): void {
-  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
+  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "event", "replay"] as const)(
     "retires pending owner task authority only for new channel input: %s",
     async (kind) => {
       const sessionKey = "agent:default:discord:channel:123";
@@ -106,7 +106,9 @@ export function registerPendingRequesterAuthorityCases({
         const provenance =
           kind === "inter-session"
             ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
-            : undefined;
+            : kind === "event"
+              ? { kind: "internal_system" as const, sourceTool: "background-task" }
+              : undefined;
         params.command.senderIsOwner = kind === "fresh-owner";
         await runPrepared({
           ...params,
@@ -125,7 +127,6 @@ export function registerPendingRequesterAuthorityCases({
             InputProvenance: provenance,
           },
           opts: {
-            isHeartbeat: kind === "heartbeat",
             suppressNextUserMessagePersistence: kind === "replay",
           },
         });

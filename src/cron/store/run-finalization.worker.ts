@@ -1,6 +1,10 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  CRON_ADMISSION_DEFERRED_RECEIPT_ERROR,
+  isDeferredCronAdmission,
+} from "../service/admission-deferred.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyOutcomeToAuthoritativeJob } from "../service/timer-outcomes.js";
@@ -47,6 +51,7 @@ export function finalizeCronRunsInWorker(
           };
           for (const [outcomeIndex, completed] of policy.outcomes.entries()) {
             const receipt = completed.runReceipt;
+            const admissionDeferred = isDeferredCronAdmission(completed.job, completed);
             const storedJob = jobs.get(completed.jobId);
             // Retention protects the marker still in storage until this mutation flushes.
             const pendingReceiptId =
@@ -70,7 +75,7 @@ export function finalizeCronRunsInWorker(
                     ? "skipped"
                     : completed.status,
                 finishedAtMs: completed.endedAt,
-                error: completed.error,
+                error: admissionDeferred ? CRON_ADMISSION_DEFERRED_RECEIPT_ERROR : completed.error,
               })
             ) {
               continue;
@@ -82,6 +87,19 @@ export function finalizeCronRunsInWorker(
               currentJob.state.runningReceiptId === receipt.receiptId;
             const job =
               currentJob && ownsRunningMarker ? currentJob : structuredClone(completed.job);
+            if (admissionDeferred) {
+              if (currentJob && ownsRunningMarker) {
+                delete currentJob.state.queuedAtMs;
+                delete currentJob.state.runningAtMs;
+                delete currentJob.state.runningReceiptId;
+                delete currentJob.state.runningScheduleChangeId;
+                outcome.upsertedJobs.push(currentJob);
+              }
+              if (completed.request?.runId) {
+                outcome.eventPlans.push({ outcomeIndex, job });
+              }
+              continue;
+            }
             const shouldDelete = applyOutcomeToAuthoritativeJob(state, job, completed, {
               request: completed.request,
               deferredNotifications: currentJob && ownsRunningMarker ? outcome.notifications : [],

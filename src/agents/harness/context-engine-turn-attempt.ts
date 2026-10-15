@@ -26,13 +26,11 @@ export type ContextEngineTurnAttemptFacts = {
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  isHeartbeat?: boolean;
   runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;
-  isHeartbeat?: boolean;
   lease: ContextEngineLogicalTurnLease;
   recorder?: UserTurnTranscriptRecorder;
   sessionTarget?: ContextEngineSessionTarget;
@@ -102,7 +100,6 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       store.prepareRun({
         ...owner,
         admission: params.admission,
-        isHeartbeat: params.isHeartbeat === true,
         sessionId,
       });
     const prepared = await (params.admission
@@ -139,9 +136,7 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       ) {
         throw new Error("context-engine transcript target changed before provider dispatch");
       }
-      await retainAdmission(admission, () =>
-        store.enqueueIntent({ ...owner, admission, isHeartbeat: params.isHeartbeat === true }),
-      );
+      await retainAdmission(admission, () => store.enqueueIntent({ ...owner, admission }));
     };
     if (params.admission) {
       if (!prepared.admitted) {
@@ -222,7 +217,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     const accepted = {
       boundary: params.facts.boundary,
       engineId: params.lease.effectiveEngineId,
-      isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
       runtimeContext: params.facts.runtimeContext,
     };

@@ -455,7 +455,7 @@ source_cli_probes() (
   fi
   as_candidate tee "$gateway_config" >/dev/null <<EOF
 {
-  "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
+  "cron": { "enabled": false },
   "browser": { "enabled": false },
   ${catalog_refresh_config}
   "update": { "checkOnStart": false },

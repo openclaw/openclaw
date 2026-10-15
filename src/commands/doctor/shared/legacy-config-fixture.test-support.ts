@@ -54,12 +54,16 @@ vi.mock("../../../plugins/manifest-registry.js", () => {
   };
 });
 
-vi.mock("./channel-legacy-config-migrate.js", () => ({
-  applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
-    next: cfg,
-    changes: [],
-  }),
-}));
+vi.mock("./channel-legacy-config-migrate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel-legacy-config-migrate.js")>();
+  return {
+    ...actual,
+    applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+      next: cfg,
+      changes: [],
+    }),
+  };
+});
 
 export function useDoctorLegacyConfigFixture() {
   let previousOauthDir: string | undefined;

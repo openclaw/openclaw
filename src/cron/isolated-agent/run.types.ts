@@ -10,7 +10,11 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 
-export type CronLaneWaitCallback = (info?: { waiting?: boolean }) => void;
+export type CronLaneWaitCallback = (info: {
+  waiting?: boolean;
+  /** Preparation can finish before the shared execution lane admits the turn. */
+  stage: "preparation" | "execution";
+}) => void;
 
 /** Pre-run disposition returned when isolated cron work never enters an agent runner. */
 export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";

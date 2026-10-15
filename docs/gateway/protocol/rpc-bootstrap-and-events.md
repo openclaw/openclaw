@@ -346,7 +346,7 @@ or protocol-version change.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.
-- `heartbeat`: heartbeat event stream update.
+- `heartbeat`: deprecated protocol v4 projection of a migrated/default automation result.
 - `cron`: cron run/job change event.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
@@ -428,7 +428,7 @@ false` or `suppressNotifyOnExit: true` suppresses notifications. Denied events
 never enqueue a system event or wake agent work. Finished events notify only for
 timeout, nonzero or unknown exit code, or nonempty compacted output; successful
 exit 0 with no output stays quiet. Finished notifications with a run ID are
-deduplicated by resolved session and run ID. A heartbeat wake is requested only
-after a system event is queued.
+deduplicated by resolved session and run ID. Accepted completion notices use
+ordinary execution in the captured originating session.
 
 Node event delivery is best-effort, not a durable completion ledger.

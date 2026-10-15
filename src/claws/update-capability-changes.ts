@@ -6,10 +6,8 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { digestClawValue } from "./digest.js";
 import {
@@ -99,37 +97,6 @@ function classifyToolSet(
   return [...currentTools].some((tool) => !desiredTools.has(tool)) ? "reduction" : "neutral";
 }
 
-function classifyHeartbeatEvery(
-  current: unknown,
-  desired: unknown,
-): ClawUpdateCapabilityChange["classification"] {
-  const toInterval = (value: unknown): number | undefined => {
-    if (value === "disabled") {
-      return 0;
-    }
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    try {
-      return Math.max(0, parseDurationMs(value, { defaultUnit: "m" }));
-    } catch {
-      return undefined;
-    }
-  };
-  const currentMs = toInterval(current);
-  const desiredMs = toInterval(desired);
-  if (currentMs === undefined || desiredMs === undefined || currentMs === desiredMs) {
-    return "neutral";
-  }
-  if (currentMs === 0) {
-    return "escalation";
-  }
-  if (desiredMs === 0) {
-    return "reduction";
-  }
-  return desiredMs < currentMs ? "escalation" : "reduction";
-}
-
 function classifyAgentCapability(
   path: string,
   current: unknown,
@@ -179,17 +146,6 @@ function classifyAgentCapability(
   if (path === "sandbox.scope") {
     return compareRankedCapability(current, desired, { session: 0, agent: 1, shared: 2 });
   }
-  if (path === "heartbeat.every") {
-    return classifyHeartbeatEvery(current, desired);
-  }
-  if (path === "heartbeat.isolatedSession") {
-    return desired === true ? "reduction" : "escalation";
-  }
-  if (path === "heartbeat.timeoutSeconds") {
-    return typeof current === "number" && typeof desired === "number" && desired < current
-      ? "reduction"
-      : "escalation";
-  }
   if (path === "tools.fs.workspaceOnly") {
     return desired === true ? "reduction" : "escalation";
   }
@@ -222,7 +178,6 @@ function classifyAgentCapability(
   }
   return path.startsWith("sandbox.") ||
     path.startsWith("tools.") ||
-    path.startsWith("heartbeat.") ||
     path.startsWith("subagents.") ||
     path.startsWith("memory.search.")
     ? "escalation"
@@ -250,10 +205,6 @@ function pushAgentCapabilityChanges(params: {
     ["memory", "search", "enabled"],
     ["memory", "search", "rememberAcrossConversations"],
     ["memory", "search", "sources"],
-    ["heartbeat", "every"],
-    ["heartbeat", "activeHours"],
-    ["heartbeat", "isolatedSession"],
-    ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
     const currentValue = getPath(params.current, field);
@@ -339,16 +290,6 @@ function normalizeLegacyAgent(
       ...(snapshot.allow.length > 0 ? { allow: snapshot.allow } : {}),
       ...(snapshot.deny.length > 0 ? { deny: snapshot.deny } : {}),
     },
-  };
-}
-
-function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
-  const defaults = config.agents?.defaults?.heartbeat;
-  const overrides = listAgentEntries(config).find((agent) => agent.id === agentId)?.heartbeat;
-  return {
-    ...defaults,
-    ...overrides,
-    every: resolveHeartbeatSummaryForAgent(config, agentId).every,
   };
 }
 
@@ -443,7 +384,6 @@ export function pushResolvedAgentCapabilityChanges(params: {
     agent && {
       ...agent,
       sandbox: resolveSandboxConfigForAgent(config, params.agentId),
-      heartbeat: resolveHeartbeat(config, params.agentId),
       memory: { search: resolvePortableMemorySearch(memoryConfig, params.agentId) },
       tools: { ...agent.tools, ...resolvePortableTools(config, params.agentId) },
     };

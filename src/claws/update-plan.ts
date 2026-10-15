@@ -23,6 +23,7 @@ import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
 import { normalizeWorkspaceConfig, resolveMigrationAgentSettings } from "./migrate-validation.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
+import { planPortableHeartbeatUpdate } from "./portable-heartbeat-update.js";
 import { readClawPackageRefs } from "./provenance.js";
 import {
   CLAW_OUTPUT_STABILITY,
@@ -562,6 +563,27 @@ export async function buildClawUpdatePlan(params: {
       });
       if (capabilityChange) {
         capabilityChanges.push(capabilityChange);
+      }
+    }
+
+    const portableAction = await planPortableHeartbeatUpdate(
+      targetPlan,
+      params.config,
+      readOnlyStateOptions,
+    );
+    if (portableAction) {
+      actions.push(portableAction);
+      if (portableAction.action !== "unchanged") {
+        capabilityChanges.push({
+          kind: "cronJob",
+          id: portableAction.id,
+          path: "agent.heartbeat",
+          action: portableAction.action,
+          classification: portableAction.action === "release" ? "neutral" : "escalation",
+          requiresDistinctConsent: portableAction.action !== "release",
+          reason: portableAction.reason,
+          effect: { action: portableAction.action, desiredDigest: portableAction.desiredDigest },
+        });
       }
     }
 

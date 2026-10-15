@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../src/config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../src/config/sessions/paths.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -21,13 +22,14 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
     OPENCLAW_STATE_DIR: stateDir,
   };
   delete env.OPENCLAW_HOME;
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env });
   const [{ upsertSessionEntryCore }, { closeOpenClawAgentDatabaseByPath }] = await Promise.all([
     import("../src/config/sessions/session-accessor.js"),
     import("../src/state/openclaw-agent-db.js"),
   ]);
   setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(
-    { agentId: "main", env, sessionKey },
+    { agentId: "main", env, sessionKey, storePath },
     { sessionId: "trajectory-process-session", updatedAt: 1 },
   );
   closeOpenClawAgentDatabaseByPath(

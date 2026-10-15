@@ -147,7 +147,6 @@ describe("node workspace document access", () => {
             workspace: state.workspaceDir,
             systemAgent: { agentId: "qa" },
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
           },
         },
         plugins: {

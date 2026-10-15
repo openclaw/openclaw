@@ -7,7 +7,10 @@ import type {
 
 type PublicReplyOptions<T> = T extends undefined
   ? undefined
-  : Omit<T, "internalEventExecution" | "onReplyOperationOwned">;
+  : Omit<
+      T,
+      "internalEventExecution" | "onReplyOperationOwned" | "scheduledAutomation" | "modelOverride"
+    >;
 
 type PublicReplyFunction<T> = T extends (params: infer P) => infer R
   ? (params: PublicReplyParams<P>) => R
@@ -45,7 +48,7 @@ export type PublicChannelTurnParams<
   };
 };
 
-/** Event custody is issued by core, never accepted from plugin reply options. */
+/** Event and scheduled custody are issued by core, never accepted from plugin reply options. */
 export function publicReplyOptions(
   options: GetReplyOptions | undefined,
 ): GetReplyOptions | undefined {
@@ -55,6 +58,8 @@ export function publicReplyOptions(
   const publicOptions = { ...options };
   Reflect.deleteProperty(publicOptions, "internalEventExecution");
   Reflect.deleteProperty(publicOptions, "onReplyOperationOwned");
+  Reflect.deleteProperty(publicOptions, "scheduledAutomation");
+  Reflect.deleteProperty(publicOptions, "modelOverride");
   return publicOptions;
 }
 

@@ -160,7 +160,7 @@ describe("cron failure alert persistence", () => {
       );
       expect(deferredNotifications).toEqual([]);
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
-      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     },
   );
 

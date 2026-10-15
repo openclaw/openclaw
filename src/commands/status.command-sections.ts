@@ -4,6 +4,7 @@ import {
   describePairingConnectRequirement,
   type ConnectPairingRequiredReason,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
@@ -11,7 +12,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import {
   resolveMemoryVectorState,
   resolveMemoryFtsState,
@@ -25,6 +25,7 @@ import type { StatusSummary } from "../status/summary.js";
 import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
+import type { StatusAutomationsResult } from "./status-runtime-shared.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
@@ -37,7 +38,6 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
 type SessionsRecentLike = StatusSummary["sessions"]["recent"][number];
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
@@ -65,45 +65,19 @@ export function buildStatusAgentsValue(params: { agentStatus: AgentStatusLike })
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
 }
 
-export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
-  const parts = params.summary.heartbeat.agents.map((agent) => {
-    if (!agent.enabled || !agent.everyMs) {
-      return `disabled (${agent.agentId})`;
-    }
-    if (agent.waitingForRoute) {
-      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
-    }
-    return `${agent.every} (${agent.agentId})`;
-  });
-  return parts.length > 0 ? parts.join(", ") : "disabled";
-}
-
-export function buildStatusLastHeartbeatValue(params: {
-  deep?: boolean;
-  gatewayReachable: boolean;
-  gatewayStartupPhase?: string;
-  lastHeartbeat: HeartbeatEventPayload | null;
-}) {
-  if (!params.deep) {
-    // Fast status omits the row entirely instead of implying heartbeat is missing.
-    return null;
+/** Scheduler enablement and total jobs are independent of an armed timer. */
+export function buildStatusAutomationsValue(result: StatusAutomationsResult): string {
+  if (!result.ok) {
+    return `unavailable (${sanitizeTerminalText(result.error)})`;
   }
-  if (params.gatewayStartupPhase) {
-    return theme.muted(`not checked (gateway still starting; phase ${params.gatewayStartupPhase})`);
-  }
-  if (!params.gatewayReachable) {
-    return theme.warn("unavailable");
-  }
-  if (!params.lastHeartbeat) {
-    return theme.muted("none");
-  }
-  const age = formatTimeAgo(Date.now() - params.lastHeartbeat.ts);
-  const accountLabel = params.lastHeartbeat.accountId
-    ? `account ${params.lastHeartbeat.accountId}`
-    : null;
-  return [params.lastHeartbeat.status, age, params.lastHeartbeat.channel, accountLabel]
-    .filter(Boolean)
-    .join(" · ");
+  const { enabled, jobs, nextWakeAtMs } = result.value;
+  return [
+    `scheduler ${enabled ? "enabled" : "disabled"}`,
+    `${jobs} total job${jobs === 1 ? "" : "s"}`,
+    nextWakeAtMs == null
+      ? "no wake scheduled"
+      : `next wake ${new Date(nextWakeAtMs).toISOString()}`,
+  ].join(" · ");
 }
 
 export function buildStatusMemoryValue(params: {

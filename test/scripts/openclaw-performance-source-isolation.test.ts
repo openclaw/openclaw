@@ -169,12 +169,16 @@ printf 'http-health\\n' >> "$EVENTS_FILE"
       join(binDir, "rg"),
       `#!/bin/sh
 set -eu
-[ "$#" -eq 3 ] && [ "$1" = '-q' ] && [ "$2" = 'catalogRefresh:' ] && [ "$3" = 'src/config/zod-schema.core.ts' ] || {
-  printf 'unexpected rg argv\\n' >&2
-  exit 64
-}
-printf 'catalog-probe\\n' >> "$EVENTS_FILE"
-exit "$RG_STATUS"
+[ "$#" -eq 3 ] && [ "$1" = '-q' ] || exit 64
+case "$2:$3" in
+  'catalogRefresh::src/config/zod-schema.core.ts')
+    printf 'catalog-probe\\n' >> "$EVENTS_FILE"
+    exit "$RG_STATUS" ;;
+  'heartbeat::src/config/zod-schema.agent-defaults.ts')
+    printf 'heartbeat-probe\\n' >> "$EVENTS_FILE"
+    exit "$HEARTBEAT_STATUS" ;;
+  *) printf 'unexpected rg argv\\n' >&2; exit 64 ;;
+esac
 `,
     );
     chmodSync(join(binDir, "rg"), 0o755);
@@ -182,9 +186,10 @@ exit "$RG_STATUS"
     chmodSync(join(binDir, "cp"), 0o755);
     chmodSync(join(binDir, "node"), 0o755);
 
-    for (const [branch, rgStatus, expectsCatalogRefresh] of [
-      ["unsupported", "1", false],
-      ["supported", "0", true],
+    for (const [branch, rgStatus, expectsCatalogRefresh, heartbeatStatus, expectsHeartbeat] of [
+      ["unsupported", "1", false, "0", true],
+      ["supported", "0", true, "0", true],
+      ["retired-heartbeat", "0", true, "1", false],
     ] as const) {
       const branchDir = join(fixtureRoot, branch);
       const captureDir = join(branchDir, "capture");
@@ -218,6 +223,7 @@ exit "$RG_STATUS"
         PERFORMANCE_HELPER_DIR: "/fixture/helpers",
         REAL_NODE: process.execPath,
         RG_STATUS: rgStatus,
+        HEARTBEAT_STATUS: heartbeatStatus,
         SOURCE_PERF_DIR: sourcePerfDir,
         source_runs: "2",
       });
@@ -236,6 +242,7 @@ exit "$RG_STATUS"
 
       expect(readFileSync(eventsFile, "utf8").trim().split("\n")).toEqual([
         "catalog-probe",
+        "heartbeat-probe",
         "gateway-run",
         "http-health",
         "gateway-health",
@@ -249,11 +256,12 @@ exit "$RG_STATUS"
       expect(readFileSync(join(captureDir, "benchmark.config"), "utf8")).toBe(gatewayConfig);
       parse(gatewayConfig, { uniqueKeys: true });
       const parsedConfig = JSON.parse(gatewayConfig) as {
+        agents?: { defaults?: { heartbeat?: { every?: string } } };
         gateway?: { auth?: Record<string, unknown> };
         models?: { catalogRefresh?: { enabled?: boolean } };
       };
       expect(parsedConfig).toMatchObject({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
+        cron: { enabled: false },
         browser: { enabled: false },
         update: { checkOnStart: false },
         gateway: {
@@ -267,6 +275,9 @@ exit "$RG_STATUS"
         plugins: { enabled: true, entries: { browser: { enabled: false } } },
       });
       expect(JSON.stringify(parsedConfig)).not.toContain('"dreaming":');
+      expect(parsedConfig.agents).toEqual(
+        expectsHeartbeat ? { defaults: { heartbeat: { every: "0m" } } } : undefined,
+      );
       expect(parsedConfig.gateway?.auth).toEqual({ mode: "token" });
       if (expectsCatalogRefresh) {
         expect(parsedConfig.models?.catalogRefresh?.enabled).toBe(false);

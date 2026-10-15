@@ -221,7 +221,7 @@ For reusable sender allowlists, see [Access groups](/channels/access-groups).
 - By default, group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
 - Telegram forum topics add `:topic:<threadId>` to the group id so each topic has its own session.
 - Direct chats use the main session (or per-sender sessions if `session.dmScope` is configured).
-- Heartbeats run in the configured heartbeat session (default: the agent main session); group sessions do not run their own heartbeats.
+- Group sessions have no implicit periodic monitor. Create an ordinary automation with an explicit session and delivery target for scheduled group checks.
 
 Set a binding's `session.groupScope` to `"main"` when a trusted room should
 share the agent's main conversation:

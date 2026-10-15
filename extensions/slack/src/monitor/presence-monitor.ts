@@ -1,11 +1,11 @@
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getSlackRuntime } from "../runtime.js";
 import { formatSlackTarget } from "../target-parsing.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 
@@ -38,6 +38,9 @@ type PresenceTarget = {
   to: string;
   sessionKey: string;
   agentId: string;
+  expectedTarget?: Promise<Awaited<
+    ReturnType<PluginRuntime["system"]["captureSessionEventTarget"]>
+  > | null>;
   participants: Map<string, number>;
   lastActivityAtMs: number;
   autoEligibleKind: "direct" | "group" | "thread" | "channel";
@@ -162,8 +165,8 @@ export function createSlackPresenceMonitor(params: {
   cooldownStore: PluginStateKeyedStore<number>;
   log?: (message: string) => void;
   error?: (message: string) => void;
-  enqueue?: typeof enqueueRoutedSystemEvent;
-  wake?: typeof requestHeartbeat;
+  enqueue?: PluginRuntime["system"]["enqueueSessionEvent"];
+  captureTarget?: PluginRuntime["system"]["captureSessionEventTarget"];
 }) {
   const resolveClient = params.resolveClient ?? (() => params.client);
   if (!params.client && !params.resolveClient) {
@@ -172,8 +175,8 @@ export function createSlackPresenceMonitor(params: {
   const targets = new Map<string, PresenceTarget>();
   const presenceByUser = new Map<string, PresenceObservation>();
   const nowMs = params.scheduler.now;
-  const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
-  const wake = params.wake ?? requestHeartbeat;
+  const enqueue = params.enqueue ?? getSlackRuntime().system.enqueueSessionEvent;
+  const captureTarget = params.captureTarget ?? getSlackRuntime().system.captureSessionEventTarget;
   let pollOffset = 0;
   const scheduler = params.scheduler.scope();
   let started = false;
@@ -221,7 +224,7 @@ export function createSlackPresenceMonitor(params: {
       accountConfig: params.accountConfig,
       nowMs: now,
     });
-    if (!observed || !observed.isPolicyCurrent()) {
+    if (scheduler.signal.aborted || !observed || !observed.isPolicyCurrent()) {
       return;
     }
     const current = targets.get(observed.key);
@@ -230,6 +233,7 @@ export function createSlackPresenceMonitor(params: {
       current.prompt = observed.prompt;
       current.sessionKey = observed.sessionKey;
       current.agentId = observed.agentId;
+      current.expectedTarget = undefined;
       current.to = observed.to;
       current.lastActivityAtMs = now;
       for (const [participant, observedAt] of observed.participants) {
@@ -283,31 +287,48 @@ export function createSlackPresenceMonitor(params: {
       await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
-    const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
-      contextKey: `slack:presence-active:${params.accountId}:${workspaceKey}:${userId}`,
-      deliveryContext: {
-        channel: "slack",
-        to: target.to,
-        accountId: params.accountId,
-        threadId: target.threadId,
-      },
-    });
-    if (!queued) {
+    try {
+      const capturedTarget = captureTarget(target.agentId, target.sessionKey);
+      target.expectedTarget = capturedTarget;
+      const expectedTarget = await capturedTarget;
+      pruneTargets(nowMs());
+      if (
+        !expectedTarget ||
+        scheduler.signal.aborted ||
+        resolveTarget() !== target ||
+        target.expectedTarget !== capturedTarget
+      ) {
+        await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
+        return;
+      }
+      const receipt = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), {
+        expectedTarget,
+        abortSignal: scheduler.signal,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        contextKey: `slack:presence-active:${params.accountId}:${workspaceKey}:${userId}`,
+        deliveryContext: {
+          channel: "slack",
+          to: target.to,
+          accountId: params.accountId,
+          threadId: target.threadId,
+        },
+      });
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        throw new Error(accepted.error);
+      }
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          params.error?.(
+            `slack presence follow-up ${outcome.status}: ${outcome.error ?? "cancelled"}`,
+          );
+        }
+      });
+    } catch (error) {
       await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
-      return;
+      params.error?.(`slack presence follow-up refused: ${String(error)}`);
     }
-    wake({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      heartbeat: {
-        target: "slack",
-        to: target.to,
-        accountId: params.accountId,
-      },
-    });
   };
 
   const performPoll = async () => {

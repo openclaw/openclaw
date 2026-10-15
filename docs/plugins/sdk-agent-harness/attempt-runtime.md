@@ -162,7 +162,8 @@ String input and a separate `currentUserMessageId` remain supported. The harness
 owns the fallback when no admitted message exists.
 
 Supply `messages` as an array or an async loader, which runs only when a `before_prompt_build`
-hook needs history. Heartbeat-only contributions do not read conversation history.
+hook needs history. Proactive-job prompt contributions run in the scheduler
+before session execution and do not read conversation history through this helper.
 The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
 Codex and Agents API transcript read budget.
 
@@ -229,7 +230,7 @@ existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
 without taking over their receipt or timeout owner.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
-cron, and heartbeat facts using the caller's prepared source-reply projection.
+and automation facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware
 rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and

@@ -380,6 +380,102 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
+    "reservation",
+    "foreground claim",
+    "tombstone",
+    "charged attempt",
+    "execution identity",
+    "delivery run",
+    "pending delivery",
+    "harness completion",
+    "same run",
+    "stale generation",
+  ] as const)("projects a successor start while interrupted recovery has %s", async (custody) => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const entry: SessionEntry = {
+      sessionId: "interrupted-session",
+      updatedAt: 2_000,
+      status: "interrupted",
+      abortedLastRun: true,
+      lastRunId: "interrupted-run",
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration }],
+      mainRestartRecovery: {
+        cycleId: "interrupted-cycle",
+        revision: 1,
+        chargedAttempts: custody === "charged attempt" ? 1 : 0,
+        ...(custody === "reservation"
+          ? { reservation: { runId: "recovery-run", attempt: 1, lifecycleGeneration } }
+          : {}),
+        ...(custody === "foreground claim"
+          ? { foregroundClaims: { lifecycleGeneration, tokens: ["foreground-claim"] } }
+          : {}),
+        ...(custody === "tombstone" ? { tombstone: { reason: "recovery exhausted" } } : {}),
+        ...(custody === "execution identity"
+          ? {
+              executionIdentity: {
+                tokenVersion: 1,
+                contextId: "recovery-context",
+                executionId: "recovery-execution",
+                runId: "recovery-run",
+                createdAt: 1_000,
+              },
+            }
+          : {}),
+      },
+      ...(custody === "delivery run" ? { restartRecoveryDeliveryRunId: "delivery-run" } : {}),
+      ...(custody === "pending delivery"
+        ? {
+            pendingFinalDelivery: {
+              kind: "replayable",
+              text: "Retained synthetic final",
+              createdAt: 2_000,
+            },
+          }
+        : {}),
+      ...(custody === "harness completion"
+        ? {
+            restartRecoveryHarnessCompletion: {
+              taskId: "completion-task",
+              taskStatus: "succeeded",
+              taskRunId: "completion-run",
+              sourceRunId: "interrupted-run",
+              requesterSessionKey: "agent:main:main",
+              requesterAgentId: "main",
+              sessionId: "interrupted-session",
+            },
+          }
+        : {}),
+    };
+    const started = await persistLifecycle(entry, {
+      sessionId: entry.sessionId,
+      runId: custody === "same run" ? "interrupted-run" : "successor-run",
+      lifecycleGeneration:
+        custody === "stale generation" ? "retired-generation" : lifecycleGeneration,
+      ts: 3_000,
+      data: { phase: "start", startedAt: 3_000 },
+    });
+    if (custody === "charged attempt" || custody === "execution identity") {
+      expect(started.mainRestartRecovery).toBeUndefined();
+      expect(started.restartRecoveryRuns).toEqual([
+        { runId: "successor-run", lifecycleGeneration },
+      ]);
+      expect(started.lifecycleRunId).toBe("successor-run");
+      expect(started.abortedLastRun).toBe(false);
+    } else {
+      expect(started.mainRestartRecovery).toEqual(entry.mainRestartRecovery);
+      expect(started.restartRecoveryRuns).toContainEqual({
+        runId: "interrupted-run",
+        lifecycleGeneration,
+      });
+    }
+    expect(started.restartRecoveryDeliveryRunId).toBe(entry.restartRecoveryDeliveryRunId);
+    expect(started.pendingFinalDelivery).toEqual(entry.pendingFinalDelivery);
+    expect(started.restartRecoveryHarnessCompletion).toEqual(
+      entry.restartRecoveryHarnessCompletion,
+    );
+  });
+
+  it.each([
     {
       name: "aborted",
       data: { phase: "end", endedAt: 1_800, stopReason: "aborted" },
@@ -456,12 +552,12 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
-    { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
-    { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
-    { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
+    { name: "visible run", controlUiVisible: true, lastActivityAt: 1_800 },
+    { name: "unclassified run", controlUiVisible: undefined, lastActivityAt: 1_000 },
+    { name: "hidden run", controlUiVisible: false, lastActivityAt: 1_000 },
   ])(
     "records unread-worthy completion activity for a $name",
-    async ({ controlUiVisible, isHeartbeat, lastActivityAt }) => {
+    async ({ controlUiVisible, lastActivityAt }) => {
       const persisted = await persistLifecycle(
         {
           sessionId: "session-id",
@@ -473,7 +569,6 @@ describe("session lifecycle state", () => {
           ts: 2_000,
           sessionId: "session-id",
           controlUiVisible,
-          isHeartbeat,
           data: { phase: "end", endedAt: 1_800 },
         },
       );

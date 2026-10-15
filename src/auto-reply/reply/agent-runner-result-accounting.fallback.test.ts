@@ -86,7 +86,6 @@ async function createFixture(selected = diagnostic) {
         model: selected.model,
       },
     }),
-    isHeartbeat: false,
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     resolvedVerboseLevel: "off",
@@ -112,6 +111,7 @@ async function createFixture(selected = diagnostic) {
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
     replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
     account: async (route: { provider: string; model: string }) => {
+      setRuntimeConfigSnapshot(context.cfg);
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
         contextTokens: 1_000,

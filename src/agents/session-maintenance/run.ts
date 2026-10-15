@@ -281,7 +281,6 @@ export function scheduleSessionMaintenance(
                   sessionKey,
                   runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                   storePath: prepared.storePath,
-                  isHeartbeat: false,
                   abortSignal: owner.signal,
                 });
                 const memory = await loadAgentRunnerMemoryRuntime();

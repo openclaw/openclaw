@@ -60,7 +60,6 @@ it.each([
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
     const job = createCronJob({

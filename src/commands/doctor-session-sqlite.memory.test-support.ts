@@ -19,6 +19,11 @@ export const sqliteImportMemorySupportUrl = import.meta.url;
 async function main() {
   const [stateDir, scenario] = process.argv.slice(2);
   assert(stateDir && scenario);
+  const diagnosticStarted = performance.now();
+  const reportStage = (stage: string) => {
+    process.stderr.write(`import-memory-stage ${stage} ${performance.now() - diagnosticStarted}\n`);
+  };
+  reportStage("seed-start");
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
@@ -84,9 +89,11 @@ async function main() {
     expected.set(sessionId, hash.digest("hex"));
   }
   fs.writeFileSync(storePath, JSON.stringify(store));
+  reportStage("seed-end");
   process.stderr.write(`seeded ${sessionCount} sessions x ${eventCount} events; importing\n`);
   const started = performance.now();
   if (scenario === "public") {
+    reportStage("public-health-start");
     await withSuppressedNotes(() =>
       noteSessionTranscriptHealth({
         cfg: { agents: { entries: { main: {} } } },
@@ -95,7 +102,9 @@ async function main() {
       }),
     );
     assert(!fs.readdirSync(sessionsDir).some((name) => name.includes(".pre-doctor-")));
+    reportStage("public-health-end");
   }
+  reportStage("import-start");
   const report = await runDoctorSessionSqlite({
     mode: "import",
     store: storePath,
@@ -107,6 +116,8 @@ async function main() {
     report.totals.importedTranscriptEvents,
     scenario === "public" ? 0 : sessionCount * (eventCount + 2),
   );
+  reportStage("import-end");
+  reportStage("verify-start");
   const db = openNodeSqliteDatabase(resolveTargetSqlitePath({ agentId: "main", storePath }), {
     readOnly: true,
   });
@@ -147,14 +158,19 @@ async function main() {
   } finally {
     db.close();
   }
+  reportStage("verify-end");
+  reportStage("rerun-start");
   const rerun = await runDoctorSessionSqlite({
     mode: "import",
     store: storePath,
     env: process.env,
   });
   assert.equal(rerun.totals.importedEntries, 0);
+  reportStage("rerun-end");
+  reportStage("cleanup-start");
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  reportStage("cleanup-end");
   process.stdout.write(
     JSON.stringify({
       scenario,

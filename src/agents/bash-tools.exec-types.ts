@@ -72,7 +72,6 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
-  continuesConversation?: boolean;
   node?: string;
   /** Default working directory for node-host execution only. */
   nodeCwd?: string;

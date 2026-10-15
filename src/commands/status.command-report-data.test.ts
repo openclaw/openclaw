@@ -18,28 +18,38 @@ afterEach(() => {
 
 it.each([
   {
-    channel: "quietchat",
-    accountId: "acct",
-    expected: "ok-token · 5m ago · quietchat · account acct",
+    enabled: true,
+    jobs: 2,
+    nextWakeAtMs: null,
+    expected: "scheduler enabled · 2 total jobs · no wake scheduled",
   },
-  { channel: undefined, accountId: undefined, expected: "ok-token · 5m ago" },
-])(
-  "formats heartbeat age and optional metadata: $expected",
-  async ({ channel, accountId, expected }) => {
-    const now = Date.parse("2026-09-01T12:00:00.000Z");
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const report = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({
-        lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
-      }),
-    );
-    const row = expectDefined(
-      report.overviewRows.find(({ Item }) => Item === "Last heartbeat"),
-      "heartbeat row",
-    );
-    expect(stripAnsi(row.Value)).toBe(expected);
+  {
+    enabled: false,
+    jobs: 1,
+    nextWakeAtMs: null,
+    expected: "scheduler disabled · 1 total job · no wake scheduled",
   },
-);
+  {
+    enabled: true,
+    jobs: 3,
+    nextWakeAtMs: Date.parse("2026-09-01T12:00:00.000Z"),
+    expected: "scheduler enabled · 3 total jobs · next wake 2026-09-01T12:00:00.000Z",
+  },
+])("reports scheduler status: $expected", async ({ enabled, jobs, nextWakeAtMs, expected }) => {
+  const report = await buildStatusCommandReportData(
+    createStatusCommandReportDataParams({
+      automations: { ok: true, value: { enabled, jobs, nextWakeAtMs } },
+    }),
+  );
+  const row = expectDefined(
+    report.overviewRows.find(({ Item }) => Item === "Automations"),
+    "automations row",
+  );
+  expect(stripAnsi(row.Value)).toBe(expected);
+  expect(
+    report.overviewRows.some(({ Item }) => Item === "Heartbeat" || Item === "Last heartbeat"),
+  ).toBe(false);
+});
 
 it("awaits backup freshness before assembling the overview", async () => {
   const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
@@ -59,7 +69,19 @@ it("awaits backup freshness before assembling the overview", async () => {
   );
 });
 
-it("keeps pending startup guidance distinct from reachability failure", async () => {
+it.each([
+  {
+    name: "plain error",
+    error: "gateway still starting; phase plugins",
+    expected: "unavailable (gateway still starting; phase plugins)",
+  },
+  {
+    name: "terminal controls in gateway error",
+    error:
+      "gateway still starting; phase \u001b[31mplugins\u001b[0m\u001b]52;c;ZmFrZQ==\u0007\nretry",
+    expected: "unavailable (gateway still starting; phase plugins\\nretry)",
+  },
+])("keeps startup guidance for $name", async ({ error, expected }) => {
   const params = createStatusCommandReportDataParams();
   const report = await buildStatusCommandReportData({
     ...params,
@@ -69,11 +91,9 @@ it("keeps pending startup guidance distinct from reachability failure", async ()
       gatewayProbe: { startupPhase: "plugins", error: null },
     },
     health: undefined,
-    lastHeartbeat: null,
+    automations: { ok: false, error },
   });
-  expect(
-    stripAnsi(report.overviewRows.find(({ Item }) => Item === "Last heartbeat")?.Value ?? ""),
-  ).toBe("not checked (gateway still starting; phase plugins)");
+  expect(report.overviewRows.find(({ Item }) => Item === "Automations")?.Value).toBe(expected);
   expect(report.footerLines.at(-1)).toBe("  Retry after startup: openclaw status --deep");
   expect(report.footerLines.join("\n")).not.toContain("Fix reachability first");
 });

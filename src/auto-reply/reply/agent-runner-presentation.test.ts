@@ -15,7 +15,6 @@ import { createTypingController } from "./typing.js";
 
 function createPresentation(
   options: {
-    isHeartbeat?: boolean;
     silentExpected?: boolean;
     conversationContext?: string;
     onPartialReply?: GetReplyOptions["onPartialReply"];
@@ -29,13 +28,11 @@ function createPresentation(
 ) {
   const turn = {
     followupRun: { run: { silentExpected: options.silentExpected === true } },
-    isHeartbeat: options.isHeartbeat === true,
     sessionCtx: { agentText: options.conversationContext },
     opts: { onPartialReply: options.onPartialReply },
     typingSignals: createTypingSignaler({
       typing: createTypingController({}),
       mode: "never",
-      isHeartbeat: options.isHeartbeat === true,
     }),
     replyOperation: options.replyOperation,
     ...options.delivery,
@@ -73,7 +70,7 @@ describe("agent runner streaming presentation", () => {
         blockStreamingEnabled: true,
         blockReplyPipeline: null,
         applyReplyToMode: (payload) => payload,
-        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+        typingSignals: createTypingSignaler({ typing, mode: "never" }),
       },
     });
     const handler = presentation.blockReplyHandler;
@@ -132,7 +129,7 @@ describe("agent runner streaming presentation", () => {
           blockStreamingEnabled: true,
           blockReplyPipeline: pipeline,
           applyReplyToMode: (payload) => payload,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
         },
       });
       const handler = presentation.blockReplyHandler;
@@ -409,8 +406,7 @@ describe("agent runner streaming presentation", () => {
       { payload: { text: "visible" }, options: { silentExpected: true }, expected: { skip: true } },
       {
         payload: { text: "HEARTBEAT_OK details" },
-        options: { isHeartbeat: true },
-        expected: { text: "HEARTBEAT_OK details", skip: false },
+        expected: { text: "details", skip: false },
       },
       {
         payload: { text: "No, that is wrong." },

@@ -63,6 +63,14 @@ const loaders = {
     ),
   // Session-state handlers also require this kernel in the same lazy read-worker graph.
   sessionUpstream: async () => sessionUpstreamReadOperations,
+  clawMonitorCleanup: () =>
+    import("../claws/monitor-cleanup.read.worker.js").then(
+      (m) => m.clawMonitorCleanupReadOperations,
+    ),
+  automationProactive: () =>
+    import("../cron/proactive-job-receipt.read.worker.js").then(
+      (m) => m.proactiveJobReceiptReadOperations,
+    ),
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
   restartLifecycle: () =>

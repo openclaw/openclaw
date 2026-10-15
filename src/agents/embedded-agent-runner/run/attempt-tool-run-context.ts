@@ -52,7 +52,6 @@ export function buildEmbeddedAttemptToolRunContext(
     thinkLevel?: ThinkLevel;
     thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
-    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
     memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
@@ -111,7 +110,6 @@ export function buildEmbeddedAttemptToolRunContext(
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
-    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     memoryFlushTools: params.memoryFlushTools,

@@ -18,7 +18,6 @@ test("A2A completes correlated tasks under message-tool-only source policy", asy
           plugins: { allow: ["a2a", "openai"], slots: { memory: "none" } },
           agents: {
             defaults: {
-              heartbeat: { every: "0m" },
               model: { primary: "a2a-proof/a2a-proof" },
               models: { "a2a-proof/a2a-proof": { agentRuntime: { id: "openclaw" } } },
               skipBootstrap: true,

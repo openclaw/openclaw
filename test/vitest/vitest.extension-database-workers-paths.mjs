@@ -64,6 +64,9 @@ export const databaseWorkerExtensionTestFiles = [
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/google/embedding-provider.test.ts",
+  "extensions/alibaba/video-generation-provider.test.ts",
+  "extensions/openai/embedding-provider.test.ts",
+  "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/realtime-voice-provider-routing.test.ts",

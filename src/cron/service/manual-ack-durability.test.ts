@@ -47,6 +47,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
   const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
   const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
+  const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
   await closeOpenClawStateDatabaseAsync();
   const node = resolveTestNodeExecPath();
@@ -61,6 +62,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
           import { writeSync } from "node:fs";
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
+          import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateDatabaseUrl.href)};
           let started = 0;
           let reportStarted;
           const blockersStarted = new Promise((resolve) => { reportStarted = resolve; });
@@ -70,7 +72,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
             cronEnabled: true,
             defaultAgentId: "main",
             log: { info() {}, warn() {}, error() {}, debug() {} },
-            enqueueSystemEvent() {}, requestHeartbeat() {},
+            enqueueSystemEvent() {},
             runIsolatedAgentJob: async () => { throw new Error("unexpected execution"); },
             runCommandJob: async ({ job }) => {
               if (!job.id.startsWith("manual-crash-blocker-")) throw new Error("unexpected execution");
@@ -90,6 +92,8 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
             process.kill(process.pid, "SIGKILL");
           }
           cron.stop();
+          await cron.waitForIdle();
+          await closeOpenClawStateDatabaseAsync();
         `,
       ],
       {
@@ -150,7 +154,7 @@ it.each(["removed", "write-failed"] as const)(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
+      enqueueSessionEvent() {},
       runIsolatedAgentJob: async (params) => {
         if (blockers.some((entry) => entry.id === params.job.id)) {
           if (++blockerCount === blockers.length) {

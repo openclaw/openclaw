@@ -26,7 +26,7 @@ export const clawMonitorInventorySchema = z
     monitors: z.array(clawMonitorSnapshotSchema).max(2),
   })
   .strict();
-export type ClawMonitorSnapshot = z.infer<typeof clawMonitorSnapshotSchema>;
+type ClawMonitorSnapshot = z.infer<typeof clawMonitorSnapshotSchema>;
 export const clawMonitorDrainSchema = z.object({ drained: z.literal(true) }).strict();
 
 export type ClawMonitorCleanupGateway = {

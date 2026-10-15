@@ -1,4 +1,5 @@
 import { createSignal, onCleanup } from "solid-js";
+import type { CronStatus } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -24,14 +25,15 @@ const emptyDiagnostics = (): DebugData => ({
   status: null,
   health: null,
   models: [],
-  heartbeat: null,
+  automations: null,
   lanes: [],
   dynamic: null,
 });
 type Diagnostics = Awaited<ReturnType<typeof loadGatewayDiagnostics>>;
-type DebugData = Omit<Diagnostics, "status" | "health"> & {
+type DebugData = Omit<Diagnostics, "status" | "health" | "automations"> & {
   status: Diagnostics["status"] | null;
   health: Diagnostics["health"] | null;
+  automations: Diagnostics["automations"] | null;
 };
 
 function DebugPageContent() {
@@ -119,12 +121,12 @@ function DebugPageContent() {
     const controller = new AbortController();
     liveFlight = controller;
     try {
-      const [heartbeat, lanes] = await Promise.all([
-        scope.client.request("last-heartbeat", {}, { signal: controller.signal }),
+      const [automations, lanes] = await Promise.all([
+        scope.client.request<CronStatus>("cron.status", {}, { signal: controller.signal }),
         loadCommandLaneDiagnostics(scope.client, controller.signal),
       ]);
       if (!disposed && !controller.signal.aborted && lifecycle.isCurrent(scope)) {
-        state.data = { ...state.data, heartbeat, ...lanes };
+        state.data = { ...state.data, automations, ...lanes };
         state.liveError = null;
         publish();
       }
@@ -240,7 +242,7 @@ function DebugPageContent() {
           status={read("data").status}
           health={read("data").health}
           models={read("data").models}
-          heartbeat={read("data").heartbeat}
+          automations={read("data").automations}
           lanes={read("data").lanes}
           dynamic={read("data").dynamic}
           diagnosticsError={read("diagnosticsError") ?? read("liveError")}

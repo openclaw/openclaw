@@ -57,7 +57,7 @@ describe("manual cron delivery occurrence", () => {
             nowMs: () => now,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             onEvent: (event) => {
               events.push(event);
               if (event.action === "finished") {

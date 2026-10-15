@@ -87,7 +87,8 @@ function createService(storePath: string, deps: Partial<CronServiceDeps> = {}) {
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -413,8 +414,7 @@ describe("CronService", () => {
 
   it("avoids duplicate runs across lexical aliases of one store", async () => {
     const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const clockA = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
     const clockB = createGatewaySchedulerClock(clockA.clock.now());
@@ -424,8 +424,8 @@ describe("CronService", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent,
       runIsolatedAgentJob,
     });
 
@@ -447,8 +447,8 @@ describe("CronService", () => {
       storePath: aliasedStorePath,
       cronEnabled: true,
       log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent,
       runIsolatedAgentJob,
     });
 
@@ -461,8 +461,7 @@ describe("CronService", () => {
     await cronA.status();
     await cronB.status();
 
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(runSessionEvent).toHaveBeenCalledTimes(1);
 
     cronA.stop();
     cronB.stop();
@@ -473,17 +472,17 @@ describe("CronService", () => {
     const store = await makeStorePath();
     const createState = () => {
       const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
-      const enqueueSystemEvent = vi.fn();
+      const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
         scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
-        enqueueSystemEvent,
-        requestHeartbeat: vi.fn(),
+        enqueueSystemEvent: vi.fn(),
+        runSessionEvent,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      return { state, enqueueSystemEvent, clock };
+      return { state, runSessionEvent, clock };
     };
     const stale = createState();
     const writer = createState();
@@ -519,7 +518,12 @@ describe("CronService", () => {
     stale.clock.setTime(stale.clock.clock.now() + 10_000);
     await onTimer(stale.state);
 
-    expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+    expect(stale.runSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: "earlier-job" }),
+        text: "earlier-job",
+      }),
+    );
     await store.cleanup();
   });
 });
@@ -563,14 +567,14 @@ describe("cron wakes during active execution", () => {
       started.resolve();
       return await deferredRun.promise;
     });
-    const enqueueSystemEvent = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       scheduler,
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent,
       runIsolatedAgentJob,
       onEvent: (event) => {
         if (event.jobId === "later-job" && event.action === "finished") {
@@ -594,7 +598,12 @@ describe("cron wakes during active execution", () => {
       laterWake = onTimer(state);
       await withinTest(laterFinished.promise, signal);
 
-      expect(enqueueSystemEvent).toHaveBeenCalledWith("later work", expect.any(Object));
+      expect(runSessionEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: "later-job" }),
+          text: "later work",
+        }),
+      );
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       expect(
         state.store?.jobs.find((job) => job.id === "long-running-job")?.state.runningAtMs,

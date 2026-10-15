@@ -6,7 +6,7 @@ export const CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR =
 export const CODEX_PROMPT_SNAPSHOT_FILES = {
   "telegram-direct": "telegram-direct-codex-message-tool.md",
   "discord-group": "discord-group-codex-message-tool.md",
-  "heartbeat-turn": "telegram-heartbeat-codex-tool.md",
+  "automation-turn": "telegram-automation-codex-tool.md",
 } as const;
 export type CodexPromptSnapshotScenario = keyof typeof CODEX_PROMPT_SNAPSHOT_FILES;
 export const CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO: CodexPromptSnapshotScenario = "telegram-direct";

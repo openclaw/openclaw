@@ -108,7 +108,6 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       plugins: { slots: { memory: "none" } },
       agents: {
         defaults: {
-          heartbeat: { every: "0m" },
           model: { primary: "history-proof/history-proof" },
           models: {
             "history-proof/history-proof": {

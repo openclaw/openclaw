@@ -4,12 +4,7 @@ import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent
 import { isRetainedUnendedSubagentRun } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { bindAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
 import { selectDeliverableSessionsReply } from "../../agents/tools/sessions-send-tokens.js";
-import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyPayloadText,
-  SILENT_REPLY_TOKEN,
-} from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
@@ -204,11 +199,7 @@ export async function waitForDescendantSubagentSummary(params: {
       )?.trim();
       if (
         latest &&
-        latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-        // Parent heartbeat acknowledgments remain in chat.history after the
-        // child settles and must not masquerade as descendant output.
-        !stripHeartbeatToken(latest, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip &&
-        !isSilentReplyPayloadText(latest, HEARTBEAT_TOKEN) &&
+        !isSilentReplyPayloadText(latest) &&
         (latest !== initialParentReply || !isLikelyInterimCronMessage(latest))
       ) {
         return latest;

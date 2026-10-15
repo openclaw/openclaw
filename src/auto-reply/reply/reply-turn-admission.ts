@@ -48,6 +48,7 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createReplyOperation,
   hasCommittedReplyOperationOutcome,
+  hasReplyOperationExecutionStarted,
   isReplyRunSuccessorAdmissionBlocked,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
@@ -226,7 +227,7 @@ export async function admitReplyTurn(
         expectedSessionId = expectedSessionId ? storelessRotation.sessionId : undefined;
       }
       if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
-        if (params.kind === "heartbeat") {
+        if (params.kind === "background") {
           return { status: "skipped", reason: "active-run" };
         }
         const successorAdmission = await waitForReplyRunSuccessorAdmission(
@@ -419,7 +420,7 @@ export async function admitReplyTurn(
             admittedSessionEntry &&
             ((hasMainSessionRecoveryClaim(admittedSessionEntry) &&
               admittedSessionEntry.abortedLastRun === true) ||
-              (params.kind !== "heartbeat" &&
+              (params.kind !== "background" &&
                 admittedSessionEntry.restartRecoveryRuns !== undefined &&
                 (admittedSessionEntry.mainRestartRecovery !== undefined ||
                   !replyRunRegistry.get(params.sessionKey))) ||
@@ -432,7 +433,7 @@ export async function admitReplyTurn(
             (params.kind !== "visible" || admittedSessionEntry?.abortedLastRun === true)
           ) {
             admission?.release();
-            if (params.kind === "heartbeat") {
+            if (params.kind === "background") {
               return { status: "skipped", reason: "active-run" };
             }
             await (params.kind === "visible"
@@ -445,7 +446,7 @@ export async function admitReplyTurn(
             recoveryOwnerRelease === undefined &&
             admittedSessionEntry?.abortedLastRun === true &&
             !admittedSessionEntry.mainRestartRecovery?.tombstone &&
-            params.kind !== "heartbeat" &&
+            params.kind !== "background" &&
             gatewayContext &&
             recoveryRuntime
           ) {
@@ -531,7 +532,7 @@ export async function admitReplyTurn(
               originatingLeafEntryId: params.originatingLeafEntryId,
               upstreamAbortSignal: params.upstreamAbortSignal,
               respectFollowupAdmissionBarrier:
-                params.kind === "queued_followup" || params.kind === "heartbeat",
+                params.kind === "queued_followup" || params.kind === "background",
             });
             bindGatewayContextResolver(operation, resolveGatewayContext);
           }
@@ -575,18 +576,26 @@ export async function admitReplyTurn(
             }
             releasingForRestart = true;
             const runId = getAttachedBackend(admittedOperation)?.runId ?? "unbound";
-            // Release rejects later phases and joins requests already accepted by this borrow.
-            void releaseWorkerDatabaseClaim().then(
-              () =>
-                log.info(
-                  `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
-                  { sessionId },
-                ),
-              (error: unknown) =>
-                log.warn(
-                  `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
-                ),
-            );
+            try {
+              admittedOperation.abortForRestart();
+            } catch (error) {
+              log.warn(
+                `failed to cancel restart-aborted reply owner: ${formatErrorMessage(error)}`,
+              );
+            } finally {
+              // Release rejects later phases and joins requests already accepted by this borrow.
+              void releaseWorkerDatabaseClaim().then(
+                () =>
+                  log.info(
+                    `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
+                    { sessionId },
+                  ),
+                (error: unknown) =>
+                  log.warn(
+                    `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
+                  ),
+              );
+            }
           };
           // Shutdown can cancel the owning work after terminal settlement freezes reply abort.
           const restartReleases = [...new Set([operation.abortSignal, workSignal])].flatMap(
@@ -661,13 +670,13 @@ export async function admitReplyTurn(
           continue;
         }
         if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
-          if (params.kind === "heartbeat") {
+          if (params.kind === "background") {
             return { status: "skipped", reason: "active-run" };
           }
           continue;
         }
         if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
-          if (params.kind === "heartbeat") {
+          if (params.kind === "background") {
             return { status: "skipped", reason: "active-run" };
           }
           const followupAdmission = await waitForReplyRunFollowupAdmission(
@@ -688,16 +697,20 @@ export async function admitReplyTurn(
           throw error;
         }
         const activeOperation = replyRunRegistry.get(params.sessionKey);
-        if (params.kind === "visible" && activeOperation?.turnKind === "heartbeat") {
-          // Background heartbeats must yield before queue policy can steer this
-          // user turn into the heartbeat's model run and lose its visible reply.
+        if (
+          params.kind === "visible" &&
+          activeOperation?.turnKind === "background" &&
+          !hasReplyOperationExecutionStarted(activeOperation)
+        ) {
+          // Unstarted background work yields before queue policy can steer a
+          // user turn into it and lose its visible reply.
           activeOperation.supersede();
         }
         if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
           continue;
         }
         // Visible and queued turns may wait for active runs when waitForActive is set.
-        if (params.kind === "heartbeat" || params.waitForActive === false) {
+        if (params.kind === "background" || params.waitForActive === false) {
           return { status: "skipped", reason: "active-run", activeOperation };
         }
         const activeWaitTimeoutMs =

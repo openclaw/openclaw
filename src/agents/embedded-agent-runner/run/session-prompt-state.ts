@@ -33,6 +33,8 @@ type ActivePrompt = {
 
 export async function createEmbeddedRunSessionPromptState(input: {
   runParams: RunEmbeddedAgentParamsWithSessionFile;
+  /** The selected runtime carries retry instructions separately from the original user turn. */
+  reusePersistedUserTurn?: boolean;
   sessionAgentId: string;
   resolvedSessionKey: string;
   lifecycleGeneration: NonNullable<RunEmbeddedAgentParamsWithSessionFile["lifecycleGeneration"]>;
@@ -132,6 +134,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   // cannot recapture the original user projection after that turn has dispatched.
   const dispatchedFallback =
     params.modelRoutingProvenance?.stage === "fallback" &&
+    input.reusePersistedUserTurn !== true &&
     params.userTurnTranscriptRecorder !== undefined &&
     getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder)?.sentToProvider() ===
       true;

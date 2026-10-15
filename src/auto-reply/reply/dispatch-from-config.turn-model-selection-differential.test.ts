@@ -8,7 +8,6 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import {
   TURN_MODEL_DEFAULT_REF,
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
-  TURN_MODEL_OVERRIDE_REF,
   turnModelRefLabel,
   type TurnModelDifferentialFixture,
 } from "../../test-utils/turn-model-selection-differential.js";
@@ -48,7 +47,7 @@ async function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
     entry: fixture.child,
     sessionAgentId: "main",
     sessionKey,
-    turnModelOverride: fixture.heartbeat ? turnModelRefLabel(TURN_MODEL_OVERRIDE_REF) : undefined,
+    turnModelOverride: fixture.modelOverride ? turnModelRefLabel(fixture.modelOverride) : undefined,
   });
   const { provider, model } = fixture.expected.harness;
   expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(

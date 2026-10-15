@@ -106,8 +106,6 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   }
 
   if (patch.kind !== "agentTurn" || existing.kind !== "agentTurn") {
-    // System-owned payloads carry no fields; the service boundary already
-    // rejects client patches for them.
     return buildPayloadFromPatch(patch);
   }
 
@@ -138,6 +136,12 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
+  }
+  if (typeof patch.skipIfScratchEmpty === "boolean") {
+    next.skipIfScratchEmpty = patch.skipIfScratchEmpty;
+  }
+  if (typeof patch.includeReasoning === "boolean") {
+    next.includeReasoning = patch.includeReasoning;
   }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
@@ -192,10 +196,6 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return next;
   }
 
-  if (patch.kind !== "agentTurn") {
-    return { kind: patch.kind };
-  }
-
   if (typeof patch.message !== "string" || patch.message.length === 0) {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
@@ -208,6 +208,10 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
     ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
     ...(patch.lightContext !== undefined ? { lightContext: patch.lightContext } : {}),
+    ...(patch.skipIfScratchEmpty !== undefined
+      ? { skipIfScratchEmpty: patch.skipIfScratchEmpty }
+      : {}),
+    ...(patch.includeReasoning !== undefined ? { includeReasoning: patch.includeReasoning } : {}),
     ...(patch.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }
       : {}),

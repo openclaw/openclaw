@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -22,43 +21,6 @@ import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
-
-function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  return [
-    {
-      label: "Heartbeat defaults",
-      heartbeat: cfg.agents?.defaults?.heartbeat,
-      pathHint: "agents.defaults.heartbeat.directPolicy",
-    },
-    ...listAgentEntriesWithSource(cfg).map(({ entry: agent, source }) => ({
-      label: `Heartbeat agent "${agent.id}"`,
-      heartbeat: agent.heartbeat,
-      pathHint:
-        source.kind === "entries"
-          ? `agents.entries.${source.key}.heartbeat.directPolicy`
-          : `heartbeat.directPolicy for agent "${agent.id}"`,
-    })),
-  ].flatMap<SecurityAuditFinding>(({ label, heartbeat, pathHint }) => {
-    if (
-      !heartbeat ||
-      heartbeat.target === undefined ||
-      heartbeat.target === "none" ||
-      heartbeat.directPolicy !== undefined
-    ) {
-      return [];
-    }
-    return [
-      {
-        checkId: "doctor.heartbeat_direct_policy_unset",
-        severity: "warn",
-        title: label,
-        detail: `heartbeat delivery is configured while ${pathHint} is unset.`,
-        remediation:
-          'Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
-      },
-    ];
-  });
-}
 
 function collectExecPolicyConflictWarnings(
   cfg: OpenClawConfig,
@@ -222,7 +184,6 @@ export async function collectSecurityWarnings(
     });
   }
 
-  findings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
   let approvals: ExecApprovalsFile | undefined;
   try {
     approvals = loadExecApprovalsReadOnly();

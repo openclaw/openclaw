@@ -22,8 +22,10 @@ import type {
   CronSkippedRequest,
 } from "../store/run-queue.types.js";
 import type { CronJob } from "../types.js";
+import { hasUnstartedCronAdmission } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
+import { assertExecutionPolicy } from "./jobs-validation.js";
 import { locked } from "./locked.js";
 import {
   clearManualCronJobActive,
@@ -537,9 +539,6 @@ async function launchCronRun(
     return;
   }
   const manual = options.source === "manual" || options.source === "event";
-  const activeJobMarker = manual
-    ? markManualCronJobActive(state, entry.job, entry.runReceipt)
-    : markServiceCronJobActive(state, entry.job, entry.runReceipt);
   const admittedJob = structuredClone(entry.job);
   if (options.onExit) {
     admittedJob.enabled = false;
@@ -550,10 +549,29 @@ async function launchCronRun(
     : (options.onExit?.payload?.(structuredClone(entry.job)) ??
       options.payload ??
       executionJob.payload);
+  if (options.delivery) {
+    const configured = executionJob.delivery;
+    executionJob.delivery = {
+      mode: "announce",
+      ...configured,
+      ...options.delivery,
+      // Per-run routing cannot widen the stored delivery policy.
+      ...(configured?.target === "owner"
+        ? { target: "owner", to: undefined, threadId: undefined }
+        : {}),
+      ...(configured?.accountId ? { accountId: configured.accountId } : {}),
+      ...(configured?.mode === "none" ? { mode: "none" } : {}),
+      ...(configured?.directPolicy === "block" ? { directPolicy: "block" } : {}),
+    };
+    assertExecutionPolicy(executionJob);
+  }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
     executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
   }
+  const activeJobMarker = manual
+    ? markManualCronJobActive(state, entry.job, entry.runReceipt)
+    : markServiceCronJobActive(state, entry.job, entry.runReceipt);
   const taskRunId = createCronRunHandle({
     state,
     job: entry.job,
@@ -583,6 +601,7 @@ async function launchCronRun(
   pending.removeCancellation?.();
   pending.started = true;
   pending.activation.resolve();
+  const onExit = options.onExit;
   let executionBinding: Promise<void> | undefined;
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -630,6 +649,19 @@ async function launchCronRun(
           await executionBinding;
         },
       },
+      ...(onExit
+        ? {
+            idleAdmission: {
+              signal: onExit.signal,
+              assertCurrent: () => {
+                onExit.commitGuard();
+                if (activeJobMarker?.messageSourceAuthorityRevoked) {
+                  throw new Error("cron on-exit source changed while awaiting idle execution");
+                }
+              },
+            },
+          }
+        : {}),
     });
   } catch (error) {
     result = authorCronRunCompletion(executionJob, {
@@ -638,7 +670,8 @@ async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy
+    result.triggerEval?.busy ||
+      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
       ? "busy"
       : result.status === "error"
         ? "error"

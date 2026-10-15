@@ -33,7 +33,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import {
@@ -466,28 +465,30 @@ describe("cron service ops regressions", () => {
       ],
     });
 
-    const enqueueSystemEvent = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronRegressionState({
       cronEnabled: false,
       storePath: store.storePath,
       nowMs: () => now,
-      enqueueSystemEvent,
+      runSessionEvent,
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
     try {
       await start(state);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runSessionEvent).not.toHaveBeenCalled();
       expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
         lastRunStatus: "error",
         lastError: "cron: job interrupted by gateway restart",
       });
       const result = await run(state, "stale-running", "force");
       expect(result).toEqual({ ok: true, ran: true });
-      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-      const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
-      expect(text).toBe("stale-running");
-      expect(options?.agentId).toBe("main");
+      expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          text: "stale-running",
+          job: expect.objectContaining({ id: "stale-running", sessionTarget: "main" }),
+        }),
+      );
     } finally {
       stop(state);
       await state.schedulerDrain;

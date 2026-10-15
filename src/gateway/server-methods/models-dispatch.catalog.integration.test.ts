@@ -147,7 +147,6 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       agents: {
         defaults: {
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           modelPolicy: { allow: [`${provider}/*`] },
         },
         entries: { main: { workspace: state.workspaceDir } },

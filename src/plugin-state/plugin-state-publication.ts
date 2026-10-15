@@ -15,10 +15,15 @@ import {
   type SqliteCommittedFact,
 } from "../infra/sqlite-commit-receipt.js";
 import {
+  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteRevision,
+} from "../infra/sqlite-database-admission.js";
+import {
   publishSqliteCommittedState,
   stageSqliteCommittedPublication,
   stageSqliteTransactionState,
 } from "../infra/sqlite-post-commit.js";
+import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -33,7 +38,7 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 
 type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
-type Receipt = SqliteCommitReceipt<PluginStateRow>;
+type Receipt = SqliteCommitReceipt<PluginStateRow> & { writeRevision?: number };
 type PluginStateChange =
   | { kind: "committed"; receipt: Receipt }
   | { kind: "unknown"; identity: string | symbol }
@@ -87,13 +92,23 @@ export function pluginStatePublicationKey(row: EntryKey): string {
 function captureReceipt(
   db: EngineConnection,
   facts: ReadonlyMap<string, SqliteCommittedFact<PluginStateRow>>,
-) {
-  return createSqliteCommitReceipt({
+): Receipt {
+  const revision = readSqliteDatabaseWriteRevision(db);
+  const receipt = createSqliteCommitReceipt({
     source: sourceFor(db),
     domain: "plugin-state",
     keys: [...facts.keys()],
     readFact: (key) => facts.get(key)!,
   });
+  return {
+    ...receipt,
+    writeRevision:
+      revision === undefined
+        ? undefined
+        : readSqliteDatabasePendingWriteToken(sqlPublicationAnchor(db)) === undefined
+          ? revision
+          : (revision + 1) | 0,
+  };
 }
 
 function install(change: PluginStateChange): void {
@@ -122,10 +137,15 @@ function install(change: PluginStateChange): void {
   }
 }
 
-function publication(receipt: Receipt) {
+function publication(receipt: Receipt, cacheStillCurrent?: () => boolean) {
   let change: PluginStateChange = { kind: "committed", receipt };
   return {
-    installFacts: () => install(change),
+    installFacts: () => {
+      if (cacheStillCurrent && !cacheStillCurrent()) {
+        change = { kind: "committed", receipt: { ...receipt, writeRevision: undefined } };
+      }
+      install(change);
+    },
     invalidate() {
       change = { kind: "unknown", identity: receipt.source.identity };
       install(change);
@@ -275,7 +295,11 @@ function stage(db: EngineConnection, facts: Map<string, SqliteCommittedFact<Plug
       },
     });
   }
-  const next = publication(captureReceipt(db, facts));
+  const nativeRevision = readSqliteNativeMutationRevision(db);
+  const next = publication(
+    captureReceipt(db, facts),
+    () => nativeRevision === readSqliteNativeMutationRevision(db),
+  );
   if (!stageSqliteCommittedPublication(anchor, next) && !db.isTransaction) {
     publishSqliteCommittedState(next);
   }
@@ -343,6 +367,8 @@ function readReceipt(value: unknown): Receipt {
     typeof value.source.identity !== "string" ||
     typeof value.source.incarnation !== "string" ||
     !(value.facts instanceof Map) ||
+    (value.writeRevision !== undefined &&
+      (typeof value.writeRevision !== "number" || !Number.isInteger(value.writeRevision))) ||
     !hasSqliteCommitReceiptCoverage(value, {
       source: { identity: value.source.identity, incarnation: value.source.incarnation },
       domain: "plugin-state",

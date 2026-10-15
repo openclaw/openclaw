@@ -738,9 +738,16 @@ function mayIncludeAuthKey(
   }
   const type = checker.getTypeAtLocation(value);
   const variants = type.isUnionType() ? type.getTypes() : [type];
-  return variants.some((variant) =>
-    variant.isStringLiteralType() ? variant.value.trim() === "authProfiles.store" : true,
-  );
+  return variants.some((variant) => {
+    if (variant.isStringLiteralType()) {
+      return variant.value.trim() === "authProfiles.store";
+    }
+    if (variant.isTemplateLiteralType()) {
+      const head = variant.texts[0]?.trim() ?? "";
+      return "authProfiles.store".startsWith(head);
+    }
+    return true;
+  });
 }
 
 function mayWriteAuthMachineState(

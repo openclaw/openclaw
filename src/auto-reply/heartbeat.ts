@@ -1,14 +1,14 @@
-/** Heartbeat prompt defaults, scratch detection, and acknowledgment handling. */
+/** Historical transcript and token recognition. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
 
-// Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
+// Historical prompt bytes are retained for saved transcript recognition.
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 const HEARTBEAT_CRON_TASK_GUIDANCE =
   "Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch.";
 const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
-/** Default prompt for heartbeat turns when config does not override it. */
+/** @deprecated Ordinary automations supply their own instructions. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
@@ -23,60 +23,9 @@ export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   cron: "[OpenClaw cron wake]",
   event: "[OpenClaw session event]",
 } as const;
-export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
-/**
- * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
- * This allows skipping heartbeat API calls when no tasks are configured.
- *
- * Scratch is considered effectively empty if it contains only:
- * - Whitespace / empty lines
- * - Markdown/HTML comments
- * - Markdown ATX headers (`#`, `##`, ...)
- * - Markdown fence markers such as ``` or ```markdown
- * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
- *
- * Note: Missing scratch returns false (not effectively empty) so the model can
- * still decide what to do. This function applies only when a scratch row exists.
- */
-export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
-  if (typeof content !== "string") {
-    return false;
-  }
-
-  let inHtmlComment = false;
-  for (let line of content.split("\n")) {
-    while (inHtmlComment || line.trimStart().startsWith("<!--")) {
-      const searchText: string = inHtmlComment ? line : line.trimStart();
-      const commentEnd = searchText.indexOf("-->");
-      inHtmlComment = commentEnd === -1;
-      if (inHtmlComment) {
-        line = "";
-        break;
-      }
-      line = searchText.slice(commentEnd + 3);
-    }
-    const trimmed = line.trim();
-    if (
-      !trimmed ||
-      /^#+(\s|$)/.test(trimmed) ||
-      /^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed) ||
-      /^```[A-Za-z0-9_-]*$/.test(trimmed)
-    ) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-/** Resolves configured heartbeat prompt text with the built-in default fallback. */
-export function resolveHeartbeatPromptCore(raw?: string): string {
-  return normalizeOptionalString(raw) || HEARTBEAT_PROMPT;
-}
-
-/** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
+/** Reconstructs historical response-tool prompts for saved transcript recognition. */
 export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   const prompt = normalizeOptionalString(raw);
   if (!prompt) {

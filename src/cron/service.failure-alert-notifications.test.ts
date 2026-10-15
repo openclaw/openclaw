@@ -1,18 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { HeartbeatRunOptions } from "../infra/heartbeat-runner-execution.js";
-import {
-  resolveHeartbeatPreflight,
-  resolveHeartbeatRunPrompt,
-} from "../infra/heartbeat-runner-prompt.js";
-import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
-import {
-  drainSystemEvents,
-  enqueueSystemEvent,
-  peekSystemEventEntries,
-} from "../infra/system-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
@@ -33,7 +19,6 @@ describe("CronService failure notification delivery", () => {
       sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
       wakeMode: "now" as const,
       carriesOrigin: true,
-      wakesNow: true,
     },
     {
       name: "a targeted next-heartbeat conversation immediately",
@@ -43,54 +28,30 @@ describe("CronService failure notification delivery", () => {
       sessionTarget: "isolated" as const,
       wakeMode: "next-heartbeat" as const,
       carriesOrigin: true,
-      wakesNow: true,
     },
     {
       name: "the default owner without exposing its last group",
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: undefined,
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       carriesOrigin: false,
-      wakesNow: true,
     },
-  ])("routes a rejected failure alert to $name with cadence disabled", async (testCase) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { every: "0m" } },
-        entries: { main: {}, ops: {} },
-      },
-    };
+    {
+      name: "the default owner even when the failed job uses a deferred wake mode",
+      agentId: "main",
+      sessionKey: undefined,
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      carriesOrigin: false,
+    },
+  ])("routes a rejected failure alert to $name with scheduling disabled", async (testCase) => {
     const deliveryContext: DeliveryContext = {
       channel: "telegram",
       to: "-10042",
       threadId: 77,
     };
-    const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
-    const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
-    const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
-      const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
-      const preflight = await resolveHeartbeatPreflight({
-        cfg,
-        agentId: testCase.agentId,
-        sessionKey: options.sessionKey,
-        heartbeat: options.heartbeat,
-        source: options.source,
-        reason: options.reason,
-      });
-      observed.push({
-        prompt: resolveHeartbeatRunPrompt({
-          cfg,
-          preflight,
-          canRelayToUser: true,
-          scheduledTasks: [],
-          useHeartbeatResponseTool: false,
-        }).prompt,
-        deliveryContext: pendingEventEntries[0]?.deliveryContext,
-      });
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    const runner = startHeartbeatRunner({ cfg, readCurrentConfig: () => cfg, runOnce });
+    const enqueueSessionEvent = vi.fn();
     const store = await makeStorePath();
     const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
     const sendCronFailureAlert = vi.fn(async (params) => {
@@ -104,32 +65,19 @@ describe("CronService failure notification delivery", () => {
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
-      cronEnabled: true,
+      cronEnabled: false,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
       defaultAgentId: "main",
       log: logger,
       resolveOriginDeliveryContext,
-      enqueueSystemEvent: (text, options) =>
-        enqueueSystemEvent(text, {
-          sessionKey:
-            options?.sessionKey ??
-            resolveAgentMainSessionKey({ cfg, agentId: options?.agentId ?? "main" }),
-          contextKey: options?.contextKey,
-          deliveryContext: options?.deliveryContext,
-        }),
-      requestHeartbeat: (wake) => {
-        pendingWakes.push(
-          requestHeartbeatAndWait({
-            ...wake,
-            sessionKey:
-              wake.sessionKey ??
-              resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
-            coalesceMs: 0,
-          }),
-        );
-      },
+      enqueueSystemEvent: vi.fn(),
+      enqueueSessionEvent,
       sendCronFailureAlert,
       runIsolatedAgentJob: async () => ({
+        status: "error",
+        error: "temporary upstream error",
+      }),
+      runSessionEvent: async () => ({
         status: "error",
         error: "temporary upstream error",
       }),
@@ -151,27 +99,16 @@ describe("CronService failure notification delivery", () => {
       await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
         "failure alert channel unavailable",
       );
-      await vi.advanceTimersByTimeAsync(1);
-      await Promise.all(pendingWakes);
-
-      expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
-      expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
-      if (testCase.wakesNow) {
-        expect(runOnce).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: testCase.agentId,
-            sessionKey: testCase.sessionKey,
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-          }),
-        );
-        expect(observed[0]?.prompt).toContain('Automation "Important report" failed 1 times');
-        expect(observed[0]?.prompt).toContain("Please relay this reminder to the user");
-        expect(observed[0]?.deliveryContext).toEqual(
-          testCase.carriesOrigin ? deliveryContext : undefined,
-        );
-      }
+      expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('Automation "Important report" failed 1 times'),
+        {
+          agentId: testCase.agentId,
+          sessionKey: testCase.sessionKey,
+          contextKey: `cron:${job.id}:failure-alert`,
+          ...(testCase.sessionKey ? {} : { createIfMissing: true }),
+          ...(testCase.carriesOrigin ? { deliveryContext } : {}),
+        },
+      );
       if (testCase.carriesOrigin) {
         expect(resolveOriginDeliveryContext).toHaveBeenCalledOnce();
       } else {
@@ -179,14 +116,6 @@ describe("CronService failure notification delivery", () => {
       }
     } finally {
       cron.stop();
-      try {
-        // Stopping the runner retains unfinished notifications for its successor.
-        await vi.advanceTimersByTimeAsync(1);
-        await Promise.all(pendingWakes);
-      } finally {
-        runner.stop();
-        drainSystemEvents(testCase.sessionKey);
-      }
     }
   });
 });

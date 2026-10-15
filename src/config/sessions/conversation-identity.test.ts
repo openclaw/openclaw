@@ -132,7 +132,7 @@ describe("conversation identity", () => {
     );
   });
 
-  it.each(["heartbeat"] as const)(
+  it.each(["event"] as const)(
     "binds synthetic %s metadata to its originating direct route, not its execution sender",
     (source) => {
       const identity = conversationIdentityFromMsgContext({

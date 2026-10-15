@@ -201,7 +201,7 @@ describe("agent group thread dispatch", () => {
 
   it.each([
     { name: "operator UI", context: { Provider: "webchat", Surface: "webchat" } },
-    { name: "internal event", context: { InternalTurnSource: "heartbeat" as const } },
+    { name: "internal event", context: { InternalTurnSource: "event" as const } },
   ])("does not fan out an $name with an external reply target", async ({ context }) => {
     const run = dispatch({ context });
     await run.done;

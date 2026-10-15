@@ -168,13 +168,16 @@ read_when:
   </Accordion>
 
   <Accordion title="Can OpenClaw run tasks on a schedule or continuously in the background?">
-    Yes, via the Gateway scheduler:
+    Yes. Ordinary **Automation jobs** handle scheduled and recurring tasks,
+    including periodic check-ins. Jobs persist across restarts and can use an
+    existing session or an isolated session, with delivery to the operator or a
+    chosen chat. Manage their schedules and scratch checklists in **Automations**
+    or with `openclaw cron`.
 
-    - **Cron jobs** for scheduled or recurring tasks (persist across restarts).
-    - **Heartbeat** for main-session periodic checks.
-    - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
+    Existing heartbeat settings migrate once through `openclaw doctor --fix`;
+    after migration, the job owns its settings and can be edited or deleted.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation), [Heartbeat](/gateway/heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation), [Heartbeat migration](/gateway/heartbeat).
 
   </Accordion>
 

@@ -53,9 +53,9 @@ Codex harness forwards the other bootstrap files as developer instructions:
 - The selected memory plugin's prompt builder receives the complete available
   tool set, including deferred plugin tools. Its guidance uses the same
   parent-local layer independently of `MEMORY.md` file routing.
-- Heartbeat turns receive generic initiative guidance through collaboration
-  mode. Monitor cron scratch is appended to the heartbeat prompt instead of
-  injected as workspace context.
+- Scheduled checks receive the automation's instructions and scratch through
+  its bounded run context, rather than a heartbeat-specific collaboration mode
+  or workspace bootstrap file.
 - `MEMORY.md` content from the configured agent workspace is not pasted into
   native Codex turn input when memory tools are available for that
   workspace; when it exists, the harness adds a small workspace-memory

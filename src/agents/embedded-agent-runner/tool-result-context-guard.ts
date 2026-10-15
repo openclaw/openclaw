@@ -178,8 +178,6 @@ export function installContextEngineLoopHook(params: {
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
   runtimeSettings?: ContextEngineRuntimeSettings;
-  /** True when this turn belongs to a heartbeat run. */
-  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const sessionIdentity = { sessionId, sessionKey };
@@ -241,7 +239,6 @@ export function installContextEngineLoopHook(params: {
               prePromptMessageCount,
             }),
             runtimeSettings: params.runtimeSettings,
-            isHeartbeat: params.isHeartbeat,
           });
         } else {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -249,14 +246,12 @@ export function installContextEngineLoopHook(params: {
             await contextEngine.ingestBatch({
               ...sessionIdentity,
               messages: newMessages,
-              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
                 ...sessionIdentity,
                 message,
-                isHeartbeat: params.isHeartbeat,
               });
               signal?.throwIfAborted();
             }

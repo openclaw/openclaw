@@ -315,16 +315,16 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
     });
 
-    it("skips cron delivery when output is heartbeat-only", async () => {
+    it("skips cron delivery when output is silent", async () => {
       mockAnnounce();
       resolveCronPayloadOutcomeMock.mockReturnValue(
-        visibleOutcome("HEARTBEAT_OK", {
-          deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+        visibleOutcome("NO_REPLY", {
+          deliveryDisposition: { kind: "silent", controlOnly: true },
         }),
       );
       await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
       expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
-      dispatch({ deliveryRequested: true, skipDelivery: "heartbeat" });
+      dispatch({ deliveryRequested: true, skipDelivery: "silent" });
     });
 
     it("does not dispatch fatal error announces after a verified message-tool delivery", async () => {

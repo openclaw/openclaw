@@ -18,6 +18,8 @@ import type { PluginRuntime } from "./runtime/types.js";
 type RunParams = Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
 
 function createApis(runtime: PluginRuntime, config: OpenClawConfig = {}) {
+  setRuntimeConfigSnapshot(config);
+  onTestFinished(clearRuntimeConfigSnapshot);
   const registry = createRuntimeTestRegistry(runtime);
   return (id: string) =>
     registry.createApi(

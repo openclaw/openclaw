@@ -12,6 +12,7 @@ import type { JSX } from "@solidjs/web";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
@@ -101,6 +102,10 @@ declare module "@solidjs/web" {
         "prop:measureSize"?: () => number;
         onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
         "onResize-end"?: () => void;
+      };
+      "openclaw-cron-scratch-editor": HTMLAttributes<HTMLElement> & {
+        "prop:jobId": string;
+        "prop:gateway": ApplicationGateway | null;
       };
       "wa-popup": LegacyAttributes<WaPopup> & {
         active?: boolean;

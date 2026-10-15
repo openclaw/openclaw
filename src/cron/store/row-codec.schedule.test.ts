@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import type { CronSchedule } from "../types.js";
-import { projectCronJobThroughStorageCodec } from "./row-codec.js";
+import { projectCronJobThroughStorageCodec, rowToCronJob } from "./row-codec.js";
 
 describe("canonical cron schedule JSON round-trip", () => {
   it("keeps private runtime authority out of job_json", () => {
@@ -60,4 +60,24 @@ describe("canonical cron schedule JSON round-trip", () => {
       items: ["first"],
     });
   });
+
+  it.each([
+    { activeHours: { start: "24:00", end: "08:00" } },
+    { activeHours: { start: "08:00", end: "24:00", timezone: "invalid/timezone" } },
+    { activeHours: { start: "08:00" } },
+    { idleOnly: "false" },
+    { payload: { kind: "agentTurn", message: "check", includeReasoning: "false" } },
+    { payload: { kind: "agentTurn", message: "check", skipIfScratchEmpty: "false" } },
+  ])(
+    "refuses stored execution policy that would change behavior through coercion: %j",
+    (policy) => {
+      const job = makeCronJob({});
+      expect(
+        rowToCronJob(
+          { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },
+          { ...job, ...policy },
+        ),
+      ).toBeNull();
+    },
+  );
 });

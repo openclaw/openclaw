@@ -82,8 +82,8 @@ async function expectLocalSharedAuthScopesPreserved(
     const helloOk = res.payload as HelloOk;
     expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
 
-    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
+    const adminRes = await rpcReq(ws, "exec.approvals.get", {});
+    expect(adminRes).toMatchObject({ ok: true, payload: { file: { version: 1 } } });
   } finally {
     ws.close();
   }

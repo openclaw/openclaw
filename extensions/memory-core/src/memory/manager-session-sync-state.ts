@@ -27,7 +27,6 @@ export function isMemorySessionIndexable(
         isCronRunSessionKey(archivedSessionKey) ||
         archivedSessionKey.endsWith(":heartbeat"))) ||
     (entry.lineProvenance !== undefined &&
-      entry.lineProvenance.length > 0 &&
       entry.lineProvenance.every((line) => line.originClass === "system"))
   );
 }

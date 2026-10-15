@@ -4,7 +4,6 @@ import { isFreshChannelCronAuthorityTurn } from "../../agents/cron-creator-autho
 const BASE = {
   messageProvider: "telegram",
   senderId: "owner-1",
-  isHeartbeat: false,
   isRoomEvent: false,
 };
 
@@ -18,7 +17,7 @@ describe("fresh channel cron authority turn", () => {
   it.each([
     { name: "missing provider", overrides: { messageProvider: undefined } },
     { name: "missing sender", overrides: { senderId: undefined } },
-    { name: "heartbeat", overrides: { isHeartbeat: true } },
+    { name: "session event", overrides: { inputProvenance: { kind: "internal_system" } } },
     { name: "room event", overrides: { isRoomEvent: true } },
     { name: "continuation provenance", overrides: { inputProvenance: { kind: "continuation" } } },
     { name: "spawned session", overrides: { spawnedBy: "agent:parent" } },

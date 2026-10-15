@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { coerceToFailoverError, FailoverError } from "../../agents/failover-error.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
@@ -138,74 +135,59 @@ describe("buildExternalRunFailureReply", () => {
     expect(reply.text).not.toContain("PRIVATE_CANARY");
   });
 
-  it("includes heartbeat preflight reasons without verbose opt-in", () => {
+  it("keeps uncurated preflight reasons behind verbose opt-in", () => {
     const message =
       "Codex session became active in another runner; wait for it to finish before continuing";
-    const reply = buildExternalRunFailureReply(
-      { message, error: new AgentHarnessPreflightError(message) },
-      { isHeartbeat: true },
-    );
+    const reply = buildExternalRunFailureReply({
+      message,
+      error: new AgentHarnessPreflightError(message),
+    });
 
-    expect(reply.text).toContain(`\n\nDetails: ${message}.\n`);
-    expect(reply.isGenericRunnerFailure).toBe(false);
-    expect(reply.text).not.toContain("/new");
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(true);
   });
 
-  it.each(["529 overloaded"])(
-    "keeps preflight %s diagnostics verbose-gated except for heartbeats",
-    (failure) => {
-      const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
-      const input = {
-        message,
-        error: new AgentHarnessPreflightError(message, {
-          cause: new FailoverError("provider diagnostic", {
-            reason: failure.startsWith("401") ? "auth" : "overloaded",
-            status: failure.startsWith("401") ? 401 : 529,
-          }),
+  it.each(["529 overloaded"])("keeps preflight %s diagnostics verbose-gated", (failure) => {
+    const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
+    const input = {
+      message,
+      error: new AgentHarnessPreflightError(message, {
+        cause: new FailoverError("provider diagnostic", {
+          reason: failure.startsWith("401") ? "auth" : "overloaded",
+          status: failure.startsWith("401") ? 401 : 529,
         }),
-      };
-      expect(
-        buildKnownAgentRunFailureReplyPayload({
-          err: input.error,
-          sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
-          resolvedVerboseLevel: "off",
-        }),
-      ).toBeUndefined();
-      expect(buildExternalRunFailureReply(input)).toEqual({
-        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-        isGenericRunnerFailure: true,
-      });
-      const heartbeat = buildExternalRunFailureReply(input, {
-        isHeartbeat: true,
-        includeDetails: true,
-      });
-      expect(heartbeat.isGenericRunnerFailure).toBe(false);
-      expect(heartbeat.text).not.toContain("x".repeat(1500));
-      expect(heartbeat.text).toContain("reconnect before continuing");
-      expect(heartbeat.text).toContain("diagnostic-canary");
-      expect(heartbeat.text).not.toContain("/new");
-      const verbose = buildExternalRunFailureReply(input, { includeDetails: true });
-      expect(verbose.isGenericRunnerFailure).toBe(true);
-      expect(verbose.text).toContain("reconnect before continuing");
-      expect(verbose.text).toContain("diagnostic-canary");
-      expect(verbose.text).not.toContain("x".repeat(1500));
-    },
-  );
+      }),
+    };
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: input.error,
+        sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toBeUndefined();
+    expect(buildExternalRunFailureReply(input)).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+    const verbose = buildExternalRunFailureReply(input, { includeDetails: true });
+    expect(verbose.isGenericRunnerFailure).toBe(true);
+    expect(verbose.text).toContain("reconnect before continuing");
+    expect(verbose.text).toContain("diagnostic-canary");
+    expect(verbose.text).not.toContain("x".repeat(1500));
+  });
 
-  it("keeps raw heartbeat failure details behind verbose opt-in", () => {
+  it("keeps raw failure details behind verbose opt-in", () => {
     const message = "Gateway SDK resource host is not bound";
     const input = { message, error: new Error(message) };
-    expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
-      text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: false,
+    expect(buildExternalRunFailureReply(input)).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     });
     const verbose = buildExternalRunFailureReply(input, {
-      isHeartbeat: true,
       includeDetails: true,
     });
-    expect(verbose.text).toContain(`\n\nDetails: ${message}.\n`);
-    expect(verbose.text).not.toContain("/new");
-    expect(verbose.isGenericRunnerFailure).toBe(false);
+    expect(verbose.text).toContain(message);
+    expect(verbose.isGenericRunnerFailure).toBe(true);
   });
 
   it.each([

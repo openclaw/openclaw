@@ -4,7 +4,6 @@ import { resolveIsNixMode } from "../config/paths.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { BackupRunFreshness } from "../state/backup-run-records.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
@@ -23,11 +22,11 @@ import {
   buildStatusSessionsOverviewValue,
   formatHostDesktopStatus,
 } from "./status-overview-values.ts";
+import type { StatusAutomationsResult } from "./status-runtime-shared.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusAgentsValue,
-  buildStatusHeartbeatValue,
-  buildStatusLastHeartbeatValue,
+  buildStatusAutomationsValue,
   buildStatusMemoryValue,
 } from "./status.command-sections.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
@@ -97,7 +96,7 @@ export function buildStatusCommandOverviewRows(params: {
   osLabel: string;
   summary: StatusSummary;
   health?: HealthSummary;
-  lastHeartbeat: HeartbeatEventPayload | null;
+  automations: StatusAutomationsResult;
   agentStatus: {
     defaultId?: string | null;
     bootstrapPendingCount: number;
@@ -118,13 +117,6 @@ export function buildStatusCommandOverviewRows(params: {
   });
   const probesValue = buildStatusProbesValue({
     health: params.health,
-  });
-  const heartbeatValue = buildStatusHeartbeatValue({ summary: params.summary });
-  const lastHeartbeatValue = buildStatusLastHeartbeatValue({
-    deep: params.opts.deep,
-    gatewayReachable: params.surface.gatewayReachable,
-    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
-    lastHeartbeat: params.lastHeartbeat,
   });
   const memoryValue = buildStatusMemoryValue({
     memory: params.memory,
@@ -191,8 +183,7 @@ export function buildStatusCommandOverviewRows(params: {
             },
           ]
         : []),
-      { Item: "Heartbeat", Value: heartbeatValue },
-      ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
+      { Item: "Automations", Value: buildStatusAutomationsValue(params.automations) },
       {
         Item: "Sessions",
         Value: buildStatusSessionsOverviewValue({
@@ -207,6 +198,7 @@ export function buildStatusCommandOverviewRows(params: {
 }
 
 export function buildStatusAllOverviewRows(params: {
+  automations: StatusAutomationsResult;
   surface: StatusOverviewSurface;
   summary: StatusDegradationSummary;
   osLabel: string;
@@ -241,6 +233,7 @@ export function buildStatusAllOverviewRows(params: {
       agentStatus: params.agentStatus,
     }),
     suffixRows: [
+      { Item: "Automations", Value: buildStatusAutomationsValue(params.automations) },
       {
         Item: "Secrets",
         Value: buildStatusSecretsValue(params.secretDiagnosticsCount),

@@ -25,7 +25,6 @@ it.each([false, true])(
     try {
       const reply = await handleReplyAgentRunError(new Error("restart"), {
         resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
         replyExpectation: "required",
         isRestartRecoveryArmed: async () => armed,
         replyOperation,
@@ -54,7 +53,6 @@ it("renders restart recovery ownership changes as session guidance", async () =>
   try {
     const reply = await handleReplyAgentRunError(createRestartRecoveryClaimChangedError(), {
       resolveVisibleReplyDelivery: async () => false,
-      isHeartbeat: false,
       replyExpectation: "required",
       isRestartRecoveryArmed: async () => false,
       replyOperation,
@@ -85,7 +83,6 @@ it.each([false, true])(
     try {
       const reply = handleReplyAgentRunError(failure, {
         resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
         replyExpectation: "required",
         userTurnAccepted: accepted,
         isRestartRecoveryArmed: async () => false,

@@ -4,9 +4,9 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 describe("resolveRunTypingPolicy", () => {
   it.each([
     {
-      name: "forces heartbeat policy for heartbeat runs",
-      input: { requestedPolicy: "user_message", isHeartbeat: true },
-      typingPolicy: "heartbeat",
+      name: "keeps internal events silent without a channel route",
+      input: { requestedPolicy: "user_message", systemEvent: true },
+      typingPolicy: "system_event",
       suppressTyping: true,
     },
     {

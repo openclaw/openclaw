@@ -106,7 +106,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 {
   agents: {
     ownership: "explicit",
-    defaults: { heartbeat: { agentId: "home" }, systemAgent: { agentId: "home" } },
+    defaults: { systemAgent: { agentId: "home" } },
     entries: {
       home: { workspace: "~/.openclaw/workspace-home" },
       work: { workspace: "~/.openclaw/workspace-work" },

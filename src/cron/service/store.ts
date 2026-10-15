@@ -393,6 +393,7 @@ export async function persistCronJobMutation(params: {
   agentId?: string;
   preconditionJob?: CronJob;
   expectedJob?: { id: string; configRevision: string };
+  clawPrecondition?: CronRuntimeMutationInputs["cron.mutateJobs"]["clawPrecondition"];
   receiptMutation?: CronRuntimeMutationInputs["cron.mutateJobs"]["receiptMutation"];
   afterCommit?: () => void;
   afterPublish?: () => void;
@@ -424,6 +425,7 @@ export async function persistCronJobMutation(params: {
       agentId: params.agentId,
       preconditionJob: params.preconditionJob,
       expectedJob: params.expectedJob,
+      clawPrecondition: params.clawPrecondition,
       receiptMutation: params.receiptMutation,
       jobMutation: params.jobMutation,
     }),

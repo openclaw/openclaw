@@ -1,11 +1,7 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
-import {
-  isHeartbeatLifecycleRunKind,
-  type BootstrapContextRunKind,
-  type BootstrapMode,
-} from "../../bootstrap-mode.js";
+import type { BootstrapContextRunKind, BootstrapMode } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
@@ -27,11 +23,9 @@ export async function resolveAttemptBootstrapContext(params: {
   hasCompletedBootstrapTurn: () => Promise<boolean>;
   resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
 }) {
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn());
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
@@ -42,7 +36,6 @@ export async function resolveAttemptBootstrapContext(params: {
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
     params.bootstrapContextRunKind !== "cron" &&
     params.deliversCompleteWorkspaceContext &&
     !context.bootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&

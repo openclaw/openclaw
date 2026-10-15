@@ -208,7 +208,7 @@ describe("buildAfterTurnRuntimeContext", () => {
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: runtimeAttempt({
-        trigger: "heartbeat",
+        trigger: "cron",
         inputProvenance: { kind: "external_user" },
         sessionKey: "agent:main:session:abc",
         authProfileId: "openai:p1",

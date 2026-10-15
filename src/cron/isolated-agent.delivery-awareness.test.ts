@@ -1,7 +1,10 @@
 import "./isolated-agent.mocks.js";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
@@ -9,6 +12,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { resolveAdmittedCronCompletionStatus } from "./completion-status.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -59,10 +63,12 @@ async function withAnnounce(
 }
 
 describe("isolated cron delivery notifications", () => {
+  afterEach(clearRuntimeConfigSnapshot);
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
     await withAnnounce({ texts: ["warm runtime"] });
+    clearRuntimeConfigSnapshot();
   });
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
@@ -131,9 +137,17 @@ describe("isolated cron delivery notifications", () => {
       (result, deps) => {
         expect(result.status).toBe("ok");
         expect(result.error).toBeUndefined();
-        expect(result.deliveryError).toContain("shared agent-main session bucket");
-        expect(result.deliveryState?.status).toBe("not-delivered");
         expect(result.delivered).toBe(false);
+        expect(result.deliveryState).toMatchObject({ status: "not-delivered", delivered: false });
+        expect(result.deliveryError).toContain("shared agent-main session bucket");
+        expect(
+          resolveAdmittedCronCompletionStatus(
+            { delivery: { mode: "announce" } },
+            result.status,
+            result.deliveryState?.status ?? "unknown",
+            result.deliverySuppressionReason,
+          ),
+        ).toBe("failed");
         expect(deps.telegram).not.toHaveBeenCalled();
         expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       },

@@ -41,6 +41,18 @@ describe("cron model schema regressions", () => {
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
     }
+    const inactive = createCronToolSchema({ selfRemoveOnly: true });
+    expect(propertyAt(inactive, "outcome")).toBeUndefined();
+    const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
+    expect(propertyAt(active, "outcome")).toBeDefined();
+    expect(propertyAt(active, "summary")).toBeDefined();
+    expect(propertyAt(active, "in")).toBeUndefined();
+    const paced = createCronToolSchema({
+      selfRemoveOnly: true,
+      activeRun: true,
+      pacingEnabled: true,
+    });
+    expect(propertyAt(paced, "in")?.description).toContain("next_check");
   });
 
   it("does not advertise forbidden automation management inside a scheduled run", () => {
@@ -51,7 +63,6 @@ describe("cron model schema regressions", () => {
       "get",
       "remove",
       "runs",
-      "next_check",
     ]);
     for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);

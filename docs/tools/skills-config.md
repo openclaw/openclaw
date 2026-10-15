@@ -325,7 +325,6 @@ different visible skill set per agent.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },

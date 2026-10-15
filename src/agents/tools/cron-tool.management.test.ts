@@ -5,10 +5,10 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
-  consumeCronNextCheckProposal,
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
@@ -167,7 +167,7 @@ describe("cron next_check action", () => {
   function registerRun(pacingEnabled: boolean) {
     claimAgentRunContext(RUN_ID, {
       sessionKey: `agent:main:cron:${JOB_ID}`,
-      cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled }]]),
+      cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled, assertCurrent: () => {} }]]),
     });
   }
 
@@ -195,7 +195,7 @@ describe("cron next_check action", () => {
     });
 
     claimAgentRunContext(RUN_ID, {
-      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true }]]),
+      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true, assertCurrent: () => {} }]]),
     });
     await createScopedTool("next-job").execute("call-next-check-next-job", {
       action: "next_check",

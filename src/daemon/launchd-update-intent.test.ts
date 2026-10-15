@@ -11,6 +11,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+import * as ancestry from "../infra/restart-stale-pids.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseStore,
@@ -175,6 +176,7 @@ beforeEach(async () => {
   await once(child.stdout!, "data");
   pid = child.pid!;
   // The synthetic LaunchAgent has a live PID but no native job separate from this runner.
+  vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(new Set([process.pid, 1]));
   vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((target) =>
     target === pid ? "outside" : "unknown",
   );

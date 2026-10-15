@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import type { CronAgentExecutionPhase } from "../types.js";
 import { CRON_AGENT_SETUP_WATCHDOG_MS, createCronAgentWatchdog } from "./agent-watchdog.js";
 import { preExecutionTimeoutErrorMessage } from "./execution-errors.js";
@@ -9,10 +10,11 @@ const fallbackSetupPhases = [
   "runtime_plugins",
 ] as const satisfies readonly CronAgentExecutionPhase[];
 
-function makeWatchdog(timeoutMultiplier = 3) {
+function makeWatchdog(timeoutMultiplier = 3, executionKind: "agent" | "command" = "agent") {
   vi.useFakeTimers();
   const triggerTimeout = vi.fn();
   const watchdog = createCronAgentWatchdog({
+    executionKind,
     deferUntilRunner: true,
     jobTimeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
     triggerTimeout,
@@ -24,6 +26,32 @@ describe("cron agent setup watchdog", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["setup", "execution"] as const)(
+    "bounds command %s without expecting agent progress",
+    async (phase) => {
+      const { triggerTimeout, watchdog } = makeWatchdog(3, "command");
+      watchdog.start();
+      try {
+        if (phase === "execution") {
+          watchdog.noteRunnerStarted();
+        }
+        await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS);
+        if (phase === "setup") {
+          expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith(
+            "cron: job execution timed out (command setup before runner start)",
+          );
+        } else {
+          expect(triggerTimeout).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS * 2);
+          expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith("cron: job execution timed out");
+        }
+        expect(isCronTimeoutErrorText(triggerTimeout.mock.calls[0]?.[0])).toBe(true);
+      } finally {
+        watchdog.dispose();
+      }
+    },
+  );
 
   it("starts setup timeout only after lane admission", async () => {
     const { triggerTimeout, watchdog } = makeWatchdog(2);

@@ -143,7 +143,7 @@ openclaw automations add \
 
 **Authority:** Check system health, restart services, send alerts
 **Approval gate:** Restart services automatically. Escalate if restart fails twice.
-**Trigger:** Every heartbeat cycle
+**Trigger:** An automation scheduled every 30 minutes
 
 ### Checks
 

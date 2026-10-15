@@ -127,7 +127,7 @@ describe("admitted WebChat prompt reactions", () => {
   function mintTurn(
     input: ReturnType<typeof createUserTurnTranscriptRecorder>,
     executionRunId: string,
-    kind: { isHeartbeat?: boolean; internalEventExecution?: boolean } = {},
+    kind: { internalEventExecution?: boolean } = {},
   ) {
     return mintReplyMessageActionTurnCapability(
       {
@@ -155,7 +155,6 @@ describe("admitted WebChat prompt reactions", () => {
         opts: {
           dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
         },
-        isHeartbeat: kind.isHeartbeat === true,
       },
       executionRunId,
     );
@@ -239,7 +238,7 @@ describe("admitted WebChat prompt reactions", () => {
   );
 
   it.each([
-    ["webchat", { isHeartbeat: true }],
+    ["webchat", { internalEventExecution: true }],
     ["discord", { internalEventExecution: true }],
   ])(
     "fails prompt reactions locally on a %s-routed run that mints no grant (%o)",
@@ -481,7 +480,6 @@ describe("admitted WebChat prompt reactions", () => {
             },
           },
           sessionCtx: { Provider: "webchat" },
-          isHeartbeat: false,
           opts: {
             dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
           },

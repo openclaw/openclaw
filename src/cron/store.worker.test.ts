@@ -308,7 +308,6 @@ it.each([true, false])(
         defaultAgentId: "main",
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: async () => ({ status: "skipped" }),
       });
       const input: CronJobCreate = {

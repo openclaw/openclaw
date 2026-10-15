@@ -220,7 +220,7 @@ describe("AgentSession handoff adoption integration", () => {
       cancel: () => {},
     };
     const typing = createMockTypingController();
-    const typingSignals = createTypingSignaler({ typing, mode: "never", isHeartbeat: false });
+    const typingSignals = createTypingSignaler({ typing, mode: "never" });
     const runState: ReplyOperationRunState = {};
     const runFollowup = async (queued: typeof followupRun) => {
       await ownerReleased;

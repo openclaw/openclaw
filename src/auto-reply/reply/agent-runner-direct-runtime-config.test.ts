@@ -34,7 +34,6 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -680,7 +679,7 @@ describe("runReplyAgent runtime config", () => {
             ? SILENT_REPLY_TOKEN
             : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       });
-      expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+      expect(runState.agentTurn).toBe("cancelled");
       expect(executeAgentTurnMock).not.toHaveBeenCalled();
     },
   );
@@ -697,7 +696,7 @@ describe("runReplyAgent runtime config", () => {
 
     await runReplyAgent(replyParams);
 
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    expect(runState.agentTurn).toBe("cancelled");
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {

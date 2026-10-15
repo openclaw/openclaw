@@ -32,6 +32,7 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
             job,
             callerScope: readCronCallerScope(client),
             defaultAgentId: context.cron.getDefaultAgentId(),
+            allowCurrentJob: true,
           })
         ) {
           throw new Error("Cron scratch owner changed before reply");
@@ -53,6 +54,7 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
         undefined,
       );
     },
+    { allowCurrentJob: true },
   ),
   "cron.scratch.set": scopedCronJobHandler(
     "cron.scratch.set",
@@ -66,7 +68,7 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
         const commitGuard = resolveCronMutationCommitGuard(
           client,
           context,
-          { callerScope, jobId },
+          { callerScope, jobId, allowCurrentJob: true },
           { sessionMutationCommitGuard, hasCurrentClientAuthority },
         );
         const result = await context.cron.writeScratch(jobId, {
@@ -92,5 +94,6 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
         respondInvalidCronParams(respond, "cron.scratch.set", formatErrorMessage(error));
       }
     },
+    { allowCurrentJob: true },
   ),
 };

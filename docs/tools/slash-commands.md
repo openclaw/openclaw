@@ -160,7 +160,7 @@ do not rewrite transcript history.
   Use the channel's direct-user target, for example `discord:user:123456789012345678`
   or `telegram:123456789`. Doctor preserves `user:` when the channel requires it
   to distinguish users from shared conversations. This keeps the same owner usable
-  for both command authorization and heartbeat delivery.
+  for both command authorization and owner-targeted automation delivery.
   If an older update removed that kind, run `openclaw doctor --fix`. Doctor restores
   it only from matching config backup history; otherwise it reports the exact
   owner entry to correct after you confirm the user ID.

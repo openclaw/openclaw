@@ -308,7 +308,7 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(reloadWork);
         const stopRecovery = vi.fn(() => recoveryWork);
         kernel.kernel.setScheduledServiceHandles({
-          heartbeatRunner: kernel.runtimeState.heartbeatRunner,
+          stopScheduledServices: kernel.runtimeState.stopScheduledServices,
           stopDeliveryRecovery: stopRecovery,
         });
         const stopUpdateCheck = vi

@@ -241,14 +241,14 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+  it("suppresses scheduled model overrides for a model-locked session", async () => {
     const { sessionKey } = mockAutoFallbackSession({ modelSelectionLocked: true });
     mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
 
     await expect(
       getReplyFromConfig(
         buildGetReplyCtx(),
-        { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
+        { modelOverride: "openai/gpt-5.5@openai:metered" },
         makeReasoningModelConfig(),
       ),
     ).resolves.toEqual({ text: "ok" });
@@ -257,7 +257,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude-fallback",
-      hasResolvedHeartbeatModelOverride: false,
+      hasResolvedTurnModelOverride: false,
     });
     expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).not.toHaveProperty(
       "configuredProfileId",
@@ -270,15 +270,14 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.autoFallbackPrimaryProbe).toBeUndefined();
   });
 
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
+  it("keeps an explicit scheduled profile on its turn without persisting it into chat", async () => {
     const { sessionKey, storePath } = mockAutoFallbackSession();
     mockFallbackDirectiveResult({ sessionKey, provider: "openai", model: "gpt-5.5" });
     const cfg = makeReasoningModelConfig();
     await getReplyFromConfig(
       buildGetReplyCtx(),
       {
-        isHeartbeat: true,
-        heartbeatModelOverride: "openai/gpt-5.5@openai:metered",
+        modelOverride: "openai/gpt-5.5@openai:metered",
       },
       cfg,
     );

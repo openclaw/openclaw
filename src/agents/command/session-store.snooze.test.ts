@@ -26,7 +26,7 @@ describe("updateSessionStoreAfterAgentRun snooze", () => {
       snoozed: false,
     },
     {
-      name: "heartbeat run",
+      name: "internal-event run",
       inFlight: false,
       touchActivity: false,
       preserve: false,

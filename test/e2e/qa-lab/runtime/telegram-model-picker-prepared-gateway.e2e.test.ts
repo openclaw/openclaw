@@ -119,6 +119,7 @@ function pickerConfig(apiRoot: string, modelId: string): OpenClawConfig {
   const modelRef = `${REPLACEMENT_PROVIDER}/${modelId}`;
   return {
     gateway: { mode: "local", bind: "loopback", auth: { mode: "token", token: "picker-token" } },
+    logging: { consoleLevel: "debug" },
     plugins: {
       enabled: true,
       allow: ["telegram"],
@@ -318,6 +319,7 @@ process.on("message", async (message) => {
       OPENCLAW_CONFIG_PATH: params.configPath,
       OPENCLAW_STATE_DIR: path.join(params.fixtureRoot, "state"),
       OPENCLAW_QA_REPLACEMENT_CONFIG_PATH: params.replacementConfigPath,
+      OPENCLAW_TEST_CONSOLE: "1",
       OPENCLAW_GATEWAY_PORT: String(port),
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_CRON: "1",
@@ -1111,6 +1113,8 @@ test("recovers a replaced model catalog and drains the following Telegram callba
                 status: "completed",
               })),
             });
+        } catch (error) {
+          throw new Error(`${String(error)}\n${gateway.output()}`, { cause: error });
         } finally {
           await settleCleanup(gateway.close);
         }

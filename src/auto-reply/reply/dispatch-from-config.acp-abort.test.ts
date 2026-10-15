@@ -34,7 +34,6 @@ import { createAcpRuntime } from "./dispatch-from-config.test-support.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -887,12 +886,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   });
 
   it.each([
-    { abort: "abortByUser", expected: "cancelled" },
-    { abort: "abortForRestart", expected: "cancelled" },
-    { abort: "supersede", expected: "superseded" },
+    { abort: "abortByUser", code: "aborted_by_user" },
+    { abort: "abortForRestart", code: "aborted_for_restart" },
+    { abort: "supersede", code: "aborted_for_supersession" },
   ] as const)(
     "records $abort before an abort-insensitive resolver settles",
-    async ({ abort, expected }) => {
+    async ({ abort, code }) => {
       const resolverStarted = createDeferred();
       const releaseResolver = createDeferred();
       const resolverFinished = createDeferred();
@@ -940,7 +939,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         expect(operation?.[abort]()).toBe(true);
         await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
         expect(runState.agentTurnOwner).toBe(operation);
-        expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);
+        expect(runState.agentTurn).toBe("cancelled");
+        expect(operation?.result).toMatchObject({ kind: "aborted", code });
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       } finally {
         releaseResolver.resolve();

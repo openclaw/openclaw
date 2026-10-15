@@ -154,7 +154,6 @@ async function createAcceptedTurnFixture(
     admission,
     database,
     engineId: "test",
-    isHeartbeat: false,
   });
   const readRow = (key = admission.logicalTurnId) =>
     database.db
@@ -289,7 +288,6 @@ describe("accepted context-engine turn finalization", () => {
             sessionKey: `agent:main:${retrySessionId}`,
           },
         },
-        isHeartbeat: false,
         messages: [],
       },
     });
@@ -304,14 +302,12 @@ describe("accepted context-engine turn finalization", () => {
         },
         database,
         engineId: "test",
-        isHeartbeat: false,
       });
     }
     enqueueContextEngineTurnIntent({
       admission: facts.boundary.admission,
       database,
       engineId: "test",
-      isHeartbeat: false,
     });
     const { commitTurn, lease } = createDurableLease();
 
@@ -589,7 +585,6 @@ describe("accepted context-engine turn finalization", () => {
       admission: siblingAdmission,
       database,
       engineId: "test",
-      isHeartbeat: false,
     });
     warn.mockClear();
     await finalizeAcceptedContextEngineTurn({

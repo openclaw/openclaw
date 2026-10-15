@@ -275,7 +275,6 @@ it.skipIf(process.platform === "win32")(
                         params: { transport: "sse", openaiWsWarmup: false },
                       },
                     },
-                    heartbeat: { every: "0m" },
                     skipBootstrap: true,
                     skills: [],
                     timeoutSeconds: 120,
@@ -389,7 +388,8 @@ it.skipIf(process.platform === "win32")(
               client = undefined;
               const closed = once(original, "close");
               original.kill("SIGKILL");
-              await withinTest(closed, signal);
+              expect(await withinTest(closed, signal)).toEqual([null, "SIGKILL"]);
+              await instance.stopGateway();
               await writeFile(
                 path.join(instance.state.workspaceDir, "checkpoint-resume"),
                 "resume\n",

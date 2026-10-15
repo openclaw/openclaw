@@ -74,6 +74,7 @@ import {
   isClaudeCliProvider,
   claudeCliSessionTranscriptHasContent,
   resolveCommandReplyExpectation,
+  resolveFallbackRetryContext,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
@@ -169,20 +170,16 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
         })
       : "";
-  const resolvedPrompt = resolveFallbackRetryPrompt({
-    body: params.body,
+  const fallbackRetry = {
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
     priorContextPrelude: claudeCliFallbackPrelude,
-  });
+  };
+  const fallbackRetryContext = resolveFallbackRetryContext(fallbackRetry);
+  const resolvedPrompt = resolveFallbackRetryPrompt({ ...fallbackRetry, body: params.body });
   const effectivePrompt = isRawModelRun
     ? resolvedPrompt
     : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
-  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
-    body: params.body,
-    prompt: effectivePrompt,
-    range: params.opts.execApprovalContinuationPromptRange,
-  });
   const continuationTranscriptBody = params.opts.execApprovalContinuationPromptRange
     ? (params.transcriptBody ?? params.body)
     : params.transcriptBody;
@@ -697,6 +694,17 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     );
   }
 
+  const embeddedPrompt = effectivePrompt;
+  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
+    body: params.body,
+    prompt: embeddedPrompt,
+    range: params.opts.execApprovalContinuationPromptRange,
+  });
+  // The prepared harness owns this choice: auto selection can resolve to either runtime.
+  const openclawFallbackPrompt =
+    !isRawModelRun && fallbackRetryContext.length > 0
+      ? annotateInterSessionPromptText(params.body, params.opts.inputProvenance)
+      : undefined;
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
@@ -712,7 +720,20 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: embeddedPrompt,
+    ...(openclawFallbackPrompt !== undefined
+      ? {
+          openclawFallbackPrompt: {
+            prompt: openclawFallbackPrompt,
+            execApprovalContinuationPromptRange: rebaseExecApprovalContinuationPromptRange({
+              body: params.body,
+              prompt: openclawFallbackPrompt,
+              range: params.opts.execApprovalContinuationPromptRange,
+            }),
+            runtimeContextFragments: fallbackRetryContext,
+          },
+        }
+      : {}),
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sleep } from "../utils/sleep.js";
+import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
 const CLAW_AGENT_RELOAD_TIMEOUT_MS = 15_000;
@@ -21,6 +22,8 @@ export async function waitUntilGatewayAgentAvailable(agentId: string): Promise<v
         typeof response.configRevisionHash === "string" &&
         response.configRevisionHash === response.appliedConfigHash
       ) {
+        // Applied hashes can publish before reload settlement; the serving owner fences inspect.
+        await clawMonitorCleanupGateway.inspect(agentId);
         return;
       }
       lastError = undefined;

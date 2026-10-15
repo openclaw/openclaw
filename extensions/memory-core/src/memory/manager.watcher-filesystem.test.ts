@@ -10,6 +10,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { MEMORY_INDEX_CHUNKS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import {
@@ -91,6 +92,7 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
       },
     };
     const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
+    setRuntimeConfigSnapshot(cfg);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     manager = await turn.run("opening turn", () =>
       MemoryIndexManager.get({

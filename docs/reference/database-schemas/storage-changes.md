@@ -139,7 +139,7 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 22). Every
+Both engines use the same shared-state schema version (currently 23). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.

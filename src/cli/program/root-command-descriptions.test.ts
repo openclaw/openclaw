@@ -52,7 +52,6 @@ const JSON_NOT_APPLICABLE = {
       "gateway restart-handoff",
       "gateway diagnostics",
       "system",
-      "system heartbeat",
       "promos",
       "telemetry",
       "infer",

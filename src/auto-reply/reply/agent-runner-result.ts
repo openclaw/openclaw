@@ -69,7 +69,6 @@ export async function finalizeReplyAgentRun(
     },
   );
   if (
-    !context.isHeartbeat &&
     context.sessionKey &&
     context.storePath &&
     context.execution.status === "ok" &&

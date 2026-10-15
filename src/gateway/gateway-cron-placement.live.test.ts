@@ -107,7 +107,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
                 model: { primary: MODEL_KEY },
                 models: { [MODEL_KEY]: { agentRuntime: { id: "openclaw" } } },
                 thinkingDefault: "low",
-                heartbeat: { every: "0m" },
                 sandbox: { mode: "off" },
                 timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               },

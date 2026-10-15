@@ -21,9 +21,12 @@ describe("terminal preparation delivery custody", () => {
       })),
     ),
   )(
-    "retains observed $observation custody for heartbeat $output",
+    "retains observed $observation custody for automation $output",
     async ({ output, observation }) => {
-      const assistant = buildEmbeddedRunnerAssistant({ content: [] });
+      const report = "Current automation report.";
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: output === "failure-only" ? [] : [{ type: "text", text: report }],
+      });
       const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
         lastAssistant: assistant,
         currentAttemptAssistant: assistant,
@@ -31,11 +34,7 @@ describe("terminal preparation delivery custody", () => {
         sourceReplyDeliveryState: "missing",
         ...(output !== "failure-only"
           ? {
-              heartbeatToolResponse: {
-                outcome: "done",
-                notify: true,
-                summary: "Current heartbeat report.",
-              },
+              assistantTexts: [report],
               messagingToolSourceReplyPayloads: [
                 { text: "Earlier committed reply.", sourceReplyFinal: true },
               ],
@@ -58,13 +57,13 @@ describe("terminal preparation delivery custody", () => {
       }
       const input = createSettledFinalizationTestInput(
         attempt,
-        createTestAdmittedRunContext("run-heartbeat-custody"),
+        createTestAdmittedRunContext("run-automation-custody"),
       );
-      input.terminalBase.runParams.trigger = "heartbeat";
+      input.terminalBase.runParams.trigger = "cron";
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
       input.terminalBase.runParams.resolveReplyDelivery = async () => {
         if (observation === "observation-failed") {
-          throw new Error("heartbeat delivery observation unavailable");
+          throw new Error("automation delivery observation unavailable");
         }
         return observation;
       };
@@ -80,15 +79,13 @@ describe("terminal preparation delivery custody", () => {
       );
       expect(resolved.action).toBe("complete");
       if (resolved.action !== "complete") {
-        throw new Error("expected heartbeat terminal completion");
+        throw new Error("expected automation terminal completion");
       }
       const payloads = resolved.result.payloads ?? [];
       if (observation === "missing") {
         expect(
           payloads.some((payload) =>
-            output === "failure-only"
-              ? payload.isError
-              : payload.text === "Current heartbeat report.",
+            output === "failure-only" ? payload.isError : payload.text === report,
           ),
         ).toBe(true);
       } else {
@@ -276,9 +273,9 @@ describe("terminal preparation delivery custody", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves a preceding input's answer while current delivery remains pending (heartbeat=%s)",
-    async (heartbeat) => {
+  it.each(["user", "cron"] as const)(
+    "preserves a preceding input's answer while current delivery remains pending (trigger=%s)",
+    async (trigger) => {
       const earlier = buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "Earlier answer." }],
       });
@@ -291,15 +288,6 @@ describe("terminal preparation delivery custody", () => {
         currentAttemptAssistant: current,
         currentAttemptCompletedAssistant: current,
         sourceReplyDeliveryState: "missing",
-        ...(heartbeat
-          ? {
-              heartbeatToolResponse: {
-                outcome: "done" as const,
-                notify: true,
-                summary: "Current heartbeat report.",
-              },
-            }
-          : {}),
       });
       attempt.answerSegments = [
         {
@@ -314,6 +302,7 @@ describe("terminal preparation delivery custody", () => {
         attempt,
         createTestAdmittedRunContext("run-preceding-answer"),
       );
+      input.terminalBase.runParams.trigger = trigger;
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
       input.terminalBase.runParams.resolveReplyDelivery = async () => "pending";
       const settled = await prepareTerminalWithSettledTurnFinalization(input);

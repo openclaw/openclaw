@@ -363,7 +363,7 @@ async function resolveBootstrapFiles(
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  // Heartbeat scratch is runner-owned; all lightweight runs omit bootstrap context.
+  // Lightweight runs omit workspace bootstrap; automation scratch has its own bounded owner.
   const bootstrapFiles = params.contextMode === "lightweight" ? [] : sessionFiles;
 
   const hooked =

@@ -247,8 +247,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         interrupted = true;
         controller.abort(new Error("Synthetic binding commit interruption"));
       };
+      let cliCompleted = false;
       runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
         expect(params.cliSessionId).toBe(previousBinding.sessionId);
+        cliCompleted = true;
         return {
           payloads: [{ text: "Synthetic cron answer" }],
           meta: {
@@ -270,7 +272,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
                   ...options?.workerGuard,
                   assertCurrent: () => {
                     const isBase = scope.sessionKey === target.sessionKey;
-                    if ((failurePoint !== "continuation") === isBase) {
+                    if (cliCompleted && (failurePoint !== "continuation") === isBase) {
                       interrupt();
                     }
                     assertCommitAllowed();

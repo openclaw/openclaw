@@ -1641,7 +1641,6 @@ describe("gateway server chat", () => {
               defaults: {
                 model: { primary: "openai/gpt-5.5" },
                 models: { "openai/gpt-5.5": {} },
-                heartbeat: { agentId: "main" },
                 sessionStore: { agentId: "main" },
                 systemAgent: { agentId: "main" },
               },

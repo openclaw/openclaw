@@ -19,8 +19,7 @@ installCronTestHooks({ logger, fakeTimers: false });
 function createService(params: {
   scheduler: CronServiceDeps["scheduler"];
   storePath: string;
-  enqueueSystemEvent?: CronServiceDeps["enqueueSystemEvent"];
-  requestHeartbeat?: CronServiceDeps["requestHeartbeat"];
+  runSessionEvent?: CronServiceDeps["runSessionEvent"];
   runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
   onEvent?: CronServiceDeps["onEvent"];
 }) {
@@ -29,8 +28,8 @@ function createService(params: {
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
-    enqueueSystemEvent: params.enqueueSystemEvent ?? vi.fn(),
-    requestHeartbeat: params.requestHeartbeat ?? vi.fn(),
+    enqueueSystemEvent: vi.fn(),
+    runSessionEvent: params.runSessionEvent ?? vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
@@ -47,15 +46,18 @@ describe("cron state contracts", () => {
         const clock = createGatewaySchedulerClock(baseTimeMs);
         const scheduler = createTestGatewayScheduler(clock.clock);
         const atMs = baseTimeMs + 1_000;
-        let resolveSystemEvent!: () => void;
-        const systemEventEnqueued = new Promise<void>((resolve) => {
-          resolveSystemEvent = resolve;
+        let resolveSessionRun!: () => void;
+        const sessionRunStarted = new Promise<void>((resolve) => {
+          resolveSessionRun = resolve;
         });
-        const enqueueSystemEvent = vi.fn((text: string) => {
-          if (text === "state contract fired") {
-            resolveSystemEvent();
-          }
-        });
+        const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+          async ({ text }) => {
+            if (text === "state contract fired") {
+              resolveSessionRun();
+            }
+            return { status: "ok" };
+          },
+        );
         let resolveFinished!: () => void;
         const finished = new Promise<void>((resolve) => {
           resolveFinished = resolve;
@@ -65,13 +67,12 @@ describe("cron state contracts", () => {
             resolveFinished();
           }
         };
-        const requestHeartbeat = vi.fn();
         let first: CronService | undefined;
         let restarted: CronService | undefined;
         let reloaded: CronService | undefined;
 
         try {
-          first = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
+          first = createService({ scheduler, storePath, runSessionEvent });
           await first.start();
 
           const atJob = await first.add({
@@ -137,8 +138,7 @@ describe("cron state contracts", () => {
           restarted = createService({
             scheduler,
             storePath,
-            enqueueSystemEvent,
-            requestHeartbeat,
+            runSessionEvent,
             onEvent,
           });
           await restarted.start();
@@ -168,11 +168,13 @@ describe("cron state contracts", () => {
 
           await clock.advanceBy(1_005);
           await restarted.status();
-          await systemEventEnqueued;
+          await sessionRunStarted;
           await finished;
 
           expect(
-            enqueueSystemEvent.mock.calls.filter(([text]) => text === "state contract fired"),
+            runSessionEvent.mock.calls.filter(
+              ([{ job, text }]) => job.id === atJob.id && text === "state contract fired",
+            ),
           ).toHaveLength(1);
           const persistedAtJob = (await loadCronStore(storePath)).jobs.find(
             (job) => job.id === atJob.id,
@@ -188,7 +190,7 @@ describe("cron state contracts", () => {
           restarted.stop();
           restarted = undefined;
 
-          reloaded = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
+          reloaded = createService({ scheduler, storePath, runSessionEvent });
           await reloaded.start();
           expect(
             (await reloaded.list({ includeDisabled: true })).map((job) => job.id).toSorted(),

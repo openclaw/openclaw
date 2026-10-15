@@ -424,7 +424,7 @@ it("preserves live recovery authority while monitoring", async () => {
   void owner.released.then(() => {
     released = true;
   });
-  const result = await f.admit({ kind: "heartbeat" });
+  const result = await f.admit({ kind: "background" });
   expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
   expect(released).toBe(false);
   expect(f.read()?.sessionId).toBe(sessionId);

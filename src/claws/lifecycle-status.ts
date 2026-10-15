@@ -39,6 +39,8 @@ import {
   type ClawPackageInspection,
   type PackageRemovalDeps,
 } from "./package-remove.js";
+import { readPortableHeartbeatState } from "./portable-heartbeat-state.js";
+import { portableHeartbeatDrift } from "./portable-heartbeat-state.kernel.js";
 import { readClawPackageOwnership } from "./provenance-async.js";
 import {
   readClawInstallRecords,
@@ -144,6 +146,11 @@ export type ClawStatusRecord = {
   packages: ClawPackageStatus[];
   mcpServers: ClawMcpServerStatus[];
   cronJobs: PersistedClawCronRef[];
+  portableHeartbeat?: {
+    schedulerJobId?: string;
+    state: "present" | "modified" | "missing" | "pending" | "released";
+    scratchRevision: number;
+  };
 };
 
 type ClawStatusResult = {
@@ -311,7 +318,26 @@ export async function readClawStatus(
           workspace: install.workspace,
           path: "BOOTSTRAP.md" as const,
         };
+    const portable = await readPortableHeartbeatState(install.agentId, config, options);
     records.push({
+      ...(portable.ref
+        ? {
+            portableHeartbeat: {
+              schedulerJobId: portable.receipt?.jobId,
+              state:
+                portable.ref.status === "removed"
+                  ? ("released" as const)
+                  : portable.receipt?.phase !== "complete"
+                    ? ("pending" as const)
+                    : !portable.job
+                      ? ("missing" as const)
+                      : portableHeartbeatDrift(portable)
+                        ? ("modified" as const)
+                        : ("present" as const),
+              scratchRevision: portable.scratch.currentRevision,
+            },
+          }
+        : {}),
       install,
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent

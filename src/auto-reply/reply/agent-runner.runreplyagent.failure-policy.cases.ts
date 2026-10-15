@@ -10,7 +10,6 @@ import type { FollowupRun } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 
@@ -84,7 +83,7 @@ export function registerImmediateFailurePolicyCases({
 
       const receipt = await fixture.run();
 
-      expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
+      expect(fixture.runState.agentTurn).toBe("failed");
       expect(receipt?.anyVisibleDelivered).toBe(visible);
       expect(fixture.delivered).toEqual(
         visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
@@ -105,7 +104,7 @@ export function registerImmediateFailurePolicyCases({
 
       expect(fixture.delivered).toEqual([]);
       expect(receipt?.anyVisibleDelivered).toBe(false);
-      expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
+      expect(fixture.runState.agentTurn).toBe("failed");
     });
 
     it.each(["auth", "rate_limit"] as const)(
@@ -123,7 +122,7 @@ export function registerImmediateFailurePolicyCases({
 
         const receipt = await fixture.run();
 
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
+        expect(fixture.runState.agentTurn).toBe("failed");
         expect(receipt?.anyVisibleDelivered).toBe(true);
         expect(fixture.delivered).toEqual([
           expect.objectContaining({ isError: true, text: expect.any(String) }),
@@ -164,7 +163,7 @@ export function registerImmediateFailurePolicyCases({
         expect(fixture.delivered).toEqual(
           visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
         );
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
+        expect(fixture.runState.agentTurn).toBe("failed");
       },
     );
 
@@ -199,7 +198,7 @@ export function registerImmediateFailurePolicyCases({
         expect(fixture.delivered).toEqual(
           visible ? [expect.objectContaining({ isError: true, text: expect.any(String) })] : [],
         );
-        expect(resolveReplyOperationAgentTurn(fixture.runState)).toBe("failed");
+        expect(fixture.runState.agentTurn).toBe("failed");
       },
     );
   });

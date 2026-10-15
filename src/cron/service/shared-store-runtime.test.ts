@@ -36,7 +36,7 @@ function createDisabledService(storePath: string): CronService {
     storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
+    enqueueSessionEvent() {},
     async runIsolatedAgentJob() {
       return { status: "ok" as const, summary: "unused" };
     },
@@ -81,7 +81,7 @@ for (const run of runs) {
     storePath: run.storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
+    enqueueSessionEvent() {},
     async runIsolatedAgentJob() {
       return { status: "ok", summary: "scheduler child completed" };
     },
@@ -208,7 +208,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       storePath,
       log,
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
+      enqueueSessionEvent() {},
       async runIsolatedAgentJob() {
         return { status: "ok" as const, summary: "unused" };
       },

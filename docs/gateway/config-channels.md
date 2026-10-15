@@ -22,7 +22,7 @@ See the full channel index: [Channels](/channels).
 
 ## What each page covers
 
-- [Configuration — shared channel policies](/gateway/config-channels/shared-policies) — DM and group access policies, `channels.modelByChannel`, `channels.defaults`, heartbeat visibility, and the shared multi-account pattern.
+- [Configuration — shared channel policies](/gateway/config-channels/shared-policies) — DM and group access policies, `channels.modelByChannel`, `channels.defaults`, and the shared multi-account pattern.
 - [Configuration — personal messaging channels](/gateway/config-channels/personal-messaging) — `channels.*` keys for WhatsApp, Telegram, Signal, iMessage, and LINE.
 - [Configuration — workplace chat channels](/gateway/config-channels/workplace-chat) — `channels.*` keys for Google Chat, Slack, Mattermost, and Microsoft Teams.
 - [Configuration — community chat channels](/gateway/config-channels/community-chat) — `channels.*` keys for Discord, Matrix, and IRC.
@@ -37,7 +37,7 @@ points at the page that now holds the content.
 
 - <a id="dm-and-group-access" />[DM and group access](/gateway/config-channels/shared-policies#dm-and-group-access)
 - <a id="channel-model-overrides" />[Channel model overrides](/gateway/config-channels/shared-policies#channel-model-overrides)
-- <a id="channel-defaults-and-heartbeat" />[Channel defaults and heartbeat](/gateway/config-channels/shared-policies#channel-defaults-and-heartbeat)
+- <a id="channel-defaults-and-heartbeat" />[Channel defaults](/gateway/config-channels/shared-policies#channel-defaults-and-heartbeat)
 - <a id="multi-account-(all-channels)" /><a id="multi-account-all-channels" />[Multi-account (all channels)](/gateway/config-channels/shared-policies#multi-account-all-channels)
 - <a id="whatsapp" />[WhatsApp](/gateway/config-channels/personal-messaging#whatsapp)
 - <a id="multi-account-whatsapp" />[Multi-account WhatsApp](/gateway/config-channels/personal-messaging#multi-account-whatsapp)

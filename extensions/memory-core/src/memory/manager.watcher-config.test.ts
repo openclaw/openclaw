@@ -7,6 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { MEMORY_INDEX_CHUNKS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -82,6 +83,7 @@ describe("Memory watch configuration", () => {
     await configureMemoryCoreDreamingStateForTests(state.env);
     const cfg = config();
     const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
+    setRuntimeConfigSnapshot(cfg);
     manager = await MemoryIndexManager.get({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,
@@ -180,9 +182,11 @@ describe("Memory watch configuration", () => {
     const file = path.join(state.workspaceDir, "memory", "note.md");
     await fs.writeFile(file, "Amber lantern baseline.");
     await configureMemoryCoreDreamingStateForTests(state.env);
+    const cfg = config();
+    setRuntimeConfigSnapshot(cfg);
     manager = await MemoryIndexManager.get({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg: config(),
+      cfg,
       agentId: "main",
     });
     if (!manager) {

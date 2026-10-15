@@ -127,5 +127,5 @@ Add conventions, style, and rules as you learn what works for this workspace.
 ## Related
 
 - [Default AGENTS.md](/reference/AGENTS.default)
-- [Automations vs heartbeat](/automation#automations-vs-heartbeat)
-- [Heartbeat](/gateway/heartbeat)
+- [Scheduled checks](/automation#automations-vs-heartbeat)
+- [Heartbeat migration](/gateway/heartbeat)

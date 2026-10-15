@@ -564,7 +564,6 @@ internal object AndroidScreenshotFixture {
         put("anchorMs", JsonPrimitive(1_783_468_800_000))
       }
       put("sessionTarget", JsonPrimitive("isolated"))
-      put("wakeMode", JsonPrimitive("now"))
       putJsonObject("payload") {
         put("kind", JsonPrimitive("agentTurn"))
         put("message", JsonPrimitive("Summarize Android release readiness."))

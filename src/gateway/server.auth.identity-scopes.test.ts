@@ -396,7 +396,10 @@ describe("gateway identity scope grants", () => {
           });
         }
         expect(responseAuth(connected)?.deviceToken).toBe(undefined);
-        expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+        expect(await rpcReq(ws, "exec.approvals.get", {})).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining("operator.admin") },
+        });
         if (!scenario.assignedRole) {
           const upgrade = await rpcReq(ws, "device.scopes.requestUpgrade", {
             scopes: ["operator.read", "operator.write", "operator.admin"],
@@ -443,7 +446,10 @@ describe("gateway identity scope grants", () => {
               },
             });
             expect(result.payload?.deviceToken).toBeTypeOf("string");
-            expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+            expect(await rpcReq(ws, "exec.approvals.get", {})).toMatchObject({
+              ok: false,
+              error: { message: expect.stringContaining("operator.admin") },
+            });
           } finally {
             admin.close();
           }
@@ -590,7 +596,10 @@ describe("gateway identity scope grants", () => {
         async (ws, connected) => {
           expect(connected.ok).toBe(true);
           expect(responseAuth(connected)?.scopes).toEqual(["operator.write", "operator.admin"]);
-          expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
+          expect(await rpcReq(ws, "exec.approvals.get", {})).toMatchObject({
+            ok: true,
+            payload: { file: { version: 1 } },
+          });
           const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
             path: outsideWorkspace,
           });

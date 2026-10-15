@@ -31,18 +31,16 @@ const CRON_ACTIONS = [
   "remove",
   "run",
   "runs",
-  "next_check",
   "wake",
 ] as const;
 
-const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs", "next_check"] as const;
+const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
 // stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
-const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
@@ -52,6 +50,8 @@ type CronToolSchemaOptions = {
   agentSessionKey?: string;
   management?: "only" | "also";
   selfRemoveOnly?: boolean;
+  activeRun?: boolean;
+  pacingEnabled?: boolean;
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
    * trigger-gated surfaces (job trigger, script payloads, stream
@@ -227,6 +227,10 @@ function createCronPayloadSchema(params: {
             description: "Lightweight bootstrap context (skip full workspace context)",
           }),
         ),
+        includeReasoning: Type.Optional(
+          Type.Boolean({ description: "Include reasoning with a meaningful delivered result" }),
+        ),
+        skipIfScratchEmpty: Type.Optional(Type.Boolean()),
         allowUnsafeExternalContent: Type.Optional(
           Type.Boolean({ description: "Allow untrusted external content in prompt" }),
         ),
@@ -276,6 +280,8 @@ function createCronDeliverySchema(): TSchema {
     Type.Object(
       {
         mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
+        target: Type.Optional(Type.Union([Type.Literal("owner"), Type.Null()])),
+        directPolicy: Type.Optional(Type.Union([stringEnum(["allow", "block"]), Type.Null()])),
         channel: deliveryStringSchema("Delivery channel"),
         to: deliveryStringSchema("Delivery target"),
         threadId: Type.Optional(
@@ -350,6 +356,8 @@ const cronToolSchemas = createCachedToolSchema({
       options?.triggersEnabled !== false,
       options?.management ?? null,
       options?.selfRemoveOnly === true,
+      options?.activeRun === true,
+      options?.pacingEnabled === true,
       Boolean(options?.agentSessionKey?.trim()),
     ]),
   build: buildCronToolSchema,
@@ -389,13 +397,26 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         ),
         schedule: createCronScheduleSchema({ triggersEnabled, management }),
         pacing: createCronPacingSchema(),
+        activeHours: Type.Optional(
+          Type.Union([
+            Type.Object(
+              {
+                start: Type.String(),
+                end: Type.String(),
+                timezone: Type.Optional(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+            Type.Null(),
+          ]),
+        ),
+        idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current (agentTurn default) | session:<id>",
           }),
         ),
-        wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
         payload: createCronPayloadSchema({ triggersEnabled, management }),
         delivery: createCronDeliverySchema(),
         // Session-scoped updates reject retargeting; do not advertise it to the model.
@@ -425,7 +446,19 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
     {
       action: stringEnum(
         options?.selfRemoveOnly
-          ? actions.filter((action) => CRON_SELF_ACTIONS.some((allowed) => allowed === action))
+          ? [
+              ...actions.filter((action) =>
+                CRON_SELF_ACTIONS.some((allowed) => allowed === action),
+              ),
+              ...(!managementOnly && options.activeRun
+                ? [
+                    "scratch_get",
+                    "scratch_set",
+                    "record_result",
+                    ...(options.pacingEnabled ? ["next_check"] : []),
+                  ]
+                : []),
+            ]
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
@@ -440,15 +473,16 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
+      content: Type.Optional(Type.Union([Type.String({ maxLength: 262144 }), Type.Null()])),
+      expectedRevision: optionalNonNegativeIntegerSchema(),
+      outcome: optionalStringEnum(["no_change", "progress", "done", "blocked", "needs_attention"]),
+      summary: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
       in: Type.Optional(
         Type.String({
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
       text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
-      mode: optionalStringEnum(CRON_WAKE_MODES, {
-        description: 'Wake mode for action="wake" (default next-heartbeat)',
-      }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
@@ -484,10 +518,29 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       "includeDisabled",
       "jobId",
       "id",
-      ...(managementOnly ? [] : ["in", "runId"]),
+      ...(managementOnly ? [] : ["runId"]),
+      ...(!managementOnly && options.activeRun
+        ? [
+            "content",
+            "expectedRevision",
+            "outcome",
+            "summary",
+            ...(options.pacingEnabled ? ["in"] : []),
+          ]
+        : []),
     ]);
   }
   return managementOnly
-    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey", "runId"])
-    : schema;
+    ? Type.Omit(schema, [
+        "in",
+        "text",
+        "contextMessages",
+        "sessionKey",
+        "runId",
+        "content",
+        "expectedRevision",
+        "outcome",
+        "summary",
+      ])
+    : Type.Omit(schema, ["in", "content", "expectedRevision", "outcome", "summary"]);
 }

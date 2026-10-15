@@ -156,6 +156,7 @@ describe("managed Codex plugin refresh", () => {
           sessionId: params.sessionId,
           sessionKey: "agent:main:session-1",
           storePath: path.join(tempDir, "openclaw-agent.sqlite"),
+          config: params.config,
         };
         await upsertSessionEntry({
           ...target,

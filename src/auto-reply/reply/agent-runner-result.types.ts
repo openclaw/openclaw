@@ -40,7 +40,7 @@ export type FinalizeReplyAgentRunInput = Pick<
   prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
   blockReplyPipeline: BlockReplyPipeline | null;
   cfg: OpenClawConfig;
-  isHeartbeat: boolean;
+
   pendingToolTasks: Set<Promise<void>>;
   preflightCompactionApplied: boolean | undefined;
   replyMediaContext: ReplyMediaContext;

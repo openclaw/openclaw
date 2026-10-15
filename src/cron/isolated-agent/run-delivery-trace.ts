@@ -152,7 +152,11 @@ export function buildCronDeliveryTrace(params: {
     accountId: params.deliveryPlan.accountId,
     threadId: params.deliveryPlan.threadId,
     source:
-      params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
+      params.deliveryPlan.target === "owner"
+        ? "owner"
+        : params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel
+          ? "last"
+          : "explicit",
   });
   const includeResolved =
     params.deliveryPlan.mode !== "none" || hasExplicitCronDeliveryTarget(params.deliveryPlan);

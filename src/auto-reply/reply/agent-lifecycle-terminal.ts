@@ -36,6 +36,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "yielded",
   "timeoutPhase",
   "providerStarted",
+  "executionStarted",
   "aborted",
   "livenessState",
   "replayInvalid",

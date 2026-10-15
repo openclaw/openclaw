@@ -8,6 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -28,6 +29,7 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { registerBackgroundDispatchAdmissionTests } from "./dispatch-from-config.background-admission.test-support.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -61,7 +63,6 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -343,119 +344,7 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
-  it("skips a Telegram topic heartbeat turn while a reply operation is active", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "user-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(
-      async () => ({ text: "heartbeat should not run" }) satisfies ReplyPayload,
-    );
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        SessionKey: sessionKey,
-        ChatType: "group",
-        IsForum: true,
-        MessageSid: "heartbeat",
-        MessageThreadId: 3731,
-        TransportThreadId: 3731,
-        To: "telegram:-1003774691294:topic:3731",
-        BodyForAgent: "[OpenClaw heartbeat poll]",
-      }),
-      cfg: automaticGroupReplyConfig,
-      dispatcher,
-      replyOptions: { isHeartbeat: true },
-      replyResolver,
-    });
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
-    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
-    expect(messageAuditEvents()[0]).toEqual(
-      expect.objectContaining({
-        status: "blocked",
-        outcome: "skipped",
-        reasonCode: "reply_operation_active",
-      }),
-    );
-    activeOperation.complete();
-  });
-
-  it("preempts a heartbeat before resolving a visible Telegram turn", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:direct:heartbeat-preemption";
-    const heartbeatAdmission = await admitReplyTurn({
-      sessionKey,
-      sessionId: "heartbeat-session",
-      kind: "heartbeat",
-      resetTriggered: false,
-    });
-    expect(heartbeatAdmission.status).toBe("owned");
-    if (heartbeatAdmission.status !== "owned") {
-      return;
-    }
-    const heartbeatOperation = heartbeatAdmission.operation;
-    const cancel = vi.fn(() => heartbeatOperation.complete());
-    heartbeatOperation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    heartbeatOperation.setPhase("running");
-    sessionStoreMocks.currentEntry = {
-      sessionId: "heartbeat-session",
-      updatedAt: Date.now(),
-    };
-    let heartbeatWasAbortedBeforeReply = false;
-    const replyResolver = vi.fn(async () => {
-      heartbeatWasAbortedBeforeReply = heartbeatOperation.abortSignal.aborted;
-      return { text: "visible reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "user:1",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        BodyForAgent: "answer this now",
-      }),
-      cfg: automaticDirectReplyConfig,
-      dispatcher: createDispatcher(),
-      replyOptions: {
-        turnAdoptionLifecycle: {
-          onAdopted: async () => {},
-          onDeferred: vi.fn(),
-          onSettled: vi.fn(),
-        },
-      },
-      replyResolver,
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(heartbeatWasAbortedBeforeReply).toBe(true);
-    expect(heartbeatOperation.result).toEqual({
-      kind: "aborted",
-      code: "aborted_for_supersession",
-    });
-    expect(cancel).toHaveBeenCalledWith("superseded");
-    expect(replyResolver).toHaveBeenCalledOnce();
-  });
+  registerBackgroundDispatchAdmissionTests();
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -1740,10 +1629,10 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
-  it("does not force-clear an active recovery operation for a heartbeat turn on a terminal session", async () => {
+  it("does not force-clear an active recovery operation for an idle-only automation on a terminal session", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691296";
-    const sessionId = "failed-session-heartbeat";
+    const sessionId = "failed-session-automation";
     sessionStoreMocks.currentEntry = {
       sessionId,
       updatedAt: Date.now(),
@@ -1751,15 +1640,15 @@ describe("dispatchReplyFromConfig", () => {
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(
-      async () => ({ text: "heartbeat should not run" }) satisfies ReplyPayload,
+      async () => ({ text: "idle automation should not run" }) satisfies ReplyPayload,
     );
 
     // A concurrent visible turn already cleared the failed leftover and admitted
     // a fresh recovery operation. Register it inside the fast-abort seam, which
-    // runs after the early heartbeat short-circuit but before admission, so the
-    // heartbeat reaches the terminal force-clear branch with this op active. The
+    // runs after the early idle-only short-circuit but before admission, so the
+    // automation reaches the terminal force-clear branch with this op active. The
     // op is intentionally NOT marked `terminalRecovery`, so only the visible-turn
-    // guard can stop the heartbeat from force-failing it.
+    // guard can stop the automation from force-failing it.
     let recoveryOperation: ReturnType<typeof createReplyOperation> | undefined;
 
     const result = await dispatchReplyFromConfig({
@@ -1769,13 +1658,19 @@ describe("dispatchReplyFromConfig", () => {
         OriginatingChannel: "telegram",
         ChatType: "group",
         SessionKey: sessionKey,
-        MessageSid: "heartbeat-after-failure",
+        MessageSid: "automation-after-failure",
         To: "telegram:-1003774691296",
-        BodyForAgent: "[OpenClaw heartbeat poll]",
+        BodyForAgent: "Check the automation state",
       }),
       cfg: automaticGroupReplyConfig,
       dispatcher,
-      replyOptions: { isHeartbeat: true },
+      replyOptions: {
+        scheduledAutomation: {
+          admissionSource: "operator-schedule",
+          job: { ...makeCronJob({}), idleOnly: true },
+          assertCurrent: () => {},
+        },
+      },
       fastAbortResolver: async () => {
         recoveryOperation = createReplyOperation({
           sessionKey,
@@ -1789,7 +1684,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    // The heartbeat left the active visible recovery operation untouched and
+    // The automation left the active visible recovery operation untouched and
     // skipped itself instead of force-clearing the in-flight visible turn.
     expect(recoveryOperation).toBeDefined();
     expect(recoveryOperation?.result).toBeNull();

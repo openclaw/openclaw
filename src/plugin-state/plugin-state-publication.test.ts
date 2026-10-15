@@ -183,7 +183,8 @@ describe("plugin state committed facts", () => {
 
   it("expires cached namespace rows and reloads after an uncertain publication", async () => {
     await withOpenClawTestState({ label: "plugin-state-namespace-expiry" }, async ({ env }) => {
-      let now = Date.now();
+      // The worker uses real time; only the cache clock should expire this row.
+      let now = Date.UTC(2100, 0, 1);
       vi.spyOn(Date, "now").mockImplementation(() => now);
       const options = { namespace: "receipts", maxEntries: 10, env };
       const native = createPluginStateSyncKeyedStore("receipt-test", options);
@@ -215,6 +216,10 @@ describe("plugin state committed facts", () => {
       const options = { namespace: "receipts", maxEntries: 10, env };
       const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
       const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+      const sibling = createPluginStateSyncKeyedStore("receipt-test", {
+        ...options,
+        namespace: "sibling",
+      });
       await store.register("key", { count: 1 });
       const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       const read = async (expected: { count: number } | undefined) => {
@@ -226,6 +231,10 @@ describe("plugin state committed facts", () => {
         ]);
         expect(dispatch).not.toHaveBeenCalled();
       };
+      await read({ count: 1 });
+      sibling.register("other", true);
+      await read({ count: 1 });
+      await store.register("another", { count: 100 });
       await read({ count: 1 });
       const first = await store.lookup("key");
       first!.count = 99;
@@ -717,6 +726,64 @@ describe("plugin state committed facts", () => {
       } finally {
         seen.unsubscribe();
       }
+    });
+  });
+
+  it("does not reuse a worker postimage after a newer raw native write", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-raw-receipt-supersession" },
+      async ({ env }) => {
+        const store = createPluginStateKeyedStore<string>("receipt-test", {
+          namespace: "receipts",
+          maxEntries: 2,
+          env,
+        });
+        const original = admission.observeSqliteWorkerCommittedFacts;
+        const intercept = vi
+          .spyOn(admission, "observeSqliteWorkerCommittedFacts")
+          .mockImplementation((owner, listener) => {
+            original(owner, (receipt) => {
+              openOpenClawStateDatabase({ env })
+                .db.prepare(
+                  "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+                )
+                .run(JSON.stringify("raw"), "receipt-test", "receipts", "key");
+              listener(receipt);
+            });
+          });
+        try {
+          await store.register("key", "worker");
+        } finally {
+          intercept.mockRestore();
+        }
+        const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        await expect(store.lookupMany(["key"])).resolves.toEqual([{ ok: true, value: "raw" }]);
+        dispatch.mockClear();
+        await expect(store.lookupMany(["key"])).resolves.toEqual([{ ok: true, value: "raw" }]);
+        await expect(store.lookup("key")).resolves.toBe("raw");
+        expect(dispatch).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("does not cache a native postimage superseded by raw SQL in the same transaction", async () => {
+    await withOpenClawTestState({ label: "plugin-state-raw-transaction" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 2, env };
+      const native = createPluginStateSyncKeyedStore<string>("receipt-test", options);
+      const store = createPluginStateKeyedStore<string>("receipt-test", options);
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          native.register("key", "typed");
+          db.prepare(
+            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+          ).run(JSON.stringify("raw"), "receipt-test", "receipts", "key");
+        },
+        { env },
+      );
+      await expect(store.lookup("key")).resolves.toBe("raw");
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      await expect(store.lookup("key")).resolves.toBe("raw");
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 });

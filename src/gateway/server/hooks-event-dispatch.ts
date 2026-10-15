@@ -10,17 +10,17 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DeferredHookWake } from "../../cron/service/wake.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueRequiredSystemEventEntry,
-  enqueueSystemEventWithReceipt,
   isSystemEventTurnOwned,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
-import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { HookWakeUnavailableError } from "./hooks-request-handler-response.js";
 
 export type HookEventTarget = {
@@ -59,8 +59,29 @@ export function resolveHookEventTarget(params: {
   };
 }
 
+export async function deferHookEvent(
+  deferHookWake: DeferredHookWake | undefined,
+  request: Parameters<DeferredHookWake>[0],
+) {
+  if (!deferHookWake) {
+    throw new HookWakeUnavailableError(
+      "Scheduled Hook wake admission is unavailable; restart the Gateway",
+    );
+  }
+  const result = await deferHookWake(request);
+  if (!result.ok) {
+    throw new HookWakeUnavailableError(
+      result.reason ?? "No scheduled target can receive this Hook notice",
+    );
+  }
+  return { eventOutcome: result.eventOutcome };
+}
+
 /** Owns capture, queue custody, and acceptance for immediate or deferred hook wakes. */
-export function createHookWakeDispatcher(reportFailure: (outcome: SessionEventOutcome) => void) {
+export function createHookWakeDispatcher(
+  reportFailure: (outcome: SessionEventOutcome) => void,
+  deferHookWake?: DeferredHookWake,
+) {
   const pendingReceipts = new Map<string, SessionEventReceipt>();
   return async (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
@@ -72,19 +93,6 @@ export function createHookWakeDispatcher(reportFailure: (outcome: SessionEventOu
       resolvedAgentId: agentId,
       sessionKey: value.sessionKey,
     });
-    if (value.mode === "next-heartbeat") {
-      if (isHooksConfigCurrent?.() === false) {
-        return null;
-      }
-      const eventOptions = { sessionKey: target.eventSessionKey };
-      const queued = enqueueSystemEventWithReceipt(
-        value.text,
-        isUnscopedSessionKeySentinel(target.eventSessionKey)
-          ? withSystemEventOwner(eventOptions, agentId)
-          : eventOptions,
-      );
-      return { eventOutcome: queued ? "queued" : "coalesced" } as const;
-    }
     const changedConfig = new Error("Hook configuration changed during wake admission");
     // The HTTP guard publishes its refusal; do not invoke it twice after revocation.
     let configChanged = false;
@@ -103,6 +111,15 @@ export function createHookWakeDispatcher(reportFailure: (outcome: SessionEventOu
         { assertCaptureCurrent: assertAcceptanceCurrent },
       );
       assertAcceptanceCurrent();
+      if (value.mode === "next-heartbeat") {
+        return await deferHookEvent(deferHookWake, {
+          text: value.text,
+          agentId: target.agentId,
+          expectedTarget,
+          createIfMissing: true,
+          commitGuard: assertAcceptanceCurrent,
+        });
+      }
     } catch (error) {
       if (error === changedConfig) {
         return null;

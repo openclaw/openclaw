@@ -4,7 +4,6 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { getRuntimeConfig } from "../../../config/config.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
-import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -66,7 +65,6 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await resetSubagentRegistryForTests({ persist: false });
   publishSystemEventStoreResolver(undefined);
-  resetHeartbeatEventsForTest();
   vi.mocked(getRuntimeConfig).mockReset();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
