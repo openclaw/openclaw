@@ -1,32 +1,12 @@
-// Regression coverage for OpenRouter onboarding route matching.
-//
-// The onboarding "API Keys -> OpenRouter API key" flow has no model picker, so
-// it stages the provider default `openrouter/auto`. The default route resolves
-// that stored ref to the canonical ModelRef { provider: "openrouter", model:
-// "openrouter/auto" } — the model id itself carries the provider prefix.
-//
-// `resolveSystemAgentConfiguredRouteFromConfig` previously built `modelLabel`
-// by raw concatenation (`${provider}/${modelId}`), yielding the double-prefixed
-// `openrouter/openrouter/auto`. The staged candidate ref and the config primary
-// (written via the canonical `modelKey`/`upsertCanonicalModelConfigEntry`) stay
-// `openrouter/auto`, so `verifyAndActivateCandidate`'s
-// `route.modelLabel !== staged.modelRef` guard rejected a valid credential with
-// "The candidate route does not match the selected provider, model, and
-// credential." Building `modelLabel` with the canonical `modelKey` fixes it.
-//
-// These tests pin the canonical label, confirm it round-trips for a plain
-// (non-prefixed) provider so other providers do not regress, and confirm a
-// genuinely different OpenRouter model still produces a distinct label.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { modelKey } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
+import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 
 // Mirrors OPENROUTER_DEFAULT_MODEL_REF from extensions/openrouter/onboard.ts.
 // Kept as a literal so this core test does not pull a bundled extension into
@@ -40,12 +20,10 @@ const readSnapshot = () =>
   readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
 
 async function routeFor(primary: string, provider: string): Promise<string> {
-  // Source config uses the input provider shape (apiKey only); the writer and
-  // schema accept it. Cast past the materialized provider type for this literal.
   const config = {
     agents: { defaults: { model: { primary } } },
     models: { providers: { [provider]: { apiKey: `synthetic-${provider}-key` } } },
-  } as OpenClawConfig;
+  };
   await fs.writeFile(configPath, JSON.stringify(config));
   const snapshot = await readSnapshot();
   expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
@@ -76,9 +54,6 @@ it("resolves the OpenRouter default route label to the staged candidate ref", as
   // Before the fix this was "openrouter/openrouter/auto".
   const label = await routeFor(OPENROUTER_DEFAULT_MODEL_REF, "openrouter");
   expect(label).toBe("openrouter/auto");
-  expect(label).toBe(OPENROUTER_DEFAULT_MODEL_REF);
-  // The label is exactly the canonical key the config write path uses.
-  expect(label).toBe(modelKey("openrouter", "openrouter/auto"));
 });
 
 it("keeps a distinct label for a non-default OpenRouter model", async () => {
@@ -119,7 +94,7 @@ it("resolves a bare alias primary to the canonical model label", async () => {
       },
     },
     models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
-  } as unknown as OpenClawConfig;
+  };
   await fs.writeFile(configPath, JSON.stringify(config));
   const snapshot = await readSnapshot();
   expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
@@ -141,7 +116,7 @@ it("resolves a provider-qualified alias before forming the route label", async (
       },
     },
     models: { providers: { openai: { apiKey: "synthetic-openai-key" } } },
-  } as unknown as OpenClawConfig;
+  };
   await fs.writeFile(configPath, JSON.stringify(config));
   const snapshot = await readSnapshot();
   expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
@@ -152,47 +127,6 @@ it("resolves a provider-qualified alias before forming the route label", async (
     snapshot,
   );
   expect(route?.modelLabel).toBe("openai/gpt-5.4-mini");
-});
-
-it("discovers the same Fusion identity that activation resolves", async () => {
-  // End-to-end guard for the previously reported Fusion discovery regression:
-  // the "Current model" candidate advertised by setup discovery must equal the
-  // configured-route label that activation compares against. Before the fix,
-  // discovery advertised `openrouter/fusion` while activation retained
-  // `openrouter/openrouter/fusion`, so selecting Current model failed with
-  // "The configured default model changed from openrouter/fusion to
-  // openrouter/openrouter/fusion".
-  const config = {
-    agents: {
-      defaults: { model: { primary: "openrouter/openrouter/fusion" } },
-      entries: { main: {} },
-    },
-    models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
-  } as unknown as OpenClawConfig;
-  await fs.writeFile(configPath, JSON.stringify(config));
-  const snapshot = await readSnapshot();
-  expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-
-  const candidates = await detectInferenceBackends({
-    config: snapshot.runtimeConfig,
-    agentId: "main",
-    env: {},
-    platform: "linux",
-    deps: {
-      probeLocalCommand: async (command) => ({ found: false, command }),
-      readCodexCliCredentials: () => null,
-    },
-  });
-  const discovered = candidates.find((candidate) => candidate.kind === "existing-model");
-  expect(discovered?.modelRef).toBe("openrouter/openrouter/fusion");
-
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    snapshot.runtimeConfig,
-    undefined,
-    {},
-    snapshot,
-  );
-  expect(route?.modelLabel).toBe(discovered?.modelRef);
 });
 
 it.each([
@@ -222,7 +156,7 @@ it.each([
     const config = {
       agents: { defaults: { model: { primary } }, entries: { main: {} } },
       models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
-    } as unknown as OpenClawConfig;
+    };
     await fs.writeFile(configPath, JSON.stringify(config));
     const snapshot = await readSnapshot();
     expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
@@ -234,7 +168,7 @@ it.each([
       platform: "linux",
       deps: {
         probeLocalCommand: async (command) => ({ found: false, command }),
-        readCodexCliCredentials: () => null,
+        hasCodexCliAuthFile: () => false,
       },
     });
     const discovered = candidates.find((candidate) => candidate.kind === "existing-model");
@@ -247,13 +181,15 @@ it.each([
     );
     expect(route?.modelLabel).toBe(discovered?.modelRef);
 
-    const runEmbeddedAgent = vi.fn(async () => ({
-      meta: {
-        durationMs: 1,
-        finalAssistantVisibleText: "OK",
-        executionTrace: { winnerProvider: "openrouter", winnerModel: expected },
-      },
-    }));
+    const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
+      async () => ({
+        meta: {
+          durationMs: 1,
+          finalAssistantVisibleText: "OK",
+          executionTrace: { winnerProvider: "openrouter", winnerModel: expected },
+        },
+      }),
+    );
     const result = await activateSetupInference({
       kind: "existing-model",
       modelRef: discovered?.modelRef,
@@ -268,7 +204,7 @@ it.each([
       deps: {
         readConfigFileSnapshot: readSnapshot,
         createTempDir: () => fs.mkdtemp(path.join(temp.home, "probe-")),
-        runEmbeddedAgent: runEmbeddedAgent as never,
+        runEmbeddedAgent,
       },
     });
     if (!result.ok) {

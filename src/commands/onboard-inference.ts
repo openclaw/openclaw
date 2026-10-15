@@ -127,14 +127,8 @@ export async function detectInferenceBackends(
       cfg: options.config ?? {},
       ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
     });
-    // Discovery must advertise exactly the label configured-route activation
-    // resolves: a qualified alias labels the concrete model, a literal catalog
-    // namespace (OpenRouter's `openrouter/openrouter/fusion`) keeps its authored
-    // spelling, and the separated auth-profile suffix is dropped.
     const profileId = splitTrailingAuthProfile(existingModel).profile;
     const modelRef = resolveConfiguredRouteModelLabel({
-      cfg: options.config ?? {},
-      ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
       configuredRef: existingModel,
       resolved,
       ...(profileId ? { profileId } : {}),
