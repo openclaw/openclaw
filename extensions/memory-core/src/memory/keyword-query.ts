@@ -3,11 +3,39 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 
 type FtsCanonicalTokenizer = "unicode61" | "trigram";
 
+const CODE_IDENTIFIER_PART_RE =
+  /\p{Lu}+(?=\p{Lu}\p{Ll})|\p{Lu}?\p{Ll}+|\p{Lu}+|\p{N}+|[\p{L}\p{M}]+/gu;
+
 export function tokenizeFtsQuery(raw: string, includeLeadingMarks = false): string[] {
   const pattern = includeLeadingMarks
     ? /[\p{L}\p{M}\p{N}_]+/gu
     : /[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu;
   return normalizeStringEntries(raw.match(pattern) ?? []);
+}
+
+export function splitCodeIdentifierSubtokens(term: string): string[] {
+  const normalized = term.trim();
+  if (!normalized) {
+    return [];
+  }
+  const hasUnderscore = normalized.includes("_");
+  const hasCamelBoundary =
+    /[\p{Ll}\p{N}]\p{Lu}/u.test(normalized) || /\p{Lu}{2,}\p{Ll}/u.test(normalized);
+  if (!hasUnderscore && !hasCamelBoundary) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const segment of normalized.split(/_+/u)) {
+    if (!segment) {
+      continue;
+    }
+    const matches = segment.match(CODE_IDENTIFIER_PART_RE);
+    if (matches) {
+      parts.push(...matches);
+    }
+  }
+  const tokens = normalizeStringEntries(parts);
+  return tokens.length > 1 ? tokens : [];
 }
 
 function simpleCaseFold(character: string): string {
@@ -117,6 +145,19 @@ export function buildMatchQueryFromTerms(
   const quoted = uniqueStrings(terms).map((term) => {
     const forms = canonicalTermForms(term, canonicalTokenizer);
     const alternatives = forms.map((form) => `"${form.replaceAll('"', "")}"`);
+    if (canonicalTokenizer !== "trigram") {
+      const subtokens = splitCodeIdentifierSubtokens(term);
+      if (subtokens.length > 1) {
+        const joinedCompound = `"${subtokens.join("").replaceAll('"', "")}"`;
+        if (!alternatives.includes(joinedCompound)) {
+          alternatives.push(joinedCompound);
+        }
+        const subtokenConjunction = `(${subtokens.map((sub) => `"${sub.replaceAll('"', "")}"`).join(" AND ")})`;
+        if (!alternatives.includes(subtokenConjunction)) {
+          alternatives.push(subtokenConjunction);
+        }
+      }
+    }
     // Alternatives belong to each word: one document can mix NFC and NFD words.
     return alternatives.length === 1 ? alternatives[0] : `(${alternatives.join(" OR ")})`;
   });
@@ -137,11 +178,28 @@ export function planKeywordSearch(params: {
     params.query,
     params.ftsTokenizer === "trigram" && params.includeLeadingMarks,
   );
+  const identifierSubstringTerms: string[] = [];
   if (params.matchAny) {
     // Retain the existing six-term language expansion without double-counting
     // terms already present in a different case or canonical spelling.
     const key = (term: string) => Array.from(term.normalize("NFC"), simpleCaseFold).join("");
     const seen = new Set(tokens.map(key));
+    const initialTokens = [...tokens];
+    for (const token of initialTokens) {
+      const subtokens = splitCodeIdentifierSubtokens(token);
+      if (subtokens.length > 1) {
+        const joined = subtokens.join("");
+        if (Array.from(joined).length >= 3) {
+          identifierSubstringTerms.push(joined);
+        }
+        for (const subtoken of subtokens) {
+          if (!seen.has(key(subtoken))) {
+            seen.add(key(subtoken));
+            tokens.push(subtoken);
+          }
+        }
+      }
+    }
     const expanded = extractKeywords(params.query.normalize("NFC"), params).slice(0, 6);
     for (const token of tokenizeFtsQuery(expanded.join(" "))) {
       if (!seen.has(key(token))) {
@@ -152,7 +210,11 @@ export function planKeywordSearch(params: {
   }
   if (params.ftsTokenizer !== "trigram") {
     const matchQuery = buildMatchQueryFromTerms(tokens, canonicalTokenizer, params.matchAny);
-    return { matchQuery, substringTerms: [], tokens };
+    return {
+      matchQuery,
+      substringTerms: uniqueStrings(identifierSubstringTerms),
+      tokens,
+    };
   }
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
