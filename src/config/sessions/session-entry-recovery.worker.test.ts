@@ -97,7 +97,9 @@ it("discovers only current recoverable inputs and observes writes after an empty
 
       const candidates = await readPendingInputRecoveryEntriesInWorker(store);
       expect(
-        candidates.map(({ sessionKey, entry }) => [sessionKey, entry.sessionId]).toSorted(),
+        candidates
+          .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey))
+          .map(({ sessionKey, entry }) => [sessionKey, entry.sessionId]),
       ).toEqual([
         ["agent:main:recovery-interrupted", "recovery-interrupted"],
         ["agent:main:recovery-queued", "recovery-queued"],
