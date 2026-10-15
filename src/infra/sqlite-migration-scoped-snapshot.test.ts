@@ -284,32 +284,55 @@ describe("table-scoped migration snapshots", () => {
     });
   });
 
-  it("preserves undeclared statistics at the capture and restore boundaries", async () => {
-    const f = fixture();
-    const withoutStatistics = tables.filter((name) => !name.startsWith("sqlite_stat"));
-    expect(() => inspectScopedMigrationTables(f.sourcePath, withoutStatistics)).toThrow(
-      ScopedMigrationSnapshotUnsupportedError,
-    );
-    withDatabase(f.sourcePath, (db) =>
-      db.exec("DROP TABLE sqlite_stat1; DROP TABLE IF EXISTS sqlite_stat4"),
-    );
-    await createScopedMigrationSnapshot({
-      ...f,
-      targetPath: f.backupPath,
-      tables: withoutStatistics,
-      beforePublish: () => {},
-    });
-    mutate(f);
-    const statistics = withDatabase(f.sourcePath, (db) => {
-      db.exec("ANALYZE");
-      return db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all();
-    });
-    expect(() => restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} })).toThrow(
-      "undeclared planner statistics",
-    );
-    withDatabase(f.sourcePath, (db) => {
-      expect(db.prepare("SELECT label FROM selected").get()).toEqual({ label: "after" });
-      expect(db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all()).toEqual(statistics);
-    });
-  });
+  it.each([
+    { encoding: "UTF-8", malformedStat: "312031FF" },
+    { encoding: "UTF-16le", malformedStat: "31002000310000D8" },
+  ])(
+    "preserves current undeclared statistics across scoped restore with $encoding",
+    async ({ encoding, malformedStat }) => {
+      const f = fixture(encoding);
+      const withoutStatistics = tables.filter((name) => !name.startsWith("sqlite_stat"));
+      await createScopedMigrationSnapshot({
+        ...f,
+        targetPath: f.backupPath,
+        tables: withoutStatistics,
+        beforePublish: () => {},
+      });
+      mutate(f);
+      const readStatistics = (db: DatabaseSync) => {
+        return ["sqlite_stat1", "sqlite_stat4"].flatMap((name) => {
+          if (
+            !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)
+          ) {
+            return [];
+          }
+          const query = db.prepare(`SELECT rowid, * FROM ${name} ORDER BY rowid`);
+          query.setReadBigInts(true);
+          return [{ name, rows: query.all() }];
+        });
+      };
+      const statistics = withDatabase(f.sourcePath, (db) => {
+        db.exec(`
+        ANALYZE untouched;
+        UPDATE sqlite_stat1 SET rowid = 9007199254740993, stat = CAST(X'${malformedStat}' AS TEXT)
+          WHERE idx = 'selected_amount';
+      `);
+        expect(db.prepare("SELECT stat FROM sqlite_stat1 WHERE tbl = 'untouched'").get()).toEqual({
+          stat: "3",
+        });
+        return readStatistics(db);
+      });
+      restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} });
+      withDatabase(f.sourcePath, (db) => {
+        expect(db.prepare("SELECT label FROM selected").get()).toEqual({ label: "before" });
+        expect(readStatistics(db)).toEqual(statistics);
+        expect(
+          db
+            .prepare("SELECT hex(stat) AS bytes FROM sqlite_stat1 WHERE idx = 'selected_amount'")
+            .get(),
+        ).toEqual({ bytes: malformedStat });
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      });
+    },
+  );
 });

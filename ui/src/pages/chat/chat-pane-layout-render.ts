@@ -170,6 +170,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           selectedSession?.worktree?.branch ??
           chatProps.pullRequestsBranch?.branch,
       },
+      onOpenWorkspace: () => openPanelSlot("workspace"),
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
       composerRecovery: recovery,

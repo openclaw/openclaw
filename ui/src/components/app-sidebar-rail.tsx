@@ -59,7 +59,7 @@ export function renderSidebarRail(
   TeamNewSession?: () => JSX.Element,
 ): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
-  const zone = () => host.reconciledSidebarZone();
+  const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
     (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
       (entry) => parseSidebarEntry(entry)!,
@@ -434,9 +434,12 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
           </span>
         )
       }
-      running={props.session.hasActiveRun || props.session.runningChildCount > 0}
+      running={
+        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
+        props.session.runningChildCount > 0
+      }
       queued={
-        props.session.hasActiveRun &&
+        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
         props.session.status === "queued" &&
         props.session.runningChildCount === 0
       }
@@ -447,13 +450,13 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
 
 /** Pages is the accessible destination catalog, not another favorites list. */
 export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = () => host.reconciledSidebarZone();
+  const zone = createMemo(() => host.reconciledSidebarZone());
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages.map((row) =>
-          restoreSnapshotSession(row, host.getRouteSessionKey()),
-        )
+      ? host.sidebarSnapshot.pages
+          .filter((row) => !row.archived)
+          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           host.getSessionNavigationState().toSidebarSession(row),
         ),

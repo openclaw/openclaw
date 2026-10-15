@@ -397,6 +397,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
+      awaitingActivity: state.chatRunStartup == null,
       environmentStartStatus:
         placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -443,15 +444,16 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(
-        state,
-        catalogKey ? this.catalogMessages : null,
-        projectionRunId,
-      ),
+      ...projectChatPaneTranscript(state, catalog ? this.catalogMessages : null, projectionRunId),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      composerPredictions: {
+        enabled: this.context.config.current.composerPredictionsEnabled === true,
+        active: !catalogKey && this.active && this.presented,
+        gateway: this.context.gateway,
+      },
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
       mentionsUnsupported,

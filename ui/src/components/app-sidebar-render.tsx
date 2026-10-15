@@ -17,11 +17,12 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -75,12 +76,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
     host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId()
       ? host.sidebarSnapshot.brand
       : null;
-  const menuUnread = createMemo(() =>
-    cardAgents().some((entry) => {
-      const agentId = normalizeAgentId(entry.id);
-      return agentId !== cardAgentId() && host.agentUnreadCount(agentId) > 0;
-    }),
-  );
+  const menuUnread = createMemo(() => host.otherAgentsHaveUnread());
   const cardName = createMemo(() => {
     const agent = cardAgent();
     return cached()?.name ?? (agent ? normalizeAgentLabel(agent, cardIdentity()) : "");
@@ -230,11 +226,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           )}
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              {renderHoverMarquee(name(), "sidebar-agent-card__name-text", {
-                loop: true,
-                delay: 300,
-                speed: 35,
-              })}
+              <HoverMarquee
+                content={name()}
+                class="sidebar-agent-card__name-text"
+                options={{ loop: true, delay: 300, speed: 35 }}
+              />
               <span class="sidebar-agent-card__chevron" aria-hidden="true">
                 <Icon name="chevronsUpDown" />
               </span>
@@ -252,12 +248,15 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
 }
 
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Element {
+  const context = useApplication();
+  const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const connectionStatus = () => host.connectionStatus;
-  const selfUser = () =>
-    host.sessionDataContext
-      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
-      : null;
+  const selfUser = createMemo(() => {
+    profileGateway.read();
+    const gateway = host.sessionDataContext?.gateway;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
+  });
   const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -360,11 +359,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       >
         <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
         <span class="sidebar-identity-card__text">
-          {renderHoverMarquee(selfLabel(), "sidebar-identity-card__name", {
-            loop: true,
-            delay: 300,
-            speed: 35,
-          })}
+          <HoverMarquee
+            content={selfLabel()}
+            class="sidebar-identity-card__name"
+            options={{ loop: true, delay: 300, speed: 35 }}
+          />
           {connectionStatus() ? (
             renderGatewayStatus({
               get kind() {
@@ -472,19 +471,15 @@ export function renderAppSidebarPluginTab(
       ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
       : "plug";
   });
-  const link = renderSidebarNavLink({
-    get href() {
-      return `${location().pathname}${location().search}`;
-    },
-    icon: <Icon name={iconName()} />,
-    get label() {
-      return tab().label;
-    },
-    get active() {
-      return host.activeRouteId === "plugin" && host.activePluginTabId === key();
-    },
-    onNavigate: () => host.onNavigate?.("plugin", location()),
-  });
+  const link = (
+    <SidebarNavLink
+      href={`${location().pathname}${location().search}`}
+      icon={<Icon name={iconName()} />}
+      label={tab().label}
+      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
+      onNavigate={() => host.onNavigate?.("plugin", location())}
+    />
+  );
   return (
     <Show when={routeId()} fallback={link}>
       {(route) => host.sidebarMenus.renderRoute(route())}

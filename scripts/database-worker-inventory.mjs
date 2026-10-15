@@ -279,6 +279,29 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["enrollOwnedAuthProfileAuthorization"],
+        guard: "params.context.maintenanceScope?.ownsSchemaMaintenance",
+        evidence:
+          "Only the synchronous exclusive-Doctor branch opens the native agent transaction, with captured live admission, credential-preserving CAS and commit settlement. Ordinary shared/agent enrollment still dispatches through the existing worker/executor; nested callbacks and unguarded calls retain runtime classification.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-state-db-legacy-backfills.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["backfillAcpReplayEstimatedBytes"],
+        evidence:
+          "Only ensureAdditiveStateColumns calls this accounting repair, from schema-runtime cold admission/migration and the Doctor schema-repair runner; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-replacement-read.ts",
     [
       {
@@ -552,15 +575,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["collectRecentSessionHistoryIds"],
+        operations: ["recentSessionHistoryIds"],
         evidence:
-          "Only readHistoricalSessionIdsInDatabase calls this collector, through session-transcript.worker.ts or native reclamation with reclamationMode=in-process. Production selectors of native mode are commands/sessions-cleanup.runtime.ts; the recency probe has its own reviewed reclamation/archive-worker classification.",
-      },
-      {
-        tier: "T3",
-        operations: ["isRecentHistoricalSessionId"],
-        evidence:
-          "Only reclamation.ts and archive.worker.ts materialization call this probe. Reclamation native execution requires an off-thread or schema/agent-maintenance owner; ordinary durable callers dispatch to workers. Archive materialization is called by its same-module batch under the materialize worker message.",
+          "Shared collector/probe query. readHistoricalSessionIdsInDatabase calls the collector through session-transcript.worker.ts or explicit CLI reclamationMode=in-process. Only reclamation.ts and archive.worker.ts materialization call the probe; native reclamation requires an off-thread or schema/agent-maintenance owner, and ordinary durable callers dispatch to workers.",
       },
     ],
   ],
@@ -3045,6 +3062,7 @@ const reviewedOperations = new Map([
         operations: [
           "readLatestTranscriptEntry",
           "readTranscriptEntry",
+          "readTranscriptPage",
           "readStoredTranscriptNotes",
         ],
         evidence:
@@ -3099,6 +3117,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
+  "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
   "extensions/workboard/src/sqlite-store-write.ts", // Workboard worker kernel card writes only.
@@ -3488,6 +3507,8 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
     classifyKnownEntry,
+    // Historical snapshots supply counts; only current-source diagnostics are consumed below.
+    !ref,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(

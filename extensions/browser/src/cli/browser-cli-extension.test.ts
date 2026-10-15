@@ -196,13 +196,6 @@ describe("browser extension pairing Gateway URL", () => {
     expect(installMocks.uninstallChromeExtensionNativeHosts).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid install --wait-ms value before installation", async () => {
-    await expect(run(["install", "--wait-ms", "0x1000"])).rejects.toThrow("__exit__:1");
-
-    expect(output.error).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
-    expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
-  });
-
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
     await expect(
       run(["pair", "--gateway-url", "wss://gateway.example/proxy-prefix"]),

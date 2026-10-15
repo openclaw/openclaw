@@ -162,15 +162,11 @@ export function createSqliteSessionActorExecutor(
           authority.assertCurrent();
           let snapshot = params.replica.read();
           if (!snapshot) {
-            const pending = params.replica.beginRead();
-            try {
-              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-              pending.install(snapshot);
-              // Disclose the immutable installed revision, including a superseding receipt.
-              snapshot = params.replica.read();
-            } finally {
-              pending.cancel();
-            }
+            const install = params.replica.beginRead();
+            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+            install(snapshot);
+            // Disclose the immutable installed revision, including a superseding receipt.
+            snapshot = params.replica.read();
           }
           if (!snapshot) {
             throw new SessionActorReadInvalidatedError();

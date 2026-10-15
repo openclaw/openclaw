@@ -159,3 +159,65 @@ it("projects direct active children through the live observer with stable rounde
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
 });
+
+it("shows live environment and context facts while preserving disclosure intent", async () => {
+  const openFiles = vi.fn();
+  const element = await mount({
+    detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
+    onOpenWorkspace: openFiles,
+    selectedSession: {
+      key: "agent:main:details",
+      kind: "direct",
+      execNode: "Design workstation",
+      model: "demo-model",
+      totalTokens: 64000,
+      totalTokensFresh: true,
+      contextTokens: 128000,
+      inputTokens: 1200,
+      outputTokens: 450,
+    },
+  });
+  expect(element.textContent).toContain("Design workstation");
+  expect(element.textContent).toContain("project");
+  expect(element.textContent).not.toContain("/workspace/project");
+  expect(element.textContent).toContain("demo-model");
+  expect(element.querySelector('[aria-label="Copy path"]')).not.toBeNull();
+  expect(element.querySelector('[aria-label="Copy branch name"]')).not.toBeNull();
+  const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
+  expect(context.querySelector("summary")?.textContent).toContain("50%");
+  context.open = true;
+  element.props = {
+    ...element.props!,
+    selectedSession: {
+      ...element.props!.selectedSession!,
+      totalTokens: 32000,
+      totalTokensFresh: false,
+    },
+  };
+  await element.updateComplete;
+  expect(context.open).toBe(true);
+  expect(context.querySelector("summary")?.textContent).toContain("~25%");
+  element
+    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
+    .click();
+  expect(openFiles).toHaveBeenCalledOnce();
+  element.presented = false;
+  await element.updateComplete;
+  element
+    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
+    .click();
+  expect(openFiles).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "/home/private-user/.openclaw/workspace/",
+  "C:\\Users\\private-user\\.openclaw\\workspace\\",
+])("keeps an unlabelled workspace's private parent path out of Details: %s", async (root) => {
+  const element = await mount({ detailsWorkspace: { root, label: null } });
+  const environment = element.querySelector(".chat-details__environment")!;
+  expect(environment.textContent).toContain("workspace");
+  expect(environment.textContent).not.toContain(root);
+  expect(environment.textContent).not.toContain("private-user");
+  expect(environment.querySelector(".chat-details__row")?.getAttribute("title")).toBe("workspace");
+  expect(environment.querySelector('[aria-label="Copy path"]')).not.toBeNull();
+});

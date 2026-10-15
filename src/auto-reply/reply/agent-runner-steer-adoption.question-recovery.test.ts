@@ -6,6 +6,7 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
@@ -486,7 +487,7 @@ describe("question response custody through reply adoption", () => {
             expect(adopted).not.toHaveBeenCalled();
             expect(settled).not.toHaveBeenCalled();
             expect(state.admission).toBeUndefined();
-            expect(claim.isResolving()).toBe(false);
+            await expectPendingQuestionAnswerClaimable(key, true);
           } else if (change === "next-model") {
             expect(result).toEqual({ handled: true, payload: undefined });
             expect(committed).toHaveBeenCalledOnce();
@@ -501,7 +502,7 @@ describe("question response custody through reply adoption", () => {
             expect(committed).not.toHaveBeenCalled();
             expect(adopted).not.toHaveBeenCalled();
             expect(settled).not.toHaveBeenCalled();
-            expect(claim.isResolving()).toBe(false);
+            await expectPendingQuestionAnswerClaimable(key, true);
           }
         } finally {
           claim.dispose();
@@ -789,7 +790,7 @@ describe("question response custody through reply adoption", () => {
                 setTimeout(resolve, 1_200);
               });
               expect(done).toBe(false);
-              expect(claim.isResolving()).toBe(true);
+              await expectPendingQuestionAnswerClaimable(key, false);
               expect(followup).not.toHaveBeenCalled();
               expect(cancel).not.toHaveBeenCalled();
             }

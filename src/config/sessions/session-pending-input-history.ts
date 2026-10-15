@@ -264,6 +264,17 @@ export async function listSessionPendingInputs(
   };
 }
 
+/** Prompt context needs only the bounded page, never the full retained-input count. */
+export async function readSessionPendingInputContext(
+  scope: Scope,
+): Promise<Omit<SessionPendingInputPage, "total">> {
+  const { rows, nextBefore } = await readPendingInputRows(scope, { includeTotal: false });
+  return {
+    items: rows.toReversed().map(projectSessionPendingInput),
+    ...(nextBefore !== undefined ? { nextBefore } : {}),
+  };
+}
+
 export async function readSessionPendingInput(
   scope: Scope,
   id: string,

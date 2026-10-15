@@ -1,4 +1,3 @@
-// Tests abort request handling, cutoff persistence, and active run cleanup.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
@@ -116,9 +115,102 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-const abortFixture = useChatAbortRegistryFixture();
-
 describe("abort detection", () => {
+  it("isAbortRequestText aligns abort command semantics", () => {
+    expect(isAbortRequestText("/stop")).toBe(true);
+    expect(isAbortRequestText("/STOP")).toBe(true);
+    expect(isAbortRequestText("/stop!!!")).toBe(true);
+    expect(isAbortRequestText("/Stop!!!")).toBe(true);
+    expect(isAbortRequestText("stop")).toBe(true);
+    expect(isAbortRequestText("Stop")).toBe(true);
+    expect(isAbortRequestText("STOP")).toBe(true);
+    expect(isAbortRequestText("stop action")).toBe(true);
+    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText("停下来")).toBe(true);
+    expect(isAbortRequestText("暂停")).toBe(true);
+    expect(isAbortRequestText("やめて")).toBe(true);
+    expect(isAbortRequestText("остановись")).toBe(true);
+    expect(isAbortRequestText("halt")).toBe(true);
+    expect(isAbortRequestText("stopp")).toBe(true);
+    expect(isAbortRequestText("pare")).toBe(true);
+    expect(isAbortRequestText(" توقف ")).toBe(true);
+    expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot!", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/queue@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
+    expect(
+      isAbortRequestText("/stop@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
+
+    expect(isAbortRequestText("/status")).toBe(false);
+    expect(isAbortRequestText("wait")).toBe(false);
+    expect(isAbortRequestText("please wait")).toBe(false);
+    expect(isAbortRequestText("do not do that")).toBe(true);
+    expect(isAbortRequestText("please do not do that")).toBe(false);
+    expect(isAbortRequestText("/abort")).toBe(false);
+  });
+
+  it("treats numeric message IDs at or before cutoff as stale", () => {
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: "200",
+        messageSid: "199",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: "200",
+        messageSid: "200",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: "200",
+        messageSid: "201",
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to timestamp cutoff when message IDs are unavailable", () => {
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffTimestamp: 2000,
+        timestamp: 1999,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffTimestamp: 2000,
+        timestamp: 2000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipMessageByAbortCutoff({
+        cutoffTimestamp: 2000,
+        timestamp: 2001,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("abort handling", () => {
+  const abortFixture = useChatAbortRegistryFixture();
   const trackedAbortMemoryKeys = new Set<string>();
 
   async function writeSessionStore(storePath: string, sessionIdsByKey: Record<string, string>) {
@@ -231,98 +323,6 @@ describe("abort detection", () => {
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
-  });
-
-  it("isAbortRequestText aligns abort command semantics", () => {
-    expect(isAbortRequestText("/stop")).toBe(true);
-    expect(isAbortRequestText("/STOP")).toBe(true);
-    expect(isAbortRequestText("/stop!!!")).toBe(true);
-    expect(isAbortRequestText("/Stop!!!")).toBe(true);
-    expect(isAbortRequestText("stop")).toBe(true);
-    expect(isAbortRequestText("Stop")).toBe(true);
-    expect(isAbortRequestText("STOP")).toBe(true);
-    expect(isAbortRequestText("stop action")).toBe(true);
-    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
-    expect(isAbortRequestText("停下来")).toBe(true);
-    expect(isAbortRequestText("暂停")).toBe(true);
-    expect(isAbortRequestText("やめて")).toBe(true);
-    expect(isAbortRequestText("остановись")).toBe(true);
-    expect(isAbortRequestText("halt")).toBe(true);
-    expect(isAbortRequestText("stopp")).toBe(true);
-    expect(isAbortRequestText("pare")).toBe(true);
-    expect(isAbortRequestText(" توقف ")).toBe(true);
-    expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
-    expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
-    expect(
-      isAbortRequestText("/stop@unresolved_bot", {
-        targetedCommandMode: "pre-identity",
-      }),
-    ).toBe(true);
-    expect(
-      isAbortRequestText("/stop@unresolved_bot!", {
-        targetedCommandMode: "pre-identity",
-      }),
-    ).toBe(true);
-    expect(
-      isAbortRequestText("/queue@unresolved_bot", {
-        targetedCommandMode: "pre-identity",
-      }),
-    ).toBe(false);
-    expect(
-      isAbortRequestText("/stop@some_other_bot", {
-        botUsername: "openclaw_bot",
-        targetedCommandMode: "pre-identity",
-      }),
-    ).toBe(false);
-
-    expect(isAbortRequestText("/status")).toBe(false);
-    expect(isAbortRequestText("wait")).toBe(false);
-    expect(isAbortRequestText("please wait")).toBe(false);
-    expect(isAbortRequestText("do not do that")).toBe(true);
-    expect(isAbortRequestText("please do not do that")).toBe(false);
-    expect(isAbortRequestText("/abort")).toBe(false);
-  });
-
-  it("treats numeric message IDs at or before cutoff as stale", () => {
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "199",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "200",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffMessageSid: "200",
-        messageSid: "201",
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to timestamp cutoff when message IDs are unavailable", () => {
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 1999,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 2000,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipMessageByAbortCutoff({
-        cutoffTimestamp: 2000,
-        timestamp: 2001,
-      }),
-    ).toBe(false);
   });
 
   it("resolves owner authorization after loading cancellation runtime", async () => {

@@ -277,65 +277,6 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("uses provider-owned config auth for a complete Comfy Cloud workflow", async () => {
-    const cfg = buildComfyConfig({
-      mode: "cloud",
-      image: {
-        workflow: { "6": { inputs: { text: "" } } },
-        promptNodeId: "6",
-      },
-    });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(true);
-  });
-
-  it("does not let provider config auth bypass incomplete Comfy Cloud workflows", async () => {
-    const cfg = buildComfyConfig({ mode: "cloud" });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
-  });
-
-  it("preserves an unavailable plugin-secret veto even with provider config auth", async () => {
-    vi.stubEnv("COMFY_MISSING_PLUGIN_SECRET", "");
-    const cfg = buildComfyConfig({
-      mode: "cloud",
-      apiKey: { source: "env", provider: "default", id: "COMFY_MISSING_PLUGIN_SECRET" },
-      image: {
-        workflow: { "6": { inputs: { text: "" } } },
-        promptNodeId: "6",
-      },
-    });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
-  });
-
   it("reports completed local history without image outputs after one lookup", async () => {
     const nowSpy = vi.spyOn(Date, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);

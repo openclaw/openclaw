@@ -71,7 +71,7 @@ export function readPostgresSchema(db: PostgresSqlConnection, namespace: string,
   return { catalog: readPostgresCatalog(JSON.parse(row.catalog)), metadata };
 }
 
-export function postgresSchemaFingerprint(
+function postgresSchemaFingerprint(
   catalog: readonly PostgresCatalogFact[],
   scratch?: { from: string; to: string },
 ): string {

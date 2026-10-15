@@ -1,4 +1,3 @@
-import { html, LitElement, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -14,10 +13,13 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
+type ControllerHost = ConstructorParameters<typeof SessionPullRequestIndicatorsController>[0];
+type Controller = Parameters<ControllerHost["addController"]>[0];
+
 const testHosts = new Set<TestHost>();
 
-class TestHost implements ReactiveControllerHost {
-  readonly controllers: ReactiveController[] = [];
+class TestHost implements ControllerHost {
+  readonly controllers: Controller[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
 
@@ -25,11 +27,11 @@ class TestHost implements ReactiveControllerHost {
     testHosts.add(this);
   }
 
-  addController(controller: ReactiveController): void {
+  addController(controller: Controller): void {
     this.controllers.push(controller);
   }
 
-  removeController(controller: ReactiveController): void {
+  removeController(controller: Controller): void {
     this.controllers.splice(this.controllers.indexOf(controller), 1);
   }
 }
@@ -37,24 +39,59 @@ class TestHost implements ReactiveControllerHost {
 type IndicatorOptions = ConstructorParameters<typeof SessionPullRequestIndicatorsController>[1];
 const LIFECYCLE_HOST_TAG = "test-session-pr-indicators";
 
-class LifecycleTestHost extends LitElement {
+class LifecycleTestHost extends HTMLElement implements ControllerHost {
   rows: readonly SidebarRecentSession[] = [];
   readRows: IndicatorOptions["getRows"] = () => [];
   controller!: SessionPullRequestIndicatorsController;
+  private readonly controllers = new Set<Controller>();
+  private pending: Promise<boolean> | undefined;
 
-  protected override willUpdate(): void {
-    // The sidebar prepares row summaries before controller hooks run.
-    this.rows = this.readRows();
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
   }
 
-  protected override render() {
-    return this.rows.map(
-      (row) => html`<span data-session-key=${row.key}>
-        ${this.controller
-          .summary(row.key, row.worktreeId ?? "", row.pullRequest)
-          ?.numbers.join(",")}
-      </span>`,
-    );
+  addController(controller: Controller) {
+    this.controllers.add(controller);
+  }
+  removeController(controller: Controller) {
+    this.controllers.delete(controller);
+  }
+  connectedCallback() {
+    for (const controller of this.controllers) {
+      controller.hostConnected?.();
+    }
+    this.requestUpdate();
+  }
+  disconnectedCallback() {
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+  }
+  get updateComplete() {
+    return this.pending ?? Promise.resolve(true);
+  }
+  requestUpdate() {
+    this.pending ??= Promise.resolve().then(() => {
+      // The sidebar prepares row summaries before controller hooks run.
+      this.rows = this.readRows();
+      this.shadowRoot!.replaceChildren(
+        ...this.rows.map((row) => {
+          const element = document.createElement("span");
+          element.dataset.sessionKey = row.key;
+          element.textContent =
+            this.controller
+              .summary(row.key, row.worktreeId ?? "", row.pullRequest)
+              ?.numbers.join(",") ?? "";
+          return element;
+        }),
+      );
+      this.pending = undefined;
+      for (const controller of this.controllers) {
+        controller.hostUpdated?.();
+      }
+      return true;
+    });
   }
 }
 
@@ -345,7 +382,7 @@ describe("SessionPullRequestIndicatorsController", () => {
   });
 });
 
-describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
+describe("SessionPullRequestIndicatorsController host lifecycle", () => {
   it("hides the row's saved PR summary after a same-client read-scope revocation", async () => {
     const harness = createGatewayHarness();
     const row = {

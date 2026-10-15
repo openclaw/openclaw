@@ -689,6 +689,7 @@ CREATE TABLE "mcp_oauth_stores" (
 );
 
 CREATE TABLE "meeting_transcript_sessions" (
+  "started_at_ms" bigint,
   "session_id" text COLLATE "C" NOT NULL,
   "started_at" text COLLATE "C" NOT NULL,
   "selector" text COLLATE "C" NOT NULL,
@@ -1490,6 +1491,8 @@ CREATE INDEX "idx_meeting_transcript_sessions_account" ON "meeting_transcript_se
 
 CREATE INDEX "idx_meeting_transcript_sessions_agent" ON "meeting_transcript_sessions" (("metadata_agent_id") ASC NULLS FIRST);
 
+CREATE INDEX "idx_meeting_transcript_sessions_chronology" ON "meeting_transcript_sessions" (("started_at_ms") DESC NULLS LAST, ("session_id") ASC NULLS FIRST, ("started_at") ASC NULLS FIRST);
+
 CREATE INDEX "idx_meeting_transcript_sessions_export_key" ON "meeting_transcript_sessions" (("export_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_meeting_transcript_sessions_id" ON "meeting_transcript_sessions" (("session_id") ASC NULLS FIRST, ("started_at") DESC NULLS LAST);
@@ -1566,27 +1569,11 @@ CREATE INDEX "idx_subagent_runs_controller_session_key" ON "subagent_runs" (("co
 
 CREATE INDEX "idx_subagent_runs_requester_session_key" ON "subagent_runs" (("requester_session_key") ASC NULLS FIRST, ("created_at") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_task_runs_child_session_key" ON "task_runs" (("child_session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_cron_runtime_order" ON "task_runs" (("runtime") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST) WHERE ("runtime" = 'cron');
 
-CREATE INDEX "idx_task_runs_cleanup_after" ON "task_runs" (("cleanup_after") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_cron_source_order" ON "task_runs" (("source_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST) WHERE ("runtime" = 'cron');
 
-CREATE INDEX "idx_task_runs_last_event_at" ON "task_runs" (("last_event_at") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_owner_key" ON "task_runs" (("owner_key") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_parent_flow_id" ON "task_runs" (("parent_flow_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_requester_session_key" ON "task_runs" (("requester_session_key") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_run_id" ON "task_runs" (("run_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_ended" ON "task_runs" (("runtime") ASC NULLS FIRST, ("ended_at") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_source_ended" ON "task_runs" (("runtime") ASC NULLS FIRST, ("source_id") ASC NULLS FIRST, ("ended_at") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_status" ON "task_runs" (("runtime") ASC NULLS FIRST, ("status") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_status" ON "task_runs" (("status") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_runtime_run" ON "task_runs" (("runtime") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("source_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_web_push_subscriptions_updated" ON "web_push_subscriptions" (("updated_at_ms") DESC NULLS LAST, ("subscription_id") ASC NULLS FIRST);
 

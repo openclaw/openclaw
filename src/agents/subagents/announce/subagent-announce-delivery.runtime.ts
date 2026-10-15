@@ -217,6 +217,30 @@ export function withSubagentRequesterSource<T>(
   });
 }
 
+/** Compose requester authority with the caller's guards without replacing either owner. */
+export function withSubagentRequesterDelivery<
+  T extends {
+    requesterAgentId?: string;
+    isSourceSessionEffectsAllowed?: () => boolean;
+    isSourceSessionAdmissionAllowed?: () => boolean;
+  },
+  R,
+>(requesterSessionKey: string, params: T, consume: (guarded: T) => Promise<R>): Promise<R> {
+  return withSubagentRequesterSource(requesterSessionKey, params.requesterAgentId, (isCurrent) =>
+    consume(
+      isCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params,
+    ),
+  );
+}
+
 export function getSubagentRequesterSessionActivity(
   requesterSessionKey: string,
   requester: Pick<RequesterSessionEntryResult, "agentId" | "entry">,

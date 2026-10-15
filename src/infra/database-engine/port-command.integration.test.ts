@@ -474,8 +474,8 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
   it("rolls back a preparing manifest before any target has been verified", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
-      const run = tasks.runWorkboardPortTask;
-      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+      const run = tasks.runDatabasePortTask;
+      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         if (args[0].operation === "migrate") {
           throw new Error(injected);
         }
@@ -497,9 +497,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       assert(client);
       makeLegacy(source);
       const original = hash(source);
-      const run = tasks.runWorkboardPortTask;
+      const run = tasks.runDatabasePortTask;
       let migrationTime: unknown;
-      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         if (args[0].operation === "stage") {
           throw new Error(injected);
         }
@@ -556,9 +556,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(child.error).toBeUndefined();
       expect(child.signal).toBe("SIGKILL");
       expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(0);
-      const run = tasks.runWorkboardPortTask;
+      const run = tasks.runDatabasePortTask;
       let checkpointed = false;
-      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         const result = await run(...args);
         if (args[0].operation === "checkpoint") {
           checkpointed = true;
@@ -583,9 +583,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     await fixture(async ({ state, source, client }) => {
       assert(client);
       const before = hash(source);
-      const run = tasks.runWorkboardPortTask;
+      const run = tasks.runDatabasePortTask;
       let interrupted = false;
-      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         const result = await run(...args);
         if (args[0].operation === "stage" && !interrupted) {
           interrupted = true;
@@ -802,10 +802,10 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     "refuses %s drift before the first replacement",
     async (changed) => {
       await fixture(async ({ state, source }) => {
-        const run = tasks.runWorkboardPortTask;
+        const run = tasks.runDatabasePortTask;
         const original = canonical(source);
         let mutated = false;
-        vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+        vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
           const result = await run(...args);
           if (!mutated && args[0].operation === "stage") {
             mutated = true;
@@ -839,8 +839,8 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
   it("refuses a changed recovery artifact without changing the original", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
-      const run = tasks.runWorkboardPortTask;
-      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+      const run = tasks.runDatabasePortTask;
+      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         if (args[0].operation === "migrate") {
           throw new Error(injected);
         }
@@ -885,8 +885,8 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           throw new Error(injected);
         };
         if (["migrate", "stage", "verify"].includes(point)) {
-          const run = tasks.runWorkboardPortTask;
-          vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+          const run = tasks.runDatabasePortTask;
+          vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
             if (!fired && args[0].operation === point) {
               fail();
             }

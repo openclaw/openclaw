@@ -57,6 +57,54 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  ["ends with its answer", true],
+  ["is still working", false],
+])("gives progress before tool calls no reply actions when an unframed group %s", (_, answered) => {
+  // Claude, Gemini and other providers mark progress only with a `toolUse` stop, not a phase.
+  const progress = (text: string, timestamp: number) => ({
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", id: `call-${timestamp}`, name: "exec", arguments: {} },
+    ],
+    stopReason: "toolUse",
+    timestamp,
+  });
+  const messages = [
+    { key: "progress-1", message: progress("Checking the tests first:", 1000) },
+    { key: "progress-2", message: progress("Now applying the fix:", 2000) },
+    ...(answered
+      ? [
+          {
+            key: "answer",
+            message: {
+              role: "assistant",
+              content: "The fix is ready.",
+              stopReason: "stop",
+              timestamp: 3000,
+            },
+          },
+        ]
+      : []),
+  ];
+  const group = createMessageGroup(messages[0]!.message, "assistant", { messages });
+  const onReply = vi.fn();
+  const view = mountSolid(() => (
+    <MessageGroup group={group} options={{ showReasoning: false, onReply }} />
+  ));
+  flush();
+  expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+  const replies = view.container.querySelectorAll<HTMLButtonElement>(
+    '.chat-group-footer-actions button[aria-label="Reply to message"]',
+  );
+  expect(replies).toHaveLength(answered ? 1 : 0);
+  replies[0]?.click();
+  expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
+    answered ? ["answer"] : [],
+  );
+});
+
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
   const imageData =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";

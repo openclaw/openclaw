@@ -692,7 +692,7 @@ describe("ensureOutboundSessionEntry", () => {
     expect((metadata.ctx as Record<string, unknown>).GroupSubject).toBeUndefined();
   });
 
-  it.each(["operator", "required-parent", "unstamped-parent"] as const)(
+  it.each(["operator", "required-parent"] as const)(
     "carries %s creation policy without requiring current role configuration",
     async (source) => {
       const actor = { type: "human" as const, source: "profile" as const, id: "outbound-creator" };
@@ -724,11 +724,7 @@ describe("ensureOutboundSessionEntry", () => {
       });
 
       const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
-      if (source === "unstamped-parent") {
-        expect(metadata.ctx).not.toHaveProperty("SessionCreation", expect.anything());
-      } else {
-        expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
-      }
+      expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
     },
   );
 

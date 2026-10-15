@@ -13,6 +13,7 @@ import { installSessionPlacementAdmissionProvider } from "../../agents/session-p
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -509,7 +510,15 @@ describe("executeAgentTurn: CLI admission", () => {
         "claude-cli": { sessionId: "new-native-session", forceReuse: true },
       },
     };
-    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+    Object.freeze(admittedSessionEntry);
+    state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      const candidateEntry: InternalSessionEntry | undefined = run.sessionEntry;
+      if (!candidateEntry) {
+        throw new Error("Missing admitted CLI entry");
+      }
+      candidateEntry.activeWriterRunId = "cli-writer";
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-sonnet-4-6";
@@ -535,7 +544,11 @@ describe("executeAgentTurn: CLI admission", () => {
         0,
         "CLI run params",
       )[0] as RunCliAgentParams;
-      expect(run.sessionEntry).toBe(admittedSessionEntry);
+      expect(run.sessionEntry).toMatchObject({
+        ...admittedSessionEntry,
+        activeWriterRunId: "cli-writer",
+      });
+      expect(admittedSessionEntry).not.toHaveProperty("activeWriterRunId");
       expect(run.sessionEntry?.sessionRoot).toBe("/workspace/project");
       expect(run.cliSessionId).toBe("new-native-session");
       expect(run.cliSessionBinding).toMatchObject({

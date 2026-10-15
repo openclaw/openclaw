@@ -58,7 +58,10 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       admission = { error, timeoutMs, deadlineAtMs: Date.now() + timeoutMs };
       cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
     },
-    async run<T>(operation: () => Promise<T>): Promise<T> {
+    async run<T>(
+      operation: () => Promise<T>,
+      acceptSettledTimeout?: (result: T) => boolean,
+    ): Promise<T> {
       return await withCommandProcessScope(async () => {
         assertCurrent();
         const work = Promise.resolve()
@@ -88,6 +91,13 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
               throw new AggregateError([timeout, joined.error], "Update operation cleanup failed", {
                 cause: timeout,
               });
+            }
+            if (
+              joined !== ABSOLUTE_DEADLINE_EXPIRED &&
+              "value" in joined &&
+              acceptSettledTimeout?.(joined.value)
+            ) {
+              return joined.value;
             }
             throw timeout;
           }

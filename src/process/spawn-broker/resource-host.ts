@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
@@ -358,4 +362,33 @@ export class BrokerResourceClaims {
     this.claims.delete(claim.attachment.id);
     this.host.refreshReference();
   }
+}
+
+const UNIX_SOCKET_PATH_BYTES = 103;
+
+function createNativeResourceDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
+  if (
+    process.platform === "win32" ||
+    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
+  ) {
+    return directory;
+  }
+  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
+  rmSync(directory, { recursive: true, force: true });
+  return mkdtempSync("/tmp/oc-br-");
+}
+
+export function createNativeResourceAuthority() {
+  const directory = createNativeResourceDirectory();
+  chmodSync(directory, 0o700);
+  const secret = randomBytes(32).toString("hex");
+  return {
+    directory,
+    secret,
+    endpoint:
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\oc-br-${secret}`
+        : join(directory, "resource.sock"),
+  };
 }

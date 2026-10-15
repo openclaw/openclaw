@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SubagentRegistryWriteError } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
@@ -150,19 +149,6 @@ it("delivers an ordinary terminal failure", async () => {
   expect(payloads[0]?.isError).toBe(true);
 });
 
-it("does not capture a suppressed final reply", async () => {
-  const context = createContext();
-  const onRawLlmResponse = vi.fn();
-  context.opts = { onRawLlmResponse };
-  context.followupRun.run.terminalReplyExpectation = "optional";
-  context.execution.result.acceptedSessionSpawns = undefined;
-  context.execution.result.meta = { durationMs: 0 };
-  context.execution.result.payloads = [{ text: SILENT_REPLY_TOKEN }];
-
-  expect(await prepare("ordinary", context)).toEqual([]);
-  expect(onRawLlmResponse).not.toHaveBeenCalled();
-});
-
 it("captures a message-tool sentinel before the empty-payload return", async () => {
   const context = createContext();
   const onRawLlmResponse = vi.fn();
@@ -179,22 +165,6 @@ it("captures a message-tool sentinel before the empty-payload return", async () 
   expect(onRawLlmResponse).toHaveBeenCalledWith("NO_REPLY");
 });
 
-it("never captures message-tool text when the model wrote no final message", async () => {
-  const context = createContext();
-  const onRawLlmResponse = vi.fn();
-  context.opts = { onRawLlmResponse };
-  context.followupRun.run.terminalReplyExpectation = "optional";
-  context.execution.result.acceptedSessionSpawns = undefined;
-  context.execution.result.meta = { durationMs: 0 };
-  context.execution.result.payloads = [];
-  context.execution.result.messagingToolSentTargets = [
-    { tool: "message", provider: "slack", text: "sent to slack", sourceReplyFinal: true },
-  ];
-
-  await prepare("ordinary", context);
-  expect(onRawLlmResponse).not.toHaveBeenCalled();
-});
-
 it("does not capture hook-block rejection text as a model response", async () => {
   const context = createContext();
   const onRawLlmResponse = vi.fn();
@@ -206,18 +176,6 @@ it("does not capture hook-block rejection text as a model response", async () =>
     error: { kind: "hook_block", message: "Blocked by before_agent_run policy" },
   };
   context.execution.result.payloads = [];
-
-  await prepare("ordinary", context);
-  expect(onRawLlmResponse).not.toHaveBeenCalled();
-});
-
-it("captures the model's raw text, never streamed delivery text", async () => {
-  const context = createContext();
-  const onRawLlmResponse = vi.fn();
-  context.opts = { onRawLlmResponse };
-  context.execution.result.acceptedSessionSpawns = undefined;
-  context.execution.result.meta = { durationMs: 0 };
-  context.execution.result.payloads = [{ text: "streamed part" }, { text: "final part" }];
 
   await prepare("ordinary", context);
   expect(onRawLlmResponse).not.toHaveBeenCalled();

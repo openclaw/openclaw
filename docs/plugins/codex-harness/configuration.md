@@ -147,6 +147,13 @@ owns compaction. The native app-server harness supports context engines
 that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
 
+When OpenClaw has no resolved token budget, context engines receive the usable
+window reported by Codex. Assembly can reuse a bound thread's observation only
+for the same model and when no newer unreported turn superseded it. Before an
+observation is available, only an explicit authored cap supplies a budget;
+otherwise the budget remains unknown. Resolved OpenClaw budgets take precedence,
+and learning a native window does not change the thread's bootstrap policy.
+
 Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
 recent saved history within a bounded continuity window. Conversation text and
 summaries that fit this window are preserved without a separate per-message

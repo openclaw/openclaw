@@ -499,15 +499,6 @@ export function streamOpenAICompletionsRequest(
         error,
         cleanup: () => {
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
-          if (mode === "direct") {
-            for (const block of output.content) {
-              delete (block as { index?: number }).index;
-              if (block.type === "toolCall") {
-                delete block.partialJson;
-              }
-              delete (block as { streamIndex?: number }).streamIndex;
-            }
-          }
         },
       });
     } finally {

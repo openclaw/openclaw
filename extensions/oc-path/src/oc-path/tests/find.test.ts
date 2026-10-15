@@ -120,7 +120,7 @@ describe("findOcPaths — JSONL", () => {
 
 describe("quoted segment validation", () => {
   it.each([
-    ['oc://X/keys/"a\\\\b"', /Quoted segment cannot contain/],
+    [String.raw`oc://X/keys/"a\q"`, /Quoted segment must escape/],
     ['oc://X/"unterminated', /Unbalanced/],
   ])("rejects %s", (uri, error) => {
     expect(() => parseOcPath(uri)).toThrow(error);

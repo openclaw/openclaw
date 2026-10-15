@@ -507,36 +507,47 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     expect(activeSession.agent.streamFn).toBe(stream);
   });
 
-  it("rechecks authority after awaiting restoration, before callbacks or dispatch", async () => {
-    const { activeSession } = createSession();
-    const stream = vi.fn<StreamFn>();
-    activeSession.agent.streamFn = stream;
-    const admission = prepareSystemAgentRunAdmission({}, "prompt-restoration", "main", "prompt");
-    const reader = vi.fn(() => ({ tools: [], systemPrompt: "restored" }));
-    const observe = vi.fn();
-    try {
-      const admitted = await admission.admit("embedded");
-      await expect(
-        submitEmbeddedAttemptPrompt({
-          ...createBaseInput(),
-          activeSession,
-          onPrimaryModelRequest: observe,
-          assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
-          preparePrimaryModelRequest: async () => {
-            admission.close();
-            return reader;
-          },
-          promptActiveSession: async (_prompt, options) => {
-            options?.preflightResult?.(true);
-            await activeSession.agent.streamFn(testModel, { messages: [] }, {});
-          },
-        }),
-      ).rejects.toThrow("admitted run authority is no longer active");
-      expect(reader).not.toHaveBeenCalled();
-      expect(observe).not.toHaveBeenCalled();
-      expect(stream).not.toHaveBeenCalled();
-    } finally {
-      admission.close();
-    }
-  });
+  it.each(["restoration", "persistence"] as const)(
+    "rechecks authority after awaiting %s, before callbacks or dispatch",
+    async (boundary) => {
+      const { activeSession } = createSession();
+      const stream = vi.fn<StreamFn>();
+      activeSession.agent.streamFn = stream;
+      const admission = prepareSystemAgentRunAdmission({}, "prompt-restoration", "main", "prompt");
+      const reader = vi.fn(() => ({ tools: [], systemPrompt: "restored" }));
+      const observe = vi.fn();
+      try {
+        const admitted = await admission.admit("embedded");
+        await expect(
+          submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            activeSession,
+            onPrimaryModelRequest: observe,
+            assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+            preparePrimaryModelRequest:
+              boundary === "restoration"
+                ? async () => {
+                    admission.close();
+                    return reader;
+                  }
+                : undefined,
+            persistToolResultProjections: async () => {
+              if (boundary === "persistence") {
+                admission.close();
+              }
+            },
+            promptActiveSession: async (_prompt, options) => {
+              options?.preflightResult?.(true);
+              await activeSession.agent.streamFn(testModel, { messages: [] }, {});
+            },
+          }),
+        ).rejects.toThrow("admitted run authority is no longer active");
+        expect(reader).not.toHaveBeenCalled();
+        expect(observe).not.toHaveBeenCalled();
+        expect(stream).not.toHaveBeenCalled();
+      } finally {
+        admission.close();
+      }
+    },
+  );
 });

@@ -435,7 +435,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
           <ul>
             <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
           </ul>
-          <footer>
+          <openclaw-modal-actions class="onboarding-memory-import__actions">
             <For each={actions()}>
               {(action) => (
                 <button
@@ -459,7 +459,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
                 </button>
               )}
             </For>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </Show>

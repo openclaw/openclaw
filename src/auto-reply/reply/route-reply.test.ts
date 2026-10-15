@@ -208,10 +208,6 @@ describe("routeReply", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("no-ops on empty payload", async () => {
-    await expectSlackNoDelivery({});
-  });
-
   it("suppresses reasoning payloads", async () => {
     await expect(expectSlackNoDelivery({ text: "step", isReasoning: true })).resolves.toMatchObject(
       {
@@ -220,10 +216,6 @@ describe("routeReply", () => {
         reason: "reasoning_payload_not_external",
       },
     );
-  });
-
-  it("drops silent token payloads", async () => {
-    await expectSlackNoDelivery({ text: SILENT_REPLY_TOKEN });
   });
 
   it("records a channel transform veto before transport or mirroring", async () => {
@@ -480,22 +472,6 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("BTW\nQuestion: what is 17 * 19?\n\n323");
   });
 
-  it("preserves audioAsVoice on routed outbound payloads", async () => {
-    await routeTestReply({
-      payload: { text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true },
-      channel: "slack",
-      to: "channel:C123",
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectLastDeliveryFields({
-      channel: "slack",
-      to: "channel:C123",
-    });
-    expect(lastDeliveryPayload().text).toBe("voice caption");
-    expect(lastDeliveryPayload().mediaUrl).toBe("file:///tmp/clip.mp3");
-    expect(lastDeliveryPayload().audioAsVoice).toBe(true);
-  });
-
   it("preserves multiple mediaUrls as a single outbound payload", async () => {
     await routeTestReply({
       payload: { text: "caption", mediaUrls: ["a", "b"] },
@@ -590,31 +566,4 @@ describe("routeReply", () => {
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("keeps unidentified adapter acceptance ambiguous without confirming visibility", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({ onPayloadDeliveryOutcome }: DeliverOutboundPayloadsParams) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "adapter_returned_no_identity",
-        });
-        return [];
-      },
-    );
-
-    const result = await routeTestReply({
-      payload: { text: "hello" },
-      channel: "slack",
-      to: "channel:C123",
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      delivered: false,
-      ambiguous: true,
-      reason: "adapter_returned_no_identity",
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
 });

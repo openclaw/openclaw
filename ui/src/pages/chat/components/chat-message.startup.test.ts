@@ -91,5 +91,5 @@ it.each([
       null,
       startStatus,
     ),
-  ).toBe("Waiting for a response…");
+  ).toBe("Waiting for a response");
 });

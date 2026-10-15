@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import * as attachmentInputs from "../chat/components/chat-attachment-inputs.ts";
+import { settleWebAwesome } from "../../test-helpers/web-awesome.ts";
+import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -84,7 +85,7 @@ describe("new session draft route ownership", () => {
   });
 
   it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
-    const inputs = vi.spyOn(attachmentInputs, "renderChatAttachmentInputs");
+    const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
     let dictating = false;
     vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
       () => dictating,
@@ -304,6 +305,8 @@ describe("new session draft route ownership", () => {
     const link = append(document.createElement("a"));
     link.href = "#target";
     const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
+    const menuTrigger = menu.appendChild(document.createElement("button"));
+    menuTrigger.slot = "trigger";
     const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
@@ -357,6 +360,7 @@ describe("new session draft route ownership", () => {
         for (const [index, key] of keys.entries()) {
           menu.open = row.openDropdown === true;
           dialog.open = row.openDialog === true;
+          await settleWebAwesome(menu.parentElement!);
           target.focus();
           target.dispatchEvent(
             new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),

@@ -282,10 +282,10 @@ export type PreparedSubagentMaintenanceRead = {
   capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
 };
 
-/** Fresh physical maintenance facts combine with current published resident rows. */
+/** One complete maintenance snapshot advances through the registry owner's publications. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
-  cache: SubagentRunsCache<SubagentRunRecord>,
+  cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
   options?: { live?: true },
 ): Promise<PreparedSubagentMaintenanceRead> {
   const context = shouldReadPersistedSubagentRuns()
@@ -301,9 +301,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
   };
   const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
     assertCurrent();
-    const state: SubagentRunsCache<SubagentRunRecord>["state"] = context
-      ? selectSubagentCacheStateForRead(cache.state, context)
-      : {};
+    const state = context ? selectSubagentCacheStateForRead(cache.state, context) : {};
     const runs = new Map<string, SubagentRunMaintenanceRecord>(state.snapshot ?? persisted);
     for (const [runId, { entry }] of state.changes ?? []) {
       if (entry) {
@@ -322,18 +320,24 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       capture: () => capture(new Map()),
     };
   }
-  const reply = await executeExistingOpenClawStateRead(
-    { path: context.admission.databasePath, env: context.environment },
-    { type: "subagents.runs", scope: { kind: "maintenance" } },
-    { context, current: true, live: options?.live },
+  const persisted = await prepareSubagentRunsCache(
+    cache,
+    async () => {
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        { type: "subagents.runs", scope: { kind: "maintenance" } },
+        { context, current: true, live: options?.live },
+      );
+      if (
+        reply &&
+        (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
+      ) {
+        throw new Error("Unexpected subagent maintenance read result");
+      }
+      return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+    },
+    context,
   );
-  if (
-    reply &&
-    (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
-  ) {
-    throw new Error("Unexpected subagent maintenance read result");
-  }
-  const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
   return {
     capture() {
       // The owner publishes committed changes before the final maintenance grant.

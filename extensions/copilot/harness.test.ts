@@ -248,41 +248,31 @@ describe("createCopilotAgentHarness", () => {
     resetGlobalHookRunner();
   });
 
-  it("supports returns false in auto runtime even for github provider", () => {
-    const harness = createCopilotAgentHarness();
-
-    expect(harness.autoSelection?.providerIds).toEqual([]);
-
-    expect(
-      harness.supports({
+  it.each([
+    {
+      name: "auto runtime even for github provider",
+      params: {
         provider: "github-copilot",
         modelId: "gpt-4.1",
         requestedRuntime: "auto",
-      }),
-    ).toEqual({
-      supported: false,
+      },
       reason: "copilot is opt-in only",
-    });
-  });
-
-  it("supports rejects custom provider ids without a supported BYOK model shape", () => {
-    const harness = createCopilotAgentHarness();
-
-    expect(
-      harness.supports({
+    },
+    {
+      name: "custom provider without a BYOK model shape",
+      params: {
         provider: "custom-proxy",
         modelId: "llama-3.1-8b",
         providerOwnerStatus: "unowned",
         providerOwnerPluginIds: [],
         requestedRuntime: "copilot",
-      }),
-    ).toEqual({
-      supported: false,
+      },
       reason:
         "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
-    });
-    expect(
-      harness.supports({
+    },
+    {
+      name: "custom provider with request transport overrides",
+      params: {
         provider: "custom-proxy",
         modelId: "llama-3.1-8b",
         modelProvider: {
@@ -293,26 +283,18 @@ describe("createCopilotAgentHarness", () => {
         providerOwnerStatus: "unowned",
         providerOwnerPluginIds: [],
         requestedRuntime: "copilot",
-      }),
-    ).toEqual({
-      supported: false,
+      },
       reason:
         "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
-    });
-  });
-
-  it("supports rejects manifest-owned providers outside the whitelist", () => {
+    },
+  ] satisfies Array<{
+    name: string;
+    params: Parameters<AgentHarness["supports"]>[0];
+    reason: string;
+  }>)("supports rejects $name", ({ params, reason }) => {
     const harness = createCopilotAgentHarness();
-
-    expect(
-      harness.supports({
-        provider: "anthropic",
-        modelId: "gpt-4.1",
-        requestedRuntime: "copilot",
-        providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
-      }),
-    ).toEqual({ supported: false, reason: "provider is not one of: github-copilot" });
+    expect(harness.autoSelection?.providerIds).toEqual([]);
+    expect(harness.supports(params)).toEqual({ supported: false, reason });
   });
 
   it("keeps invalid BYOK provider configuration on the structured attempt path", async () => {
@@ -499,12 +481,10 @@ describe("createCopilotAgentHarness", () => {
     expect(pool.release).toHaveBeenCalledWith(expect.objectContaining({ client }));
   });
 
-  it("rejects harness-owned authorization before acquiring a client", async () => {
-    const pool = makePoolMock();
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({
+  it.each([
+    {
+      name: "harness-owned authorization",
+      params: {
         ...ISOLATED_COMPLETION_PARAMS,
         authorization: {
           owner: "harness",
@@ -514,8 +494,21 @@ describe("createCopilotAgentHarness", () => {
           },
           authProfileStore: { version: 1, profiles: {} },
         },
-      }),
-    ).rejects.toThrow("requires host-prepared authorization");
+      } satisfies AgentHarnessIsolatedCompletionParams,
+      reason: "requires host-prepared authorization",
+    },
+    {
+      name: "unsupported thinking level",
+      params: {
+        ...ISOLATED_COMPLETION_PARAMS,
+        thinkLevel: "off",
+      } satisfies AgentHarnessIsolatedCompletionParams,
+      reason: "does not support thinking level off",
+    },
+  ])("rejects $name before acquiring a client", async ({ params, reason }) => {
+    const pool = makePoolMock();
+    const harness = createCopilotAgentHarness({ pool });
+    await expect(harness.runIsolatedCompletionV2?.(params)).rejects.toThrow(reason);
     expect(pool.acquire).not.toHaveBeenCalled();
   });
 
@@ -534,17 +527,6 @@ describe("createCopilotAgentHarness", () => {
     });
     expect(session.disconnect).toHaveBeenCalledOnce();
     expect(pool.release).toHaveBeenCalledOnce();
-  });
-
-  it("rejects unsupported thinking levels before acquiring a client", async () => {
-    const thinkLevel = "off";
-    const pool = makePoolMock();
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, thinkLevel }),
-    ).rejects.toThrow(`does not support thinking level ${thinkLevel}`);
-    expect(pool.acquire).not.toHaveBeenCalled();
   });
 
   it.each(["client acquisition", "session creation"] as const)(
@@ -762,29 +744,20 @@ describe("createCopilotAgentHarness", () => {
     expect(sendAndWait.mock.calls[0]?.[1]).toBeLessThanOrEqual(params.timeoutMs);
   });
 
-  it("dispose during lazy startup prevents the attempt from creating a pool", async () => {
+  it.each([
+    ["during lazy startup", false, "[copilot] harness was disposed while starting an attempt"],
+    ["before startup", true, "[copilot] harness has been disposed; cannot start new attempts"],
+  ] as const)("dispose %s prevents pool creation", async (_stage, disposeFirst, reason) => {
     const harness = createCopilotAgentHarness();
-
-    const attemptPromise = harness.runAttempt(ATTEMPT_PARAMS);
-    const disposePromise = harness.dispose?.();
-
-    await expect(attemptPromise).rejects.toThrow(
-      "[copilot] harness was disposed while starting an attempt",
-    );
-    await expect(disposePromise).resolves.toBeUndefined();
+    if (disposeFirst) {
+      await harness.dispose?.();
+    }
+    const attempt = harness.runAttempt(ATTEMPT_PARAMS);
+    const disposal = harness.dispose?.();
+    await expect(attempt).rejects.toThrow(reason);
+    await expect(disposal).resolves.toBeUndefined();
     expect(mocks.createCopilotClientPool).not.toHaveBeenCalled();
     expect(mocks.runCopilotAttempt).not.toHaveBeenCalled();
-  });
-
-  it("runAttempt after dispose rejects without creating a new pool", async () => {
-    const harness = createCopilotAgentHarness();
-
-    await harness.dispose?.();
-
-    await expect(harness.runAttempt(ATTEMPT_PARAMS)).rejects.toThrow(
-      "[copilot] harness has been disposed; cannot start new attempts",
-    );
-    expect(mocks.createCopilotClientPool).not.toHaveBeenCalled();
   });
 
   it("dispose surfaces pool.dispose errors as AggregateError", async () => {

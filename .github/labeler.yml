@@ -161,6 +161,11 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-events":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-events/**"
+          - "docs/automation/mcp-events.md"
 "plugin: mcp-relay":
   - changed-files:
       - any-glob-to-any-file:

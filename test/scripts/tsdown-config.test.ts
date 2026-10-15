@@ -1193,7 +1193,9 @@ console.log("relocated session card renders with bundled fonts");
     );
 
     expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
+    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
+      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
+    );
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(standaloneRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs).toHaveLength(1);

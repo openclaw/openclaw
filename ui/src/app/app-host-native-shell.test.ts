@@ -4,6 +4,8 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.tsx";
+import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
@@ -65,6 +67,34 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
+  it("focuses the navigation drawer without a tooltip claiming Escape", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const shell = createShellOwner();
+    const context = {
+      ...nativeSessionContext(vi.fn(), "research"),
+      navigation: createNavigationPreferencesFixture(),
+    };
+    Object.assign(shell, { runtime: { context } });
+    const drawer = document.createElement("nav");
+    drawer.className = "shell-nav";
+    const { tooltip, trigger } = createTooltip("Workspace options");
+    Object.defineProperty(trigger, "checkVisibility", { value: () => true });
+    drawer.append(tooltip);
+    shell.element.append(drawer);
+    document.body.append(shell.element);
+    try {
+      await settleTooltip(tooltip);
+      shell.toggleNavigationSurface();
+      shell.afterCommit();
+      await shell.updateComplete;
+      await settleTooltip(tooltip);
+      expect(document.activeElement).toBe(trigger);
+      expect(tooltip.hasAttribute("open")).toBe(false);
+    } finally {
+      shell.element.remove();
+    }
+  });
+
   it.each(["MacIntel", "Win32"])(
     "uses only the platform sidebar modifier on %s without consuming text navigation",
     (platform) => {

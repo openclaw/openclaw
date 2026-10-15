@@ -192,6 +192,98 @@ describe("Telegram durable ingress coalescing", () => {
     return resources;
   }
 
+  it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
+    signal,
+  }) => {
+    // The monitor captures Date.now at construction, so install the clock first.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const enteredBlocker = createDeferred<void>();
+    const finishBlocker = createDeferred<void>();
+    downstreamTurns.mockImplementationOnce(async () => {
+      enteredBlocker.resolve();
+      await finishBlocker.promise;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    const { monitor, bot } = await createMonitor({
+      adoptionStallTimeoutMs: 300_000,
+      pollIntervalMs: 60_000,
+      onRuntimeError: vi.fn(),
+    });
+    const blocker = bot.handleUpdate(
+      textUpdate({ updateId: 801, messageId: 1, text: "busy turn" }),
+    );
+    try {
+      await withinTest(enteredBlocker.promise, signal);
+      const handleUpdate = vi.spyOn(bot, "handleUpdate");
+      const queued = textUpdate({ updateId: 802, messageId: 2, text: "deliver this later" });
+      const tail = textUpdate({ updateId: 803, messageId: 3, text: "deliver after the retry" });
+      const eventId = telegramQueueEventId(802);
+      const queue = openTelegramIngressQueue({ stateDir });
+      monitor.start();
+
+      await withinTest(monitor.admit(queued), signal);
+      await withinTest(
+        vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1)),
+        signal,
+      );
+      await withinTest(vi.advanceTimersByTimeAsync(300_000), signal);
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 1, lastError: expect.stringContaining("handler-timeout") },
+          ]);
+        }),
+        signal,
+      );
+
+      await withinTest(monitor.admit(tail), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
+      monitor.requestDrain();
+      await withinTest(
+        vi.waitFor(() => {
+          expect(
+            handleUpdate.mock.calls.filter(([update]) => update.update_id === 802),
+          ).toHaveLength(2);
+        }),
+        signal,
+      );
+      // A pending duplicate must not let its same-lane follower overtake it.
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 2, payload: { update: queued } },
+            { id: telegramQueueEventId(803), attempts: 0 },
+          ]);
+        }),
+        signal,
+      );
+      expect(downstreamTurns).toHaveBeenCalledTimes(1);
+
+      finishBlocker.resolve();
+      await blocker;
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(2_000);
+      monitor.requestDrain();
+      await monitor.waitForIdle();
+      expect(downstreamTurns).toHaveBeenCalledTimes(3);
+      expect(downstreamTurns.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "busy turn",
+        "deliver this later",
+        "deliver after the retry",
+      ]);
+      await assertSpoolTombstoned({ stateDir, updateIds: [802, 803] });
+      const duplicate = await processingOutcome.runWithTelegramUpdateProcessingFrame(() =>
+        bot.handleUpdate(queued),
+      );
+      expect(duplicate.result).toEqual({ kind: "skipped" });
+      expect(downstreamTurns).toHaveBeenCalledTimes(3);
+    } finally {
+      finishBlocker.resolve();
+      await blocker;
+      await monitor.stop();
+    }
+  });
+
   it("coalesces album members admitted across separate drain passes", async () => {
     const albumTimers = holdTelegramMediaTimeouts(40);
     const { monitor, telegramTransport } = await createMonitor();

@@ -115,11 +115,13 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
 
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
-      const workingLabel = page.locator(".chat-working-indicator__status > .sr-only");
-      expect(await workingLabel.textContent()).toBe("Working…");
+      const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
+      expect(await workingLabel.textContent()).toBe("Preparing this turn…");
       expect(
-        await page.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-      ).toBe(0);
+        await page
+          .locator(".chat-working-indicator__status > span:not(.sr-only)")
+          .allTextContents(),
+      ).toEqual(["Preparing this turn…", "·"]);
       await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
       // Keep heartbeat callbacks chronological; fastForward models a suspended
       // browser and can legitimately retire this otherwise healthy connection.

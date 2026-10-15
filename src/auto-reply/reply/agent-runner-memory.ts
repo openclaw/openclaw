@@ -867,8 +867,7 @@ export async function runMemoryFlushIfNeeded(params: {
       ...params,
       sessionEntry: entry,
       flushRunId,
-      contextWindowTokens,
-      memoryFlushWritable,
+      resolution: memoryFlushResolution,
       abortSignal,
       assertCurrent: assertMemoryFlushCurrent,
       recordPersistenceToolSuccess: () => {
@@ -882,7 +881,6 @@ export async function runMemoryFlushIfNeeded(params: {
     return { sessionEntry: entry, outcome: "skipped" };
   }
   const {
-    plan: activeMemoryFlushPlan,
     writePath: memoryFlushWritePath,
     systemPrompt: flushSystemPrompt,
     selection,
@@ -939,7 +937,7 @@ export async function runMemoryFlushIfNeeded(params: {
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
       modelResolve: {
-        prompt: activeMemoryFlushPlan.prompt,
+        prompt: memoryFlushPlan.prompt,
         awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
         cwd: maintenanceRun.cwd,
         modelSelectionLocked: maintenanceRun.modelSelectionLocked,
@@ -1018,7 +1016,7 @@ export async function runMemoryFlushIfNeeded(params: {
           memoryFlushTools,
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
-          prompt: activeMemoryFlushPlan.prompt,
+          prompt: memoryFlushPlan.prompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,

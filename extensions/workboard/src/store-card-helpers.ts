@@ -13,7 +13,6 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -25,13 +24,7 @@ import {
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
-import {
-  capText,
-  metadataIsEmpty,
-  normalizeEvents,
-  normalizeTimestamp,
-  removeUndefinedMetadataFields,
-} from "./store-normalizers.js";
+import { capText, normalizeTimestamp, removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -74,15 +67,16 @@ export function syncExecutionAttemptMetadata(
   }
   const attemptStatus = executionAttemptStatus(execution);
   const attempts = [...(metadata.attempts ?? [])];
-  const key = execution.runId ?? execution.sessionKey ?? execution.id;
-  const existingIndex = attempts.findIndex(
-    (attempt) =>
-      (execution.runId && attempt.runId === execution.runId) ||
-      (!execution.runId && attempt.id === key),
+  const existingIndex = attempts.findIndex((attempt) =>
+    execution.runId
+      ? attempt.runId === execution.runId
+      : execution.sessionKey
+        ? !attempt.runId && attempt.sessionKey === execution.sessionKey
+        : !attempt.runId && !attempt.sessionKey,
   );
   const existingAttempt = existingIndex >= 0 ? attempts[existingIndex] : undefined;
   const nextAttempt: WorkboardRunAttempt = {
-    id: existingAttempt?.id ?? key,
+    id: existingAttempt?.id ?? randomUUID(),
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
     mode: execution.mode,
@@ -123,7 +117,7 @@ export function appendEvent(
   at = Date.now(),
 ): WorkboardEvent[] {
   return [
-    ...normalizeEvents(card.events),
+    ...(card.events ?? []),
     {
       id: randomUUID(),
       at,
@@ -315,14 +309,6 @@ export function updateEvent(
     return { kind: "stale" };
   }
   return { kind: "edited" };
-}
-
-export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = definedFields({ ...card });
-  if (metadataIsEmpty(next.metadata)) {
-    delete next.metadata;
-  }
-  return next;
 }
 
 export function assertCanMutateClaimedCard(

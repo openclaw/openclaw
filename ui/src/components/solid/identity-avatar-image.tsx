@@ -24,9 +24,13 @@ export function identityAvatarState(
   view: Accessor<IdentityAvatarImageProps["view"] & { pending: boolean }>,
 ) {
   let frame: HTMLElement;
-  createEffect(view, (value) => {
-    if (!value.imageUrl) {
-      setIdentityAvatarState(frame, value.pending ? "pending" : "none");
+  const fallback = createMemo(() => {
+    const value = view();
+    return value.imageUrl ? undefined : value.pending ? "pending" : "none";
+  });
+  createEffect(fallback, (state) => {
+    if (state) {
+      setIdentityAvatarState(frame, state);
     }
   });
   return (element: HTMLElement) => {

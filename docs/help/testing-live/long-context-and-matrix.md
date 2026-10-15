@@ -206,7 +206,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `deepseek/deepseek-v4-pro`                          |            |
 | `minimax/MiniMax-M3`                                |            |
 | `openai/gpt-5.6`                                    |            |
-| `openrouter/openai/gpt-5.2-chat`                    |            |
+| `openrouter/openai/gpt-5.6-luna`                    |            |
 | `openrouter/minimax/minimax-m2.7`                   |            |
 | `opencode-go/glm-5.3`                               |            |
 | `xai/grok-4.7`                                      |            |

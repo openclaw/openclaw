@@ -43,7 +43,12 @@ export type GitReadOperations = {
     >;
   };
   "checkout.revision": {
-    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    input: {
+      root: string;
+      scope: "context" | "refs" | "worktree";
+      branch?: string;
+      defaultBranch?: string;
+    };
     output: string | null;
   };
   "checkout.context": {

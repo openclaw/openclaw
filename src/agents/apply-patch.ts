@@ -34,6 +34,7 @@ import {
   withFileMutationQueueKeyResolution,
   withFileMutationQueueKeysResolution,
 } from "./sessions/tools/file-mutation-queue.js";
+import { ToolInputError } from "./tool-input-error.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -143,7 +144,7 @@ export function createApplyPatchTool(
       const params = args as { input?: string };
       const input = typeof params.input === "string" ? params.input : "";
       if (!input.trim()) {
-        throw new Error("Provide a patch input.");
+        throw new ToolInputError("Provide a patch input.");
       }
       if (executionSignal?.aborted) {
         throw createAbortError("Aborted");
@@ -180,7 +181,7 @@ export function createApplyPatchTool(
 async function applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult> {
   const hunks = parsePatchText(input);
   if (hunks.length === 0) {
-    throw new Error("No files were modified.");
+    throw new ToolInputError("No files were modified.");
   }
 
   const patchOptions = {
@@ -412,7 +413,7 @@ async function resolvePatchPath(
 function parsePatchText(input: string): Hunk[] {
   const trimmed = input.trim();
   if (!trimmed) {
-    throw new Error("Invalid patch: input is empty.");
+    throw new ToolInputError("Invalid patch: input is empty.");
   }
 
   const lines = checkPatchBoundaries(trimmed.split(/\r?\n/)).slice(1, -1);
@@ -437,10 +438,10 @@ function checkPatchBoundaries(inputLines: string[]): string[] {
       ? inputLines.slice(1, -1)
       : inputLines;
   if (lines[0]?.trim() !== BEGIN_PATCH_MARKER) {
-    throw new Error("The first line of the patch must be '*** Begin Patch'");
+    throw new ToolInputError("The first line of the patch must be '*** Begin Patch'");
   }
   if (lines.at(-1)?.trim() !== END_PATCH_MARKER) {
-    throw new Error("The last line of the patch must be '*** End Patch'");
+    throw new ToolInputError("The last line of the patch must be '*** End Patch'");
   }
   return lines;
 }
@@ -504,7 +505,7 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
     }
 
     if (chunks.length === 0) {
-      throw new Error(
+      throw new ToolInputError(
         `Invalid patch hunk at line ${lineNumber}: Update file hunk for path '${targetPath}' is empty`,
       );
     }
@@ -520,7 +521,7 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
     };
   }
 
-  throw new Error(
+  throw new ToolInputError(
     `Invalid patch hunk at line ${lineNumber}: '${lines[0]}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
   );
 }
@@ -539,13 +540,13 @@ function parseUpdateFileChunk(
     changeContext = firstLine.slice(CHANGE_CONTEXT_MARKER.length);
     startIndex = 1;
   } else if (!allowMissingContext) {
-    throw new Error(
+    throw new ToolInputError(
       `Invalid patch hunk at line ${lineNumber}: Expected update hunk to start with a @@ context marker, got: '${firstLine}'`,
     );
   }
 
   if (startIndex >= lines.length || lines[startIndex] === EOF_MARKER) {
-    throw new Error(
+    throw new ToolInputError(
       `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
     );
   }
@@ -581,7 +582,7 @@ function parseUpdateFileChunk(
     }
 
     if (parsedLines === 0) {
-      throw new Error(
+      throw new ToolInputError(
         `Invalid patch hunk at line ${lineNumber + 1}: Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
       );
     }

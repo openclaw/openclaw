@@ -101,7 +101,7 @@ export function Editor(
                 ? t("cron.form.saveChanges")
                 : t("cron.form.createTask")}
           </button>
-          {props.mode === "create" ? (
+          {props.mode === "create" && props.form.scheduleKind !== "event" ? (
             <button
               class="btn"
               data-test-id="cron-submit-run"

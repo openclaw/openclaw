@@ -200,13 +200,6 @@ describe("VisitorAccessService", () => {
       access: "shared owner authority retained; this invitation does not restrict it",
     },
     {
-      name: "the role linked to the selected GitHub account",
-      github: true,
-      assignedRole: "staff",
-      otherRole: staffRole,
-      access: 'existing role "staff" retained; this invitation does not restrict it',
-    },
-    {
       name: "the declarative GitHub role without an explicit assignment",
       github: true,
       assignedRole: undefined,
@@ -412,30 +405,27 @@ describe("VisitorAccessService", () => {
     },
   );
 
-  it.each([0, null])(
-    "requires explicit forever when the default duration is %s",
-    async (defaultTtlDays) => {
-      const fixture = visitorFixture({ config: { defaultTtlDays } });
-      await expect(
-        fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
-      ).rejects.toThrow(/forever/);
-      expect(fixture.grants.size).toBe(0);
-      expect(fixture.mutations()).toEqual([]);
+  it("requires explicit forever when no default duration is configured", async () => {
+    const fixture = visitorFixture({ config: { defaultTtlDays: null } });
+    await expect(
+      fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
+    ).rejects.toThrow(/forever/);
+    expect(fixture.grants.size).toBe(0);
+    expect(fixture.mutations()).toEqual([]);
 
-      const result = await fixture.service.invite(
-        { email: "visitor@example.com", forever: true },
+    const result = await fixture.service.invite(
+      { email: "visitor@example.com", forever: true },
+      fixture.authority,
+    );
+    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
+    expect(result.text).toContain("never");
+    await expect(
+      fixture.service.invite(
+        { email: "visitor@example.com", forever: true, days: 1 },
         fixture.authority,
-      );
-      expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
-      expect(result.text).toContain("never");
-      await expect(
-        fixture.service.invite(
-          { email: "visitor@example.com", forever: true, days: 1 },
-          fixture.authority,
-        ),
-      ).rejects.toThrow(/days.*forever/);
-    },
-  );
+      ),
+    ).rejects.toThrow(/days.*forever/);
+  });
 
   it("counts managed and unmanaged grants toward admission while allowing an existing grant to renew", async () => {
     const previous = visitorGrant("visitor@example.com", { githubLogin: "visitor" });

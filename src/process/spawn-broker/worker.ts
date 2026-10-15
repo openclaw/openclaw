@@ -1,6 +1,7 @@
 import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
@@ -55,6 +56,7 @@ let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | un
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 let initialization = Promise.resolve();
 const launches = new Set<Promise<void>>();
+const fileReads = new Map<number, { canceled: boolean }>();
 
 const sender = createWorkerSender((message, handle, callback) => {
   if (!process.send || !process.connected) {
@@ -198,10 +200,48 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
   }
 }
 
+async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>): Promise<void> {
+  const pending = { canceled: false };
+  try {
+    // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
+    if (resources || owned.size + starting.size + fileReads.size >= 256) {
+      throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
+    }
+    fileReads.set(message.id, pending);
+    const { buffer } = await readRegularFile({ filePath: message.filePath });
+    // Bound each IPC message, not the file size. Await sends to avoid retaining a second payload.
+    for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
+      if (stopping || pending.canceled) {
+        return;
+      }
+      await report({
+        type: "file-read-chunk",
+        id: message.id,
+        bytes: buffer.subarray(offset, offset + 512 * 1024),
+      });
+    }
+    if (!stopping && !pending.canceled) {
+      await report({ type: "file-read-result", id: message.id });
+    }
+  } catch (error) {
+    if (!stopping && !pending.canceled) {
+      const failure = toErrorObject(error, "File read failed");
+      await report({
+        type: "file-read-result",
+        id: message.id,
+        error: failure,
+        code: serializeBrokerError(failure).code,
+      });
+    }
+  } finally {
+    fileReads.delete(message.id);
+  }
+}
+
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  if (stopping || owned.size + starting.size + (resources?.size ?? 0) >= 256) {
+  if (stopping || owned.size + starting.size + fileReads.size + (resources?.size ?? 0) >= 256) {
     const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
     // The ordered failed-admission result proves no native work was started.
     // No command metadata exists because this guard precedes spawn preparation.
@@ -525,6 +565,19 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   }
   if (message.type === "pipe-received") {
     sender.acknowledge(message.id, message.fd);
+    return;
+  }
+  if (message.type === "cancel-read-file") {
+    const read = fileReads.get(message.id);
+    if (read) {
+      read.canceled = true;
+    }
+    return;
+  }
+  if (message.type === "read-file") {
+    const reading = readFile(message).catch(shutdown);
+    launches.add(reading);
+    void reading.finally(() => launches.delete(reading));
     return;
   }
   if (

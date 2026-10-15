@@ -547,17 +547,18 @@ describe("createCodexDynamicToolBridge", () => {
       diagnosticEvents.push(event),
     );
     const badExecute = vi.fn();
+    const tools = [
+      createTool({ name: "message" }),
+      createTool({
+        name: "fuzzplugin_move_angles",
+        parameters: { type: "array", items: { type: "number" } },
+        execute: badExecute,
+      }),
+    ];
     let bridge!: ReturnType<typeof createCodexDynamicToolBridge>;
     try {
       bridge = createCodexDynamicToolBridge({
-        tools: [
-          createTool({ name: "message" }),
-          createTool({
-            name: "fuzzplugin_move_angles",
-            parameters: { type: "array", items: { type: "number" } },
-            execute: badExecute,
-          }),
-        ],
+        tools,
         signal: new AbortController().signal,
         hookContext: {
           agentId: "agent-quarantine",
@@ -573,6 +574,12 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(specNames(bridge.specs)).toEqual(["message"]);
+    const projected = projectCodexExecutableDynamicTools({ tools });
+    expect(projected.availableTools.map((tool) => tool.name)).toEqual(
+      bridge.availableTools.map((tool) => tool.name),
+    );
+    expect(projected.availableTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
     expect(bridge.telemetry.quarantinedTools).toEqual([
       {
         tool: "fuzzplugin_move_angles",
@@ -656,27 +663,6 @@ describe("createCodexDynamicToolBridge", () => {
         text: `Unknown OpenClaw tool: ${testCase.name}`,
       },
     ]);
-  });
-
-  it("uses the bridge's executable projection for authority snapshots", () => {
-    const tools = [
-      createTool({ name: "configured_ok" }),
-      createTool({
-        name: "configured_unsupported",
-        parameters: { type: "array", items: { type: "string" } },
-      }),
-    ];
-    const projected = projectCodexExecutableDynamicTools({ tools });
-    const bridge = createCodexDynamicToolBridge({
-      tools,
-      signal: new AbortController().signal,
-    });
-
-    expect(projected.availableTools.map((tool) => tool.name)).toEqual(
-      bridge.availableTools.map((tool) => tool.name),
-    );
-    expect(projected.availableTools.map((tool) => tool.name)).toEqual(["configured_ok"]);
-    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
   });
 
   it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
@@ -1746,22 +1732,21 @@ describe("Codex automation tool references", () => {
     return execute.mock.calls[0]?.[1];
   }
 
-  it("leaves unknown, wrong-namespace and non-string values unchanged", async () => {
+  it.each([
+    {
+      label: "unknown, wrong-namespace and non-string entries",
+      toolsAllow: [
+        "openclaw__missing",
+        "openclaw__sandbox_exec",
+        "openclaw_direct__fixture__lookup_note",
+        7,
+        "read",
+      ],
+    },
+    { label: "a non-array allowlist", toolsAllow: null },
+  ])("leaves $label unchanged for the automation validator", async ({ toolsAllow }) => {
     const { call, execute } = setup();
-    const input = automationArgs([
-      "openclaw__missing",
-      "openclaw__sandbox_exec",
-      "openclaw_direct__fixture__lookup_note",
-      7,
-      "read",
-    ]);
-    await call(input);
-    expect(received(execute)).toEqual(input);
-  });
-
-  it("leaves a non-array allowlist for the automation validator", async () => {
-    const { call, execute } = setup();
-    const input = automationArgs(null);
+    const input = automationArgs(toolsAllow);
     await call(input);
     expect(received(execute)).toEqual(input);
   });

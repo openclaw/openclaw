@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { upsertAuthProfileAsync } from "../../dist/plugin-sdk/provider-auth.js";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 const require = createRequire(import.meta.url);
@@ -67,6 +68,7 @@ async function main() {
   await fs.rm(exitPath, { force: true });
   await writeProbeServer({ serverPath, pidPath, pidsPath, exitPath });
 
+  const profileId = "openai:docker-cron-cleanup";
   const seededConfig = applyDockerOpenAiProviderConfig(
     {
       gateway: {
@@ -114,6 +116,23 @@ async function main() {
     } satisfies OpenClawConfig,
     "sk-docker-cron-mcp-cleanup-test",
   );
+
+  // Scheduled inference retains a stored account, not the provider-config key.
+  await upsertAuthProfileAsync({
+    profileId,
+    credential: {
+      type: "api_key",
+      provider: "openai",
+      key: "sk-docker-cron-mcp-cleanup-test",
+    },
+  });
+  seededConfig.agents = {
+    ...seededConfig.agents,
+    defaults: {
+      ...seededConfig.agents?.defaults,
+      model: `openai/gpt-5.6-luna@${profileId}`,
+    },
+  };
 
   await fs.writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf-8");
 

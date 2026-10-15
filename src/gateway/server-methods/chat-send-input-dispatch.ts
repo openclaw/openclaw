@@ -7,7 +7,10 @@ import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-cal
 import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -184,7 +187,8 @@ export async function handleChatSendWithStorage(
         throw new Error("Session routing changed before input admission; refresh and retry.");
       }
     };
-    const assertInputAdmissionCurrent = composeSessionSourceAssertion(
+    let assertAcceptedInputCurrent: (() => void) | undefined;
+    const assertUnacceptedInputCurrent = composeSessionSourceAssertion(
       [sessionMutationCommitGuard],
       (assertSource) => {
         admission.assertClientUploadAllowed?.();
@@ -195,6 +199,14 @@ export async function handleChatSendWithStorage(
         assertSource();
       },
     );
+    const assertInputAdmissionCurrent = options?.stageCreatedInput
+      ? createDynamicSessionSourceAssertion(
+          () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
+          () => {
+            throw new Error("Chat input custody changed before admission");
+          },
+        )
+      : assertUnacceptedInputCurrent;
     assertInputAdmissionCurrent();
     const goalCommitGuard = request.goalOperation
       ? createChatSendGoalCommitGuard({
@@ -304,7 +316,9 @@ export async function handleChatSendWithStorage(
     let stageInput = Boolean(
       entry?.sessionId &&
       userTurn.baseInput.display !== false &&
-      (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
+      (!systemInputProvenance ||
+        systemInputProvenance.kind === "external_user" ||
+        options?.stageCreatedInput === true) &&
       !isInternalTextSlashCommandTurn &&
       !request.goalOperation &&
       !restartSafeAdmission?.retryExpectedState &&
@@ -331,16 +345,15 @@ export async function handleChatSendWithStorage(
       // dispatch; a validated durable retry already owns its transcript input.
       inputAdmissionAttempted = true;
       using stagePhase = diagnostics.scope("detail.persist.stage");
-      const staged = await userTurnRecorder.stageApproved?.(
-        createChatSendPendingInputAdmission({
-          runId: clientRunId,
-          expectedProfileId: req.expectedProfileId,
-          sessionMutationAuthorization,
-          sessionMutationCommitGuard,
-          assertCustodyLifetimeCurrent,
-          assertClientUploadAllowed: admission.assertClientUploadAllowed,
-        }),
-      );
+      const pendingAdmission = createChatSendPendingInputAdmission({
+        runId: clientRunId,
+        expectedProfileId: req.expectedProfileId,
+        sessionMutationAuthorization,
+        sessionMutationCommitGuard,
+        assertCustodyLifetimeCurrent,
+        assertClientUploadAllowed: admission.assertClientUploadAllowed,
+      });
+      const staged = await userTurnRecorder.stageApproved?.(pendingAdmission);
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
@@ -353,6 +366,11 @@ export async function handleChatSendWithStorage(
       }
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
+      }
+      if (options?.stageCreatedInput) {
+        // Only committed input custody can outlive the originating tool, while
+        // the retained operator, destination and Gateway authority stay live.
+        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
       }
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(

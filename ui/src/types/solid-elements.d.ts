@@ -9,7 +9,7 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { NodePermissionRequest } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
@@ -40,7 +40,27 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-appearance-background": HTMLAttributes<HTMLElement>;
+      "openclaw-config-page": HTMLAttributes<HTMLElement>;
+      "openclaw-meeting-capture-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-session-storage-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-talk-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
+      "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
+      "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
+        "prop:request"?: NodePermissionRequest | null;
+        "prop:onRetry"?: (message: string) => void;
+      };
+      "openclaw-chat-run-failure-notice": LegacyAttributes<
+        HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
+      > &
+        ElementProperties<
+          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
+        >;
+      "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
+      "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
       "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
@@ -53,10 +73,6 @@ declare module "@solidjs/web" {
       // Each caller validates the picker option/callback pairing before the DOM boundary.
       "openclaw-select-picker": HTMLAttributes<HTMLElementTagNameMap["openclaw-select-picker"]> & {
         "prop:params": unknown;
-      };
-      "openclaw-update-run-view": HTMLAttributes<HTMLElement> & {
-        "prop:run": UpdateRunRecord | null;
-        "prop:connected": boolean;
       };
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
         PluginViewProperties & {
@@ -119,6 +135,7 @@ declare module "@solidjs/web" {
         "prop:content"?: Tooltip["content"];
         "prop:contentTemplate"?: Tooltip["contentTemplate"];
         "prop:describe"?: Tooltip["describe"];
+        "prop:pointerThrough"?: Tooltip["pointerThrough"];
         "prop:openOnClick"?: Tooltip["openOnClick"];
         "prop:disabled"?: Tooltip["disabled"];
         "prop:anchor"?: Tooltip["anchor"];

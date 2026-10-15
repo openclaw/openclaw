@@ -419,6 +419,93 @@ describe("sidebar projection memo", () => {
     expect(row(target.key)).not.toBeNull();
   });
 
+  it.each(["done", "failed", "killed", "timeout"] as const)(
+    "keeps activity through answer streaming and finishing until the run is %s",
+    async (status) => {
+      const target = session("answer", {
+        hasActiveRun: true,
+        activeRunIds: ["answer-run"],
+        status: "running",
+      });
+      const other = session("other", {
+        hasActiveRun: true,
+        activeRunIds: ["other-run"],
+        status: "running",
+      });
+      const { sidebar, gateway, row, sessions, publish } = await mount([target, other]);
+      const spinner = (sessionKey: string) =>
+        row(sessionKey)?.querySelector('[aria-label="Active run"]');
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 1,
+        stream: "assistant",
+        data: { text: "The answer is ready." },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      expect(spinner(other.key)).not.toBeNull();
+      gateway.publishEvent("chat", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        state: "delta",
+        replace: true,
+        message: { role: "assistant", content: [] },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 2,
+        stream: "item",
+        data: {
+          kind: "tool",
+          phase: "start",
+          itemId: "inspect",
+          toolCallId: "inspect",
+          name: "read_file",
+          title: "Read file",
+        },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 3,
+        stream: "lifecycle",
+        data: { phase: "finishing", error: "retryable" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 4,
+        stream: "run_status",
+        data: { phase: "retrying", message: "Retrying" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      gateway.publishEvent("agent", {
+        sessionKey: target.key,
+        runId: "answer-run",
+        seq: 3,
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      });
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).not.toBeNull();
+      expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
+      publish([{ ...target, hasActiveRun: false, activeRunIds: [], status }, other]);
+      await settleLitElement(sidebar);
+      expect(spinner(target.key)).toBeNull();
+      expect(spinner(other.key)).not.toBeNull();
+    },
+  );
+
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);

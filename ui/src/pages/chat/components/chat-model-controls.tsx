@@ -35,8 +35,7 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
@@ -58,7 +57,6 @@ type ChatModelControlsProps = {
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
-  activeRunSessionKey?: string;
   agentDefaultModel?: string;
   connected: boolean;
   gatewayAvailable: boolean;
@@ -286,24 +284,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       sessionsResult: props.sessionsResult,
     });
     const activeSession = props.selectedSession;
-    const localRunMatchesSession = Boolean(
-      props.activeRunId &&
-      props.activeRunSessionKey &&
-      areUiSessionKeysEquivalent(props.activeRunSessionKey, props.sessionKey),
-    );
-    const activeRunId = localRunMatchesSession ? props.activeRunId : null;
-    const stream = localRunMatchesSession ? props.stream : null;
     const resolvedFastMode = resolveChatFastModeSelectState({
-      activeRunId,
       catalog: props.modelCatalog,
       connected: props.connected,
       currentModelOverride: currentOverride,
       fastModeTarget: props.fastModeTarget ?? props.selectedSession,
       gatewayAvailable: props.gatewayAvailable,
       loading: props.loading,
-      sending: props.sending,
       sessionsResult: props.sessionsResult,
-      stream,
     });
     // Reasoning/fast state still describes the previous model until the refreshed
     // session row lands. Lock both so stale levels cannot be committed mid-switch.
@@ -620,7 +608,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
             disabledReason: props.effortMutationDisabledReason,
             fastMode: {
               ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || busy || effortMutationDisabled,
+              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
             },
             sessionKey: props.sessionKey,
             thinkingDisabled,
@@ -648,5 +636,5 @@ export function ChatModelControls(props: ChatModelControlsProps) {
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
-  return solidTemplate(ChatModelControls, props);
+  return solidContent(ChatModelControls, props);
 }

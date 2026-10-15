@@ -208,7 +208,7 @@ export async function main(argv = process.argv.slice(2)) {
     } catch (error) {
       if (!extra.cleanup) {
         diagnostic("command", {
-          ...androidReleaseCommandFacts(bin, args, stderr),
+          ...androidReleaseCommandFacts(bin, args, stdout, stderr),
           ...androidReleaseErrorFacts(error),
           elapsedMs: Date.now() - startedAt,
         });
@@ -222,7 +222,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (code !== 0) {
       if (!extra.cleanup) {
         diagnostic("command", {
-          ...androidReleaseCommandFacts(bin, args, stderr),
+          ...androidReleaseCommandFacts(bin, args, stdout, stderr),
           exitCode: code,
           elapsedMs: Date.now() - startedAt,
         });
@@ -680,6 +680,7 @@ export async function main(argv = process.argv.slice(2)) {
       await deviceCommand(device, ["shell", "wm", "dismiss-keyguard"]);
       let text = "";
       let finished = false;
+      let exitCode: number | undefined;
       const testClass =
         device.role === "phone"
           ? "ai.openclaw.app.AndroidReleasePhoneTest"
@@ -726,6 +727,7 @@ export async function main(argv = process.argv.slice(2)) {
         },
       })
         .then((code) => {
+          exitCode = code;
           finished = true;
           if (
             code !== 0 ||
@@ -735,6 +737,7 @@ export async function main(argv = process.argv.slice(2)) {
             diagnostic("native", {
               role: device.role,
               phase: releasePhase,
+              exitCode,
               ...androidReleaseNativeFacts(text),
             });
             throw new Error("native-test-failed");
@@ -764,6 +767,7 @@ export async function main(argv = process.argv.slice(2)) {
               diagnostic("native", {
                 role: device.role,
                 phase: releasePhase,
+                exitCode,
                 ...androidReleaseNativeFacts(text),
               });
               throw new Error("native-test-failed");

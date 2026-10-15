@@ -100,7 +100,15 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(activeItem).toBeInstanceOf(HTMLElement);
     expect(title).toBeInstanceOf(HTMLElement);
 
+    const footer = preview.querySelector<HTMLElement>(".foot")!;
+    const actions = footer.querySelector<HTMLElement>("openclaw-modal-actions")!;
+    const close = actions.querySelector<HTMLButtonElement>("button")!;
     const dialogBounds = dialog.getBoundingClientRect();
+    expect(footer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      preview.querySelector<HTMLElement>(".body")!.getBoundingClientRect().bottom - 1,
+    );
+    expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(close.getBoundingClientRect().bottom).toBeLessThanOrEqual(dialogBounds.bottom + 1);
     const listBounds = list!.getBoundingClientRect();
     const detailBounds = detail!.getBoundingClientRect();
     const copyBounds = copy!.getBoundingClientRect();
@@ -166,7 +174,15 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(preview.querySelector(".chat-copy-btn")).toBeNull();
     expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
 
+    const footer = preview.querySelector<HTMLElement>(".foot")!;
+    const actions = footer.querySelector<HTMLElement>("openclaw-modal-actions")!;
+    const close = actions.querySelector<HTMLButtonElement>("button")!;
     const dialogBounds = dialog.getBoundingClientRect();
+    expect(footer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      preview.querySelector<HTMLElement>(".body")!.getBoundingClientRect().bottom - 1,
+    );
+    expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(close.getBoundingClientRect().bottom).toBeLessThanOrEqual(dialogBounds.bottom + 1);
     const detailBounds = detail!.getBoundingClientRect();
     const detailBodyBounds = detailBody!.getBoundingClientRect();
     expect(detailBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
@@ -260,6 +276,7 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       const owner = preview.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
       const dialog = await resolveRenderedDialog(owner);
       expect(preview.querySelector(".search")).toBeNull();
+      expect(preview.querySelector("openclaw-modal-actions")).toBeNull();
       expect(
         preview.querySelector(".chips, .item-meta, .state, .list-section, .detail-head, .foot"),
       ).toBeNull();

@@ -22,8 +22,6 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
   cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
-  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
-  cacheTtlRevision?: number;
 };
 
 type EmbeddedSessionPromptState = {
@@ -260,9 +258,7 @@ export function createToolResultPromptProjectionState(
     ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
     sourceHashByKey: new Map(source?.sourceHashByKey),
     restoredCacheTtl: new Map(source?.restoredCacheTtl),
-    ...(source
-      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
-      : {}),
+    ...(source ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint } : {}),
   };
 }
 
@@ -354,7 +350,6 @@ export async function persistToolResultProjections(
 ): Promise<void> {
   const snapshot = serializeCacheTtlToolResultProjections(state);
   const previous = state.cacheTtlCheckpoint;
-  const revision = state.cacheTtlRevision ?? 0;
   if (
     previous === undefined &&
     !cacheTouch &&
@@ -374,11 +369,7 @@ export async function persistToolResultProjections(
     committedCheckpoint = checkpoint;
   } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
-    // A branch restore during the write owns its new baseline.
-    if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = committedCheckpoint;
-      state.cacheTtlRevision = revision + 1;
-    }
+    state.cacheTtlCheckpoint = committedCheckpoint;
   }
 }
 

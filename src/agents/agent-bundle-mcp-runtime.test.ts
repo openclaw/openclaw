@@ -726,21 +726,17 @@ describe("session MCP runtime", () => {
 
       nowMs += 5_001;
       expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const staleCatalog = await withinTest(runtime.getCatalog(), signal);
-      expect(staleCatalog).toBe(failedCatalog);
-      expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await withinTest(receipts.waitFor(retryLogPath, "recv tools/list", 2), signal);
+      const recovery = runtime.getCatalog();
+      await withinTest(
+        fixtureEventBeforeSettlement(retryLogPath, "recv tools/list", recovery, 2),
+        signal,
+      );
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,
       });
       await fs.writeFile(retryReleasePath, "release", "utf8");
 
-      await waitForRuntimeState(
-        () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
-        "background catalog recovery",
-        signal,
-      );
-      const recoveredCatalog = await runtime.getCatalog();
+      const recoveredCatalog = await withinTest(recovery, signal);
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
       expect(recoveredCatalog.servers.retryServer).toBeDefined();
@@ -812,94 +808,69 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("filters listed MCP tools with per-server include and exclude rules", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tool-filter-"));
-    const serverPath = path.join(tempDir, "tool-filter.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      tools: [
-        { name: "search_docs", inputSchema: { type: "object", properties: {} } },
-        { name: "read_docs", inputSchema: { type: "object", properties: {} } },
-        { name: "admin_delete", inputSchema: { type: "object", properties: {} } },
-      ],
-    });
-
-    const runtime = await makeStdioRuntime("session-tool-filter", "docs", serverPath, {
-      server: {
-        toolFilter: { include: ["*_docs", "admin_*"], exclude: ["admin_*"] },
-      },
-    });
-
-    try {
-      const catalog = await runtime.getCatalog();
-
-      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
-        "read_docs",
-        "search_docs",
-      ]);
-      expect(catalog.servers.docs?.toolCount).toBe(2);
-      expect(catalog.servers.docs?.tools?.filteredCount).toBe(1);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("applies session tool denials to listed and synthetic MCP tools", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-session-deny-");
-    const serverPath = path.join(tempDir, "session-deny.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      capabilities: { tools: {}, resources: {} },
-      tools: [
-        { name: "search_docs", inputSchema: { type: "object", properties: {} } },
-        { name: "read_docs", inputSchema: { type: "object", properties: {} } },
-      ],
-    });
-
-    const runtime = await makeStdioRuntime("session-tool-deny", "docs", serverPath, {
-      workspaceDir: tempDir,
+  it.each([
+    {
+      policy: "server include/exclude",
+      serverName: "docs",
+      tools: ["search_docs", "read_docs", "admin_delete"],
+      server: { toolFilter: { include: ["*_docs", "admin_*"], exclude: ["admin_*"] } },
+      toolOverrides: undefined,
+      capabilities: { tools: {} },
+      expectedTools: ["read_docs", "search_docs"],
+      expectedServer: { toolCount: 2, tools: { filteredCount: 1 } },
+      expectedDenied: undefined,
+      expectedMaterialized: undefined,
+    },
+    {
+      policy: "session denials including synthetic tools",
+      serverName: "docs",
+      tools: ["search_docs", "read_docs"],
+      server: {},
       toolOverrides: { mcpToolsDeny: { docs: ["read_docs", "resources_read"] } },
+      capabilities: { tools: {}, resources: {} },
+      expectedTools: ["search_docs"],
+      expectedServer: { toolCount: 1 },
+      expectedDenied: [{ serverName: "docs", toolName: "read_docs", deniedBySession: true }],
+      expectedMaterialized: ["docs__resources_list", "docs__search_docs"],
+    },
+    {
+      policy: "own-property session denials",
+      serverName: "constructor",
+      tools: ["slow_tool"],
+      server: {},
+      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
+      capabilities: { tools: {} },
+      expectedTools: ["slow_tool"],
+      expectedServer: { toolCount: 1 },
+      expectedDenied: undefined,
+      expectedMaterialized: undefined,
+    },
+  ])("filters the MCP catalog with $policy", async (row) => {
+    const tempDir = tempDirTracker.make("bundle-mcp-tool-policy-");
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: row.capabilities,
+      tools: row.tools.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })),
     });
-
+    const runtime = await makeStdioRuntime("session-tool-policy", row.serverName, serverPath, {
+      workspaceDir: tempDir,
+      server: row.server,
+      toolOverrides: row.toolOverrides,
+    });
     try {
       const catalog = await runtime.getCatalog();
-      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["search_docs"]);
-      expect(catalog.sessionDeniedTools).toMatchObject([
-        { serverName: "docs", toolName: "read_docs", deniedBySession: true },
-      ]);
-      expect(catalog.servers.docs?.toolCount).toBe(1);
-
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
-      expect(materialized.tools.map((tool) => tool.name)).toEqual([
-        "docs__resources_list",
-        "docs__search_docs",
-      ]);
-    } finally {
-      await runtime.dispose();
-    }
-  });
-
-  it("does not read inherited properties as MCP tool denials", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-own-deny-");
-    const serverPath = path.join(tempDir, "own-deny.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({ filePath: serverPath, logPath });
-    const runtime = createSessionMcpRuntime({
-      sessionId: "session-own-deny",
-      workspaceDir: tempDir,
-      cfg: { mcp: { servers: { constructor: { command: process.execPath, args: [serverPath] } } } },
-      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
-        "slow_tool",
-      ]);
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(row.expectedTools);
+      expect(catalog.servers[row.serverName]).toMatchObject(row.expectedServer);
+      if (row.expectedDenied) {
+        expect(catalog.sessionDeniedTools).toMatchObject(row.expectedDenied);
+      }
+      if (row.expectedMaterialized) {
+        const materialized = await materializeBundleMcpToolsForRun({ runtime });
+        expect(materialized.tools.map((tool) => tool.name)).toEqual(row.expectedMaterialized);
+      }
     } finally {
       await runtime.dispose();
     }

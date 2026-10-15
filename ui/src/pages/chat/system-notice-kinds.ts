@@ -14,7 +14,8 @@ type SystemNoticeKind = {
   // Fixed operator summary shown instead of the raw model prompt. Omit when the
   // producer emits variable, informative text (reasons, doctor hints) that must
   // stay visible; the notice then keeps the message body under the kind label.
-  summaryKey?: string;
+  // Null keeps only the label unless a pending state supplies an actionable summary.
+  summaryKey?: string | null;
   pendingSummaryKeys?: Partial<Record<PendingInputStatus, string>>;
   // Collapse the variable body behind a disclosure. For bulky injected context
   // (skill instructions, continuation summaries) the label stays visible while
@@ -29,7 +30,7 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
   main_session_restart_recovery: {
     icon: "cpu",
     labelKey: "chat.systemNotice.restartRecovery.label",
-    summaryKey: "chat.systemNotice.restartRecovery.summary",
+    summaryKey: null,
     pendingSummaryKeys: {
       interrupted: "chat.systemNotice.restartRecovery.interrupted",
       cancelled: "chat.systemNotice.restartRecovery.cancelled",

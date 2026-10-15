@@ -19,6 +19,7 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as entryAdmission from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
@@ -290,7 +291,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
   describe("placement observations", () => {
     const placementDirs = useStateDatabaseTempDirs();
 
-    async function createPlacementAdmission() {
+    async function createPlacementAdmission(local = false) {
       const root = placementDirs.make("openclaw-reply-placement-admission-");
       const scope = {
         agentId: "main",
@@ -302,11 +303,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const service = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ path: path.join(root, "placement.sqlite") }),
       });
-      await service.startDispatch({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        sessionId: entry.sessionId,
-      });
+      if (!local) {
+        await service.startDispatch({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          sessionId: entry.sessionId,
+        });
+      }
       const context: placementContext.SessionWorkerPlacementContext = {
         workerSessionPlacementService: service,
       };
@@ -367,6 +370,31 @@ describe("createReplyRestartRecoveryClaimController", () => {
       }
     });
 
+    it("admits a follow-up while the preceding local turn finishes during session preparation", async () => {
+      await using fixture = await createPlacementAdmission(true);
+      const predecessor = await fixture.service.claimTurn({
+        ...fixture.scope,
+        sessionId: fixture.entry.sessionId,
+        owner: { kind: "local" },
+        runId: "preceding-run",
+        claimId: "preceding-claim",
+      });
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
+        await fixture.service.releaseTurn(predecessor);
+        return entry;
+      });
+
+      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      expect(fixture.recorder.hasPersisted()).toBe(true);
+      expect(await fixture.service.getAsync(fixture.entry.sessionId)).toMatchObject({
+        state: "local",
+        turnClaim: null,
+      });
+    });
+
     it("refuses an unavailable placement observation instead of reading synchronously", async () => {
       await using fixture = await createPlacementAdmission();
       fixture.context.workerSessionPlacementService = {
@@ -392,16 +420,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       "service-removal",
       "pending-input-persisted",
       "terminal-source",
-    ] as const)("revalidates %s while placement preparation is pending", async (change) => {
+    ] as const)("revalidates %s while session preparation is pending", async (change) => {
       await using fixture = await createPlacementAdmission();
       const prepared = createDeferred();
       const resume = createDeferred();
-      const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
-      vi.spyOn(fixture.service, "prepareRuntimeRefresh").mockImplementation(async (sessionId) => {
-        const observation = await prepare(sessionId);
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
         prepared.resolve();
         await resume.promise;
-        return observation;
+        return entry;
       });
       const admission = fixture.controller.admitUserTurn(fixture.recorder);
       const outcome = admission.catch((error: unknown) => error);
@@ -521,7 +550,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
-  it.each(["global", "unknown"])(
+  it.each(["global"])(
     "keeps the selected agent through a %s hook checkpoint",
     async (sessionKey) => {
       const root = tempDirs.make("openclaw-owned-reply-claim-");

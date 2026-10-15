@@ -1,5 +1,7 @@
 import { readdirSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { PerformanceEntry } from "node:perf_hooks";
+import { mock } from "node:test";
 import { getHeapStatistics, setFlagsFromString } from "node:v8";
 import vm from "node:vm";
 
@@ -7,6 +9,8 @@ import vm from "node:vm";
 let collectGarbage: () => void = () => {
   // Inject GC pressure that V8 does not retire first; native OOM uses the normal worker.
   setFlagsFromString("--expose_gc --no-detect-ineffective-gcs-near-heap-limit");
+  // Cheap major collections must retire a near-limit worker regardless of GC time share.
+  mock.getter(PerformanceEntry.prototype, "duration", () => 0);
   collectGarbage = vm.runInNewContext("gc");
   collectGarbage();
 };

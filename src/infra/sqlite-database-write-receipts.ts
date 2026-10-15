@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
@@ -30,11 +31,41 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
+  writeListeners: WeakMap<Admission, Set<() => void>>;
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
   publish(this: void, record: Admission): void;
 }) {
+  /** Local sibling writers notify maintenance after publishing their shared write revision. */
+  function onSqliteDatabaseWriteSettled(
+    database: DatabaseSync,
+    listener: () => void,
+  ): (() => void) | undefined {
+    const record = owner.admission(database);
+    if (!record) {
+      return undefined;
+    }
+    let listeners = owner.writeListeners.get(record);
+    if (!listeners) {
+      listeners = new Set();
+      owner.writeListeners.set(record, listeners);
+    }
+    return registerListener(listeners, listener);
+  }
+
+  /** An interrupted native write may have committed before its receipt was published. */
+  function settleWorker(record: Admission, worker: number): void {
+    const references = worker > 0 ? record.references.get(worker) : undefined;
+    if (references && Atomics.exchange(new Int32Array(references), 1, 0) > 0) {
+      advanceSqliteDatabaseGeneration(record, "writeRevision");
+      advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
+      const listeners = owner.writeListeners.get(record);
+      if (listeners) {
+        notifyListeners(listeners, undefined);
+      }
+    }
+  }
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
   function withSqliteDatabaseWriteScope<T>(
     database: DatabaseSync,
@@ -87,7 +118,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     let changed = false;
     for (const key of keys) {
       const previous = record.writeScopes.get(key);
-      if (!previous || Atomics.load(new Int32Array(previous.state), 1) !== 0) {
+      if (!previous || Atomics.load(previous.state, 1) !== 0) {
         record.writeScopes.set(key, createScopeRevision());
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
@@ -105,7 +136,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function createScopeRevision(): ScopedWriteRevision {
     return {
       identity: randomUUID(),
-      state: new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT),
+      state: new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT)),
     };
   }
 
@@ -130,7 +161,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       let changed = false;
       for (const key of keys) {
         const revision = record.writeScopes.get(key);
-        if (revision && Atomics.exchange(new Int32Array(revision.state), 1, 1) === 0) {
+        if (revision && Atomics.exchange(revision.state, 1, 1) === 0) {
           changed = true;
         }
       }
@@ -166,9 +197,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       keys.map((key) => [
         key,
         record.writeScopes.get(key)!.identity,
-        (Atomics.load(new Int32Array(record.writeScopes.get(key)!.state), 0) +
-          (pending?.has(key) ? 1 : 0)) |
-          0,
+        (Atomics.load(record.writeScopes.get(key)!.state, 0) + (pending?.has(key) ? 1 : 0)) | 0,
       ]),
     ]);
   }
@@ -184,7 +213,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       keys.map((key) => [
         key,
         state.localScopeRevisions.get(database)!.get(key)!.identity,
-        (Atomics.load(new Int32Array(state.localScopeRevisions.get(database)!.get(key)!.state), 0) +
+        (Atomics.load(state.localScopeRevisions.get(database)!.get(key)!.state, 0) +
           (pending?.has(key) ? 1 : 0)) |
           0,
       ]),
@@ -329,11 +358,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         for (const key of keys) {
           const localRevision = local?.get(key);
           if (localRevision) {
-            Atomics.add(new Int32Array(localRevision.state), 0, 1);
+            Atomics.add(localRevision.state, 0, 1);
           }
           const revision = record?.writeScopes.get(key);
-          if (revision && Atomics.load(new Int32Array(revision.state), 1) === 0) {
-            Atomics.add(new Int32Array(revision.state), 0, 1);
+          if (revision && Atomics.load(revision.state, 1) === 0) {
+            Atomics.add(revision.state, 0, 1);
           } else if (
             record &&
             (revision ||
@@ -355,6 +384,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         }
       }
     },
+    settleWorker,
+    onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
     withSqliteDatabaseWriteScope,
     withoutSqliteDatabaseWriteScope,

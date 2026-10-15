@@ -14,6 +14,9 @@ type BlockingField = {
 };
 const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   name: "cron.form.fieldName",
+  eventServer: "cron.events.server",
+  eventName: "cron.events.name",
+  eventArguments: "cron.events.arguments",
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
@@ -176,6 +179,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
   );
 }
 type CronSelectOptions = {
+  required?: boolean;
   field: CronStringFormField;
   label: string;
   options: readonly PickerOption[];
@@ -208,6 +212,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
       label={props.label}
       controlId={inputIdForField(props.field)}
       help={props.help}
+      required={props.required}
       error={error()}
       errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
       control={control}

@@ -419,6 +419,10 @@ async function prepareCliRunContextWithinReadFence(
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
+  } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
+    throw new Error(
+      "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+    );
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -1405,6 +1409,7 @@ async function prepareCliRunContextWithinReadFence(
           ? undefined
           : (params.messageChannel ?? params.messageProvider),
         accountId: params.agentAccountId,
+        requester: params,
       });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation

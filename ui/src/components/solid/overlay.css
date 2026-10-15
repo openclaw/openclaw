@@ -224,6 +224,10 @@
     color var(--control-ui-transition-fast) ease;
 }
 
+a.oc-menu-item[href] {
+  cursor: pointer;
+}
+
 .oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {

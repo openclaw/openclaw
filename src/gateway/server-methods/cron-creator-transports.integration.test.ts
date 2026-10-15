@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -12,6 +12,7 @@ import {
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -53,7 +54,7 @@ import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
   CREATOR,
-  cfg,
+  cfg as baseCfg,
   stateDir,
   admission,
   inRun,
@@ -68,7 +69,25 @@ vi.mock("../../agents/node-exec-availability.js", () => ({
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
 
+const cfg: OpenClawConfig = {
+  ...baseCfg,
+  agents: { ...baseCfg.agents, defaults: { model: "openai/gpt-4.1" } },
+};
+
 installRequesterCronAuthorityTestHooks();
+beforeEach(async () => {
+  vi.stubEnv("OPENAI_API_KEY", undefined);
+  vi.stubEnv("OPENAI_OAUTH_TOKEN", undefined);
+  await persistAuthProfileBatch({
+    stateDir,
+    profiles: [
+      {
+        profileId: "openai:automation-test",
+        credential: { type: "api_key", provider: "openai", key: "synthetic-automation-test-key" },
+      },
+    ],
+  });
+});
 
 describe("original caller through Cron creator transports", () => {
   it.for([
@@ -340,7 +359,7 @@ describe("original caller through Cron creator transports", () => {
     async (transport, origin) => {
       const config: OpenClawConfig = {
         ...cfg,
-        agents: { ...cfg.agents, defaults: { workspace: stateDir } },
+        agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, workspace: stateDir } },
         tools: { allow: [AUTOMATIONS_TOOL_NAME] },
       };
       setRuntimeConfigSnapshot(config);

@@ -118,8 +118,6 @@ export function createGatewayChatMetadataRuntime(params: {
     buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };
-  const requestedModelLists: Parameters<typeof createChatMetadataModelList>[0]["requested"] =
-    new Map();
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
@@ -292,18 +290,12 @@ export function createGatewayChatMetadataRuntime(params: {
             : createChatMetadataModelList({
                 facts,
                 context: deps.getContext(),
-                requested: requestedModelLists,
                 maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
               }),
         agentsById: new Map(),
         neutralProjectionByAgentId: new Map(),
         sessionProjectionByKey: new Map(),
       };
-      // Rebuild only variants clients already use, before the replacement becomes readable.
-      const { modelLists } = generation;
-      await Promise.allSettled(
-        [...requestedModelLists.values()].map((request) => modelLists.prepare(request)),
-      );
       assertOpen();
       // Mid-refresh config changes are best effort; the next publication refreshes these facts.
       current = generation;
@@ -625,7 +617,6 @@ export function createGatewayChatMetadataRuntime(params: {
         "gateway chat metadata runtime is stopped",
       );
       fail(stoppedError);
-      requestedModelLists.clear();
     }
     // Retain preparation and readers through shutdown, including evicted projections
     // and superseded refreshes no longer reachable from the current generation.

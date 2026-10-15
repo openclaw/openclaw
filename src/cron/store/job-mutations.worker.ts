@@ -156,6 +156,10 @@ export function planCronJobMutation(
         isJobActive: () => previousJob?.state.runningAtMs !== undefined,
       });
     }
+    // Declarative re-registration is not a fresh authorization of an existing account.
+    if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
+      nextJob.inferenceBinding = options.inferenceBinding;
+    }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
         ? mutation.input.payload.toolsAllow !== undefined
@@ -167,6 +171,10 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
+    if (nextJob.runtimeAuthority) {
+      // Native inference authority replaces, rather than supplements, host credentials.
+      delete nextJob.inferenceBinding;
+    }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
       previousJob,

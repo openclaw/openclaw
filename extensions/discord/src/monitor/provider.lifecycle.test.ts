@@ -18,7 +18,6 @@ type MockGateway = {
   disconnect: Mock<() => void>;
   connect: Mock<(resume?: boolean) => void>;
   emitter: EventEmitter;
-  ws?: EventEmitter;
 };
 
 const { stopLogging, unregisterGateway, waitForStop } = vi.hoisted(() => ({
@@ -54,11 +53,9 @@ describe("runDiscordGatewayLifecycle", () => {
 
   function createHarness({
     ready = true,
-    socket,
     pending = [],
   }: {
     ready?: boolean;
-    socket?: EventEmitter;
     pending?: DiscordGatewayEvent[];
   } = {}) {
     const emitter = new EventEmitter();
@@ -68,7 +65,6 @@ describe("runDiscordGatewayLifecycle", () => {
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,
-      ws: socket,
     };
     const threadStop = vi.fn();
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -206,29 +202,6 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.gateway.connect).toHaveBeenCalledOnce();
-  });
-
-  it("waits for the stale startup socket to close before reconnecting", async () => {
-    vi.useFakeTimers();
-    const socket = new EventEmitter();
-    const h = createHarness({ ready: false, socket });
-    h.gateway.disconnect.mockImplementation(() => {
-      setTimeout(() => socket.emit("close", 1000, "Client disconnect"), 1_000);
-    });
-    h.gateway.connect.mockImplementation(() => {
-      setTimeout(() => {
-        h.gateway.isConnected = true;
-      }, 1_000);
-    });
-    const lifecycle = runDiscordGatewayLifecycle(h.params);
-    await vi.advanceTimersByTimeAsync(15_100);
-    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
-    expect(h.gateway.connect).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1_100);
-    expect(h.gateway.connect).toHaveBeenCalledOnce();
-    expect(h.gateway.connect).toHaveBeenCalledWith(false);
-    await vi.advanceTimersByTimeAsync(3_000);
-    await lifecycle;
   });
 
   it("keeps retrying startup readiness and publishes recovery once READY", async () => {

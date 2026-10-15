@@ -52,6 +52,8 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Prepared publication imports its verifier from the frozen release harness.
+  ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -69,6 +71,8 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
+  // The standalone build guide invokes this builder by path.
+  "scripts/build-bun-standalone.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -230,6 +234,8 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // The MCP Events live driver and fixture README launch this developer CLI by path.
+  "scripts/mcp-events-test-server.mjs",
   // Immutable systemd installations invoke the packaged launcher by path.
   "scripts/openclaw-immutable-launcher.mjs!",
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
@@ -331,6 +337,17 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+    return [
+      ...source.matchAll(
+        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+      ),
+    ]
+      .map(
+        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+      )
+      .join("\n");
+  }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
     return [
       ...new Set(
@@ -817,7 +834,6 @@ const config = {
     // The Lit/Solid presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/provider-icon.ts": ["exports"],
-    "ui/src/components/settings-ui.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],

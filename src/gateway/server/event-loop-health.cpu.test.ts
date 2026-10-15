@@ -75,7 +75,7 @@ async function sample(elapsedMs = 1_000) {
 describe("CPU breakdown sampling", () => {
   it.each(["Node", "Bun"])("measures independent CPU counters supported by %s", async (runtime) => {
     if (runtime === "Bun") {
-      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.3" } });
     }
     const monitor = await createMonitor();
     expect(monitor.snapshot()).toBeUndefined();

@@ -6,13 +6,12 @@ import {
   recordMemoryEntryOriginsInDatabase,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
   tableExists,
   withSqlitePostCommitPublications,
-  type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
 import type {
@@ -63,12 +62,8 @@ export function bindSqliteWorkerBackend(
     // A rejected origin batch must not undo the original additive schema preparation.
     withSqlitePostCommitPublications(db, () => transact(() => ensureMemoryEntryOriginsSchema(db)));
   }
-  let closed = false;
-  return {
+  return bindSqliteWorkerDatabase<MemoryEntryOriginOperations>(db, {
     execute(command) {
-      if (closed) {
-        throw new Error("Memory origin worker binding is closed");
-      }
       if (command.type === "record") {
         return transact(() => recordMemoryEntryOriginsInDatabase(db, command.input));
       }
@@ -134,14 +129,5 @@ export function bindSqliteWorkerBackend(
           : purgeForgottenMemory(db, command.input),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Memory origin operation left an unsettled native connection");
-      }
-    },
-    close() {
-      closed = true;
-    },
-  } satisfies SqliteWorkerBackend<MemoryEntryOriginOperations>;
+  });
 }

@@ -7,7 +7,6 @@ import type {
   SessionOwnerSessionCount,
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
@@ -96,10 +95,14 @@ export type SessionListFilterParams = {
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-  configuredAgentIds?: ReadonlySet<string>;
+  configuredAgentIds: ReadonlySet<string>;
   identityNames?: ReadonlyMap<string, string>;
   getRowContext: SessionListRowContextProvider;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  entryFilter?: (
+    key: string,
+    entry: SessionEntry,
+    target: NonNullable<ReturnType<SessionListTargetLookup>>,
+  ) => boolean;
   restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
@@ -173,7 +176,7 @@ export function* filterSessionEntries(
   params: SessionListFilterParams,
   window?: { offset: number; limit?: number; ownerLimit: number },
 ): SynchronousWork<SessionListFilteredEntries> {
-  const { cfg, opts, now, shouldYield } = params;
+  const { cfg, opts, now, shouldYield, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -199,7 +202,6 @@ export function* filterSessionEntries(
   let peopleIncomplete = false;
   const activityPulse = createActivityPulse(opts);
   const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
-  const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
   const identityProjection = getRowContext().identityProjection;
@@ -221,7 +223,14 @@ export function* filterSessionEntries(
   const visibleEntries: SessionEntryPair[] = [];
   if (opts.involvingProfileId) {
     for (const pair of params.entries("all")) {
-      if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
+      if (
+        params.entryFilter?.(
+          pair[0],
+          pair[1],
+          expectDefined(params.getTarget(pair[0]), "selection row owner"),
+        ) ??
+        true
+      ) {
         visibleEntries.push(pair);
       }
       if (shouldYield?.()) {
@@ -399,10 +408,10 @@ export function* filterSessionEntries(
     if (opts.group !== undefined && (entry.category ?? "") !== opts.group) {
       continue;
     }
-    if (!opts.involvingProfileId && params.entryFilter?.(key, entry) === false) {
+    const target = expectDefined(params.getTarget(key), "selection row owner");
+    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
       continue;
     }
-    const target = expectDefined(params.getTarget(key), "selection row owner");
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (

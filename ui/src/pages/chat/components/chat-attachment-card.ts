@@ -1,11 +1,7 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
-  renderAttachmentFileIcon,
   resolveAttachmentFileIcon,
   type AttachmentFileVisualMode,
 } from "./chat-attachment-file-icon.ts";
@@ -28,34 +24,6 @@ export type AttachmentCardHeaderOptions = {
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
 };
-
-export function renderCompactAttachmentCard(
-  options: AttachmentCardHeaderOptions,
-  elementRef?: (element: Element | undefined) => void,
-  onFocus?: () => void,
-): TemplateResult {
-  return html`<div
-    ${elementRef ? ref(elementRef) : nothing}
-    class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
-    ?data-openable=${Boolean(options.onExpand)}
-    @focusin=${onFocus ?? nothing}
-    @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
-  >
-    ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
-  </div>`;
-}
-
-export function renderAttachmentPreviewSkeleton() {
-  return html`<div
-    class="sidebar-attachment-preview__loading"
-    role="status"
-    aria-label=${t("common.loading")}
-  >
-    <div class="skeleton skeleton-line" aria-hidden="true"></div>
-    <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
-    <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>
-  </div>`;
-}
 
 const attachmentCardInteractiveSelector =
   "a, button, input, select, textarea, audio, video, iframe, [contenteditable='true'], [tabindex], [role='button']";
@@ -110,107 +78,4 @@ export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions
     expandLabel:
       options.expandLabel ?? translate("chat.attachments.expand", { filename: options.label }),
   };
-}
-
-export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
-  const skeleton = options.loading ? "skeleton" : "";
-  const view = prepareAttachmentCardHeader(options);
-  const hasOpenAction = options.onExpand !== undefined;
-  const downloadContent = view.downloadLabel
-    ? html`${icons.download}<span>${view.downloadLabel}</span>`
-    : icons.download;
-  return html`
-    <div
-      class="chat-assistant-attachment-card__header ${
-        view.compactPreview ? "chat-assistant-attachment-card__header--preview" : ""
-      }"
-    >
-      <div class="chat-assistant-attachment-card__identity">
-        ${renderAttachmentFileIcon({
-          filename: options.label,
-          mimeType: options.mimeType,
-          mode: options.visualMode ?? "large-placeholder",
-          loading: options.loading,
-        })}
-        <span
-          class="chat-assistant-attachment-card__details ${
-            view.compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
-          }"
-        >
-          <span class="chat-assistant-attachment-card__title ${skeleton}" title=${options.label}
-            >${options.label}</span
-          >
-          ${
-            view.compactPreview
-              ? view.formattedSize
-                ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
-                      >·</span
-                    ><span class="chat-assistant-attachment-card__meta ${skeleton}"
-                      >${view.formattedSize}</span
-                    >`
-                : null
-              : html`<span class="chat-assistant-attachment-card__meta">${view.metadata}</span>`
-          }
-        </span>
-      </div>
-      <span class="chat-assistant-attachment-card__actions">
-        ${
-          options.voiceNote && !view.compactPreview
-            ? html`<span class="chat-assistant-attachment-badge"
-                >${t("chat.messages.voiceNote")}</span
-              >`
-            : null
-        }
-        ${
-          options.onDownload
-            ? html`<button
-                type="button"
-                class=${view.downloadClass}
-                ?disabled=${options.downloadPending}
-                aria-label=${view.downloadTitle}
-                title=${view.downloadTitle}
-                @click=${options.onDownload}
-              >
-                ${downloadContent}
-              </button>`
-            : options.downloadHref || options.downloadPending
-              ? html`<a
-                  class=${view.downloadClass}
-                  href=${options.downloadPending ? nothing : options.downloadHref}
-                  aria-disabled=${options.downloadPending ? "true" : nothing}
-                  tabindex=${options.downloadPending && options.downloadPendingFocusable ? 0 : nothing}
-                  role="link"
-                  download=${options.label}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label=${view.downloadTitle}
-                  title=${view.downloadTitle}
-                  >${downloadContent}</a
-                >`
-              : null
-        }
-        ${
-          hasOpenAction
-            ? html`<button
-                type="button"
-                class="chat-assistant-attachment-card__action ${
-                  view.compactPreview
-                    ? "chat-assistant-attachment-card__expand--icon"
-                    : "chat-assistant-attachment-card__action--labeled"
-                } chat-assistant-attachment-card__expand"
-                aria-label=${view.expandLabel}
-                title=${view.expandLabel}
-                @click=${options.onExpand}
-              >
-                ${
-                  view.compactPreview
-                    ? icons.chevronsUpDown
-                    : html`<span>${t("chat.attachments.open")}</span>`
-                }
-              </button>`
-            : null
-        }
-      </span>
-    </div>
-  `;
 }

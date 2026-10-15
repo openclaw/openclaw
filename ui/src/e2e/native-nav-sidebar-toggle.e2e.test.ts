@@ -578,12 +578,21 @@ suite.define(() => {
     await expect.poll(() => sessionMenu.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
 
-    const pageDetails = page.locator(".chat-controls__model-picker").first();
-    await pageDetails.evaluate((element) => ((element as HTMLDetailsElement).open = true));
+    // A native picker refuses to open in inert content; use an ordinary disclosure
+    // to verify that the modal drawer owns Escape before the pane's legacy handler.
+    await page.evaluate(() => {
+      const details = document.createElement("details");
+      details.id = "background-navigation-disclosure";
+      details.className = "chat-controls__inline-select";
+      details.open = true;
+      document.querySelector(".chat-controls__model-picker")!.parentElement!.append(details);
+    });
+    const pageDetails = page.locator("#background-navigation-disclosure");
     await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
     await page.keyboard.press("Escape");
     await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
     await expect.poll(() => dialog.isVisible()).toBe(false);
+    await pageDetails.evaluate((element) => element.remove());
 
     await trigger.click();
     await expect.poll(() => dialog.isVisible()).toBe(true);

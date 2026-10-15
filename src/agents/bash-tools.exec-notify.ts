@@ -3,6 +3,10 @@ import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
   enqueueSessionEventForHost as enqueueSessionEvent,
 } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  listAgentRunsForSession,
+} from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -10,7 +14,7 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { recordNotifyOnExitRemoval, tail, type ProcessSession } from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
@@ -33,13 +37,28 @@ export function prepareExecExitNotification(
   ) {
     return undefined;
   }
-  const targetKey = resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
+  // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
+  const targetKey = isCronRunSessionKey(session.sessionKey)
+    ? session.sessionKey
+    : resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
   const owner = session.agentId ?? parseAgentSessionKey(targetKey)?.agentId;
   if (!owner) {
     return undefined;
   }
   return captureSessionEventTarget(owner, targetKey).then(
     (target) => {
+      if (isCronRunSessionKey(targetKey)) {
+        const runs = listAgentRunsForSession({
+          sessionKey: targetKey,
+          sessionId: target.sessionId,
+        });
+        // Retain the originating runs, so a completion turn cannot extend its own lifetime.
+        target.assertCurrent = () => {
+          if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
+            throw new Error("Originating cron run ended; inspect the result with process log");
+          }
+        };
+      }
       session.notifySessionTarget = target;
     },
     (error: unknown) => {
@@ -91,8 +110,9 @@ export function maybeNotifyOnExit(
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {};
-  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const eventSessionKey =
+    session.notifySessionTarget?.sessionKey ??
+    resolveEventSessionKeyForPolicy(sessionKey, session.eventRouting);
   const eventOptions = withExecRequestOwners(
     {
       sessionKey: eventSessionKey,

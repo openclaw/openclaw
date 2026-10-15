@@ -172,7 +172,7 @@ export function writeExecApprovalsConfigRow(params: {
       .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
       .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
-  const persisted = parsePersistedExecApprovals(raw);
+  const persisted = raw === authored ? parsed : parsePersistedExecApprovals(raw);
   const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
   const { socket: _socket, ...policy } = file;
   execApprovalsPublication.stagePostimages(params.db, [

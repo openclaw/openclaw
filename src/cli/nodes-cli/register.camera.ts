@@ -18,12 +18,12 @@ import {
   writeCameraPayloadToFile,
   writeCameraClipPayloadToFile,
 } from "../nodes-camera.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
+  parseNodeDurationMs,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeInteger,
   resolveCliNode,
@@ -218,7 +218,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
           const facing = parseFacing(opts.facing ?? "front");
-          const durationMs = parseDurationMs(opts.duration ?? "3000");
+          const durationMs = parseNodeDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const deviceId = normalizeOptionalString(opts.deviceId);

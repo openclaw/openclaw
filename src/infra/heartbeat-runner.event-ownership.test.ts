@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearCronJobActive,
   markCronJobActive,
@@ -8,6 +9,7 @@ import {
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
@@ -41,6 +43,7 @@ describe("Heartbeat cron and exec event ownership", () => {
   });
   afterEach(() => {
     resetSystemEventsForTest();
+    resetCronActiveJobs();
     vi.restoreAllMocks();
   });
 
@@ -160,11 +163,65 @@ describe("Heartbeat cron and exec event ownership", () => {
 
   it("executes a cron wake while its active owner waits for heartbeat settlement", async () => {
     await withCronOwner(async (f) => {
+      markCronJobActive("other-agent-report", { agentId: "other" });
       expect((await runCron(f)).status).toBe("ran");
       expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
       expect(peekSystemEvents(f.sessionKey)).toEqual([]);
     });
   });
+  it.each([
+    { owner: "other", sessionKey: undefined, expected: "ran" },
+    { owner: "main", sessionKey: undefined, expected: "skipped" },
+    { owner: undefined, sessionKey: undefined, expected: "skipped" },
+    { owner: "other", sessionKey: "agent:main:chat", expected: "skipped" },
+  ])(
+    "scopes scheduled heartbeats to cron targets (owner=$owner, session=$sessionKey)",
+    async ({ owner, sessionKey, expected }) => {
+      await withHeartbeat(async (f) => {
+        markCronJobActive("report", { agentId: owner, sessionKey });
+        const result = await f.run({ source: "interval", intent: "scheduled" });
+        if (expected === "ran") {
+          expect(result.status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
+        } else {
+          expectCronBusy(result, f.replySpy);
+        }
+      });
+    },
+  );
+  it.each([CommandLane.Cron, CommandLane.CronNested, CommandLane.HookDispatch])(
+    "ignores foreign active and queued %s work but protects the target session",
+    async (lane) => {
+      await withHeartbeat(async (f) => {
+        const release = createDeferred();
+        const started = createDeferred();
+        const target = { agentId: "other", sessionKey: "agent:other:main", sessionId: "other" };
+        const active = enqueueCommandInLane(
+          lane,
+          async () => {
+            started.resolve();
+            await release.promise;
+          },
+          { sessionTarget: target },
+        );
+        const foreignQueued = enqueueCommandInLane(lane, async () => {}, { sessionTarget: target });
+        let ownQueued: Promise<void> | undefined;
+        try {
+          await started.promise;
+          expect((await f.run({ source: "interval", intent: "scheduled" })).status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
+          f.replySpy.mockClear();
+          ownQueued = enqueueCommandInLane(lane, async () => {}, {
+            sessionTarget: { ...target, sessionKey: f.sessionKey, sessionId: "main" },
+          });
+          expectCronBusy(await f.run({ source: "interval", intent: "scheduled" }), f.replySpy);
+        } finally {
+          release.resolve();
+          await Promise.all([active, foreignQueued, ownQueued]);
+        }
+      });
+    },
+  );
   it.each(["cron lane", "nested lane", "unowned job"])(
     "blocks a cron wake under pressure from %s",
     async (busy) => {

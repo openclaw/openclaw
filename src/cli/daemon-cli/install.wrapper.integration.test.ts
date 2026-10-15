@@ -74,12 +74,12 @@ describe("registered gateway install runtime default", () => {
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
     const bunPath = "/opt/app/runtime/bun";
     Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
     vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
     const supported = {
       status: "supported" as const,
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,

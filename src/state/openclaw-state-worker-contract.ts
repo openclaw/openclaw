@@ -18,6 +18,7 @@ import type {
 import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capacity.worker.js";
 import type { recoverPendingWorktreesInWorker } from "../agents/worktrees/registry-run-end.worker.js";
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
+import type { ClawAddStateWorkerOperations } from "../claws/add-state-worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type { ConfigHealthEntryBasis } from "../config/io.health-state.types.js";
@@ -86,6 +87,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
+  ClawAddStateWorkerOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
@@ -109,7 +111,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: undefined;
       output: StateSchemaPublicationBlocker | undefined;
     };
-    "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "workspace.replaceAttestation": {

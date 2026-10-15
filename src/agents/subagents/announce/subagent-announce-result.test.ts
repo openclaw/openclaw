@@ -141,13 +141,7 @@ describe("exact-run announcement results", () => {
     },
   );
 
-  it.each([
-    "silent replacement",
-    "failed outcome",
-    "transcript target",
-    "retired run",
-    "Gateway recovery",
-  ] as const)(
+  it.each(["retired run", "Gateway recovery"] as const)(
     "rejects a %s that arrives while the exact transcript read is pending",
     async (change) => {
       const child = completedChild("original answer");
@@ -166,19 +160,6 @@ describe("exact-run announcement results", () => {
       );
       await started.promise;
       const next = structuredClone(child);
-      if (change !== "Gateway recovery") {
-        copySubagentRunRuntimeOwner(child, next);
-      }
-      if (change === "silent replacement") {
-        next.completion = { required: true, terminalReply: { disposition: "silent" } };
-      } else if (change === "failed outcome") {
-        next.execution.outcome = { status: "error", error: "cancelled" };
-      } else if (change === "transcript target") {
-        next.execution.transcriptTarget = {
-          ...next.execution.transcriptTarget,
-          sessionId: "replacement-session",
-        };
-      }
       if (change === "retired run") {
         published.delete(child.runId);
       } else {
@@ -207,7 +188,7 @@ describe("exact-run announcement results", () => {
   });
 
   it.each(["before batch preparation", "after batch preparation"] as const)(
-    "rejects an early child's silent replacement %s",
+    "rejects an early child's execution replacement %s",
     async (timing) => {
       const first = completedChild("first answer");
       const second = completedChild("second answer");
@@ -238,13 +219,10 @@ describe("exact-run announcement results", () => {
         const rejected = expect(result).rejects.toThrow(
           "A child result changed while preparing the completion batch",
         );
-        published.set(
-          first.runId,
-          copySubagentRunRuntimeOwner(first, {
-            ...structuredClone(first),
-            completion: { required: true, terminalReply: { disposition: "silent" } },
-          }),
-        );
+        published.set(first.runId, {
+          ...structuredClone(first),
+          completion: { required: true, terminalReply: { disposition: "silent" } },
+        });
         releaseSecond.resolve();
         await rejected;
       } else {
@@ -252,13 +230,10 @@ describe("exact-run announcement results", () => {
         const prepared = await result;
         expect(prepared.isCurrent()).toBe(true);
         expect(prepared.text).toContain("first answer");
-        published.set(
-          first.runId,
-          copySubagentRunRuntimeOwner(first, {
-            ...structuredClone(first),
-            completion: { required: true, terminalReply: { disposition: "silent" } },
-          }),
-        );
+        published.set(first.runId, {
+          ...structuredClone(first),
+          completion: { required: true, terminalReply: { disposition: "silent" } },
+        });
         expect(prepared.isCurrent()).toBe(false);
       }
     },

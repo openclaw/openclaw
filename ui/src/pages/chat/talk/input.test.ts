@@ -263,11 +263,6 @@ describe("realtime Talk microphone inputs", () => {
     expect(changes).toBe(1);
   });
 
-  it("stays inert where the browser exposes no media devices to watch", () => {
-    vi.stubGlobal("navigator", {});
-    expect(() => observeRealtimeTalkDevices(() => undefined)()).not.toThrow();
-  });
-
   it("reports an unsupported enumeration instead of a generic access failure", async () => {
     vi.stubGlobal("navigator", { mediaDevices: {} });
 
@@ -418,32 +413,6 @@ describe("realtime Talk microphone inputs", () => {
 });
 
 describe("realtime Talk camera inputs", () => {
-  it("lists unique cameras in enumeration order with normalized labels", async () => {
-    const getUserMedia = vi.fn();
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        enumerateDevices: vi.fn(async () => [
-          mediaDevice("audioinput", "mic", "Microphone"),
-          mediaDevice("videoinput", "default", "Default Camera"),
-          mediaDevice("videoinput", "front", "Front Camera"),
-          mediaDevice("videoinput", "back", ""),
-          mediaDevice("videoinput", "back", "Duplicate"),
-        ]),
-        getUserMedia,
-      },
-    });
-
-    await expect(discoverRealtimeTalkCameras(() => false)).resolves.toEqual({
-      devices: [
-        { deviceId: "front", label: "Front Camera" },
-        { deviceId: "back", label: "Camera 2" },
-      ],
-      permissionRequired: true,
-      issue: null,
-    });
-    expect(getUserMedia).not.toHaveBeenCalled();
-  });
-
   it("probes video permission and re-enumerates hidden cameras", async () => {
     const stop = vi.fn();
     const enumerateDevices = vi

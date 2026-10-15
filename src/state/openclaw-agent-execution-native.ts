@@ -4,7 +4,9 @@ import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -24,6 +26,7 @@ import {
   runSqliteWorkerStoreOperation,
 } from "../infra/sqlite-worker-store.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
@@ -101,6 +104,7 @@ export function createAgentDatabaseNativeGeneration(
   let readOpenRefused: (() => boolean) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let preparationPublished = false;
+  const pendingPreparations = new Set<Promise<void>>();
 
   // The actor retains this observer; keep it outside the opening caller's scope.
   const onNativeLost = (reason: Error) => {
@@ -500,7 +504,6 @@ export function createAgentDatabaseNativeGeneration(
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
     signal?: AbortSignal,
-    readmitSchema = false,
   ): Promise<T | undefined> {
     const assertOperationCurrent = () => {
       assertCurrent();
@@ -509,47 +512,70 @@ export function createAgentDatabaseNativeGeneration(
       signal?.throwIfAborted();
     };
     const wasPrepared = preparationPublished;
-    // Opening publishes registration before another caller can reuse this generation.
-    const store = preparationPublished
-      ? openedStore
-      : await open(source, assertCallerCurrent, createIfMissing, signal);
-    assertOperationCurrent();
-    if (!store) {
-      return undefined;
+    const preparing = wasPrepared ? undefined : createDeferredCore();
+    if (preparing) {
+      pendingPreparations.add(preparing.promise);
     }
-    const schema = createIfMissing
-      ? getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })?.schema
-      : undefined;
-    const requiresReadmission =
-      createIfMissing &&
-      wasPrepared &&
-      (readmitSchema ||
-        !schema ||
-        Atomics.load(new Int32Array(schema.valid), 0) !== 1 ||
-        captureAgentDatabasePreparationJournal(agentId, { env: input.environment }) !== undefined);
-    if (!nativeIdentity || requiresReadmission) {
-      const registration = captureOpenClawAgentDatabaseRegistration({
-        agentId,
-        agentPath: pathname,
-        admission: context.admission,
-        assertPublicationCurrent: context.assertPublicationCurrent,
-        onRegistryChange: source.onRegistryChange,
-      });
-      await settleAgentRegistration(registration, async () => {
-        await runSqliteWorkerStoreOperation(
-          store,
-          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
-          undefined,
-          assertOperationCurrent,
-          admission(source, registration, assertCallerCurrent),
-        );
-        assertCurrent();
-        source.assertCurrent();
-      });
-      preparationPublished = true;
+    let preparedStore: Store;
+    try {
+      // Opening publishes registration before another caller can reuse this generation.
+      const store = preparationPublished
+        ? openedStore
+        : await open(source, assertCallerCurrent, createIfMissing, signal);
+      assertOperationCurrent();
+      if (!store) {
+        return undefined;
+      }
+      const schema = createIfMissing
+        ? getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })?.schema
+        : undefined;
+      // Raw in-process DDL also invalidates the physical owner's catalog, even when
+      // that connection has never borrowed the agent's validation receipt.
+      const admittedSchema =
+        createIfMissing && wasPrepared
+          ? getOrLoadSqliteDatabaseAdmissionForPath(pathname, schemaAdmission, () => undefined)
+          : undefined;
+      const requiresReadmission =
+        createIfMissing &&
+        wasPrepared &&
+        (!schema ||
+          Atomics.load(new Int32Array(schema.valid), 0) !== 1 ||
+          !admittedSchema ||
+          admittedSchema.schemaVersion !== schema.facts.schemaVersion ||
+          admittedSchema.userVersion !== schema.facts.userVersion ||
+          captureAgentDatabasePreparationJournal(agentId, { env: input.environment }) !==
+            undefined);
+      if (!nativeIdentity || requiresReadmission) {
+        const registration = captureOpenClawAgentDatabaseRegistration({
+          agentId,
+          agentPath: pathname,
+          admission: context.admission,
+          assertPublicationCurrent: context.assertPublicationCurrent,
+          onRegistryChange: source.onRegistryChange,
+        });
+        await settleAgentRegistration(registration, async () => {
+          await runSqliteWorkerStoreOperation(
+            store,
+            (scope) =>
+              scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
+            undefined,
+            assertOperationCurrent,
+            admission(source, registration, assertCallerCurrent),
+          );
+          assertCurrent();
+          source.assertCurrent();
+        });
+        preparationPublished = true;
+      }
+      preparedStore = store;
+    } finally {
+      if (preparing) {
+        pendingPreparations.delete(preparing.promise);
+        preparing.resolve();
+      }
     }
     return runSqliteWorkerStoreOperation(
-      store,
+      preparedStore,
       operation,
       undefined,
       assertOperationCurrent,
@@ -563,6 +589,17 @@ export function createAgentDatabaseNativeGeneration(
     isPrepared() {
       assertCurrent();
       return preparationPublished;
+    },
+    getPendingPreparation() {
+      if (pendingPreparations.size === 0) {
+        return undefined;
+      }
+      // Discovery reports availability after attempts settle; failures stay with their callers.
+      return (async () => {
+        while (pendingPreparations.size > 0) {
+          await Promise.all(pendingPreparations);
+        }
+      })();
     },
     captureClaim() {
       assertCurrent();

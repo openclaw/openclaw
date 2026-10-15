@@ -15,18 +15,18 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import {
-  emptyLegacyContent as litNothing,
-  LitContent,
-  solidContent,
-} from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent as litNothing, solidContent } from "../../../lit/solid-content.tsx";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { ChatToolCard, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import {
+  BrowserTabPreviews,
+  ChatToolCard,
+  syncToolDisclosureOverflow,
+} from "./chat-tool-cards.solid.tsx";
+import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import {
   ChatToolOutcomeSummary,
   ChatToolReviewOutcome,
@@ -289,7 +289,7 @@ function ActivityGroupBody(props: {
         </Show>
       </div>
       <Show when={!props.options.bubbleMode || state().activityExpanded}>
-        <LitContent value={renderBrowserTabPreviews(props.groups, props.options)} />
+        <BrowserTabPreviews previews={selectBrowserTabPreviews(props.groups, props.options)} />
       </Show>
     </div>
   );

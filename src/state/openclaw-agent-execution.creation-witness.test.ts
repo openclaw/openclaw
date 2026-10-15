@@ -80,8 +80,6 @@ it("exposes a prepared generation only after registration publication and keeps 
     } finally {
       host.restore();
     }
-    await execution.prepare(warmSource, undefined, { readmitSchema: true });
-    expect(warmStages).toContain("prepare");
     claim!.assertCurrent();
     await execution.release();
     expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);

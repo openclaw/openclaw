@@ -7,6 +7,8 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-user-version.ts",
   // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
   "src/infra/sqlite-migration-scoped-snapshot.ts",
+  // SQLite planner-statistics owner: bounded optimization under existing writer admission.
+  "src/infra/sqlite-planner-statistics.ts",
 ];
 export type DialectMatch = {
   construct: string;

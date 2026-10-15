@@ -82,8 +82,8 @@ for complete workspace preparation; an omitted static declaration waits only
 at execution. Explicit declarations preserve early first replies during checkout.
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",

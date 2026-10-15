@@ -1,11 +1,14 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildSessionContext,
+  cloneSessionModelContextEntries,
   isIndexedSessionEntry,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "./session-manager-codec.js";
-import type { SessionEntry } from "./session-manager-types.js";
+import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 describe("session manager codec compatibility", () => {
@@ -203,6 +206,142 @@ const parentTraversalCases: Array<{
   { name: "missing parent", parents: [["a", "missing"]], leaf: "a", expected: ["a"] },
   { name: "explicit empty branch", parents: [["a", "a"]], leaf: null, expected: [] },
 ];
+
+describe("model context projection isolation", () => {
+  const toolResult = {
+    role: "toolResult" as const,
+    toolCallId: "call",
+    toolName: "read",
+    isError: false,
+    content: [{ type: "text" as const, text: "visible" }],
+    timestamp: 0,
+  };
+  const cases: Array<{ name: string; message: SessionMessageEntry["message"]; expected: unknown }> =
+    [
+      {
+        name: "private user metadata",
+        message: Object.assign(
+          { role: "user" as const, content: "visible", timestamp: 0 },
+          { __openclaw: { upstreamUserText: "private", retained: { nested: "kept" } } },
+        ),
+        expected: {
+          role: "user",
+          content: "visible",
+          timestamp: 0,
+          __openclaw: { retained: { nested: "kept" } },
+        },
+      },
+      { name: "plain tool result", message: toolResult, expected: toolResult },
+      {
+        name: "tool evidence",
+        message: { ...toolResult, details: { evidence: "private" } },
+        expected: toolResult,
+      },
+      {
+        name: "missing-result marker",
+        message: { ...toolResult, details: { openclawSyntheticMissingToolResult: true } },
+        expected: { ...toolResult, details: { openclawSyntheticMissingToolResult: true } },
+      },
+      {
+        name: "marker with evidence",
+        message: {
+          ...toolResult,
+          details: { openclawSyntheticMissingToolResult: true, evidence: "private" },
+        },
+        expected: { ...toolResult, details: { openclawSyntheticMissingToolResult: true } },
+      },
+      {
+        name: "false marker",
+        message: { ...toolResult, details: { openclawSyntheticMissingToolResult: false } },
+        expected: toolResult,
+      },
+      {
+        name: "custom-message details",
+        message: {
+          role: "custom",
+          customType: "synthetic",
+          display: true,
+          content: "visible",
+          details: { retained: "kept" },
+          timestamp: 0,
+        },
+        expected: {
+          role: "custom",
+          customType: "synthetic",
+          display: true,
+          content: "visible",
+          details: { retained: "kept" },
+          timestamp: 0,
+        },
+      },
+    ];
+  it.each(cases)(
+    "preserves canonical payload and input bytes for $name",
+    ({ message, expected }) => {
+      const entry: SessionMessageEntry = {
+        type: "message",
+        id: "entry",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message,
+      };
+      const before = JSON.stringify(entry);
+      Object.freeze(entry);
+      Object.freeze(message);
+      expect(cloneSessionModelContextEntries(null, [entry])).toEqual([
+        { ...entry, message: expected },
+      ]);
+      expect(JSON.stringify(entry)).toBe(before);
+    },
+  );
+
+  it("detaches surviving nested tool arguments in both directions", () => {
+    const argumentsValue = { nested: { path: "original.txt" } };
+    const metadata = { upstreamUserText: "private", retained: { nested: "kept" } };
+    const message = Object.assign(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call", name: "read", arguments: argumentsValue }],
+      }),
+      { __openclaw: metadata },
+    );
+    const entry: SessionMessageEntry = {
+      type: "message",
+      id: "entry",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message,
+    };
+    const projected = cloneSessionModelContextEntries(null, [entry]);
+    argumentsValue.nested.path = "caller-change.txt";
+    metadata.retained.nested = "caller-change";
+    expect(projected).toMatchObject([
+      {
+        message: {
+          content: [{ arguments: { nested: { path: "original.txt" } } }],
+          __openclaw: { retained: { nested: "kept" } },
+        },
+      },
+    ]);
+    const projectedEntry = projected[0];
+    if (projectedEntry?.type !== "message" || projectedEntry.message.role !== "assistant") {
+      throw new Error("Missing assistant projection");
+    }
+    const call = projectedEntry.message.content.find((item) => item.type === "toolCall");
+    const nested = asOptionalRecord(call?.arguments.nested);
+    if (!nested) {
+      throw new Error("Missing nested tool arguments");
+    }
+    nested.path = "context-change.txt";
+    const projectedMetadata = asOptionalRecord(Reflect.get(projectedEntry.message, "__openclaw"));
+    const retained = asOptionalRecord(projectedMetadata?.retained);
+    if (!retained) {
+      throw new Error("Missing retained metadata");
+    }
+    retained.nested = "context-change";
+    expect(argumentsValue.nested.path).toBe("caller-change.txt");
+    expect(metadata.retained.nested).toBe("caller-change");
+  });
+});
 
 describe("session context parent traversal", () => {
   it.each(parentTraversalCases)(

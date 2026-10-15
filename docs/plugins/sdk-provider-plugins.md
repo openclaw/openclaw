@@ -32,6 +32,13 @@ Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belong
 to a native harness. Model Setup applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
+`ProviderAuthContext.agentId` identifies the target agent when the caller has one.
+Native sign-in methods may use it to check previously remembered permissions.
+After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
+with the accepted harness IDs. Model Setup stages those permissions on that
+agent in the same verified config commit as the runtime routing and plugin enable.
+Do not write a separate permission store or infer consent from successful login.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,

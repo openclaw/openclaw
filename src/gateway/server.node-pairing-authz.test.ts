@@ -319,7 +319,14 @@ describe("gateway node pairing authorization", () => {
       requestId: string,
       displayName: string,
     ) {
-      expect((await rpcReq(ws, "node.pair.approve", { requestId })).ok).toBe(true);
+      const approved = await rpcReq(ws, "node.pair.approve", { requestId });
+      expect(approved.ok).toBe(true);
+      expect(approved.payload).toEqual(
+        expect.objectContaining({
+          requestId: requestId.trim(),
+          node: expect.objectContaining({ nodeId }),
+        }),
+      );
       await expect(findPairedNode(nodeId)).resolves.toMatchObject({
         commands: [NODE_MCP_TOOLS_CALL_COMMAND],
       });
@@ -477,41 +484,12 @@ describe("gateway node pairing authorization", () => {
           expect.objectContaining({ nodeId: victimNodeId }),
         );
 
-        await approveRenameAndReject(ws, victimNodeId, request.request.requestId, "shared renamed");
-      } finally {
-        ws.close();
-      }
-    });
-
-    test("approves a pending node pair when requestId has clipboard padding", async () => {
-      const victimNodeId = "node-padded-request-id-victim";
-      const request = await requestVictimNodeSurface(victimNodeId);
-      const operator = await issueOperatorToken({
-        name: "node-padded-request-id-operator",
-        approvedScopes: ["operator.pairing", "operator.write"],
-      });
-
-      const ws = await openTrackedWs(getStarted().port);
-      try {
-        await connectOk(ws, {
-          token: "secret",
-          deviceIdentityPath: operator.identityPath,
-          scopes: ["operator.pairing", "operator.write"],
-        });
-
-        const approve = await rpcReq(ws, "node.pair.approve", {
-          requestId: `  ${request.request.requestId}  `,
-        });
-        expect(approve.ok).toBe(true);
-        expect(approve.payload).toEqual(
-          expect.objectContaining({
-            requestId: request.request.requestId,
-            node: expect.objectContaining({ nodeId: victimNodeId }),
-          }),
+        await approveRenameAndReject(
+          ws,
+          victimNodeId,
+          `  ${request.request.requestId}  `,
+          "shared renamed",
         );
-        await expect(findPairedNode(victimNodeId)).resolves.toMatchObject({
-          commands: [NODE_MCP_TOOLS_CALL_COMMAND],
-        });
       } finally {
         ws.close();
       }

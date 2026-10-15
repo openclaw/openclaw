@@ -69,6 +69,8 @@ export type OllamaEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  /** Provider ownership permits the guard to check its narrow Podman origin exception. */
+  allowPodmanHostGatewayLinkLocal?: boolean;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -327,6 +329,7 @@ async function resolveOllamaEmbeddingClient(
     baseUrl,
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    allowPodmanHostGatewayLinkLocal: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
@@ -375,6 +378,7 @@ export async function createOllamaEmbeddingProvider(
         url: embedUrl,
         policy: client.ssrfPolicy,
         configuredLocalOriginBaseUrl: client.baseUrl,
+        allowPodmanHostGatewayLinkLocal: client.allowPodmanHostGatewayLinkLocal,
         auditContext: "ollama-memory-embedding",
         signal,
         init: {

@@ -245,6 +245,17 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+Tool factories and provider schema normalizers keep the same tool-object API.
+The host separates their definition data from executable callbacks: schemas and
+metadata retain their identities, while execution and preparation callbacks keep
+the original receiver and the exact plugin invocation scope. Reusable descriptor
+snapshots contain no run authority or cancellation signal. A retired plugin or
+closed invocation still rejects retained callbacks, including callbacks reached
+after rebuilding a tool's hooks. Definition accessors remain lazy and scoped, so
+an unreadable schema can be quarantined without invoking the tool.
+Callable tools and Proxy-backed objects retain their admitted callable and live
+property contracts, including execution methods supplied by `get` traps.
+
 `before_tool_call` inputs and approval parameters retain detached snapshots so
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
@@ -417,6 +428,12 @@ SQLite worker backends set connection lock-wait policy with
 temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
+
+Connection-bound backends use `bindSqliteWorkerDatabase(db, backend)` from the
+same entrypoint for scope closure and synchronous transaction settlement checks.
+The backend supplies its command implementation and optional preparation or
+scope cleanup; it never closes the borrowed database. Transaction and commit
+admission remain with the executor and the store's write operation.
 
 Worker kernels that write derived data without changing any session facts wrap
 their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
@@ -621,6 +638,18 @@ declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness execution identity
+
+The harness host's closure-bound `preparedEnvironment()` returns non-secret
+execution facts. When `hostExecutionRequired` is true, use the host's
+`createToolSurfaceAsync()` execution tools rather than a native runtime shell
+environment overlay. The host captures credential selection before plugin
+handoff and binds it privately at child launch. Tool construction overrides
+cannot replace that selection. The tools retain the host's existing approvals,
+source authority, process lifecycle, and failure handling; this fact grants no
+credential export or remote delegation authority. Hosts without a managed
+selection omit the optional fact and retain native execution defaults.
 
 ## Other top-level `api` fields
 

@@ -8,7 +8,10 @@ import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-p
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import {
+  MEDIA_ROWS_MIGRATION_META_KEY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../state/openclaw-agent-db-contract.js";
 import * as agentRegistry from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
@@ -87,6 +90,48 @@ it("preserves plugin rowids, views, and triggers as well as declared values", ()
   expect(
     assertOpenClawMigrationWitnessPreserved(original, captureOpenClawMigrationWitness(database)),
   ).toEqual({ warnings: [] });
+});
+
+it("excludes only the agent media repair completion row from retained metadata", () => {
+  using database = new DatabaseSync(":memory:");
+  database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+  database.exec(`PRAGMA user_version = 24;
+    INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+    VALUES ('primary', 'agent', 24, 'main', 1, 1)`);
+  const owner = { role: "agent", agentId: "main" } as const;
+  const original = captureOpenClawMigrationWitness(database, owner);
+  const opaqueOriginal = captureOpenClawMigrationWitness(database);
+  database
+    .prepare(`INSERT INTO schema_meta
+    (meta_key, role, schema_version, agent_id, created_at, updated_at)
+    VALUES (?, 'agent', 1, 'main', 2, 2)`)
+    .run(MEDIA_ROWS_MIGRATION_META_KEY);
+  expect(() =>
+    assertOpenClawMigrationWitnessPreserved(
+      original,
+      captureOpenClawMigrationWitness(database, owner),
+    ),
+  ).not.toThrow();
+  expect(() =>
+    assertOpenClawMigrationWitnessPreserved(
+      opaqueOriginal,
+      captureOpenClawMigrationWitness(database),
+    ),
+  ).toThrow(/retained database content: schema_meta/);
+  for (const mutation of [
+    "UPDATE schema_meta SET created_at = 3 WHERE meta_key = 'primary'",
+    "UPDATE schema_meta SET meta_key = 'unclassified-repair' WHERE schema_version = 1",
+  ]) {
+    database.exec("SAVEPOINT changed_metadata");
+    database.exec(mutation);
+    expect(() =>
+      assertOpenClawMigrationWitnessPreserved(
+        original,
+        captureOpenClawMigrationWitness(database, owner),
+      ),
+    ).toThrow(/retained database content: schema_meta/);
+    database.exec("ROLLBACK TO changed_metadata; RELEASE changed_metadata");
+  }
 });
 
 it("binds semantic preservation to original backups across a partial migration and retry", async () => {

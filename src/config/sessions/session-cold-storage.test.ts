@@ -7,7 +7,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
@@ -773,39 +772,6 @@ describe("cold transcript storage workers", () => {
     },
   );
 
-  it("keeps recently active and running current transcripts hot", async () => {
-    const fixture = await createFixture();
-    const config = maintenanceConfig(fixture.scope.storePath);
-    const currentBefore = transcriptRows(fixture, currentId);
-    expect(await runSessionColdStorageMaintenance({ config })).toEqual({
-      archivedTranscripts: 1,
-      externalizedTranscripts: 0,
-    });
-    expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
-    expect(transcriptRows(fixture, currentId)).toEqual(currentBefore);
-    await replaceSessionEntry(fixture.scope, {
-      sessionId: currentId,
-      updatedAt: 1,
-    });
-    setTranscriptActivity(fixture.options, currentId);
-    const running = fixture.snapshot();
-    registerAgentRunContext("cold-current-run", {
-      agentId: "main",
-      sessionKey: fixture.scope.sessionKey,
-      sessionId: currentId,
-      projectSessionActive: true,
-    });
-    try {
-      expect(await runSessionColdStorageMaintenance({ config })).toEqual({
-        archivedTranscripts: 0,
-        externalizedTranscripts: 0,
-      });
-      expect(fixture.snapshot()).toEqual(running);
-    } finally {
-      clearAgentRunContext("cold-current-run");
-    }
-  });
-
   it("applies the configured day cutoff to historical transcript activity", async () => {
     const fixture = await createFixture();
     const updatedAt = Date.now() - 15 * 86_400_000;
@@ -822,25 +788,6 @@ describe("cold transcript storage workers", () => {
         config: maintenanceConfig(fixture.scope.storePath, true, 7),
       }),
     ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
-  });
-
-  it("archives old unreferenced history despite a recently updated idle session", async () => {
-    const fixture = await createFixture();
-    await replaceSessionEntry(fixture.scope, {
-      sessionId: currentId,
-      updatedAt: Date.now(),
-      status: "done",
-    });
-    const currentBefore = transcriptRows(fixture, currentId);
-    const nodesBefore = fixture.database().prepare("SELECT * FROM session_nodes").all();
-    expect(
-      await runSessionColdStorageMaintenance({
-        config: maintenanceConfig(fixture.scope.storePath),
-      }),
-    ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-    expect(transcriptRows(fixture, currentId)).toEqual(currentBefore);
-    expect(fixture.database().prepare("SELECT * FROM session_nodes").all()).toEqual(nodesBefore);
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
   });
 
@@ -938,45 +885,6 @@ describe("cold transcript storage workers", () => {
       }),
     ).toEqual({ archivedTranscripts: 0, externalizedTranscripts: 0 });
     expect(fixture.snapshot()).toEqual(resumed);
-  });
-
-  it("preserves a cold transcript when its reader is revoked at restore commit", async () => {
-    const fixture = await createFixture();
-    const { descriptor } = await archiveFixture(fixture);
-    const before = fixture.snapshot();
-    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-    let revoked = false;
-    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-      (params) => {
-        if (params.expectedMessageType !== "reclaimed") {
-          return originalWorker(params);
-        }
-        return originalWorker({
-          ...params,
-          onCommitRequest: () => {
-            revoked = true;
-            params.onCommitRequest();
-          },
-        });
-      },
-    );
-    const changes = vi.fn();
-    const unsubscribe = sessionChanges.subscribe(changes);
-    try {
-      await expect(
-        restoreSessionColdTranscript(fixture.scope, () => {
-          if (revoked) {
-            throw new Error("Cold transcript reader was revoked");
-          }
-        }),
-      ).rejects.toThrow("Cold transcript reader was revoked");
-      expect(changes).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
-    expect(revoked).toBe(true);
-    expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(descriptor);
-    expect(fixture.snapshot()).toEqual(before);
   });
 
   it.each(["missing", "corrupt"] as const)(

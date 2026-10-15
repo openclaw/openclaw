@@ -8,6 +8,7 @@ export const WIKI_AGING_DAYS = 30;
 const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
+const CLAIM_FRESHNESS_ORDER = ["stale", "aging", "fresh"];
 
 export type WikiFreshnessLevel = "fresh" | "aging" | "stale" | "unknown";
 
@@ -89,6 +90,20 @@ export function normalizeClaimStatus(status?: string): string {
 
 export function isClaimContestedStatus(status?: string): boolean {
   return CONTESTED_CLAIM_STATUSES.has(normalizeClaimStatus(status));
+}
+
+export function compareWikiClaimSummaries(
+  left: { text: string; confidence?: number; freshnessLevel?: string },
+  right: { text: string; confidence?: number; freshnessLevel?: string },
+): number {
+  const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
+  const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
+  return (
+    rightConfidence - leftConfidence ||
+    CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
+      CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
+    left.text.localeCompare(right.text)
+  );
 }
 
 export function assessPageFreshness(page: WikiPageSummary, now?: Date): WikiFreshness {

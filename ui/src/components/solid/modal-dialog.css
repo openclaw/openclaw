@@ -81,6 +81,34 @@ openclaw-modal-dialog {
   display: contents;
 }
 
+/* Static light DOM keeps submit buttons in their native form in both renderers. */
+.oc-modal-dialog openclaw-modal-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: stretch;
+  justify-content: flex-end;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+
+.oc-modal-dialog openclaw-modal-actions > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.oc-modal-dialog openclaw-modal-actions :is(button, .btn, a) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 openclaw-modal-dialog.fullscreen {
   --openclaw-modal-height-limit: calc(100dvh - 20px);
 }

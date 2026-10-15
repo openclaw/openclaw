@@ -23,6 +23,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** Read-only cards must not block nearby actions when their surface overlaps them. */
+  pointerThrough?: boolean;
   autoSize?: boolean;
   disabled?: boolean;
   openOnClick?: boolean;
@@ -98,7 +100,6 @@ export class TooltipController {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
-  #focusRevision = 0;
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentObserver: MutationObserver | null = null;
   readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
@@ -286,7 +287,6 @@ export class TooltipController {
     this.#close();
   };
   readonly handleFocusIn = () => {
-    this.#focusRevision += 1;
     if (this.#suppressNextFocusOpen) {
       this.#suppressNextFocusOpen = false;
       this.#close();
@@ -308,16 +308,11 @@ export class TooltipController {
       return;
     }
     if (event instanceof FocusEvent && event.relatedTarget === null) {
-      const revision = this.#focusRevision;
       const trigger = this.#triggerElement;
       // Chromium blurs a removed trigger before disconnecting its subtree.
       // Let that removal retire silently, while preserving ordinary blur dismissal.
       queueMicrotask(() => {
-        if (
-          revision !== this.#focusRevision ||
-          trigger !== this.#triggerElement ||
-          this.#shouldRemainOpen()
-        ) {
+        if (trigger !== this.#triggerElement || this.#shouldRemainOpen()) {
           return;
         }
         if (!this.host.isConnected || !trigger?.isConnected) {
@@ -536,7 +531,10 @@ export class TooltipController {
     this.options
       .richContainer()
       ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty("pointer-events", richText ? "auto" : "none");
+      ?.style.setProperty(
+        "pointer-events",
+        richText && !this.options.props().pointerThrough ? "auto" : "none",
+      );
     if (!this.describe) {
       this.#restoreDescription();
       return;
@@ -699,13 +697,13 @@ export class TooltipController {
     }
   };
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
     if (this.#triggerElement?.contains(target) && !target.matches(":focus")) {
       // Navigation can replace a focused toggle with its inverse. Preserve the
       // focus handoff without presenting it as fresh tooltip intent.
       this.#suppressNextFocusOpen = true;
     }
-    target.focus();
+    target.focus(options);
   }
 }
 

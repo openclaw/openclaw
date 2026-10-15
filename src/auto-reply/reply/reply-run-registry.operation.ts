@@ -308,16 +308,10 @@ export function createReplyOperation(params: {
     },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
-    get routeThreadId() {
-      return params.routeThreadId;
-    },
-    get originatingLeafEntryId() {
-      return params.originatingLeafEntryId;
-    },
+    routeThreadId: params.routeThreadId,
+    originatingLeafEntryId: params.originatingLeafEntryId,
     abortSignal: controller.signal,
-    get resetTriggered() {
-      return params.resetTriggered;
-    },
+    resetTriggered: params.resetTriggered,
     get terminalRecovery() {
       return terminalRecovery;
     },

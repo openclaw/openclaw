@@ -64,9 +64,8 @@ catalog refreshes. Larger responses use a worker owned by their app-server clien
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
-Incomplete-frame recovery stays in the worker, including when a malformed
-frame hides its routing header until a later line; its decoded ID selects the catalog
-projection and the captured row admission. Native control reads, normal streaming notifications,
+Malformed JSON frames produce a redacted diagnostic and are dropped; subsequent
+valid frames continue normally. Native control reads, normal streaming notifications,
 and full-history reads keep their in-process decoder. Control reads preserve complete
 native metadata, including model selection and direct-input capability; transcript
 consumers require complete native raw items.
@@ -377,6 +376,17 @@ unless you opt into the experimental sandbox exec-server path. The effective
 tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
+
+Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
+of native Code Mode. The same exec owner used by the built-in runtime binds the
+selected profile at child launch, preserves approval and caller lifetime checks,
+and reports an unavailable profile without falling back to native GitHub auth.
+Other tools and the conversation remain available; identity discovery does not
+block turn startup. Reconnect or change GitHub Identity in Settings to recover.
+With no managed identity selected, native Code Mode and shell defaults are unchanged.
+Ordinary paired-node exec keeps node-local authentication: a Gateway GitHub
+selection and command approval never export that credential to the node.
+
 When sandboxing disables the native surface, allowed shell commands remain available
 through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
@@ -441,6 +451,8 @@ and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
 session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
+Stop also retires an already-interrupted child without interrupting its finished
+turn again, so that child cannot keep its parent session blocked.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -580,7 +592,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.160.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.161.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

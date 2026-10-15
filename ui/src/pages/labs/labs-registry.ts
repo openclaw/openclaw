@@ -97,6 +97,12 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
+      id: "composerPredictions",
+      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat#composer-predictions",
+      configPath: ["gateway", "controlUi", "experimental", "composerPredictions", "enabled"],
+    },
+    {
+      ...BOOLEAN_GATE,
       id: "chatBubbles",
       docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],

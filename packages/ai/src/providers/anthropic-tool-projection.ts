@@ -2,7 +2,7 @@ import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 import { inheritToolSchemaTruncation } from "./tool-schema-depth.js";
 import {
   getPublishedRuntimeToolInputSchema,
@@ -93,21 +93,6 @@ function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
 }
 
-const schemaValueKeywords = new Set([
-  "additionalProperties",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-
 /** Normalize the detached JSON projection and report tuple changes to enclosing schemas. */
 function normalizeAnthropicJsonSchema(schema: unknown): boolean {
   if (!isRecord(schema)) {
@@ -116,11 +101,11 @@ function normalizeAnthropicJsonSchema(schema: unknown): boolean {
 
   let changed = false;
   for (const [key, value] of Object.entries(schema)) {
-    if (schemaValueKeywords.has(key) && !Array.isArray(value)) {
+    if (key !== "additionalItems" && SCHEMA_OBJECT_KEYS.has(key) && !Array.isArray(value)) {
       changed = normalizeAnthropicJsonSchema(value) || changed;
       continue;
     }
-    if (schemaArrayKeywords.has(key) && Array.isArray(value)) {
+    if (key !== "items" && SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
       for (const entry of value) {
         changed = normalizeAnthropicJsonSchema(entry) || changed;
       }

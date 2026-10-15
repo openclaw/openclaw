@@ -136,6 +136,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
   paths: readonly string[];
   onProgress?: (progress: UpdateStateInspectionProgress) => void;
   stderrLimit?: { bytes: number; onExceeded: () => void };
+  retryAdvice?: boolean;
 }) {
   const startedAt = Date.now();
   const decoder = new StringDecoder("utf8");
@@ -195,13 +196,19 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
+      const signaled = termination === "signal" || termination?.startsWith("signal,");
+      // Storage remediation and retries are next steps only for callers that stop on failure.
       const advice =
-        termination === "signal" || termination?.startsWith("signal,")
-          ? "The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
-          : "Check access to the reported source, free space, and storage performance, then retry the update.";
+        params.retryAdvice === false
+          ? signaled
+            ? " The worker was terminated by a signal during the reported step."
+            : ""
+          : signaled
+            ? " The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
+            : " Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
       return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. ${advice}`,
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
     },

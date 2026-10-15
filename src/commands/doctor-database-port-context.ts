@@ -6,7 +6,7 @@ import { z } from "zod";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { WorkboardPortError } from "../infra/database-engine/port-command.worker.js";
+import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import {
   databasePortManifestPath,
   databasePortArtifactSchema,
@@ -46,7 +46,7 @@ export type Context = {
   prepared: [string, Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>][];
 };
 export function refuse(ctx: Context, observed: string, required: string): never {
-  throw new WorkboardPortError(
+  throw new DatabasePortError(
     `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
   );
 }

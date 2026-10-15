@@ -86,6 +86,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
   function configureCli(
     methods: string[],
     bootstrapError = "Matrix room key backup is not usable",
+    executionFailure?: Error,
   ) {
     mocks.createRuntime.mockImplementation(async () => ({
       rootDir: root,
@@ -116,7 +117,18 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
             );
             await response.arrayBuffer();
           }
-          throw new Error("synthetic CLI exit 1");
+          if (executionFailure) {
+            throw executionFailure;
+          }
+          return {
+            args,
+            exitCode: 7,
+            stdout: JSON.stringify({
+              success: false,
+              bootstrap: { success: false, error: bootstrapError },
+            }),
+            stderr: "",
+          };
         },
       }),
     }));
@@ -142,6 +154,14 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     configureCli(["POST"], "unrelated failure");
     await expect(run()).rejects.toThrow("unexpected reason");
     expect(closed).toBe(true);
+  });
+
+  it("does not accept partial failure JSON from a timed-out CLI", async () => {
+    const failure = new Error("Matrix QA CLI command timed out after 1000ms");
+    configureCli(["POST"], "Matrix room key backup is not usable", failure);
+    await expect(run()).rejects.toBe(failure);
+    expect(closed).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it.each([undefined])(

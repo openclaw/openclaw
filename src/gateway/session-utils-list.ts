@@ -14,7 +14,7 @@ import {
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
 } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantIdentityName } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -37,6 +37,7 @@ import {
 } from "./session-row-presentation.js";
 import {
   selectionRow,
+  type Lookup,
   type Query as SessionRowQuery,
   type SelectionRow as SelectionTarget,
 } from "./session-row-projection-record.js";
@@ -102,7 +103,7 @@ export function* selectSessionEntries(
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
-  sessions: GatewaySessionRow[],
+  { sessions, previousRows }: { sessions: GatewaySessionRow[]; previousRows?: GatewaySessionRow[] },
   policyConfig: OpenClawConfig,
   client?: GatewayClient | null,
 ): SessionsListResult {
@@ -157,7 +158,7 @@ function buildSessionsListResult(
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
     ...(opts.rowMode === "sidebar"
-      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision)
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, previousRows)
       : { sessions }),
   };
 }
@@ -267,6 +268,7 @@ export function prepareSessionRowSelection(
     now,
     modelCatalog,
     entries,
+    configuredAgentIds: selected.configuredAgentIds,
     involvementKeys: selected.involvementKeys,
     candidateKeys(identities: Iterable<string>) {
       return new Set(
@@ -330,7 +332,7 @@ export async function prepareSessionSearchIdentityNames(
   }
   const identities = await pMap(
     [...agentIds],
-    (agentId) => resolveAssistantIdentity({ cfg: prepared.cfg, agentId }),
+    (agentId) => resolveAssistantIdentityName({ cfg: prepared.cfg, agentId }),
     { concurrency: 4 },
   );
   return {
@@ -386,20 +388,18 @@ export function prepareProjectedSessionList(params: {
     projectActiveRun: context
       ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
       : undefined,
-    entryFilter: (key, entry) => {
-      const row = getTarget(key);
+    entryFilter: (key, entry, row) => {
+      const storeKey = row.storeKey ?? key;
       let visible = params.visibility?.get(entry);
       if (visible === undefined) {
-        visible = Boolean(
-          row &&
-          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-        );
+        visible =
+          client === undefined || (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
         params.visibility?.set(entry, visible);
       }
       return (
         visible &&
-        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
+        (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(active(storeKey, entry, row.agentId)?.active))
       );
     },
   };
@@ -426,6 +426,11 @@ export async function listProjectedSessions(params: {
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
+  // Search and Board filters inspect full row facts; ordinary paging selects from metadata.
+  const selectionPreparation = {
+    metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,
+    includeCatalog: true,
+  };
   return projection.withSelectionPreparation(async () => {
     const dirtyRowCount = projection.dirtyRowCount;
     const materializedBefore = projection.materializedCount;
@@ -435,12 +440,12 @@ export async function listProjectedSessions(params: {
     let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
     do {
       yieldCount++;
-      await projection.prepareSelection({ yieldForCatalog: true });
+      await projection.prepareSelection({ ...selectionPreparation, yieldForCatalog: true });
       if (opts.search?.trim()) {
         searchIdentities = await prepareSessionSearchIdentityNames(projection, opts, true);
       }
     } while (
-      projection.needsSelectionPreparation() ||
+      projection.needsSelectionPreparation(selectionPreparation) ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     );
     let prepareSyncMs = 0;
@@ -499,18 +504,18 @@ export async function listProjectedSessions(params: {
       projection,
       () => {
         page = selectPage();
-        return page.selection.entries.flatMap(([key]) => {
+        const queries: Lookup[] = [];
+        for (const [key] of page.selection.entries) {
           const target = page.prepared.getTarget(key);
-          return target
-            ? [
-                {
-                  agentId: target.agentId,
-                  key: target.key,
-                  storePath: target.storeTarget.storePath,
-                },
-              ]
-            : [];
-        });
+          if (target) {
+            queries.push({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
+          }
+        }
+        return queries;
       },
       () => {
         const resumed = performance.now();
@@ -523,10 +528,12 @@ export async function listProjectedSessions(params: {
         try {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
-          const sessions = selection.entries.flatMap(([key], index) => {
+          const sessions: GatewaySessionRow[] = [];
+          for (let index = 0; index < selection.entries.length; index++) {
+            const [key] = selection.entries[index]!;
             const target = getTarget(key);
             if (!target) {
-              return [];
+              continue;
             }
             const includeTranscriptFields =
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
@@ -546,23 +553,24 @@ export async function listProjectedSessions(params: {
               },
             );
             if (!sharedRow || !record) {
-              return [];
+              continue;
             }
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
             }
             if (params.acceptsSerializedJson) {
-              return [sharedRow];
+              sessions.push(sharedRow);
+            } else {
+              const row = { ...sharedRow };
+              bindSessionListRowRead(row, { projection, record, client });
+              sessions.push(row);
             }
-            const row = { ...sharedRow };
-            bindSessionListRowRead(row, { projection, record, client });
-            return [row];
-          });
+          }
           diagnostics?.mark("decoration");
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            params.acceptsSerializedJson ? presentation.list(sessions, opts) : sessions,
+            params.acceptsSerializedJson ? presentation.list(sessions, opts) : { sessions },
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );
@@ -593,7 +601,7 @@ export async function listProjectedSessions(params: {
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
         }
       },
-      { selection: true },
+      { selection: selectionPreparation },
     );
   });
 }

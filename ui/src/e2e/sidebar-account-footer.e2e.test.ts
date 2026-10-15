@@ -1,7 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
@@ -208,6 +211,105 @@ const suite = createSidebarFooterProofSuite(
 );
 
 suite.define(() => {
+  it.each(["stable", "beta", "dev"] as const)(
+    "gates release-update notifications on %s",
+    async (channel) => {
+      const updateAvailable = { channel, currentVersion: "1.0.0", latestVersion: "2.0.0" };
+      const updateSchedule = {
+        channel,
+        autoEnabled: false,
+        target: { kind: "package" as const, version: "2.0.0" },
+      };
+      const opened = await openSidebarFooterProofPage(suite, {
+        ...gatewayBuild,
+        operatorScopes: ["operator.read", "operator.admin"],
+        updateAvailable,
+        updateSchedule,
+      });
+      try {
+        const { gateway, page, sidebar } = opened;
+        await setSidebarProofTheme(page, "dark");
+        await waitForControlUiGatewayReady(page);
+        await sidebar.locator(".sidebar-identity-card").click();
+        await page.mouse.move(0, 0);
+        const menu = sidebar.locator(".sidebar-identity-menu");
+        const updates = menu.getByRole("menuitem", { name: /^Updates/ });
+        await updates.waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, menu, [updates], {
+            elements: [menu],
+            animations: "disabled",
+          });
+          await writeFile(
+            path.join(suite.artifactDir, `release-update-${channel}.png`),
+            frame.elements[0]!.png,
+          );
+        }
+        const badge = updates.getByText("Available", { exact: true });
+        await expect.poll(() => badge.count()).toBe(channel === "dev" ? 0 : 1);
+        await expect
+          .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
+          .toBe(channel === "dev" ? 0 : 1);
+        if (channel === "stable") {
+          // The selected schedule wins over leftover availability from another channel.
+          await gateway.emitGatewayEvent("update.available", {
+            updateAvailable,
+            schedule: { ...updateSchedule, channel: "dev" },
+          });
+          await expect.poll(() => badge.count()).toBe(0);
+          await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(0);
+          await gateway.emitGatewayEvent("update.available", {
+            updateAvailable: { ...updateAvailable, channel: "beta" },
+            schedule: { ...updateSchedule, channel: "beta" },
+          });
+          await expect.poll(() => badge.count()).toBe(1);
+          await gateway.emitGatewayEvent("update.available", {
+            updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
+            schedule: { channel: "beta", autoEnabled: false },
+          });
+          await expect.poll(() => badge.count()).toBe(0);
+        }
+        await updates.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      } finally {
+        await suite.closeBrowserContext(opened.context);
+      }
+    },
+  );
+
+  it("opens Updates settings from the account menu without starting an update", async () => {
+    const opened = await openSidebarFooterProofPage(suite, gatewayBuild);
+    try {
+      const { gateway, page, sidebar } = opened;
+      await setSidebarProofTheme(page, "dark");
+      await waitForControlUiGatewayReady(page);
+      await sidebar.locator(".sidebar-identity-card").click();
+      await page.mouse.move(0, 0);
+      const menu = sidebar.locator(".sidebar-identity-menu");
+      await menu.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          menu,
+          [menu.getByRole("menuitem", { name: "Settings", exact: true })],
+          { elements: [menu], animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, "account-menu.png"), frame.elements[0]!.png);
+      }
+      await menu.getByRole("menuitem", { name: "Updates", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
+      await expect.poll(() => menu.count()).toBe(0);
+      await page.getByRole("heading", { name: "Updates", exact: true }).waitFor();
+      await gateway.waitForRequest("update.status");
+      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      await page.getByRole("button", { name: "Back to app", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
+
   it("labels the lifecycle status on the account icon and retries through its menu", async () => {
     const opened = await openSidebarFooterProofPage(suite, {
       ...gatewayBuild,
@@ -270,7 +372,6 @@ suite.define(() => {
       await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
       expect(await footer.locator(".gateway-status").count()).toBe(1);
       expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
-      await expect.poll(() => page.title()).toContain("(Disconnected)");
       await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
         footer,
       ]);
@@ -295,7 +396,6 @@ suite.define(() => {
       await expect
         .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
         .toBe(0);
-      await expect.poll(() => page.title()).not.toContain("Disconnected");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",

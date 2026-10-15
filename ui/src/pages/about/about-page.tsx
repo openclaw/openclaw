@@ -6,15 +6,21 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 import { AboutView, type AboutCommitCopyState } from "./view.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-about-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 
 const COPY_RESULT_VISIBLE_MS = 1800;
 // Mirrors about-clawd-wave so the next poke can replay the settled animation.
 const CLAWD_WAVE_MS = 1400;
 
-function AboutPageContent() {
+export function AboutPage() {
   const context = useApplication();
   const gateway = projectGateway(untrack(() => context.gateway));
   createEffect(
@@ -68,7 +74,7 @@ function AboutPageContent() {
   }
 
   return (
-    <>
+    <openclaw-about-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -86,16 +92,6 @@ function AboutPageContent() {
           onPokeClawd={pokeClawd}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-about-page>
   );
 }
-
-export const AboutPage = defineSolidBridge(
-  "openclaw-about-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <AboutPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

@@ -70,7 +70,7 @@ describe("Logbook view", () => {
     }
   });
 
-  it("keeps the capture toggle label and enabled state current", async () => {
+  it("keeps action focus and capture toggle state current across refreshes", async () => {
     vi.useFakeTimers();
     const host = {};
     const state = getLogbookState(host);
@@ -116,12 +116,17 @@ describe("Logbook view", () => {
       flush();
       const toggle = view.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
       expect(toggle.disabled).toBe(true);
+      const analyze = view.getByRole("button", { name: "Analyze now" });
+      analyze.focus();
+      expect(document.activeElement).toBe(analyze);
 
       serverStatus = { ...serverStatus, captureEnabled: true };
       await loadLogbook(state, client);
       flush();
       expect(view.getByRole("button", { name: "Pause" })).toBe(toggle);
       expect(toggle.disabled).toBe(false);
+      expect(view.getByRole("button", { name: "Analyze now" })).toBe(analyze);
+      expect(document.activeElement).toBe(analyze);
 
       toggle.click();
       await vi.advanceTimersByTimeAsync(0);

@@ -310,6 +310,13 @@ and channel-provided joiner before prompt hooks run. Frame ordinary chat
 with prose section labels so a leading file path cannot become a native slash command. Keep
 one admitted user turn while assigning each provider attempt its own request and reply identity.
 
+The result's `developerInstructions` includes plugin system context. When that
+context is present, `threadDeveloperInstructions` contains the policy without
+the context, and `turnDeveloperInstructions` contains the wrapped context.
+Harnesses with separate persistent and per-turn instruction carriers can use
+these fields to refresh context without reloading their session. Hook
+`systemPrompt` replacements remain part of `threadDeveloperInstructions`.
+
 Host `requestApproval` normalizes the title and description within the shared display bounds
 and preserves full action evidence in `detail`. Its response acknowledges the request with
 an ID. Call `waitForApproval` with

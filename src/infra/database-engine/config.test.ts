@@ -7,6 +7,33 @@ import { resolveDatabaseEngineInput } from "./config.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("host database engine selection", () => {
+  it("captures a frozen connection from the supplied host environment", async () => {
+    const input = await resolveDatabaseEngineInput(
+      {
+        database: {
+          engine: "postgres",
+          postgres: { connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" } },
+        },
+      },
+      { TEST_DATABASE_DSN: "postgresql://localhost/synthetic" },
+    );
+    expect(input).toEqual({
+      connection: "postgresql://localhost/synthetic",
+      schemaPrefix: "openclaw",
+    });
+    expect(Object.isFrozen(input)).toBe(true);
+  });
+
+  it("refuses a store-backed secret before opening shared state", async () => {
+    await expect(
+      resolveDatabaseEngineInput({
+        database: {
+          engine: "postgres",
+          postgres: { connection: { source: "store", provider: "default", id: "database-dsn" } },
+        },
+      }),
+    ).rejects.toThrow(/store-backed SecretRef/);
+  });
   it("defaults to SQLite and does not resolve unused PostgreSQL credentials", async () => {
     await expect(resolveDatabaseEngineInput({})).resolves.toBeUndefined();
     await expect(

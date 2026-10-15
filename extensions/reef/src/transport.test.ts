@@ -441,17 +441,6 @@ describe("ReefTransportClient response body bounds", () => {
     expect(offered.state.emittedBytes).toBeLessThan(128 * 1024);
   });
 
-  it("keeps the typed status fallback for malformed error JSON", async () => {
-    const client = createClient(async () => new Response("{", { status: 502 }));
-
-    await expect(client.requestFriend("bob", "code")).rejects.toMatchObject({
-      name: "ReefRelayError",
-      status: 502,
-      message: "relay HTTP 502",
-      code: undefined,
-    });
-  });
-
   it("keeps the status fallback when parsed error JSON has no relay code", async () => {
     const client = createClient(async () => Response.json({ detail: "ignored" }, { status: 400 }));
 

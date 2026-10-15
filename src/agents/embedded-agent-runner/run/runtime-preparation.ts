@@ -314,6 +314,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     authStorage,
     profileCandidates,
     lockedProfileId,
+    authProfileBinding: params.authProfileBinding,
     initialThinkLevel,
     attemptedThinking,
     fallbackConfigured: input.fallbackConfigured,
