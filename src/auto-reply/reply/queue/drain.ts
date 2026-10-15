@@ -924,7 +924,8 @@ export function scheduleFollowupDrain(
         ) {
           continue;
         }
-        if (queue.mode === "collect") {
+        // Rejected steering collects the latest input after the active turn settles.
+        if (queue.mode === "collect" || (queue.mode === "steer" && queue.items.length > 1)) {
           // Recheck remaining routes after each individual drain so a later
           // compatible suffix can collect without mixing destinations.
           const isCrossChannel =

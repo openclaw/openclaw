@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe("parked steering admission", () => {
   it.each(["accepted", "rejected"] as const)(
-    "tries newer input after an earlier steer rejects and drains %s fallback in order",
+    "tries newer input after an earlier steer rejects and collects %s fallback",
     async (outcome) => {
       const key = `steer-after-rejection-${outcome}`;
       keys.add(key);
@@ -30,9 +30,7 @@ describe("parked steering admission", () => {
       const expected = outcome === "accepted" ? [older, first] : [older, first, newer];
       const runFollowup = async (run: FollowupRun) => {
         delivered.push(run.prompt);
-        if (delivered.length === expected.length) {
-          drained.resolve();
-        }
+        drained.resolve();
       };
       enqueueFollowupRun(key, older, settings, "message-id", runFollowup, false);
       const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
@@ -49,7 +47,13 @@ describe("parked steering admission", () => {
         newerReservation.fallback();
       }
       await drained.promise;
-      expect(delivered).toEqual(expected.map((run) => run.prompt));
+      expect(delivered).toHaveLength(1);
+      for (const run of expected) {
+        expect(delivered[0]).toContain(run.prompt);
+      }
+      if (outcome === "accepted") {
+        expect(delivered[0]).not.toContain(newer.prompt);
+      }
       for (const run of [older, first, newer]) {
         expect(enqueueFollowupRun(key, { ...run }, settings, "message-id", runFollowup)).toBe(
           false,

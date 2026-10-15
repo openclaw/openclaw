@@ -835,3 +835,38 @@ describe("deliverFollowupDecision", () => {
     }
   });
 });
+
+it("withholds a queued stale final before delivery recovery when another correction is retained", async () => {
+  const { enqueueFollowupRun } = await import("./queue/enqueue.js");
+  const { clearFollowupQueue } = await import("./queue/state.js");
+  const turn = createTurn();
+  const source = vi.fn();
+  turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source };
+  enqueueFollowupRun(
+    "main",
+    { ...turn.queued, prompt: "latest correction", messageId: "new" },
+    { mode: "steer", debounceMs: 0 },
+    "message-id",
+    undefined,
+    false,
+  );
+  try {
+    const decision = await resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution("Outdated answer"),
+      accounting: createAccounting([{ text: "Outdated answer" }]),
+    });
+    expect(decision).toEqual({ kind: "suppress", reason: "newer-input" });
+    const delivered = await deliverFollowupDecision({
+      decision,
+      turn,
+      defaults: createDefaults(vi.fn()),
+      runId: "run-1",
+      runFollowup: vi.fn(),
+    });
+    expect(delivered).toEqual({ kind: "completed", payloads: [] });
+    expect(source).not.toHaveBeenCalled();
+  } finally {
+    clearFollowupQueue("main");
+  }
+});

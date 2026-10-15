@@ -39,7 +39,12 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
-import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  hasPendingSteerFollowupFrom,
+  resolveQueueSettings,
+  type FollowupRun,
+} from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
@@ -65,7 +70,13 @@ type FollowupDeliveryDecision =
     }
   | {
       kind: "suppress";
-      reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted";
+      reason:
+        | "send-policy"
+        | "room-event"
+        | "silent"
+        | "message-tool-only"
+        | "aborted"
+        | "newer-input";
     }
   | {
       kind: "retry-source-delivery";
@@ -106,6 +117,18 @@ export async function resolveFollowupDeliveryDecision(params: {
     !isInternalMessageChannel(turn.queued.originatingChannel)
   ) {
     return { kind: "suppress", reason: "room-event" };
+  }
+  if (
+    execution.outcome.kind === "settled" &&
+    !accounting?.terminalFailurePayload &&
+    !execution.outcome.result.meta?.error &&
+    execution.outcome.result.didSendDeterministicApprovalPrompt !== true &&
+    hasPendingSteerFollowupFrom(
+      turn.queued.run.sessionKey ?? turn.queued.run.sessionId,
+      turn.queued,
+    )
+  ) {
+    return { kind: "suppress", reason: "newer-input" };
   }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,

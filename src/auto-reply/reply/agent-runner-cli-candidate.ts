@@ -40,6 +40,7 @@ import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { hasPendingSteerFollowupFrom } from "./queue.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
@@ -265,10 +266,24 @@ export async function runCliFallbackCandidate(
                 }
               : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
-          onAssistantText: (text) => params.presentation.presentPartialReply({ text }, "cli"),
+          onAssistantText: (text) =>
+            hasPendingSteerFollowupFrom(
+              sessionKey ?? turn.followupRun.run.sessionId,
+              turn.followupRun,
+            )
+              ? undefined
+              : params.presentation.presentPartialReply({ text }, "cli"),
           onCompletedReply: async (text, assistantMessageIndex) => {
             params.runAbortSignal?.throwIfAborted();
             assertSettlementCurrent();
+            if (
+              hasPendingSteerFollowupFrom(
+                sessionKey ?? turn.followupRun.run.sessionId,
+                turn.followupRun,
+              )
+            ) {
+              return;
+            }
             const reply = prepareCliReplyPayload(text, cliCurrentMessageId, assistantMessageIndex);
             await params.presentation.blockReplyHandler?.(reply, { completed: true });
           },

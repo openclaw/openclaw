@@ -1048,3 +1048,30 @@ describe.each(["ordinary", "followup"] as const)("%s accounting replacement race
     expect(fixture.read()).toBeUndefined();
   });
 });
+
+it("accounts a stale final but does not publish or persist it when an owner correction is queued", async () => {
+  const fixture = await createFixture();
+  const { enqueueFollowupRun } = await import("./queue.js");
+  const { clearFollowupQueue } = await import("./queue/state.js");
+  fixture.context.execution.result.payloads = [{ text: "Outdated answer" }];
+  fixture.context.execution.result.meta!.finalAssistantVisibleText = "Outdated answer";
+  enqueueFollowupRun(
+    fixture.context.queueKey,
+    {
+      ...fixture.context.followupRun,
+      prompt: "latest correction",
+      messageId: "correction",
+    },
+    { mode: "steer", debounceMs: 0 },
+    "message-id",
+    undefined,
+    false,
+  );
+  try {
+    expect(await finalizeReplyAgentRun(fixture.context)).toBeUndefined();
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+    expect(fixture.read()?.activeWriterRunId).toBe(fixture.context.runId);
+  } finally {
+    clearFollowupQueue(fixture.context.queueKey);
+  }
+});

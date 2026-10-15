@@ -62,6 +62,7 @@ import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { hasPendingSteerFollowupFrom } from "./queue.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
@@ -85,6 +86,7 @@ export async function prepareReplyAgentPayloads(state: {
     followupRun,
     isHeartbeat,
     opts,
+    queueKey,
     replyMediaContext,
     replyOperation,
     replyRouteThreadId,
@@ -133,6 +135,21 @@ export async function prepareReplyAgentPayloads(state: {
       cfg,
       isHeartbeat,
     });
+  // Keep the transcript and usage, but let retained new input take over the answer.
+  // Check before delivery recovery can persist the stale final for a later retry.
+  if (
+    !isHeartbeat &&
+    !terminalFailurePayload &&
+    !runResult.meta?.error &&
+    runResult.didSendDeterministicApprovalPrompt !== true &&
+    hasPendingSteerFollowupFrom(queueKey, followupRun)
+  ) {
+    const operationState = resolveReplyOperationRunState(opts);
+    if (operationState) {
+      operationState.replyCompletion = resolveReplyCompletion(terminalReplyExpectation, "pending");
+    }
+    return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
+  }
   const blocked =
     runResult.meta?.error?.kind === "hook_block" ||
     runResult.didSendDeterministicApprovalPrompt === true;

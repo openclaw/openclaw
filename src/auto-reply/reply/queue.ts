@@ -5,6 +5,7 @@ export {
   claimNextQueuedFollowupRequestFrom,
   enqueueFollowupRun,
   getFollowupQueueDepth,
+  hasPendingSteerFollowupFrom,
   parkSteerCandidate,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";

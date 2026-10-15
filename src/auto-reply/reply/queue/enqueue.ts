@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSyntheticSourceReplyTurn } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
@@ -248,6 +249,33 @@ function applyFollowupQueueOverflow(
 export function getFollowupQueueDepth(key: string): number {
   const queue = getExistingFollowupQueue(key);
   return queue ? countPendingQueueItems(queue.items, queue.inFlight) : 0;
+}
+
+/** A declined steer remains queued; its next turn owns the updated answer. */
+export function hasPendingSteerFollowupFrom(key: string, source: FollowupRun): boolean {
+  const queue = getExistingFollowupQueue(key);
+  if (
+    queue?.mode !== "steer" ||
+    source.run.internalEventExecution !== undefined ||
+    source.run.terminalReplyExpectation === "optional" ||
+    source.currentInboundEventKind === "room_event" ||
+    isSyntheticSourceReplyTurn({ inputProvenance: source.run.inputProvenance })
+  ) {
+    return false;
+  }
+  return queue.items.some(
+    (item) =>
+      !queue.inFlight.has(item) &&
+      !isFollowupRunAborted(item) &&
+      !item.steerPending &&
+      item.run.internalEventExecution === undefined &&
+      item.run.terminalReplyExpectation !== "optional" &&
+      item.currentInboundEventKind !== "room_event" &&
+      !isSyntheticSourceReplyTurn({ inputProvenance: item.run.inputProvenance }) &&
+      item.strandedReplyRetry !== true &&
+      followupMessageRouteIdentityKey(item) === followupMessageRouteIdentityKey(source) &&
+      resolveFollowupAuthorizationKey(item) === resolveFollowupAuthorizationKey(source),
+  );
 }
 
 /**

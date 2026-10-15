@@ -131,3 +131,55 @@ it.each([false, true])(
     expect(order).toEqual(["Checking.", "commentary delivered", "Done."]);
   },
 );
+
+it("withholds CLI preview and completed text after queued owner correction without replaying work", async () => {
+  const { enqueueFollowupRun } = await import("./queue.js");
+  const { clearFollowupQueue } = await import("./queue/state.js");
+  const { emitAgentEvent } = await import("../../infra/agent-events.js");
+  const onPartialReply = vi.fn();
+  const onBlockReply = vi.fn();
+  const turn = createCliTurn({ onPartialReply, onBlockReply });
+  const queueKey =
+    turn.sessionKey ?? turn.followupRun.run.sessionKey ?? turn.followupRun.run.sessionId;
+  onTestFinished(() => clearFollowupQueue(queueKey));
+  const completedToolWork = vi.fn();
+  state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+    completedToolWork();
+    const queued = {
+      ...turn.followupRun,
+      prompt: "Please use the latest correction",
+      messageId: "correction",
+    };
+    enqueueFollowupRun(
+      queueKey,
+      queued,
+      { mode: "steer", debounceMs: 0 },
+      "message-id",
+      undefined,
+      false,
+    );
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "assistant",
+      data: { text: "Outdated answer", delta: "Outdated answer" },
+    });
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "assistant",
+      data: { completedText: "Outdated answer", assistantMessageIndex: 0 },
+    });
+    return {
+      payloads: [{ text: "Outdated answer" }],
+      meta: { finalAssistantVisibleText: "Outdated answer" },
+    };
+  });
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  const result = await executeAgentTurn(turn);
+  expect(result.kind).toBe("success");
+  expect(onPartialReply).not.toHaveBeenCalled();
+  expect(onBlockReply).not.toHaveBeenCalled();
+  expect(completedToolWork).toHaveBeenCalledOnce();
+  expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+  assert(result.kind === "success");
+  expect(result.runResult.payloads).toEqual([{ text: "Outdated answer" }]);
+});
