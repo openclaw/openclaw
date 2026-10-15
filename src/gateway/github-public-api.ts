@@ -46,6 +46,15 @@ type GitHubDetailTarget =
   | ControlUiGitHubPreviewTarget
   | { owner: string; repo: string; kind: "commit"; sha: string };
 
+type GitHubSearchParams = {
+  repository: string;
+  query: string;
+  kind: "issue" | "pull";
+  state: "all" | "open" | "closed";
+  page: number;
+};
+type GitHubReadRequest = { assertActive: () => void; signal: AbortSignal };
+
 /** Host consumers depend on this public read contract, not the plugin's source graph. */
 type GitHubPublicApi = {
   resolveGitHubApiUrls: (apiBaseUrl: string | undefined) => { baseUrl: string; graphqlUrl: string };
@@ -110,12 +119,19 @@ type GitHubPublicApi = {
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
+  parseGitHubSearchParams: (params: unknown) => GitHubSearchParams | null;
+  searchPublicGitHubItems: (
+    params: GitHubSearchParams,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    request?: GitHubReadRequest,
+  ) => Promise<unknown>;
   loadGitHubDetail: (
     target: GitHubDetailTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
-    request?: { assertActive: () => void; signal: AbortSignal },
+    request?: GitHubReadRequest,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
@@ -233,6 +249,28 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
       revalidate: async () => assertSelected(),
     };
   };
+  const resolveReadRequestIdentity = (
+    identity: ControlUiGitHubPreviewIdentity | undefined,
+    request: GitHubReadRequest | undefined,
+  ): ControlUiGitHubPreviewIdentity => {
+    const selected = resolveReadIdentity(identity);
+    // Keep one transport/cooldown owner while each invocation owns its authority.
+    return request
+      ? {
+          ...selected,
+          signal: request.signal,
+          assertSelected() {
+            request.assertActive();
+            selected.assertSelected();
+          },
+          async revalidate() {
+            request.assertActive();
+            await selected.revalidate();
+            request.assertActive();
+          },
+        }
+      : selected;
+  };
   return {
     ...library,
     get GITHUB_API_BASE_URL() {
@@ -264,25 +302,20 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         refresh,
       );
     },
+    searchPublicGitHubItems(params, identity, fetchImpl, request) {
+      return library.searchPublicGitHubItems(
+        params,
+        resolveReadRequestIdentity(identity, request),
+        fetchImpl,
+      );
+    },
     loadGitHubDetail(target, identity, fetchImpl, refresh, request) {
-      const selected = resolveReadIdentity(identity);
-      // Keep one transport/cooldown owner while each invocation owns its authority.
-      const current = request
-        ? {
-            ...selected,
-            signal: request.signal,
-            assertSelected() {
-              request.assertActive();
-              selected.assertSelected();
-            },
-            async revalidate() {
-              request.assertActive();
-              await selected.revalidate();
-              request.assertActive();
-            },
-          }
-        : selected;
-      return library.loadGitHubDetail(target, current, fetchImpl, refresh);
+      return library.loadGitHubDetail(
+        target,
+        resolveReadRequestIdentity(identity, request),
+        fetchImpl,
+        refresh,
+      );
     },
   };
 });

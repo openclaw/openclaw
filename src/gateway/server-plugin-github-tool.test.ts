@@ -93,7 +93,10 @@ async function createFixture(allow?: string[], throughSearch = false) {
   const record = createPluginRecord({
     id: "github",
     origin: "bundled",
-    contracts: { tools: ["github_read"], gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: ["github_read", "github_search"],
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
   });
   registerTestPlugin({
     registry,
@@ -193,7 +196,20 @@ async function createFixture(allow?: string[], throughSearch = false) {
         user: { login: "octocat" },
       });
     }
-    return Response.json({ id: 123, private: false, visibility: "public" });
+    if (url.pathname === "/search/issues") {
+      const page = Number(url.searchParams.get("page"));
+      return Response.json({
+        total_count: 21,
+        incomplete_results: false,
+        items: [searchItem(page)],
+      });
+    }
+    return Response.json({
+      id: 123,
+      full_name: "octocat/reader",
+      private: false,
+      visibility: "public",
+    });
   });
   vi.stubGlobal("fetch", fetcher);
   const read = (params: Record<string, unknown> = {}, signal?: AbortSignal) =>
@@ -212,6 +228,17 @@ async function createFixture(allow?: string[], throughSearch = false) {
         signal,
       ),
     );
+  const search = (params: Record<string, unknown> = {}, signal?: AbortSignal) =>
+    withPluginRuntimeGatewayRequestScope(scope, () =>
+      expectDefined(
+        tools.find((candidate) => candidate.name === "github_search"),
+        "registered GitHub search",
+      ).execute(
+        "search-github",
+        { repository: "octocat/reader", kind: "issue", ...params },
+        signal,
+      ),
+    );
   return {
     config,
     context,
@@ -223,8 +250,10 @@ async function createFixture(allow?: string[], throughSearch = false) {
     record,
     assemble,
     tool,
+    tools,
     fetcher,
     read,
+    search,
   };
 }
 
@@ -232,8 +261,210 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return input instanceof Request ? input.url : String(input);
 }
 
+function searchItem(number = 1, overrides: Record<string, unknown> = {}) {
+  return {
+    number,
+    html_url: `https://github.com/octocat/reader/issues/${number}`,
+    repository_url: "https://api.github.com/repos/octocat/reader",
+    title: "Public reader issue",
+    state: "open",
+    updated_at: "2026-10-01T12:00:00Z",
+    ...overrides,
+  };
+}
+
 // The plugin, admitted tool, Gateway routing and managed identity are real; only GitHub I/O is fixed.
 describe("GitHub agent reader", () => {
+  it("searches a public repository, follows a bounded page and reads its result", async () => {
+    fixture = await createFixture();
+    const first = await fixture.search({
+      query: "gateway OR streaming",
+      kind: "issue",
+      state: "open",
+    });
+    expect(first.details).toMatchObject({
+      repository: "octocat/reader",
+      page: 1,
+      pageSize: 20,
+      totalCount: 21,
+      incomplete: false,
+      limited: false,
+      nextPage: 2,
+      items: [{ number: 1, kind: "issue", url: "https://github.com/octocat/reader/issues/1" }],
+    });
+    const second = await fixture.search({
+      query: "gateway OR streaming",
+      kind: "issue",
+      state: "open",
+      page: 2,
+    });
+    expect(second.details).toMatchObject({ page: 2, nextPage: null, items: [{ number: 2 }] });
+    const result = await fixture.read({ url: "https://github.com/octocat/reader/issues/2" });
+    expect(result.details).toMatchObject({ title: "Public reader issue" });
+    const urls = fixture.fetcher.mock.calls
+      .map(([input]) => new URL(requestUrl(input)))
+      .filter((url) => url.pathname === "/search/issues");
+    expect(urls.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+    expect(urls[0]?.searchParams.get("q")).toBe(
+      'repo:octocat/reader is:public is:issue is:open "gateway" "OR" "streaming"',
+    );
+    expect(urls[0]?.searchParams.get("per_page")).toBe("20");
+    expect(JSON.stringify(first)).not.toContain(token);
+    expect(first.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }),
+      ]),
+    );
+  });
+
+  it("reports no matches, incomplete results, the search cap and rate-limit retry information", async () => {
+    fixture = await createFixture();
+    const fetcher = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+    let response = () => Response.json({ total_count: 0, incomplete_results: false, items: [] });
+    fixture.fetcher.mockImplementation((input, init) =>
+      new URL(requestUrl(input)).pathname === "/search/issues"
+        ? Promise.resolve(response())
+        : fetcher(input, init),
+    );
+    expect((await fixture.search()).details).toMatchObject({
+      items: [],
+      totalCount: 0,
+      nextPage: null,
+      incomplete: false,
+    });
+    response = () =>
+      Response.json({
+        total_count: 1,
+        incomplete_results: false,
+        items: [
+          searchItem(2, {
+            html_url: "https://github.com/octocat/reader/pull/2",
+            pull_request: {},
+            state: "closed",
+          }),
+        ],
+      });
+    expect((await fixture.search({ kind: "pull", state: "closed" })).details).toMatchObject({
+      items: [{ kind: "pull", state: "closed", url: "https://github.com/octocat/reader/pull/2" }],
+    });
+    expect(
+      fixture.fetcher.mock.calls.some(
+        ([input]) =>
+          new URL(requestUrl(input)).searchParams.get("q") ===
+          "repo:octocat/reader is:public is:pull-request is:closed",
+      ),
+    ).toBe(true);
+    response = () => Response.json({ total_count: 1200, incomplete_results: true, items: [] });
+    expect((await fixture.search({ page: 50 })).details).toMatchObject({
+      nextPage: null,
+      incomplete: true,
+      limited: true,
+      resultLimit: 1000,
+    });
+    response = () => new Response(null, { status: 429, headers: { "retry-after": "60" } });
+    await expect(fixture.search()).rejects.toThrow(/rate limit.*Wait 60 seconds/i);
+    const calls = fixture.fetcher.mock.calls;
+    const searchRequests = () =>
+      calls.filter(([input]) => new URL(requestUrl(input)).pathname === "/search/issues").length;
+    const requestsBeforeRetry = searchRequests();
+    await expect(fixture.search()).rejects.toThrow(/rate limit/i);
+    expect(searchRequests()).toBe(requestsBeforeRetry);
+  });
+
+  it("rejects query scope escapes and out-of-range pages before GitHub I/O", async () => {
+    fixture = await createFixture();
+    for (const params of [
+      { query: "repo:other/private" },
+      { kind: "all" },
+      { query: Array(80).fill("zz").join(" ") },
+      { query: 'text" OR is:private' },
+      { repository: "octocat/reader OR repo:other/private" },
+      { query: "(text)" },
+      { query: "text\\" },
+      { page: 0 },
+      { page: 51 },
+      { agentId: "another" },
+    ]) {
+      await expect(fixture.search(params)).rejects.toThrow();
+    }
+    expect(fixture.fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects private repositories, mismatched results and visibility lost during search", async () => {
+    fixture = await createFixture();
+    const fetcher = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+    let mode: "private" | "foreign" | "changed" = "private";
+    let searched = false;
+    fixture.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(requestUrl(input));
+      if (url.pathname === "/search/issues") {
+        searched = true;
+        return Response.json({
+          total_count: 1,
+          incomplete_results: false,
+          items: [
+            searchItem(
+              1,
+              mode === "foreign"
+                ? { repository_url: "https://api.github.com/repos/other/private" }
+                : {},
+            ),
+          ],
+        });
+      }
+      if (
+        url.pathname === "/repos/octocat/reader" &&
+        (mode === "private" || (mode === "changed" && searched))
+      ) {
+        return Response.json({ id: 123, private: true, visibility: "private" });
+      }
+      return fetcher(input, init);
+    });
+    await expect(fixture.search()).rejects.toThrow(/public/);
+    expect(searched).toBe(false);
+    mode = "foreign";
+    await expect(fixture.search()).rejects.toThrow(/outside.*scope/);
+    mode = "changed";
+    searched = false;
+    await expect(fixture.search()).rejects.toThrow(/public/);
+  });
+
+  it.each(["cancel", "caller closure"] as const)(
+    "withholds in-flight search after %s",
+    async (change) => {
+      fixture = await createFixture();
+      const entered = createDeferredCore<AbortSignal>();
+      const release = createDeferredCore();
+      const fetcher = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+      fixture.fetcher.mockImplementation(async (input, init) => {
+        if (new URL(requestUrl(input)).pathname === "/search/issues") {
+          entered.resolve(expectDefined(init?.signal, "search fetch signal"));
+          await release.promise;
+        }
+        return fetcher(input, init);
+      });
+      const cancel = new AbortController();
+      const pending = fixture.search({}, cancel.signal);
+      const rejected = expect(pending).rejects.toThrow();
+      try {
+        const signal = await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("Search completed before the upstream request");
+          }),
+        ]);
+        if (change === "cancel") {
+          cancel.abort();
+          expect(signal.aborted).toBe(true);
+        } else {
+          fixture.host.closeHost();
+        }
+      } finally {
+        release.resolve();
+        await rejected;
+      }
+    },
+  );
   it.each([
     { policy: "coding profile", allow: undefined },
     { policy: "plugin allowlist", allow: ["github"] },
@@ -312,16 +543,23 @@ describe("GitHub agent reader", () => {
 
   it("omits the tool when policy denies it or its owner is deactivated", async () => {
     fixture = await createFixture();
-    for (const denied of ["github_read", "github", "group:plugins"]) {
+    for (const denied of ["github_read", "github_search", "github", "group:plugins"]) {
       fixture.config.tools = { ...fixture.config.tools, deny: [denied] };
       setRuntimeConfigSnapshot(fixture.config);
-      expect((await fixture.assemble()).map((tool) => tool.name)).not.toContain("github_read");
+      const names = (await fixture.assemble()).map((tool) => tool.name);
+      for (const name of ["github_read", "github_search"]) {
+        if (denied === name || denied === "github" || denied === "group:plugins") {
+          expect(names).not.toContain(name);
+        }
+      }
     }
     fixture.config.tools = { profile: "coding" };
     fixture.config.plugins = { ...fixture.config.plugins, entries: { github: { enabled: false } } };
     setRuntimeConfigSnapshot(fixture.config);
     fixture.registry.rollbackPluginGlobalSideEffects("github", fixture.record);
-    expect((await fixture.assemble()).map((tool) => tool.name)).not.toContain("github_read");
+    const names = (await fixture.assemble()).map((tool) => tool.name);
+    expect(names).not.toContain("github_read");
+    expect(names).not.toContain("github_search");
     expect(fixture.fetcher).not.toHaveBeenCalled();
   });
 
@@ -424,17 +662,22 @@ describe("GitHub agent reader", () => {
     },
   );
 
-  it("rejects direct RPC use without an admitted reader invocation", async () => {
-    fixture = await createFixture();
-    await expect(
-      withPluginRuntimeGatewayRequestScope(fixture.scope, () =>
-        dispatchGatewayMethodInProcess(
-          "tools.github.read",
-          { owner: "octocat", repo: "reader", kind: "issue", number: 1 },
-          { syntheticScopes: ["operator.sessions.read"] },
+  it.each(["read", "search"] as const)(
+    "rejects direct %s RPC use without an admitted invocation",
+    async (method) => {
+      fixture = await createFixture();
+      await expect(
+        withPluginRuntimeGatewayRequestScope(fixture.scope, () =>
+          dispatchGatewayMethodInProcess(
+            `tools.github.${method}`,
+            method === "read"
+              ? { owner: "octocat", repo: "reader", kind: "issue", number: 1 }
+              : { repository: "octocat/reader", kind: "issue" },
+            { syntheticScopes: ["operator.sessions.read"] },
+          ),
         ),
-      ),
-    ).rejects.toThrow(/active github_read tool invocation/);
-    expect(fixture.fetcher).not.toHaveBeenCalled();
-  });
+      ).rejects.toThrow(/active github_(?:read|search) tool invocation/);
+      expect(fixture.fetcher).not.toHaveBeenCalled();
+    },
+  );
 });

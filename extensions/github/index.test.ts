@@ -98,7 +98,10 @@ describe("GitHub plugin ownership and RPC migration", () => {
   it("registers read-scoped methods lazily and removes surfaces on deactivation", () => {
     const registry = registered();
     expect(manifest.activation.onStartup).toBe(true);
-    expect(registry.registry.tools.flatMap((tool) => tool.names)).toContain("github_read");
+    expect(registry.registry.tools.flatMap((tool) => tool.names)).toEqual([
+      "github_read",
+      "github_search",
+    ]);
     expect(manifest.contracts.gatewayMethodDispatch).toEqual(["authenticated-request"]);
     expect(registry.registry.gatewayMethodDescriptors).toEqual(
       expect.arrayContaining(

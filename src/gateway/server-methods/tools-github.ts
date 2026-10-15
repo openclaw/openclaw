@@ -29,91 +29,102 @@ import { gitHubPublicApi } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
+const handleGitHubRead: GatewayRequestHandler = async (options) => {
+  const { params, respond, context, client, req } = options;
+  const searching = req.method === "tools.github.search";
+  const toolName = searching ? "github_search" : "github_read";
+  const operation = searching
+    ? ({ type: "search", params: gitHubPublicApi.parseGitHubSearchParams(params) } as const)
+    : ({ type: "read", params: gitHubPublicApi.parseGitHubTarget(params) } as const);
+  if (
+    !operation.params ||
+    params.agentId !== undefined ||
+    params.sessionKey !== undefined ||
+    (params.refresh !== undefined && typeof params.refresh !== "boolean")
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${req.method} params`),
+    );
+    return;
+  }
+  const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
+  const assertCaller = caller && captureGatewayToolCallerAssertion();
+  const assertToolAllowed = caller?.assertToolAllowed;
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const registry = scope?.pluginRegistry;
+  const record = registry?.plugins.find((plugin) => plugin.id === "github");
+  const pluginCurrent =
+    registry &&
+    record &&
+    capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
+  if (
+    !caller ||
+    !assertCaller ||
+    !assertToolAllowed ||
+    client?.internal?.pluginRuntimeOwnerId !== "github" ||
+    !pluginCurrent
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `GitHub reading requires an active ${toolName} tool invocation.`,
+      ),
+    );
+    return;
+  }
+  const signals = [options.signal, getAsyncWorkSignal(), ...(caller.approvalSignals ?? [])].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const signal = AbortSignal.any(signals);
+  const assertActive = () => {
+    assertCaller();
+    assertToolAllowed(toolName);
+    options.sessionMutationCommitGuard?.();
+    signal.throwIfAborted();
+    if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
+      throw new Error("GitHub read authority is no longer active.");
+    }
+  };
+  try {
+    const { identity, assertSelected } = await prepareGitHubReaderIdentity(
+      context,
+      caller.agentId,
+      assertActive,
+    );
+    const document =
+      operation.type === "read"
+        ? await gitHubPublicApi.loadGitHubDetail(
+            operation.params,
+            identity,
+            undefined,
+            params.refresh === true,
+            { assertActive: assertSelected, signal },
+          )
+        : await gitHubPublicApi.searchPublicGitHubItems(operation.params, identity, undefined, {
+            assertActive: assertSelected,
+            signal,
+          });
+    assertSelected();
+    respond(true, document, undefined);
+  } catch (error) {
+    const { message, ...details } =
+      error instanceof GitHubIdentityError
+        ? { message: error.message, retryable: error.reason !== "unavailable" }
+        : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+  }
+};
+
 export const toolsGitHubHandlers: GatewayRequestHandlers = {
-  "tools.github.read": async (options) => {
-    const { params, respond, context, client } = options;
-    const target = gitHubPublicApi.parseGitHubTarget(params);
-    if (
-      !target ||
-      params.agentId !== undefined ||
-      params.sessionKey !== undefined ||
-      (params.refresh !== undefined && typeof params.refresh !== "boolean")
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid tools.github.read params"),
-      );
-      return;
-    }
-    const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-    const assertCaller = caller && captureGatewayToolCallerAssertion();
-    const assertToolAllowed = caller?.assertToolAllowed;
-    const scope = getPluginRuntimeGatewayRequestScope();
-    const registry = scope?.pluginRegistry;
-    const record = registry?.plugins.find((plugin) => plugin.id === "github");
-    const pluginCurrent =
-      registry &&
-      record &&
-      capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
-    if (
-      !caller ||
-      !assertCaller ||
-      !assertToolAllowed ||
-      client?.internal?.pluginRuntimeOwnerId !== "github" ||
-      !pluginCurrent
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "GitHub reading requires an active github_read tool invocation.",
-        ),
-      );
-      return;
-    }
-    const signals = [
-      options.signal,
-      getAsyncWorkSignal(),
-      ...(caller.approvalSignals ?? []),
-    ].filter((signal): signal is AbortSignal => signal !== undefined);
-    const signal = AbortSignal.any(signals);
-    const assertActive = () => {
-      assertCaller();
-      assertToolAllowed("github_read");
-      options.sessionMutationCommitGuard?.();
-      signal.throwIfAborted();
-      if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
-        throw new Error("GitHub read authority is no longer active.");
-      }
-    };
-    try {
-      const { identity, assertSelected } = await prepareGitHubReaderIdentity(
-        context,
-        caller.agentId,
-        assertActive,
-      );
-      const document = await gitHubPublicApi.loadGitHubDetail(
-        target,
-        identity,
-        undefined,
-        params.refresh === true,
-        { assertActive: assertSelected, signal },
-      );
-      assertSelected();
-      respond(true, document, undefined);
-    } catch (error) {
-      const { message, ...details } =
-        error instanceof GitHubIdentityError
-          ? { message: error.message, retryable: error.reason !== "unavailable" }
-          : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
-    }
-  },
+  "tools.github.read": handleGitHubRead,
+  "tools.github.search": handleGitHubRead,
   "tools.github.status": defineValidatedGatewayHandler(
     "tools.github.status",
     validateToolsGitHubStatusParams,
