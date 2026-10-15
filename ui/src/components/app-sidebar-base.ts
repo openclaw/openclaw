@@ -1,4 +1,3 @@
-import type { ReactiveController } from "lit";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -16,6 +15,7 @@ import {
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import type { SolidController } from "../lit/solid-controller-host.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
@@ -142,7 +142,7 @@ export abstract class AppSidebarBase {
   declare readonly contains: HTMLElement["contains"];
   declare readonly matches: HTMLElement["matches"];
 
-  private readonly controllers = new Set<ReactiveController>();
+  private readonly controllers = new Set<SolidController>();
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
@@ -218,13 +218,13 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: ReactiveController): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
     if (this.isConnected) {
       controller.hostConnected?.();
     }
   }
-  removeController(controller: ReactiveController): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
   subscribe(listener: () => void): () => void {

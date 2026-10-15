@@ -123,9 +123,11 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
           .allTextContents(),
       ).toEqual(["Preparing this turn…", "·"]);
       await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
-      // Keep heartbeat callbacks chronological; fastForward models a suspended
-      // browser and can legitimately retire this otherwise healthy connection.
-      await page.clock.runFor(177_000);
+      // Keep each elapsed-time/heartbeat tick, without rendering every frame
+      // between the one-second clock readings or suspending pending RPC replies.
+      for (let elapsedMs = 0; elapsedMs < 177_000; elapsedMs += 1_000) {
+        await page.clock.fastForward(1_000);
+      }
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");
