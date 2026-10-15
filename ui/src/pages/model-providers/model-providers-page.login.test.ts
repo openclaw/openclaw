@@ -645,7 +645,7 @@ describe("Models provider login", () => {
   });
 
   it("shows accounts from the selected provider's credential owner before another login", async () => {
-    const { context, request } = loginHarness({
+    const { context, request, answer } = loginHarness({
       capabilities: [
         {
           provider: "example-owner",
@@ -733,6 +733,30 @@ describe("Models provider login", () => {
     expect(profiles[1]?.textContent).toContain("Expiring");
     expect(dialog.textContent).not.toContain("other-provider@example.invalid");
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method, ...args) => {
+      if (method !== "models.authStatus") {
+        return originalRequest(method, ...args);
+      }
+      return {
+        ts: 2,
+        providers: [
+          {
+            provider: "example-owner",
+            displayName: "Example provider",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "example:new",
+                type: "oauth",
+                status: "ok",
+                email: "new-account@example.invalid",
+              },
+            ],
+          },
+        ],
+      };
+    });
     await startSelectedLogin(page, "example-browser");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
@@ -743,6 +767,10 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
+    answer.resolve({ done: true, status: "done" });
+    await submitCredential(page);
+    await waitForSolid(() => expect(card.textContent).toContain("new-account@example.invalid"));
+    expect(card.textContent).not.toContain("same-account@example.invalid");
   });
 
   it("preserves quick API-key setup alongside browser login", async () => {

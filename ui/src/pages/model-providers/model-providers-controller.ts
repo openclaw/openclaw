@@ -106,6 +106,7 @@ export class ModelProvidersController extends ModelPageController {
   };
   private logoutConfirmation: AbortController | null = null;
   private pendingConnection = false;
+  private pendingCredentialInvalidation = false;
 
   setState<Key extends keyof ModelProvidersState>(key: Key, value: ModelProvidersState[Key]) {
     if (!Object.is(this.state[key], value)) {
@@ -246,8 +247,10 @@ export class ModelProvidersController extends ModelPageController {
       () => this.context?.gateway,
       (gateway) =>
         modelCatalog.subscribeModelCatalogChanges(gateway, () => {
-          // Sign-in completion coalesces these invalidations into one shared catalog refresh.
-          if (!this.login.busy) {
+          // A picker can outlive other clients' credential writes, even without signing in.
+          if (this.login.busy) {
+            this.pendingCredentialInvalidation = true;
+          } else {
             void this.refresh("publication");
           }
         }),
@@ -346,6 +349,9 @@ export class ModelProvidersController extends ModelPageController {
       this.pendingConnection = false;
       void this.login.open();
     }
+    if (this.pendingCredentialInvalidation && !this.login.busy) {
+      void this.refresh("replacement");
+    }
   }
 
   private ensureInitialData() {
@@ -409,6 +415,7 @@ export class ModelProvidersController extends ModelPageController {
   }
 
   private resetAgentScopeState() {
+    this.pendingCredentialInvalidation = false;
     this.login.reset();
     this.setState("busy", {});
     this.setState("messages", {});
@@ -455,11 +462,17 @@ export class ModelProvidersController extends ModelPageController {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
+    const reconcileCredentials = providerId !== undefined || this.pendingCredentialInvalidation;
+    if (this.pendingCredentialInvalidation) {
+      // The selected owner cannot account for writes from other clients.
+      providerId = undefined;
+      this.pendingCredentialInvalidation = false;
+    }
     return this.core.refresh(
       client,
       this.state.selectedAgentId,
       reason,
-      providerId && this.state.data ? { providerId, data: this.state.data } : undefined,
+      reconcileCredentials && this.state.data ? { providerId, data: this.state.data } : undefined,
     );
   }
 

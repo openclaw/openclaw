@@ -407,7 +407,7 @@ export class ModelProviderLoginController {
           this.options.onManualProvider?.(selected.id);
           return;
         }
-        this.providerId = provider ? canonicalModelAuthProviderId(provider.id) : undefined;
+        this.providerId = canonicalModelAuthProviderId(selected.authProvider);
         this.picker = null;
         const selectingModel = picker.allowSetup && selected.requiresSetup;
         this.mode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";

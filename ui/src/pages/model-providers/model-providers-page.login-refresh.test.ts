@@ -3,7 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { loginHarness, openLogin } from "./model-providers-page.login.test-support.ts";
+import { loginHarness, openLogin, openPicker } from "./model-providers-page.login.test-support.ts";
 import { appendPage, submitCredential } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
@@ -113,3 +113,60 @@ it("keeps rows and offers retry when refreshing saved sign-in status fails", asy
     request.mock.calls.filter(([method]) => ["usage.status", "sessions.usage"].includes(method)),
   ).toHaveLength(supplementalCalls);
 });
+
+it.each(["close", "cancel", "complete"] as const)(
+  "reconciles another client's credentials after login %s without restarting usage",
+  async (action) => {
+    const { context, request, publishEvent, cancel, status, answer } = loginHarness();
+    const originalRequest = request.getMockImplementation()!;
+    let externalUpdate = false;
+    request.mockImplementation(async (method, ...args) => {
+      if (method === "models.authStatus" && externalUpdate) {
+        return {
+          ts: 2,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai:new", type: "token", status: "ok" }],
+            },
+          ],
+        };
+      }
+      return originalRequest(method, ...args);
+    });
+    const page = appendPage(context);
+    if (action === "close") {
+      await openPicker(page);
+    } else {
+      await openLogin(page);
+    }
+    const usageReads = request.mock.calls.filter(([method]) =>
+      ["usage.status", "sessions.usage"].includes(method),
+    ).length;
+    externalUpdate = true;
+    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    expect(page.querySelector('[data-provider-id="openai"]')).toBeNull();
+    if (action === "complete") {
+      answer.resolve({ done: true, status: "done" });
+      await submitCredential(page);
+    } else if (action === "close") {
+      page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
+    } else {
+      const dismiss = [
+        ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+      ].find((button) => button.textContent?.trim() === "Cancel");
+      expect(dismiss).toBeDefined();
+      dismiss!.click();
+      cancel.resolve({ status: "cancelled" });
+      status.resolve({ status: "cancelled" });
+    }
+    await waitForSolid(() =>
+      expect(page.querySelector('[data-provider-id="openai"]')).not.toBeNull(),
+    );
+    expect(
+      request.mock.calls.filter(([method]) => ["usage.status", "sessions.usage"].includes(method)),
+    ).toHaveLength(usageReads);
+  },
+);

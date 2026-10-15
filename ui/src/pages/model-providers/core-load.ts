@@ -24,7 +24,7 @@ type CoreLoadOptions = {
 async function loadConnectedProviderData(
   client: GatewayBrowserClient,
   agentId: string,
-  target: { providerId: string; data: ModelProvidersData },
+  target: { providerId?: string; data: ModelProvidersData },
   signal: AbortSignal,
 ): Promise<ModelProvidersData> {
   // Read auth first so the catalog sees the newly connected runtime. This one
@@ -36,19 +36,20 @@ async function loadConnectedProviderData(
     providerOutcomes: refreshed.providerOutcomes,
     catalogError: refreshed.catalogError,
     error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
-    authStatus: authStatus
-      ? {
-          ...authStatus,
-          providers: [
-            ...(target.data.authStatus?.providers ?? []).filter(
-              (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
-            ),
-            ...authStatus.providers.filter(
-              (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
-            ),
-          ],
-        }
-      : target.data.authStatus,
+    authStatus:
+      authStatus && target.providerId
+        ? {
+            ...authStatus,
+            providers: [
+              ...(target.data.authStatus?.providers ?? []).filter(
+                (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
+              ),
+              ...authStatus.providers.filter(
+                (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
+              ),
+            ],
+          }
+        : (authStatus ?? target.data.authStatus),
   };
 }
 
@@ -122,7 +123,7 @@ export class ModelProviderCoreLoader {
     client: GatewayBrowserClient,
     agentId: string,
     reason: ModelProviderRefreshReason,
-    target?: { providerId: string; data: ModelProvidersData },
+    target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
       // Catalog changes during an existing read are best effort until the next refresh.
