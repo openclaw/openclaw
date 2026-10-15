@@ -977,11 +977,8 @@ merge_run() {
       echo "Waiting for GitHub mergeability to settle (60s limit; 2s, 4s, then 8s backoff)."
     fi
     previous_observation="$MERGE_OBSERVATION"
-    pr_merge_pause "$admission_deadline" "$admission_delay" || {
-      merge_outcome_stop "mergeability remained UNKNOWN through the 60s settle limit; stopped before intent/dispatch"
-      return 1
-    }
-    [ "$admission_delay" -ge 8 ] || admission_delay=$((admission_delay * 2))
+    merge_wait_for_projection "$pr" "$admission_deadline" "$admission_delay" || return 1
+    admission_delay="$MERGE_PROJECTION_DELAY"
   done
   if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
     [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeStateStatus)" != CLEAN ]; then
@@ -1179,11 +1176,8 @@ merge_run() {
           76)
             MERGE_PRIOR_CI_PROOF=""
             if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
-              pr_merge_pause "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" "$MERGE_PRIOR_CI_UNKNOWN_DELAY" || {
-                merge_outcome_stop "mergeability recalculation remained UNKNOWN through the 60s settle limit; stopped before intent/dispatch"
-                return 1
-              }
-              [ "$MERGE_PRIOR_CI_UNKNOWN_DELAY" -ge 8 ] || MERGE_PRIOR_CI_UNKNOWN_DELAY=$((MERGE_PRIOR_CI_UNKNOWN_DELAY * 2))
+              merge_wait_for_projection "$pr" "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" "$MERGE_PRIOR_CI_UNKNOWN_DELAY" "mergeability recalculation" || return 1
+              MERGE_PRIOR_CI_UNKNOWN_DELAY="$MERGE_PROJECTION_DELAY"
             fi
             ;;
           *) return 1 ;;
