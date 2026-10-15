@@ -359,6 +359,15 @@ export async function applyManagerRuntimeControls(params: {
   const thinkingConfigKey = options.thinking
     ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)
     : undefined;
+  // Unadvertised explicit thinking still enters the replay so the writer rejects it pre-wire.
+  if (
+    thinkingExplicit === true &&
+    options.thinking &&
+    thinkingConfigKey &&
+    !configOptions.some(([key]) => key === thinkingConfigKey)
+  ) {
+    configOptions.push([thinkingConfigKey, options.thinking]);
+  }
   const modelConfigKey = resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys);
   const assertActor = () => assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   // Policy rebinds on a changed model or requested -> accepted, not on repeated accepted evidence.

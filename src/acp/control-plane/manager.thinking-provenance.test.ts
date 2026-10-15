@@ -22,6 +22,10 @@ const effortConfig: AcpRuntimeCapabilities = {
   controls: ["session/set_config_option", "session/status"],
   configOptionKeys: ["model", "effort"],
 };
+const modelKeyOnly: AcpRuntimeCapabilities = {
+  controls: ["session/set_config_option", "session/status"],
+  configOptionKeys: ["model"],
+};
 
 function requestError(details: string) {
   return Object.assign(new Error("Internal error"), {
@@ -244,5 +248,57 @@ describe("AcpSessionManager thinking provenance", () => {
 
     expect(f.runTurn).not.toHaveBeenCalled();
     expect(f.setModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { provenance: "explicit", thinkingExplicit: true },
+    { provenance: "inherited", thinkingExplicit: false },
+    { provenance: "legacy", thinkingExplicit: undefined },
+  ] as const)(
+    "model-key-only gates unadvertised $provenance thinking before prompting",
+    async ({ thinkingExplicit }) => {
+      const f = fixture(
+        thinkingExplicit === undefined
+          ? readySessionMeta({ agent: "auggie", runtimeOptions: { model, thinking: "high" } })
+          : undefined,
+        modelKeyOnly,
+      );
+      if (thinkingExplicit !== undefined) {
+        await f.initialize(thinkingExplicit);
+      }
+
+      const turn = f.run(`model-key-only-${String(thinkingExplicit)}`);
+      if (thinkingExplicit) {
+        await expect(turn).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+      } else {
+        await turn;
+      }
+
+      expect(f.setConfigOption.mock.calls.map(([input]) => [input.key, input.value])).toEqual([
+        ["model", model],
+      ]);
+      expect(f.setModel).not.toHaveBeenCalled();
+      expect(f.runTurn).toHaveBeenCalledTimes(thinkingExplicit ? 0 : 1);
+      expect(f.state.currentMeta?.runtimeOptions).toMatchObject({ model, thinking: "high" });
+      expect(f.state.currentMeta?.thinkingExplicit).toBe(thinkingExplicit);
+    },
+  );
+
+  it("model-key-only authoritative snapshot may remove explicit thinking", async () => {
+    const f = fixture(undefined, modelKeyOnly);
+    f.setConfigOption.mockResolvedValue({
+      configOptions: [{ id: "model", category: "model", currentValue: model }],
+    });
+    await f.initialize(true);
+
+    await f.run("model-key-only-snapshot");
+
+    expect(f.setConfigOption.mock.calls.map(([input]) => [input.key, input.value])).toEqual([
+      ["model", model],
+    ]);
+    expect(f.setModel).not.toHaveBeenCalled();
+    expect(f.runTurn).toHaveBeenCalledOnce();
+    expect(f.state.currentMeta?.runtimeOptions).toMatchObject({ model });
+    expect(f.state.currentMeta?.runtimeOptions?.thinking).toBeUndefined();
   });
 });
