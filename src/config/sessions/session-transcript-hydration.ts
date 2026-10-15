@@ -219,6 +219,7 @@ export function prepareSessionTranscriptHydration(
         { agentId: target.agentId, path: target.storePath, sessionId: target.sessionId },
         selection,
         retained?.tail,
+        retained?.anchors,
       );
       if (!transcript) {
         return undefined;

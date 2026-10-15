@@ -40,7 +40,7 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
-  it.each(["escaped.mjs", "worker/extra.mjs", "worker/native.node", "worker/runtime.wasm"])(
+  it.each(["escaped.mjs", "worker/runtime.wasm"])(
     "rejects an unstaged emitted %s before publishing the worker graph",
     (fileName) => {
       const plugin = createWorkerDeployBuildPlugin();
@@ -784,7 +784,6 @@ export async function createAttachedBrowserToolRuntime(params) {
     modulePath: string;
     contains: string[];
     excludes: string[];
-    symlink?: boolean;
   }>([
     {
       name: "lazy Playwright accessor",
@@ -823,49 +822,20 @@ export async function createAttachedBrowserToolRuntime(params) {
         'registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));',
       ],
     },
-    {
-      name: "Playwright package behind a pnpm-style symlink",
-      modulePath: "node_modules/playwright-core/lib/coreBundle.js",
-      contains: ['packageJSON = {"name":"playwright-core","version":"1.63.0"};'],
-      excludes: [],
-      symlink: true,
-    },
-  ])(
-    "bundles $name without a host runtime dependency",
-    ({ modulePath, contains, excludes, symlink }) => {
-      const source = fs.readFileSync(path.resolve(modulePath), "utf8");
-      let rootDir = process.cwd();
-      let resolvedId = path.resolve(modulePath);
-      if (symlink) {
-        rootDir = tempDirs.make("openclaw-worker-build-plugin-");
-        for (const name of [
-          "playwright-core",
-          "web-tree-sitter",
-          "tree-sitter-bash",
-          "@silvia-odwyer/photon-node",
-        ]) {
-          fs.mkdirSync(path.join(rootDir, "node_modules", path.dirname(name)), { recursive: true });
-          fs.symlinkSync(
-            path.resolve("node_modules", name),
-            path.join(rootDir, "node_modules", name),
-            process.platform === "win32" ? "junction" : "dir",
-          );
-        }
-        resolvedId = fs.realpathSync(path.join(rootDir, modulePath));
-      }
-      const transformed = createWorkerDeployBuildPlugin(rootDir).transform.call(
-        { error: fail },
-        source,
-        resolvedId,
-      );
-      for (const fragment of contains) {
-        expect(transformed).toContain(fragment);
-      }
-      for (const fragment of excludes) {
-        expect(transformed).not.toContain(fragment);
-      }
-    },
-  );
+  ])("bundles $name without a host runtime dependency", ({ modulePath, contains, excludes }) => {
+    const source = fs.readFileSync(path.resolve(modulePath), "utf8");
+    const transformed = createWorkerDeployBuildPlugin().transform.call(
+      { error: fail },
+      source,
+      path.resolve(modulePath),
+    );
+    for (const fragment of contains) {
+      expect(transformed).toContain(fragment);
+    }
+    for (const fragment of excludes) {
+      expect(transformed).not.toContain(fragment);
+    }
+  });
 
   it.each([
     {

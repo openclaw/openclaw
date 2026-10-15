@@ -50,7 +50,7 @@ function fixture(method: "preview" | "detail") {
     config,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: { tools: ["github_read"], gatewayMethodDispatch: ["authenticated-request"] },
     register: expectDefined(github.register, "GitHub registration"),
   });
   setTestPluginRegistry(registry.registry);

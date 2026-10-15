@@ -357,7 +357,10 @@ suite.define(() => {
         expect(await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled()).toBe(
           true,
         );
-        await dialog.getByRole("status").filter({ hasText: "Waiting for sign-in" }).waitFor();
+        await dialog
+          .getByRole("status")
+          .filter({ hasText: "Waiting for approval in your browser…" })
+          .waitFor();
         expect(await dialog.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
         expect(await dialog.locator('input[name="wizard-text"]').count()).toBe(0);
         const [signInPage] = await Promise.all([context.waitForEvent("page"), openSignIn.click()]);
@@ -380,9 +383,10 @@ suite.define(() => {
         await gateway.resolveDeferred("wizard.next", { done: true, status: "done" });
         const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
         await saved.waitFor();
+        await captureProviderProof("login-browser-callback-completed.png", dialog);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         await page.locator('[data-provider-id="example"]').waitFor();
-        await captureProviderProof("login-browser-callback-completed.png", saved);
       },
     );
   });
@@ -535,6 +539,8 @@ suite.define(() => {
           });
         const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
         await saved.waitFor();
+        await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, dialog);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await page.getByText("signed-in@example.invalid", { exact: true }).waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("models.authStatus")).length)
@@ -543,7 +549,6 @@ suite.define(() => {
         expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, saved);
       },
     );
   });
@@ -727,6 +732,7 @@ suite.define(() => {
         expect(await dialog.textContent()).not.toContain(signInUrl);
         await captureProviderProof("login-browser-waiting.png", dialog);
         await gateway.resolveDeferred("wizard.next");
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
         await popup.close();
       },

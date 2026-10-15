@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
 import "./chat-html-preview-element.tsx";
 
@@ -390,9 +391,11 @@ describe("ordinary HTML preview transport", () => {
     "rejects invalid or Gateway-origin sandbox metadata (%s)",
     async (sandboxPort) => {
       const { view } = mount(vi.fn().mockResolvedValue({ ...metadata, sandboxPort }));
-      await expect
-        .poll(() => view.querySelector('[role="alert"]')?.textContent)
-        .toContain("Sandbox host URL is invalid");
+      await waitForSolid(() => {
+        expect(view.querySelector('[role="alert"]')?.textContent).toContain(
+          "Sandbox host URL is invalid",
+        );
+      });
       expect(view.querySelector("iframe")).toBeNull();
     },
   );
@@ -466,9 +469,9 @@ describe("ordinary HTML preview transport", () => {
       .mockRejectedValueOnce(new Error("Preview denied"))
       .mockResolvedValue(metadata);
     const { view } = mount(request);
-    await expect
-      .poll(() => view.querySelector('[role="alert"]')?.textContent)
-      .toContain("Preview denied");
+    await waitForSolid(() => {
+      expect(view.querySelector('[role="alert"]')?.textContent).toContain("Preview denied");
+    });
     view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledOnce();

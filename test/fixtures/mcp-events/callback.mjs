@@ -54,7 +54,7 @@ export function signingKey(secret) {
   return key;
 }
 
-export function webhookHeaders(subscription, eventId, body, options = {}) {
+function webhookHeaders(subscription, eventId, body, options = {}) {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const secrets = [subscription.secret];
   if (subscription.previousSecret && subscription.rotationUntil > Date.now()) {

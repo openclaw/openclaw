@@ -750,4 +750,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.10",
     { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
   ],
+  ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", { advertise: false }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

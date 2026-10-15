@@ -32,6 +32,7 @@ export type ControlUiGitHubPreviewIdentity = {
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   stale?: true;
+  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
@@ -81,7 +82,7 @@ type GitHubPublicApi = {
     fetchImpl: typeof fetch,
     token?: string,
     beforeRedirect?: (url: URL) => Promise<void>,
-    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected">,
+    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "signal">,
     etag?: string,
     signal?: AbortSignal,
     graphql?: { query: string; variables: Record<string, string> },
@@ -114,6 +115,7 @@ type GitHubPublicApi = {
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
+    request?: { assertActive: () => void; signal: AbortSignal },
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
@@ -262,8 +264,25 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         refresh,
       );
     },
-    loadGitHubDetail(target, identity, fetchImpl, refresh) {
-      return library.loadGitHubDetail(target, resolveReadIdentity(identity), fetchImpl, refresh);
+    loadGitHubDetail(target, identity, fetchImpl, refresh, request) {
+      const selected = resolveReadIdentity(identity);
+      // Keep one transport/cooldown owner while each invocation owns its authority.
+      const current = request
+        ? {
+            ...selected,
+            signal: request.signal,
+            assertSelected() {
+              request.assertActive();
+              selected.assertSelected();
+            },
+            async revalidate() {
+              request.assertActive();
+              await selected.revalidate();
+              request.assertActive();
+            },
+          }
+        : selected;
+      return library.loadGitHubDetail(target, current, fetchImpl, refresh);
     },
   };
 });
