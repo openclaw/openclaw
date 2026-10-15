@@ -274,17 +274,6 @@ export function createRemoteExecCompactionParams(tempDir: string, sessionFile: s
   return params;
 }
 
-export function createNodeExecCompactionParams(tempDir: string, sessionFile: string) {
-  return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    sessionFile,
-    workspaceDir: tempDir,
-    trigger: "manual",
-    config: { tools: { exec: { host: "node", node: "worker-1" } } },
-  } satisfies Parameters<typeof maybeCompactCodexAppServerSession>[0];
-}
-
 type CompactResult = NonNullable<Awaited<ReturnType<typeof maybeCompactCodexAppServerSession>>>;
 
 export function requireCompactResult(result: CompactResult | undefined): CompactResult {
