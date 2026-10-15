@@ -83,7 +83,7 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     const malformed = malformedPage(ENTITY_HEADER);
     await fs.writeFile(entityPath, malformed);
 
-    await expectRefusal(parseWiki(config, ["compile"]), path.join("entities", "router.md"));
+    await expectRefusal(parseWiki(config, ["compile"]), "entities/router.md");
     expect(await fs.readFile(entityPath)).toEqual(malformed);
   });
 
@@ -107,10 +107,7 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     const malformed = malformedPage(ENTITY_HEADER);
     await fs.writeFile(entityPath, malformed);
 
-    await expectRefusal(
-      parseWiki(config, ["compile", "--json"]),
-      path.join("entities", "router.md"),
-    );
+    await expectRefusal(parseWiki(config, ["compile", "--json"]), "entities/router.md");
     expect(await fs.readFile(entityPath)).toEqual(malformed);
   });
 
@@ -124,15 +121,9 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     const notePath = path.join(suiteRoot, "ingest-note.md");
     await fs.writeFile(notePath, "# Alpha\n\nLocal note.\n");
 
-    await expectRefusal(
-      parseWiki(config, ["ingest", notePath]),
-      path.join("entities", "router.md"),
-    );
+    await expectRefusal(parseWiki(config, ["ingest", notePath]), "entities/router.md");
     expect(await fs.readFile(entityPath)).toEqual(malformed);
 
-    await expectRefusal(
-      parseWiki(config, ["ingest", notePath, "--json"]),
-      path.join("entities", "router.md"),
-    );
+    await expectRefusal(parseWiki(config, ["ingest", notePath, "--json"]), "entities/router.md");
   });
 });

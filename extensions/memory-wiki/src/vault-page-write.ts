@@ -1,5 +1,10 @@
+import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+} from "openclaw/plugin-sdk/memory-host-markdown";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { decodeWikiPageUtf8, parseWikiMarkdown } from "./markdown.js";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
@@ -76,4 +81,40 @@ export async function writeGuardedVaultPage(params: {
     }
     throw error;
   }
+}
+
+export async function writeManagedMarkdownFile(params: {
+  rootDir: string;
+  relativePath: string;
+  title: string;
+  startMarker: string;
+  endMarker: string;
+  body: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  params.signal?.throwIfAborted();
+  const root = await fsRoot(params.rootDir);
+  const originalBytes = await root.readBytes(params.relativePath).catch(() => null);
+  const original =
+    originalBytes === null
+      ? `# ${params.title}\n`
+      : decodeWikiPageUtf8(originalBytes, params.relativePath);
+  params.signal?.throwIfAborted();
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
+  const updated = replaceManagedMarkdownBlock({
+    original,
+    heading: "## Generated",
+    startMarker: params.startMarker,
+    endMarker: params.endMarker,
+    body: params.body,
+  });
+  const rendered = withTrailingNewline(updated);
+  if (rendered === original) {
+    return false;
+  }
+  await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
+  return true;
 }
