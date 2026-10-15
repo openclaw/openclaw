@@ -14,13 +14,24 @@ export function readPairingQrContent(message: unknown): Record<string, unknown>[
 
 export function removePairingQrContent(message: unknown): unknown {
   const record = asNullableRecord(message);
-  if (!Array.isArray(record?.content)) {
+  if (!record) {
     return message;
   }
-  const content = record.content.filter(
-    (block) => asNullableRecord(block)?.type !== "openclaw_pairing_qr",
-  );
-  return content.length === record.content.length ? message : { ...record, content };
+  let result: Record<string, unknown> | undefined;
+  for (const key of ["content", "openclawDisplayContent"]) {
+    const original = record[key];
+    if (!Array.isArray(original)) {
+      continue;
+    }
+    const content = original.filter(
+      (block) => asNullableRecord(block)?.type !== "openclaw_pairing_qr",
+    );
+    if (content.length !== original.length) {
+      result ??= { ...record };
+      result[key] = content;
+    }
+  }
+  return result ?? message;
 }
 
 /** Enrich only admitted rows; canonical history still owns text, identity, and removal. */

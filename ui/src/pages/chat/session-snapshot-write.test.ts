@@ -79,11 +79,13 @@ describe("snapshot write serialization and scheduling", () => {
       { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
       { type: "image", url: "https://example.com/photo.png" },
     ];
-    expect(await store.read(sessionKey)).toEqual({
-      ...snapshot(),
-      messages: [
-        { role: "assistant", content: storedContent, openclawDisplayContent: storedContent },
-      ],
+    expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({
+      snapshot: {
+        ...snapshot(),
+        messages: [
+          { role: "assistant", content: storedContent, openclawDisplayContent: storedContent },
+        ],
+      },
     });
     expect(value.messages[0]?.content).toBe(content);
     expect(value.messages[0]?.openclawDisplayContent).toBe(content);

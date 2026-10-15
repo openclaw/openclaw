@@ -1,6 +1,6 @@
 // Keep the registered pane class on this file's module graph.
-import { html } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { html, render } from "lit";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -12,6 +12,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
@@ -24,6 +25,8 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
+import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
+import { createMessageGroup } from "./components/chat-message.test-support.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import {
   getChatSessionProjection,
@@ -122,6 +125,29 @@ describe("chat pane connection lifecycle", () => {
       });
       setChatRunOwner(state, "pairing-run");
       const runBefore = getChatSessionProjection(state).runs["pairing-run"];
+      const view = document.createElement("div");
+      onTestFinished(() => {
+        render(null, view);
+      });
+      const renderReply = () => {
+        render(
+          renderMessageGroup(
+            createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
+            {
+              showReasoning: false,
+              showToolCalls: false,
+              assistantName: "OpenClaw",
+              assistantAvatar: null,
+            },
+          ),
+          view,
+        );
+        flush();
+      };
+      renderReply();
+      expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+        "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+      );
       const cached = {
         messages: [live],
         sessionId: "pairing-session",
@@ -153,6 +179,9 @@ describe("chat pane connection lifecycle", () => {
       }
 
       expect(state.chatMessages).toEqual([canonical]);
+      renderReply();
+      expect(view.querySelector(".chat-message-image")).toBeNull();
+      expect(view.textContent).toContain(text.text);
       expect(getChatSessionProjection(state).runs["pairing-run"]).toEqual({
         ...runBefore,
         message: canonical,
@@ -168,6 +197,8 @@ describe("chat pane connection lifecycle", () => {
       if (transition !== "pane disposal") {
         await loadChatHistory(state, { startup: true });
         expect(state.chatMessages).toEqual([canonical]);
+        renderReply();
+        expect(view.querySelector(".chat-message-image")).toBeNull();
       }
     },
   );
