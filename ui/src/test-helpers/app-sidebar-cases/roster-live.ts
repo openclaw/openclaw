@@ -98,7 +98,7 @@ describe("AppSidebar agent roster", () => {
     },
   );
   it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {
-    const { sidebar, provider, context, result } = await mountRoster();
+    const { sidebar, provider, context, result, gatewayHarness } = await mountRoster();
     expect(sidebar.querySelector(".sidebar-agent-roster")).toBeNull();
     expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
     sidebar.sidebarEntries = ["session:agent:working:pinned"];
@@ -116,6 +116,26 @@ describe("AppSidebar agent roster", () => {
       '[data-agent-group="working"] .sidebar-agent-roster__signals',
     )!;
     expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
+    for (const [phase, seq, expectedSignals] of [
+      ["finishing", 1, 0],
+      ["start", 2, 1],
+    ] as const) {
+      gatewayHarness.publishEvent("agent", {
+        sessionKey: "agent:working:pinned",
+        runId: "collapsed-roster-run",
+        seq,
+        stream: "lifecycle",
+        data: { phase },
+      });
+      await settleRoster(sidebar);
+      expect(result.sessions.find((row) => row.key === "agent:working:pinned")?.hasActiveRun).toBe(
+        true,
+      );
+      expect(
+        sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__signals'),
+      ).toBe(summary);
+      expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(expectedSignals);
+    }
     result.sessions = result.sessions.map((row) =>
       row.agentId === "working" && row.isMain === false && row.archived !== true
         ? { ...row, hasActiveRun: false, status: "done", unread: true }
