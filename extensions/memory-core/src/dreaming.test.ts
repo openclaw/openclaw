@@ -511,7 +511,7 @@ describe("dreaming service reconciliation", () => {
     },
   );
 
-  it("prunes duplicate declared jobs and updates the primary job", async () => {
+  it.each([false, true])("defers declared jobs only when legacy=%s", async (hasLegacy) => {
     const seeded = (id: string, createdAtMs: number, expr: string): CronJobLike => ({
       id,
       declarationKey: "memory-core:memory-dreaming-promotion",
@@ -525,18 +525,29 @@ describe("dreaming service reconciliation", () => {
       delivery: { mode: "none" },
       createdAtMs,
     });
+    const legacyJob = seeded("legacy-job", 5, "0 3 * * *");
+    delete legacyJob.declarationKey;
     const { api, harness, logger } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "*/3 * * * *" }),
       initialJobs: [
+        ...(hasLegacy ? [legacyJob] : []),
         seeded("job-oldest", 10, "0 3 * * *"),
         seeded("job-duplicate", 20, "*/5 * * * *"),
       ],
     });
+    const before = structuredClone(harness.jobs);
+
     try {
       registerShortTermPromotionDreamingForTest(api);
       await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
 
       expect(harness.addCalls).toHaveLength(0);
+      if (hasLegacy) {
+        expect(harness.jobs).toEqual(before);
+        expect(harness.mutationCalls).toEqual([]);
+        expectLogContains(logger.warn, "openclaw doctor --fix");
+        return;
+      }
       expect(harness.removeCalls).toEqual(["job-duplicate"]);
       expect(harness.updateCalls).toHaveLength(1);
       expect(harness.updateCalls[0]?.id).toBe("job-oldest");

@@ -443,6 +443,16 @@ describe("xAI OAuth", () => {
     expect(refreshed.refresh).toBe("refresh-1");
   });
 
+  it("does not retry refresh on transport errors so a rotated refresh token is never resent", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new Error("socket hang up");
+    });
+    const credential = createXaiOAuthCredential();
+
+    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow("socket hang up");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the cached xAI expiry when token lifetimes overflow safe milliseconds", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({
