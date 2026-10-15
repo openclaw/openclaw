@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   isBrowserPanelSurfaceAvailable,
@@ -111,6 +112,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   private sessionPresentationKey: string | undefined;
+  private pairingPresentationOwner?: ReturnType<typeof gatewayPresentationScope>;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
   private gatewayReadsAvailable = false;
@@ -175,6 +177,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireCachedPairingQr(this.state.chatMessagesBySession);
     }
     this.sessionPresentationKey = undefined;
+    this.pairingPresentationOwner = undefined;
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
@@ -437,6 +440,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     const previousMediaAuthToken = resolveControlUiAuthToken(state);
+    const presentationOwner = gatewayPresentationScope(this.context.gateway);
+    const pairingOwnerChanged =
+      this.pairingPresentationOwner !== undefined &&
+      this.pairingPresentationOwner !== presentationOwner;
+    this.pairingPresentationOwner = presentationOwner;
     const readsAvailable = isGatewayAvailable(snapshot);
     const readsResumed = readsAvailable && !this.gatewayReadsAvailable;
     this.gatewayReadsAvailable = readsAvailable;
@@ -473,8 +481,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
-      retireChatPairingQr(state);
-      retireCachedPairingQr(state.chatMessagesBySession);
       this.resetSessionReadAcknowledgements();
       this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
@@ -569,9 +575,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state);
     }
-    if (!sourceChanged && previousMediaAuthToken !== resolveControlUiAuthToken(state)) {
+    const mediaAuthChanged = previousMediaAuthToken !== resolveControlUiAuthToken(state);
+    if (sourceChanged || pairingOwnerChanged || mediaAuthChanged) {
       retireChatPairingQr(state);
       retireCachedPairingQr(state.chatMessagesBySession);
+    }
+    if (!sourceChanged && mediaAuthChanged) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;

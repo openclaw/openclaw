@@ -76,7 +76,7 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
-  it.each(["reconnect", "auth change", "pane disposal"])(
+  it.each(["reconnect", "auth change", "authenticated owner", "pane disposal"])(
     "retires pairing QR credentials on %s without losing canonical history",
     async (transition) => {
       const text = { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" };
@@ -102,6 +102,7 @@ describe("chat pane connection lifecycle", () => {
       );
       const { pane, state } = createTestChatPane({ client });
       const hello = sessionMutationGatewayHello();
+      pane.context.gateway.snapshot.selfUser = { id: "fixture-user-before" };
       const connected = {
         ...pane.context.gateway.snapshot,
         client,
@@ -137,6 +138,12 @@ describe("chat pane connection lifecycle", () => {
         pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
       } else if (transition === "pane disposal") {
         pane.disconnectedCallback();
+      } else if (transition === "authenticated owner") {
+        pane.context.gateway.snapshot.selfUser = { id: "fixture-user-after" };
+        pane.applyGatewaySnapshot({
+          ...connected,
+          selfUser: pane.context.gateway.snapshot.selfUser,
+        });
       } else {
         pane.applyGatewaySnapshot({
           ...connected,
