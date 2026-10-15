@@ -161,14 +161,50 @@ it.each([
   });
 });
 
-it.each(["unrelated plugin", "selected model", "tool policy"] as const)(
-  "rechecks prepared chat facts across a reload of %s",
-  async (change) => {
+it.each([
+  {
+    name: "unrelated plugin settings",
+    patch: { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
+    allowed: true,
+  },
+  {
+    name: "selected model",
+    patch: {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: { model: { primary: "openai/changed" } },
+      },
+    },
+    allowed: false,
+  },
+  { name: "tool policy", patch: { tools: { deny: ["exec"] } }, allowed: false },
+  { name: "global plugin enablement", patch: { plugins: { enabled: false } }, allowed: false },
+  { name: "plugin allowlist", patch: { plugins: { allow: ["memory-core"] } }, allowed: false },
+  { name: "plugin denylist", patch: { plugins: { deny: ["openai"] } }, allowed: false },
+  {
+    name: "harness enablement",
+    patch: { plugins: { entries: { codex: { enabled: false } } } },
+    allowed: false,
+  },
+  {
+    name: "plugin slot",
+    patch: { plugins: { slots: { contextEngine: "other" } } },
+    allowed: false,
+  },
+] satisfies { name: string; patch: OpenClawConfig; allowed: boolean }[])(
+  "rechecks prepared chat facts across a reload of $name",
+  async ({ patch, allowed }) => {
     await withOpenClawTestState({ label: "chat-reload-preparation" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const cfg: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {} } },
-        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: false } } },
+            codex: { enabled: true },
+          },
+        },
       };
       let currentConfig = cfg;
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -197,11 +233,12 @@ it.each(["unrelated plugin", "selected model", "tool policy"] as const)(
       const session = await qualifyChatSendSession(prepared.value);
       currentConfig = {
         ...cfg,
-        ...(change === "unrelated plugin"
-          ? { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } }
-          : change === "selected model"
-            ? { agents: { ...cfg.agents, defaults: { model: { primary: "openai/changed" } } } }
-            : { tools: { deny: ["exec"] } }),
+        ...patch,
+        plugins: {
+          ...cfg.plugins,
+          ...patch.plugins,
+          entries: { ...cfg.plugins?.entries, ...patch.plugins?.entries },
+        },
       };
       setRuntimeConfigSnapshot(currentConfig, currentConfig);
       const respond = vi.fn();
@@ -214,8 +251,8 @@ it.each(["unrelated plugin", "selected model", "tool policy"] as const)(
           context,
           respond,
         });
-        expect(admitted.ok).toBe(change === "unrelated plugin");
-        if (change !== "unrelated plugin") {
+        expect(admitted.ok).toBe(allowed);
+        if (!allowed) {
           expect(respond).toHaveBeenCalledWith(
             false,
             undefined,
