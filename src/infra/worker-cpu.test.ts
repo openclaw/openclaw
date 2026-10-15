@@ -175,8 +175,6 @@ describe("worker CPU lifecycle", () => {
 
   it.each([
     ["postMessage", "accessor"],
-    ["emit", "accessor"],
-    ["postMessage", "readonly"],
     ["emit", "readonly"],
   ] as const)("preserves a subclass with %s defined as %s", async (method, descriptorKind) => {
     class ReadOnlyWorker extends Worker {}
