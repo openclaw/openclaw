@@ -29,6 +29,7 @@ import {
 import { codexCatalogHomeId } from "./session-catalog-home-id.js";
 import {
   MAX_SESSION_ID_LENGTH,
+  NODE_INVOKE_TIMEOUT_MS,
   readBoundedOptionalString,
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
@@ -42,6 +43,24 @@ export const CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE =
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
+/**
+ * A bounded listing reads a capped prefix of the codex-home. The slowest bounded request measured
+ * across five real homes (the largest 2.4 GB / 2,990 rollouts) returned in 2.0 s, so the released
+ * 15 s budget stays generous for it and is kept unchanged.
+ */
+const BOUNDED_SESSIONS_LIST_TIMEOUT_MS = 15_000;
+/**
+ * `--search-all` deliberately opens every rollout under the codex-home and reads each one whole.
+ * Measured on a real 2.4 GB codex-home that takes 15.6-21.6 s, which the bounded budget above
+ * cannot cover: `node.invoke` arms an absolute deadline from the forwarded `timeoutMs`
+ * (`src/gateway/node-registry.invoke-stream.ts`), and an expired pending invocation resolves
+ * `TIMEOUT` and cancels the node request. With one budget serving both routes the truncation
+ * notice could not recover the page it offered to recover. This reuses the budget the Codex
+ * session catalog already reserves for a whole-codex-home node scan rather than introducing a
+ * second number: roughly 3x the measured worst case, and inside the 15-120 s window a node clamps
+ * an invoke-result wait to.
+ */
+const EXHAUSTIVE_SESSIONS_LIST_TIMEOUT_MS = NODE_INVOKE_TIMEOUT_MS;
 const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
@@ -183,7 +202,9 @@ export async function listCodexCliSessionsOnNode(params: {
       filter: params.filter,
       ...(params.searchAll ? { searchAll: true } : {}),
     },
-    timeoutMs: 15_000,
+    timeoutMs: params.searchAll
+      ? EXHAUSTIVE_SESSIONS_LIST_TIMEOUT_MS
+      : BOUNDED_SESSIONS_LIST_TIMEOUT_MS,
     scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
