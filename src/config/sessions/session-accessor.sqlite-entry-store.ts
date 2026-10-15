@@ -1,9 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
@@ -30,7 +28,7 @@ import {
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
-import { clearSqliteSessionEntryPreservingWindows } from "./session-accessor.sqlite-entry-clear.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-deletion.js";
 import {
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
@@ -41,17 +39,11 @@ import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite
 import {
   clearSessionCollaborationForKey,
   copySessionNodeArtifactsForRepair,
-  deleteSessionDeliveryArtifacts,
-  deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
-import {
-  hasValidSessionEntryIdentity,
-  parseSessionEntryJson as parseSessionEntryRow,
-} from "./session-accessor.sqlite-status.js";
+import { hasValidSessionEntryIdentity } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import {
   readSessionActorTransactionState,
@@ -77,6 +69,11 @@ import {
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
+import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
+} from "./session-question-recovery-owner.js";
+import { retireSessionQuestionsInDatabase } from "./session-questions-retirement.worker.js";
 import {
   readStagedSessionTranscriptUpdatedAt,
   readStagedSessionTranscriptAuthority,
@@ -106,114 +103,7 @@ export {
   resolveLifecyclePrimaryEntry,
 } from "./session-accessor.sqlite-entry-snapshot.js";
 
-export function deleteSessionEntryRows(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-  options: {
-    deleteOwnedWindows?: boolean;
-    deliveryCleanupKeys?: readonly string[];
-    validatedEntry?: SessionEntry;
-    postimages?: SessionEntryWritePostimages;
-  } = {},
-): void {
-  // Doctor supplies the exact row it validated; the runtime parser deliberately rejects that shape.
-  const previousEntry =
-    options.validatedEntry ?? readExactSessionEntryRow(database, sessionKey)?.entry;
-  if (previousEntry) {
-    commitSqliteSessionDeletion(sessionKey, previousEntry);
-  }
-  const db = getSessionKysely(database.db);
-  const windows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
-  ).rows;
-  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
-  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
-  const survivingNodes =
-    windows.length > 0
-      ? executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select(["current_session_id", "entry_json", "session_key"])
-            .where("session_key", "!=", sessionKey)
-            .orderBy("session_key", "asc"),
-        ).rows
-      : [];
-  const ownedSessionIds: string[] = [];
-  for (const window of windows) {
-    const survivingNode = survivingNodes.find((node) => {
-      if (node.current_session_id === window.session_id) {
-        return true;
-      }
-      const entry = parseSessionEntryRow(node);
-      return entry ? collectSessionStateIdsForEntry(entry).includes(window.session_id) : false;
-    });
-    if (survivingNode) {
-      withSqliteDatabaseWriteScope(
-        database.db,
-        [sessionKey, survivingNode.session_key, sqliteSessionIdWriteScope(window.session_id)],
-        () =>
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_windows")
-              .set({ session_key: survivingNode.session_key })
-              .where("session_id", "=", window.session_id),
-          ),
-      );
-      for (const postimage of options.postimages?.values() ?? []) {
-        if (postimage.window.session_id === window.session_id) {
-          postimage.window = { ...postimage.window, session_key: survivingNode.session_key };
-        }
-      }
-    } else {
-      ownedSessionIds.push(window.session_id);
-    }
-  }
-  const remainingWindow = options.deleteOwnedWindows
-    ? undefined
-    : executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_windows")
-          .select(["session_id", "updated_at"])
-          .where("session_key", "=", sessionKey)
-          .orderBy("updated_at", "desc")
-          .orderBy("session_id", "asc")
-          .limit(1),
-      );
-  withSqliteDatabaseWriteScope(
-    database.db,
-    [sessionKey, ...windows.map((window) => sqliteSessionIdWriteScope(window.session_id))],
-    () => {
-      if (options.deleteOwnedWindows) {
-        deleteSessionDeliveryArtifacts(database, sessionKey, options.deliveryCleanupKeys);
-      }
-      if (options.deleteOwnedWindows || remainingWindow) {
-        deleteSessionNodeArtifacts(database, sessionKey);
-      }
-      if (remainingWindow) {
-        clearSqliteSessionEntryPreservingWindows(database, {
-          sessionId: remainingWindow.session_id,
-          sessionKey,
-          updatedAt: remainingWindow.updated_at,
-        });
-      } else {
-        executeSqliteQuerySync(
-          database.db,
-          db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
-        );
-        retireSqliteDatabaseWriteScopes(database.db, [
-          sessionKey,
-          ...ownedSessionIds.map(sqliteSessionIdWriteScope),
-        ]);
-      }
-    },
-  );
-  options.postimages?.delete(sessionKey);
-  publishSessionEntryCacheInvalidation(database, { sessionKey, facts: { kind: "removed" } });
-}
+export { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-deletion.js";
 
 export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
@@ -240,14 +130,20 @@ export function deleteLegacySessionEntryRows(
   if (legacyKeys.length === 0) {
     return;
   }
+  const removals = legacyKeys
+    .filter((key) => key !== sessionKey)
+    .map((legacyKey) => ({
+      legacyKey,
+      previousEntry:
+        options.validatedEntries?.get(legacyKey) ??
+        readExactSessionEntryRow(database, legacyKey)?.entry,
+    }));
+  // Preflight the complete batch before hooks, rehoming, or the first deletion.
+  for (const { previousEntry } of removals) {
+    assertQuestionAliasRelocation(previousEntry);
+  }
   const db = getSessionKysely(database.db);
-  for (const legacyKey of legacyKeys) {
-    if (legacyKey === sessionKey) {
-      continue;
-    }
-    const previousEntry =
-      options.validatedEntries?.get(legacyKey) ??
-      readExactSessionEntryRow(database, legacyKey)?.entry;
+  for (const { legacyKey, previousEntry } of removals) {
     if (previousEntry) {
       commitSqliteSessionDeletion(legacyKey, previousEntry);
     }
@@ -262,6 +158,17 @@ export function deleteLegacySessionEntryRows(
         db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
       ),
     );
+    if (!isMainThread && previousEntry) {
+      retireSessionQuestionsInDatabase(
+        database,
+        {
+          sessionKey: legacyKey,
+          sessionId: previousEntry.sessionId,
+          lifecycleRevision: previousEntry.lifecycleRevision,
+        },
+        `retired:${previousEntry.sessionId}`,
+      );
+    }
     retireSqliteDatabaseWriteScopes(database.db, [legacyKey]);
     options.postimages?.delete(legacyKey);
     const canonicalPostimage = options.postimages?.get(sessionKey);
@@ -314,6 +221,8 @@ export function writeSessionEntry(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     /** Only the provider review owner may replace a generation-bound pause. */
     providerReviewMutation?: boolean;
+    /** Only durable question custody may replace the restart replay exclusion marker. */
+    questionOwnerMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
     /** Raw canonical columns from the same transaction, for exact no-op comparison. */
@@ -365,6 +274,21 @@ export function writeSessionEntry(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : canonicalRead?.entry;
+  const lifecycleChanged =
+    canonicalPreviousEntry !== undefined &&
+    (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
+      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision);
+  if (lifecycleChanged) {
+    assertQuestionLifecycleWorker(canonicalPreviousEntry);
+  }
+  if (!options.questionOwnerMutation && !options.allowStoredAliases) {
+    normalizedEntry = {
+      ...normalizedEntry,
+      durableQuestionOwners: !lifecycleChanged
+        ? canonicalPreviousEntry?.durableQuestionOwners
+        : undefined,
+    };
+  }
   const canonicalPreviousRow =
     options.canonicalPreviousRow ?? actor?.entryRows.get(sessionKey)?.row ?? canonicalRead?.row;
   const canonicalFacts = canonicalRead && captureSessionEntrySnapshot(canonicalRead);
@@ -582,6 +506,17 @@ export function writeSessionEntry(
                     ? queries.nodeWithLegacySources
                     : queries.node;
                 writeNode(sessionNode);
+              }
+              if (lifecycleChanged && canonicalPreviousEntry && !isMainThread) {
+                retireSessionQuestionsInDatabase(
+                  database,
+                  {
+                    sessionKey,
+                    sessionId: canonicalPreviousEntry.sessionId,
+                    lifecycleRevision: canonicalPreviousEntry.lifecycleRevision,
+                  },
+                  `retired:${canonicalPreviousEntry.sessionId}`,
+                );
               }
               if (persisted.snapshotsChanged) {
                 writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots, persisted);

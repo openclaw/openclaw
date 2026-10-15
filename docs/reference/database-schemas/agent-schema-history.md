@@ -44,6 +44,7 @@ backup and its matching build, not just reinstalling the older package.
 | 25      | Session writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                          | `Unreleased` |
 | 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 | 27      | Explicit context-engine outbox enqueue sequence preserving FIFO through SQLite rebuilds and PostgreSQL generation                                                                                                                                      | `Unreleased` |
+| 28      | Dormant durable question custody; proposed storage contract pending maintainer acceptance ([design checkpoint](/reference/database-schemas/storage-changes#proposed-durable-ordinary-questions))                                                       | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only

@@ -35,7 +35,6 @@ import {
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
@@ -57,6 +56,10 @@ import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
 } from "./openclaw-agent-progress-card-schema.js";
+import {
+  DURABLE_QUESTIONS_SCHEMA_VERSION,
+  withoutSessionQuestionsSchema,
+} from "./openclaw-agent-questions-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -80,10 +83,14 @@ export {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const versionedSchemaSql =
+    targetVersion < DURABLE_QUESTIONS_SCHEMA_VERSION
+      ? withoutSessionQuestionsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const sequenceSchemaSql =
     targetVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
-      ? withoutOutboxEnqueueSequence(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutOutboxEnqueueSequence(versionedSchemaSql)
+      : versionedSchemaSql;
   const predicateSchemaSql =
     targetVersion < AGENT_JSON_PREDICATE_SCHEMA_VERSION
       ? withoutAgentJsonPredicateColumns(sequenceSchemaSql)
@@ -339,27 +346,6 @@ export function assertAgentSchemaVersion(
     schemaSql,
     options.version < 18 ? "legacy" : "current",
   );
-}
-
-export function finishAgentSchemaMigration(
-  db: DatabaseSync,
-  agentId: string,
-  pathname: string,
-  targetVersion: number,
-  schemaSql: string,
-  requiresMaintenance: boolean,
-  assertMigration: () => void,
-): void {
-  repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
-    verifyPhysicalIntegrity: false,
-  });
-  db.exec(`PRAGMA user_version = ${targetVersion};`);
-  persistAgentSchemaMetadata(db, agentId, targetVersion);
-  assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
-  if (requiresMaintenance && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
-    throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
-  }
-  assertMigration();
 }
 
 function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {

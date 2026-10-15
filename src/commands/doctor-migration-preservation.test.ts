@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
@@ -232,6 +233,62 @@ it("binds semantic preservation to original backups across a partial migration a
           OPENCLAW_AGENT_SCHEMA_VERSION,
         );
         expect(registryVersions()).toEqual([24, OPENCLAW_AGENT_SCHEMA_VERSION]);
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE agent_databases SET schema_version = 27 WHERE agent_id = ? AND schema_version = ?",
+          )
+          .run("external", OPENCLAW_AGENT_SCHEMA_VERSION);
+        const staleRegistration = (await capture("witness-stale-registration")).ref;
+        await expect(
+          inspectDoctorMigrationPreservation({ original, candidate: staleRegistration }),
+        ).rejects.toThrow(/Registry schema version/u);
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE agent_databases SET schema_version = ? WHERE agent_id = ? AND schema_version = 27",
+          )
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION, "external");
+        const admittedState = openOpenClawStateDatabase();
+        if (isPostgresSqlConnection(admittedState.db)) {
+          throw new Error("This registry witness fixture requires its native SQLite source.");
+        }
+        const registryWitness = captureOpenClawMigrationWitness(
+          admittedState.db,
+          { role: "global" },
+          {
+            sourcePath: admittedState.path,
+            agents: [
+              {
+                agentId: "external",
+                path: external,
+                requireRegistration: true,
+                expectedSchemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              },
+            ],
+            phase: "candidate",
+            resolvePath: (value) => (value === externalAlias ? external : value),
+          },
+        );
+        const missingTarget = {
+          ...registryWitness,
+          tables: registryWitness.tables.map((table) =>
+            table.registryRows
+              ? {
+                  ...table,
+                  registryRows: table.registryRows.map(
+                    ({ store, locator, schemaVersion, sha256 }) => ({
+                      store,
+                      locator,
+                      schemaVersion,
+                      sha256,
+                    }),
+                  ),
+                }
+              : table,
+          ),
+        };
+        expect(() =>
+          assertOpenClawMigrationWitnessPreserved(registryWitness, missingTarget),
+        ).toThrow();
         expect(await fs.readFile(backupPath)).toEqual(backupBytes);
         expect(await fs.readFile(original.manifestPath)).toEqual(originalBytes);
         const candidate = (await capture("witness-migrated")).ref;

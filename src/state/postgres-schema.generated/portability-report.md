@@ -20,11 +20,11 @@
 | state    | trigger       |     0 |          0 |        0 |
 | state    | virtualTable  |     0 |          0 |        0 |
 | state    | internalTable |     1 |          0 |        1 |
-| agent    | table         |    45 |         45 |        0 |
-| agent    | column        |   417 |        381 |       36 |
-| agent    | index         |   101 |         97 |        4 |
+| agent    | table         |    46 |         46 |        0 |
+| agent    | column        |   431 |        395 |       36 |
+| agent    | index         |   104 |        100 |        4 |
 | agent    | foreignKey    |    28 |         28 |        0 |
-| agent    | check         |    66 |         66 |        0 |
+| agent    | check         |    70 |         70 |        0 |
 | agent    | trigger       |    14 |         10 |        4 |
 | agent    | virtualTable  |     2 |          0 |        2 |
 | agent    | internalTable |    10 |          0 |       10 |

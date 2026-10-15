@@ -371,13 +371,20 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: [
-          "deleteSessionEntryRows",
-          "deleteLegacySessionEntryRows",
-          "rehomeSessionWindows",
-        ],
+        operations: ["deleteLegacySessionEntryRows", "rehomeSessionWindows"],
         evidence:
           "Entry deletion is reached by worker/maintenance lifecycle, reclamation, purge and finalization kernels, or cleanup-utils.ts offline reset. Legacy deletion and window rehome also serve replacement-state and Doctor legacy repair. Lifecycle/replacement dispatch durable main-thread work to workers after memory exits; legacy mutation requires doctor-fix, while startup, onboarding and agent creation use detect.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-deletion.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["deleteSessionEntryRows"],
+        evidence:
+          "Extracted entry deletion retains entry-store ownership: worker/maintenance lifecycle, reclamation, purge and finalization kernels, or cleanup-utils.ts offline reset. Durable question retirement and entry deletion share the native transaction.",
       },
     ],
   ],

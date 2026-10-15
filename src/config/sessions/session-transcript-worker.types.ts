@@ -95,6 +95,7 @@ import type {
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
+import type { SessionQuestionReadInput, SessionQuestionResult } from "./session-questions.types.js";
 import type {
   SessionRetirementReadResult,
   SessionRetirementReadWorkerInput,
@@ -335,6 +336,7 @@ export type SessionHistoryWorkerInput =
   | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
+  | SessionQuestionReadInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -408,6 +410,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
+    "session-question-read": { kind: "session-question-read"; result: SessionQuestionResult };
     "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
     prewarm: { kind: "prewarm" };
     "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };

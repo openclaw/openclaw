@@ -52,7 +52,19 @@ describe("PostgreSQL schema generation", () => {
     }
     expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(10);
     expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(4);
-    expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
+    expect(
+      agent.objects.filter(
+        (item) => item.table === "session_questions" && item.kind === "check" && item.sql,
+      ),
+    ).toHaveLength(4);
+    expect(files["agent.postgres.sql"]).toContain('CREATE TABLE "session_questions"');
+    expect(files["agent.postgres.sql"]).toContain(
+      'CREATE UNIQUE INDEX "idx_agent_session_questions_pending"',
+    );
+    expect(files["agent.postgres.sql"]).toContain(
+      'CREATE INDEX "idx_agent_session_questions_continuation"',
+    );
+    expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(70);
     expect(
       report.pendingCapabilities.filter(
         (item) => item.database === "agent" && item.kind === "trigger",

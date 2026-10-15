@@ -1,5 +1,6 @@
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -17,6 +18,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
+import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
 import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -478,4 +480,69 @@ describe("asynchronous agent database maintenance admission", () => {
       expect(scan).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("durable question schema 28 maintenance", () => {
+  it("migrates actual schema 27 under the offline owner and preserves canonical payloads", async () => {
+    const f = fixture();
+    const prior = new DatabaseSync(f.options.pathname);
+    try {
+      prior.exec(
+        `DROP TABLE session_questions; PRAGMA user_version = 27; UPDATE schema_meta SET schema_version = 27;
+        INSERT INTO context_engine_turn_outbox(enqueue_sequence, advancement_key, engine_id, session_id, payload_json, created_at)
+        VALUES (7, 'z-first', 'test', 'session', '{"retained":true}', 90),
+          (40, 'a-last', 'test', 'session', '{"retained":true}', 1);`,
+      );
+      expect(getOpenClawAgentMigrationSchema(27)).not.toContain(
+        "CREATE TABLE IF NOT EXISTS session_questions (",
+      );
+      expect(
+        prior.prepare("SELECT value_json FROM cache_entries WHERE scope = 'maintenance'").get()
+          ?.value_json,
+      ).toBe('{"retained":true}');
+    } finally {
+      prior.close();
+    }
+    await withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
+      await migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance);
+    });
+    const upgraded = new DatabaseSync(f.options.pathname);
+    try {
+      expect(upgraded.prepare("PRAGMA user_version").get()?.user_version).toBe(28);
+      expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version).toBe(
+        28,
+      );
+      expect(
+        upgraded.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'").get()
+          ?.name,
+      ).toBe("session_questions");
+      expect(
+        upgraded.prepare("SELECT value_json FROM cache_entries WHERE scope = 'maintenance'").get()
+          ?.value_json,
+      ).toBe('{"retained":true}');
+      expect(upgraded.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        upgraded
+          .prepare(
+            "SELECT rowid AS retained_rowid, enqueue_sequence, advancement_key, payload_json FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+          )
+          .all(),
+      ).toEqual([
+        {
+          retained_rowid: 7,
+          enqueue_sequence: 7,
+          advancement_key: "z-first",
+          payload_json: '{"retained":true}',
+        },
+        {
+          retained_rowid: 40,
+          enqueue_sequence: 40,
+          advancement_key: "a-last",
+          payload_json: '{"retained":true}',
+        },
+      ]);
+    } finally {
+      upgraded.close();
+    }
+  });
 });

@@ -503,7 +503,12 @@ const callers = new Map<string, readonly string[]>([
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),
-    [key(sessionEntries, "deleteSessionEntryRows")],
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-entry-deletion.ts",
+        "deleteSessionEntryRows",
+      ),
+    ],
   ],
   // Alias moves publish both canonical entry postimages; the other callers hold offline repair ownership.
   [

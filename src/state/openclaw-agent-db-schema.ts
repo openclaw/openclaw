@@ -75,7 +75,6 @@ import {
   assertSupportedAgentSchemaVersion,
   assertCanonicalAgentPersistenceVersion,
   assertAgentSchemaVersion,
-  finishAgentSchemaMigration,
   hasPendingCurrentVersionAgentDatabaseMigration,
   hasPendingMemoryChunkMetadataMigration,
   migrateRetiredAgentStateLeaseSchema,
@@ -113,6 +112,7 @@ import {
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { finishAgentSchemaMigration } from "./openclaw-agent-schema-migration-finalize.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {

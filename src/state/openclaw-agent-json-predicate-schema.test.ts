@@ -10,9 +10,11 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import { sessionQuestionsSchemaSql } from "./openclaw-agent-questions-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_V21_SQL,
   restoreEmptyV21StorageForHistoricalFixture,
@@ -240,6 +242,90 @@ describe("agent JSON predicate migration", () => {
   );
 });
 
+it.each([
+  { version: 26, rollback: false },
+  { version: 26, rollback: true },
+  { version: 27, rollback: false },
+  { version: 27, rollback: true },
+])(
+  "migrates schema $version questions atomically (rollback=$rollback)",
+  async ({ version, rollback }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path(`questions-v${version}.sqlite`);
+      using db = new DatabaseSync(pathname);
+      db.exec(getOpenClawAgentMigrationSchema(version));
+      db.exec(`PRAGMA user_version = ${version};
+      INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, created_at, updated_at)
+      VALUES ('primary', 'agent', ${version}, 'main', 1, 1);
+      UPDATE session_key_contract SET canonical_ready = 'retained';
+      INSERT INTO session_canonical_validation_pending(session_key) VALUES ('agent:main:pending');`);
+      const before = captureOpenClawMigrationWitness(db, { role: "agent", agentId: "main" });
+      if (rollback) {
+        db.setAuthorizer((action, name, value) =>
+          action === constants.SQLITE_PRAGMA && name === "user_version" && value === "28"
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+      }
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        const migrate = () =>
+          ensureOpenClawAgentDatabaseSchema(db, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+          });
+        if (rollback) {
+          expect(migrate).toThrow(/authoriz/u);
+        } else {
+          migrate();
+        }
+      });
+      db.setAuthorizer(null);
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(rollback ? version : 28);
+      expect(db.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version).toBe(
+        rollback ? version : 28,
+      );
+      expect(
+        Boolean(
+          db.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'").get(),
+        ),
+      ).toBe(!rollback);
+      expect(
+        assertOpenClawMigrationWitnessPreserved(
+          before,
+          captureOpenClawMigrationWitness(db, { role: "agent", agentId: "main" }),
+        ),
+      ).toEqual({ warnings: [] });
+    });
+  },
+);
+it("refuses the unpublished question schema27 prototype as a different main FIFO lineage", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const pathname = state.path("question-prototype-v27.sqlite");
+    using db = new DatabaseSync(pathname);
+    db.exec(getOpenClawAgentMigrationSchema(26));
+    db.exec(sessionQuestionsSchemaSql(getOpenClawAgentMigrationSchema(28)));
+    db.exec(`PRAGMA user_version = 27;
+      INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, created_at, updated_at)
+      VALUES ('primary', 'agent', 27, 'main', 1, 1)`);
+    const schema = () =>
+      db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all();
+    const before = schema();
+    await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+      expect(() =>
+        ensureOpenClawAgentDatabaseSchema(db, {
+          agentId: "main",
+          env: state.env,
+          path: pathname,
+          register: false,
+        }),
+      ).toThrow(/schema|enqueue_sequence/u);
+    });
+    expect(schema()).toEqual(before);
+    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+    expect(db.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version).toBe(27);
+  });
+});
 describe("agent outbox sequence migration", () => {
   it.each(["frozen", "restored"] as const)(
     "preserves a v17 outbox through schema admission from %s storage",
