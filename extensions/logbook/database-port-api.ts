@@ -4,7 +4,7 @@ import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { createLogbookDatabase } from "./src/store-open.js";
+import { createLogbookDatabase } from "./src/store-schema-admission.js";
 import { LOGBOOK_SCHEMA_VERSION } from "./src/store-schema.js";
 
 class LogbookPortSchemaError extends Error {}

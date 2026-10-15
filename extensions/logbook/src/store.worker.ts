@@ -27,7 +27,7 @@ import type {
   LogbookTimeline,
 } from "./store-contract.js";
 import { createLogbookFrameQueries } from "./store-frame-queries.js";
-import { createLogbookDatabase, LOGBOOK_SQLITE_BUSY_TIMEOUT_MS } from "./store-open.js";
+import { createLogbookDatabase, LOGBOOK_SQLITE_BUSY_TIMEOUT_MS } from "./store-schema-admission.js";
 import { toBatch, toCard, toFrame, type LogbookDatabase } from "./store-schema.js";
 import type {
   LogbookBatch,
