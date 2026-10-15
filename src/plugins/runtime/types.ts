@@ -133,6 +133,8 @@ type RuntimeNodeDuplexChannel = {
 
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
+  /** Cancel this request without extending the current caller or plugin lifetime. */
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
   /** Fence an in-process channel send to the exact current requester session incarnation. */

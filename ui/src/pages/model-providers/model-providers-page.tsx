@@ -33,10 +33,13 @@ export function ModelProvidersContent(props: {
   let initialLoadComplete = false;
   const showContent = createMemo(() => {
     const snapshot = current();
+    // Global defaults can be edited from the catalog and config while provider details load.
+    const defaultsReady =
+      snapshot.props.configuredModels.length > 0 &&
+      snapshot.props.defaultsMutationBlockedReason === null;
     if (
       snapshot.props.connected &&
-      !snapshot.props.loading &&
-      controller.installedAgents.initialized
+      (defaultsReady || (!snapshot.props.loading && controller.installedAgents.initialized))
     ) {
       initialLoadComplete = true;
     }

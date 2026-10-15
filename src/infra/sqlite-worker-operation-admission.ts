@@ -382,11 +382,16 @@ function createOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
+    // Bun starts process.hrtime at zero in each thread, so the worker's deadline
+    // instant cannot cross threads. The host bounds its own late work from receipt;
+    // the worker still enforces its budget through the shared decision word.
+    const deadlineNs =
+      typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
+        ? readSqliteWorkerMonotonicNs() +
+          BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
+        : undefined;
     const expired = () => {
-      if (
-        typeof message.deadlineNs === "bigint" &&
-        readSqliteWorkerMonotonicNs() >= message.deadlineNs
-      ) {
+      if (deadlineNs !== undefined && readSqliteWorkerMonotonicNs() >= deadlineNs) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
