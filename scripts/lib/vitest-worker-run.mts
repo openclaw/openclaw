@@ -220,17 +220,16 @@ export function createVitestWorkerRun(
               if (channelError) {
                 throw channelError;
               }
-              // Only the owner's completed run needs this: it can still fail the run
-              // or retain outputs. Borrowers leave the generation to that owner, and
-              // an interrupted run must not delay its signal exit with a full scan.
-              if (parent || interrupted) {
+              // An interrupted run already exits by signal: verification cannot change
+              // that outcome, and a full scan can outlast the caller's kill escalation.
+              if (interrupted) {
                 return;
               }
               if (fs.existsSync(path.join(directory, "manifest.json"))) {
                 console.error("[vitest-workers] verifying completed generation before cleanup");
                 await verifyVitestWorkerArtifacts(directory, manifest);
               }
-              if (manifest?.cacheSignature) {
+              if (!parent && manifest?.cacheSignature) {
                 if (await retainArtifacts?.(root, directory, manifest)) {
                   console.error("[vitest-workers] retained completed compiler outputs for reuse");
                 }
