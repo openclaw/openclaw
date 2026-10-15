@@ -90,6 +90,7 @@ import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { hasSessionControlAuthority } from "./tools/sessions-operator-authority.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
@@ -451,6 +452,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -535,7 +537,13 @@ function* createOpenClawToolsSteps(
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,
+    options?.githubPublicationAvailable === true ||
+    (options?.githubPublicationAvailable === false && githubActionsAvailable)
+      ? createGitHubPublishTool({
+          publicationAvailable: options.githubPublicationAvailable,
+          actionsAvailable: githubActionsAvailable,
+        })
+      : null,
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,
