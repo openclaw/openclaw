@@ -544,28 +544,17 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it.each(["src/selector/one.test.ts", "./src/selector/one.test.ts"])(
-    "records exact default-unit ownership for %s without removing CLI filters",
-    (target) => {
-      withTinyFileTree({ "src/selector/one.test.ts": "" }, (cwd) => {
-        expectSingleVitestRunPlan(buildVitestRunPlans([target, "--", "-t", "case"], cwd), {
-          config: "test/vitest/vitest.unit.config.ts",
-          forwardedArgs: ["-t", "case", target],
-          includePatterns: ["src/selector/one.test.ts"],
-        });
-      });
-    },
-  );
-
-  it.each([
-    ["src/selector/missing.test.ts"],
-    ["src/selector/one.spec.ts"],
-    ["src/selector/*.test.ts"],
-    ["src/selector/one.test.ts", "src/selector/one.spec.ts"],
-    ["src/selector/one.test.ts", "src/selector/missing.test.ts"],
-    ["src/selector/one.live.test.ts"],
-    ["outside/one.test.ts"],
-  ])("keeps unsupported default-unit targets on the CLI route: %j", (...targets) => {
+  it.each<[string[], string[] | null]>([
+    [["src/selector/one.test.ts"], ["src/selector/one.test.ts"]],
+    [["./src/selector/one.test.ts"], ["src/selector/one.test.ts"]],
+    [["src/selector/missing.test.ts"], null],
+    [["src/selector/one.spec.ts"], null],
+    [["src/selector/*.test.ts"], null],
+    [["src/selector/one.test.ts", "src/selector/one.spec.ts"], null],
+    [["src/selector/one.test.ts", "src/selector/missing.test.ts"], null],
+    [["src/selector/one.live.test.ts"], null],
+    [["outside/one.test.ts"], null],
+  ])("selects default-unit includes without losing CLI targets: %j", (targets, includePatterns) => {
     withTinyFileTree(
       {
         "src/selector/one.test.ts": "",
@@ -574,9 +563,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "outside/one.test.ts": "",
       },
       (cwd) => {
-        expectSingleVitestRunPlan(buildVitestRunPlans(targets, cwd), {
+        const filters = includePatterns ? ["-t", "case"] : [];
+        expectSingleVitestRunPlan(buildVitestRunPlans([...targets, "--", ...filters], cwd), {
           config: "test/vitest/vitest.unit.config.ts",
-          forwardedArgs: targets,
+          forwardedArgs: [...filters, ...targets],
+          includePatterns,
         });
       },
     );
@@ -622,13 +613,18 @@ describe("scripts/test-projects changed-target routing", () => {
     (target) => {
       withTinyFileTree({}, (tempDir) => {
         const borrowed = path.join(tempDir, "missing.json");
-        const [spec] = createVitestRunSpecs([target], {
-          baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: borrowed },
+        const files = Array.from({ length: 2 }, () => {
+          const [spec] = createVitestRunSpecs([target], {
+            baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: borrowed },
+          });
+          expect(spec?.includePatterns).toEqual([target]);
+          assert(spec?.includeFilePath);
+          expect(path.dirname(spec.includeFilePath)).toBe(os.tmpdir());
+          expect(spec.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec.includeFilePath);
+          expect(spec.includeFilePath).not.toBe(borrowed);
+          return spec.includeFilePath;
         });
-        expect(spec?.includePatterns).toEqual([target]);
-        expect(spec?.includeFilePath).toBeTruthy();
-        expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
-        expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).not.toBe(borrowed);
+        expect(files[0]).not.toBe(files[1]);
         expect(fs.existsSync(borrowed)).toBe(false);
       });
     },
@@ -732,62 +728,39 @@ export const single = {
     },
   );
 
-  it.each([false, true])(
-    "preserves mixed target order with directory first=%s",
-    (directoryFirst) => {
+  it.each<[string, boolean]>([
+    ["tooling", false],
+    ["tooling", true],
+    ["extension-database-workers", false],
+  ])(
+    "preserves owned files and inherited directory selection for %s (directory first: %s)",
+    (config, directoryFirst) => {
+      const worker = config === "extension-database-workers";
+      const owned = worker
+        ? "extensions/matrix/src/matrix/client/storage.test.ts"
+        : "test/scripts/run-node.test.ts";
+      const selected = worker
+        ? "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts"
+        : "test/helpers/temp-dir.test.ts";
+      const directory = worker ? "extensions/matrix/src/matrix/sdk" : "test/helpers";
       withTinyFileTree({}, (tempDir) => {
-        const owned = "test/scripts/run-node.test.ts";
-        const selected = "test/helpers/temp-dir.test.ts";
         const borrowed = path.join(tempDir, "include.json");
         fs.writeFileSync(borrowed, JSON.stringify([selected]));
-        const args = directoryFirst ? ["test/helpers", owned] : [owned, "test/helpers"];
-        const [spec] = createVitestRunSpecs(args, {
+        const args = directoryFirst ? [directory, owned] : [owned, directory];
+        const specs = createVitestRunSpecs(args, {
           baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: borrowed },
         });
-        expect(spec?.includePatterns).toEqual(
-          directoryFirst ? [selected, owned] : [owned, selected],
+        const spec = specs.find(
+          (entry) => entry.config === `test/vitest/vitest.${config}.config.ts`,
         );
+        const expected = directoryFirst ? [selected, owned] : [owned, selected];
+        expect(worker ? spec?.includePatterns?.toSorted() : spec?.includePatterns).toEqual(
+          worker ? expected.toSorted() : expected,
+        );
+        expect(fs.readFileSync(borrowed, "utf8")).toBe(JSON.stringify([selected]));
       });
     },
   );
-
-  it("keeps an owned worker file beside a restricted directory selection", () => {
-    withTinyFileTree({}, (tempDir) => {
-      const owned = "extensions/matrix/src/matrix/client/storage.test.ts";
-      const selected = "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts";
-      const borrowed = path.join(tempDir, "include.json");
-      fs.writeFileSync(borrowed, JSON.stringify([selected]));
-      const specs = createVitestRunSpecs([owned, "extensions/matrix/src/matrix/sdk"], {
-        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: borrowed },
-      });
-      const worker = specs.find(
-        (spec) => spec.config === "test/vitest/vitest.extension-database-workers.config.ts",
-      );
-      expect(worker?.includePatterns?.toSorted()).toEqual([owned, selected].toSorted());
-      expect(fs.readFileSync(borrowed, "utf8")).toBe(JSON.stringify([selected]));
-    });
-  });
-
-  it("deduplicates explicit source tests that share import-graph owners", () => {
-    let plans: ReturnType<typeof buildVitestRunPlans> = [];
-    withTinyGitRepo(
-      {
-        "src/runtime-a.ts": "export const a = 'a';\n",
-        "src/runtime-b.ts": "export const b = 'b';\n",
-        "src/runtime.consumer.test.ts":
-          "import { a } from './runtime-a.js';\nimport { b } from './runtime-b.js';\nvoid [a, b];\n",
-      },
-      (cwd) => {
-        plans = buildVitestRunPlans(["src/runtime-a.ts", "src/runtime-b.ts"], cwd);
-      },
-    );
-
-    expectSingleVitestRunPlan(plans, {
-      config: "test/vitest/vitest.unit.config.ts",
-      forwardedArgs: ["src/runtime.consumer.test.ts"],
-      includePatterns: ["src/runtime.consumer.test.ts"],
-    });
-  });
 
   it("preserves Git membership for large changed and explicit test inventories", () => {
     withTinyGitRepo(
@@ -1447,29 +1420,32 @@ export const single = {
     },
   );
 
-  it("routes many explicit source files through one import-graph-backed owner set", () => {
-    let plans: ReturnType<typeof buildVitestRunPlans> = [];
+  it.each([
+    { count: 2, withRepo: withTinyGitRepo },
+    { count: 13, withRepo: withTinyFileTree },
+  ])("deduplicates import-graph owners of $count explicit source files", ({ count, withRepo }) => {
     const files: Record<string, string> = {};
     const imports: string[] = [];
     const refs: string[] = [];
-    for (let index = 0; index < 13; index += 1) {
+    for (let index = 0; index < count; index += 1) {
       files[`src/runtime-${index}.ts`] = `export const value${index} = ${index};\n`;
       imports.push(`import { value${index} } from './runtime-${index}.js';`);
       refs.push(`value${index}`);
     }
     files["src/runtime.consumer.test.ts"] = `${imports.join("\n")}\nvoid [${refs.join(", ")}];\n`;
 
-    withTinyFileTree(files, (cwd) => {
-      plans = buildVitestRunPlans(
-        Array.from({ length: 13 }, (_, index) => `src/runtime-${index}.ts`),
-        cwd,
+    withRepo(files, (cwd) => {
+      expectSingleVitestRunPlan(
+        buildVitestRunPlans(
+          Array.from({ length: count }, (_, index) => `src/runtime-${index}.ts`),
+          cwd,
+        ),
+        {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: ["src/runtime.consumer.test.ts"],
+          includePatterns: ["src/runtime.consumer.test.ts"],
+        },
       );
-    });
-
-    expectSingleVitestRunPlan(plans, {
-      config: "test/vitest/vitest.unit.config.ts",
-      forwardedArgs: ["src/runtime.consumer.test.ts"],
-      includePatterns: ["src/runtime.consumer.test.ts"],
     });
   });
 
@@ -2047,30 +2023,26 @@ export const single = {
     });
   });
 
-  it("fans contract directory targets out to the owning contract lanes", () => {
-    // Regression: the generic channels project excludes contracts/**, so the
-    // directory target used to run zero tests and exit green.
-    const plans = buildVitestRunPlans(["src/channels/plugins/contracts"]);
-
-    expect(plans.map((plan) => plan.config)).toEqual([
-      "test/vitest/vitest.contracts-channel-surface.config.ts",
-      "test/vitest/vitest.contracts-channel-config.config.ts",
-      "test/vitest/vitest.contracts-channel-registry.config.ts",
-      "test/vitest/vitest.contracts-channel-session.config.ts",
-    ]);
-    expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
-  });
-
-  it("routes the plugin contracts directory across contract and database worker lanes", () => {
-    const plans = buildVitestRunPlans(["src/plugins/contracts"]);
-
-    expect(plans).toEqual([
-      runPlan("contracts-plugin"),
-      runPlan("infra", [
-        "src/plugins/contracts/host-hook-state.identity.test.ts",
-        "src/plugins/contracts/host-hooks.contract.test.ts",
-      ]),
-    ]);
+  it.each([
+    {
+      target: "src/channels/plugins/contracts",
+      plans: ["surface", "config", "registry", "session"].map((owner) =>
+        runPlan(`contracts-channel-${owner}`),
+      ),
+    },
+    {
+      target: "src/plugins/contracts",
+      plans: [
+        runPlan("contracts-plugin"),
+        runPlan("infra", [
+          "src/plugins/contracts/host-hook-state.identity.test.ts",
+          "src/plugins/contracts/host-hooks.contract.test.ts",
+        ]),
+      ],
+    },
+  ])("fans $target out to its contract and database owners", ({ target, plans }) => {
+    // Generic channels/plugins projects exclude contracts/** and would run zero tests.
+    expect(buildVitestRunPlans([target])).toEqual(plans);
   });
 
   it.each([
@@ -2557,60 +2529,44 @@ export const single = {
     ).toThrow("use a literal test path, directory, or dedicated UI suite");
   });
 
-  it("keeps scoped include files distinct across invocations and borrowed metadata", () => {
-    const borrowed = path.join(os.tmpdir(), "borrowed-vitest-include.json");
-    const files = Array.from({ length: 2 }, () => {
-      const [spec] = createVitestRunSpecs(["src/plugin-sdk/temp-path.test.ts"], {
-        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: borrowed },
-      });
-      assert(spec?.includeFilePath);
-      expect(path.dirname(spec.includeFilePath)).toBe(os.tmpdir());
-      expect(spec.includeFilePath).not.toBe(borrowed);
-      return spec.includeFilePath;
-    });
-    expect(files[0]).not.toBe(files[1]);
-  });
-
-  it("expands routed glob targets to literal include-file paths", () => {
-    withTinyGitRepo(
-      {
-        "src/gateway/core.test.ts": "",
-        "src/gateway/server-methods/ping.test.ts": "",
-        "src/gateway/server-startup.test.ts": "",
-      },
-      (cwd) => {
-        const includeFile = path.join(cwd, "include.json");
-        writeVitestIncludeFile(
-          includeFile,
-          [
-            "src/gateway/**/*.test.ts",
-            "src/gateway/server-*.test.ts",
-            "src/gateway/@(core|server-startup).test.ts",
-          ],
-          { cwd },
-        );
-
-        expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
-          "src/gateway/core.test.ts",
-          "src/gateway/server-methods/ping.test.ts",
-          "src/gateway/server-startup.test.ts",
-        ]);
-      },
-    );
-  });
-
-  it("retains routed glob targets in watch-mode include files", () => {
-    withTinyFileTree({}, (tempDir) => {
-      const includeFile = path.join(tempDir, "include.json");
-      writeVitestIncludeFile(includeFile, ["src/gateway/**/*.test.ts"], {
-        expandGlobs: false,
-      });
-
-      expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual([
+  it.each([
+    {
+      expandGlobs: true,
+      withRepo: withTinyGitRepo,
+      patterns: [
         "src/gateway/**/*.test.ts",
-      ]);
-    });
-  });
+        "src/gateway/server-*.test.ts",
+        "src/gateway/@(core|server-startup).test.ts",
+      ],
+      expected: [
+        "src/gateway/core.test.ts",
+        "src/gateway/server-methods/ping.test.ts",
+        "src/gateway/server-startup.test.ts",
+      ],
+    },
+    {
+      expandGlobs: false,
+      withRepo: withTinyFileTree,
+      patterns: ["src/gateway/**/*.test.ts"],
+      expected: ["src/gateway/**/*.test.ts"],
+    },
+  ])(
+    "writes include files with expandGlobs=$expandGlobs",
+    ({ expandGlobs, withRepo, patterns, expected }) => {
+      withRepo(
+        {
+          "src/gateway/core.test.ts": "",
+          "src/gateway/server-methods/ping.test.ts": "",
+          "src/gateway/server-startup.test.ts": "",
+        },
+        (cwd) => {
+          const includeFile = path.join(cwd, "include.json");
+          writeVitestIncludeFile(includeFile, patterns, { cwd, expandGlobs });
+          expect(JSON.parse(fs.readFileSync(includeFile, "utf8"))).toEqual(expected);
+        },
+      );
+    },
+  );
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
     const [spec] = createVitestRunSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
@@ -3711,24 +3667,6 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
-  it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
-    vi.stubEnv("CI", "1");
-    vi.stubEnv("GITHUB_ACTIONS", "");
-    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
-    try {
-      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
-
-      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
-      expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
   it("raises the effective last aggregate extension heap override", () => {
     const specs = applyFullExtensionsHeapBudget([
       {
@@ -3740,16 +3678,23 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
   });
 
-  it("splits the Testbox agentic and extension shards into bounded processes", () => {
+  it.each([false, true])("bounds full-suite CI processes for Testbox=%s", (testbox) => {
     vi.stubEnv("CI", "1");
     vi.stubEnv("GITHUB_ACTIONS", "");
-    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "1");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", testbox ? "1" : "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
     try {
       const plans = buildFullSuiteVitestRunPlans([], process.cwd());
       const configs = plans.map((plan) => plan.config);
 
+      if (!testbox) {
+        expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+        expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
+        return;
+      }
       expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
       expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
