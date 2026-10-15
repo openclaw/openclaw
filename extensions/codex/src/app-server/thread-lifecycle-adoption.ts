@@ -344,9 +344,6 @@ function observeCodexThreadConfiguration(
           const timer = setTimeout(finish, 2_000);
           onUnload = finish;
           params.signal?.addEventListener("abort", finish, { once: true });
-          if (params.signal?.aborted || unloaded) {
-            finish();
-          }
         });
       }
       assertCurrent();

@@ -55,15 +55,19 @@ export function withEphemeralCodexAuthStore(params: {
   return args === startOptions.args ? startOptions : { ...startOptions, args };
 }
 
-/** OpenClaw retains subscriptions for warm/child work; native post-release caching is redundant. */
+export function usesManagedCodexThreadUnloading(start: CodexAppServerStartOptions): boolean {
+  return (
+    start.transport === "stdio" &&
+    start.homeScope !== "user" &&
+    !isCodexAppServerProxyLaunch(start.args)
+  );
+}
+
+// OpenClaw retains warm/child subscriptions; native post-release caching is redundant.
 export function withManagedCodexThreadUnloading(
   startOptions: CodexAppServerStartOptions,
 ): CodexAppServerStartOptions {
-  if (
-    startOptions.transport !== "stdio" ||
-    startOptions.homeScope === "user" ||
-    isCodexAppServerProxyLaunch(startOptions.args)
-  ) {
+  if (!usesManagedCodexThreadUnloading(startOptions)) {
     return startOptions;
   }
   const args = normalizeCodexAppServerArgs(startOptions.args, "thread_unload_delay_secs=0");

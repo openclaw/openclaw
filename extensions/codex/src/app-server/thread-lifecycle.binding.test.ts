@@ -371,7 +371,7 @@ async function createManualResumeFixture(
   }
   const response = threadStartResult(threadId, { cwd: workspaceDir });
   const thread = { ...response.thread, path: rolloutPath };
-  let resumes = 0;
+  const unsubscribed = createDeferred();
   const harness = createFakeCodexAppServerClient(async (method: string) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
@@ -399,10 +399,10 @@ async function createManualResumeFixture(
       };
     }
     if (method === "thread/unsubscribe") {
-      return { status: "unsubscribed" };
-    }
-    if (method === "thread/resume") {
-      if (resumes++ > 0 && options.receipt !== "none" && options.receipt !== "stale") {
+      if (options.receipt === "unrelated" || options.receipt === "stale") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      if (options.receipt !== "none" && options.receipt !== "stale") {
         await harness.notify({
           method: "thread/status/changed",
           params: {
@@ -411,6 +411,10 @@ async function createManualResumeFixture(
           },
         });
       }
+      unsubscribed.resolve();
+      return { status: "unsubscribed" };
+    }
+    if (method === "thread/resume") {
       return { ...response, thread };
     }
     if (method === "thread/inject_items") {
@@ -531,6 +535,7 @@ async function createManualResumeFixture(
     common,
     sessionFile,
     threadId,
+    unsubscribed: unsubscribed.promise,
     identity: {
       kind: "session" as const,
       agentId: "main",
@@ -1117,7 +1122,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
           userProfile: fixture.common.appServer.start.env?.USERPROFILE,
         });
         const handlers = [...fixture.notifications];
-        await expect(fixture.start()).rejects.toThrow(error);
+        const rejected = expect(fixture.start()).rejects.toThrow(error);
+        if (options.receipt) {
+          await fixture.unsubscribed;
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        await rejected;
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
