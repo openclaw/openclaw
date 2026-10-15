@@ -20,7 +20,7 @@ export function createPluginToolFactoryContext(params: {
   context: OpenClawPluginToolContext;
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
-}): OpenClawPluginToolContext<2> {
+}): OpenClawPluginToolContext {
   const { entry, registry, context } = params;
   if (context.memoryAudience) {
     assertMemoryAudienceSession(context.memoryAudience, context.sessionKey);
@@ -59,6 +59,11 @@ export function createPluginToolFactoryContext(params: {
     get senderIsOwner() {
       return continuation ? continuation.isCurrent() : context.senderIsOwner;
     },
-    assertInvocationCurrent,
+    // V1 callers may inspect metadata or run one-shot tools without an admitted
+    // invocation. Do not present a lifecycle-only check as host authority.
+    assertInvocationCurrent:
+      entry.contextVersion === 2 || params.assertInvocationCurrent || continuation
+        ? assertInvocationCurrent
+        : undefined,
   };
 }

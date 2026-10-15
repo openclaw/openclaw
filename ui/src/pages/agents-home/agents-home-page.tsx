@@ -51,12 +51,12 @@ export function AgentsHomePage(props: { active?: boolean }) {
     <openclaw-agents-home-page>
       <AgentsHomeView
         cards={cards()}
+        canCreate={snapshot().canCreate}
         context={context}
         connected={snapshot().connected}
         loading={snapshot().roster.loading}
         error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
         onRetry={() => void store.refresh()}
-        canCreate={snapshot().canCreate}
       />
     </openclaw-agents-home-page>
   );

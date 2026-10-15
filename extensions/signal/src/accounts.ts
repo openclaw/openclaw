@@ -276,12 +276,6 @@ export function listEnabledSignalAccounts(cfg: OpenClawConfig): ResolvedSignalAc
     .filter((account) => account.enabled);
 }
 
-function normalizeSignalReplyToMode(value: unknown): ReplyToMode | undefined {
-  return value === "off" || value === "first" || value === "all" || value === "batched"
-    ? value
-    : undefined;
-}
-
 export function resolveSignalReplyToMode(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -298,10 +292,10 @@ export function resolveSignalReplyToMode(params: {
   const chatType =
     params.chatType === "direct" || params.chatType === "group" ? params.chatType : undefined;
   return (
-    normalizeSignalReplyToMode(chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
-    normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
-    normalizeSignalReplyToMode(chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
-    normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
+    (chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
+    accountConfig?.replyToMode ??
+    (chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
+    signalConfig?.replyToMode ??
     "all"
   );
 }

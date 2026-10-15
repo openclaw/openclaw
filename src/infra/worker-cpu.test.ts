@@ -41,6 +41,24 @@ async function createWorker(filename?: URL) {
 }
 
 describe("worker CPU lifecycle", () => {
+  it.each([
+    ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
+    ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],
+  ] as const)("attributes Code Mode %s before pool cleanup", async (code, reason) => {
+    const filename = join(tempDirs.make("worker-retirement-"), "code-mode-node.worker.js");
+    await writeFile(filename, idleSource);
+    const before = getTrackedWorkerLifecycleSnapshot();
+    const worker = await createWorker(pathToFileURL(filename));
+    worker.on("error", () => markWorkerRetirement(worker, "closed"));
+    worker.emit("error", Object.assign(new Error("synthetic native failure"), { code }));
+    await worker.terminate();
+    const count = (snapshot: typeof before) =>
+      snapshot.workerLifecycle
+        .find(({ script }) => script === "code-mode-node.worker.js")
+        ?.retired.find((entry) => entry.reason === reason)?.count ?? 0;
+    expect(count(getTrackedWorkerLifecycleSnapshot()) - count(before)).toBe(1);
+  });
+
   it("keeps Code Mode slots until native exit and bounds them across worker churn", async () => {
     const handles: (EventEmitter & {
       threadId: number;
@@ -484,9 +502,17 @@ describe("worker CPU lifecycle", () => {
         4 * 1024 * 1024,
       );
       const closed = once(port, "close");
-      await pool.close();
+      const beforeClose = getTrackedWorkerLifecycleSnapshot();
+      await pool.close(undefined, "eviction");
       await closed;
       expect(sampleTrackedWorkerMemory()).toMatchObject({ workerCount: 0, workerHeapUsedBytes: 0 });
+      const afterClose = getTrackedWorkerLifecycleSnapshot();
+      const evictions = (snapshot: typeof beforeClose) =>
+        snapshot.workerLifecycle
+          .flatMap((entry) => entry.retired)
+          .filter(({ reason }) => reason === "eviction")
+          .reduce((total, { count }) => total + count, 0);
+      expect(evictions(afterClose) - evictions(beforeClose)).toBe(1);
     } finally {
       Atomics.store(gate, 0, 1);
       completeNative?.();

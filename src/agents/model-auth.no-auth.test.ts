@@ -6,6 +6,7 @@ import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { getApiKeyForModelCore as resolveModelAuth } from "./model-auth-model.js";
 import { resolveApiKeyForProviderCore as resolveAuth } from "./model-auth-provider.js";
@@ -23,7 +24,7 @@ function configForProviders<T extends Record<string, ModelProviderConfig>>(provi
 }
 
 function createModelConfig() {
-  return makeProviderModelFixture({
+  return makeProviderModelFixture<"openai-completions">({
     id: "llama3",
     provider: "custom-studio",
     api: "openai-completions",
@@ -59,7 +60,7 @@ describe("explicit provider no-auth", () => {
       const auth = await resolveAuth({
         provider: "custom-studio",
         cfg: credential === "runtime-ref" ? runtimeConfig : sourceConfig,
-        store: authStore(
+        store: authStore<AuthProfileStore["profiles"]>(
           credential === "stored" || credential === "pinned"
             ? { "custom-studio:manual": keyCredential("custom-studio", "synthetic-stored-key") }
             : {},
