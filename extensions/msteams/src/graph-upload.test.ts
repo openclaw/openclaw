@@ -24,7 +24,7 @@ const tokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
 
 afterEach(() => vi.unstubAllGlobals());
 
-type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
+type FetchCall = [string, RequestInit | undefined];
 
 function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCall {
   const call = fetchFn.mock.calls[index] as unknown as FetchCall | undefined;
@@ -40,11 +40,12 @@ function expectGraphUploadFetch(
   contentType = "application/octet-stream",
 ): void {
   const [url, init] = requireFetchCall(fetchFn);
+  const headers = new Headers(init?.headers);
   expect(url).toBe(expectedUrl);
   expect(init?.method).toBe("PUT");
-  expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-  expect(init?.headers?.["Content-Type"]).toBe(contentType);
-  expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+  expect(headers.get("Authorization")).toBe("Bearer graph-token");
+  expect(headers.get("Content-Type")).toBe(contentType);
+  expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
 function bodyOnlyErrorResponse(body: string, status = 500): Response {

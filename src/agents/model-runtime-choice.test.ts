@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { prepareModelChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
@@ -842,6 +843,66 @@ describe("prepared model support admission", () => {
   const implicitNative: OpenClawConfig = {
     agents: { defaults: { model: "fixture/native", models: { "fixture/native": {} } } },
   };
+
+  it.each(["anthropic", "claude-cli"])(
+    "rechecks recovered native auth before admitting %s without a catalog refresh",
+    async (provider) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
+      try {
+        const raw = `${provider}/claude-opus-5-5`;
+        const config: OpenClawConfig = {
+          agents: {
+            defaults: { model: raw, models: { [raw]: { agentRuntime: { id: "claude-cli" } } } },
+          },
+        };
+        const row = { provider, id: "claude-opus-5-5", name: "Claude" };
+        const owner = publish(() => true, config, {
+          modelCatalog: { entries: [row], routeVariants: [row] },
+          configuredRuntimeModels: [
+            {
+              provider,
+              modelId: row.id,
+              model: makeProviderModelFixture({
+                provider,
+                id: row.id,
+                name: row.name,
+                api: "anthropic-messages",
+                baseUrl: "https://api.anthropic.com",
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              }),
+            },
+          ],
+          metadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+          }),
+        });
+        const recheckNativeLogin = vi.fn(async () => {
+          await Promise.resolve();
+          Object.assign(owner, { authModes: { "claude-cli": "api_key" } });
+        });
+        Object.assign(owner, { recheckNativeLogin });
+        const result = await prepareModelChoice({ ...selection, cfg: config, raw });
+        expect(result.kind, JSON.stringify(result)).toBe("resolved");
+        expect(result).toMatchObject({
+          kind: "resolved",
+          ref: { provider, model: "claude-opus-5-5" },
+        });
+        expect(recheckNativeLogin).toHaveBeenCalledExactlyOnceWith({ force: true });
+      } finally {
+        cliBackendsTesting.resetDepsForTest();
+      }
+    },
+  );
 
   it.each([
     { ownership: "catalog", source: "override" },
