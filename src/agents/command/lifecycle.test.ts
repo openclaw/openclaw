@@ -326,6 +326,53 @@ describe("createAgentCommandLifecycle", () => {
     );
   });
 
+  it("replaces a provisional overflow with the final compaction failure", async () => {
+    emitAgentEvent.mockClear();
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error:
+          "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        errorObservation: { failoverReason: "context_overflow" },
+      },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "compaction-recovery-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state,
+    });
+    const text =
+      "Auto-compaction failed before the next model request: the model exhausted its summary output budget without producing summary text. Try again or run /compact.";
+    const result = {
+      payloads: [{ text, isError: true }],
+      meta: {
+        durationMs: 0,
+        finalAssistantVisibleText: text,
+        error: { kind: "compaction_failure" as const, message: "Summary output budget exhausted" },
+      },
+    };
+    const terminal = {
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
+    expect(lifecycle.resolveResultError(result, false)).toBe(text);
+    expect(lifecycle.resolveTerminalError(result, false, terminal)).toBe(text);
+    lifecycle.emitResultError(result, false, terminal);
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: text, executionSettled: true }),
+      }),
+    );
+    expect(emitAgentEvent.mock.calls[0]?.[0].data).not.toHaveProperty("errorObservation");
+  });
+
   it.each([
     "lifecycle callback",
     "fallback payload",
