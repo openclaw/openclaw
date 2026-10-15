@@ -92,6 +92,40 @@ function mountObservedHost(
   };
 }
 
+it("hides archived pages in the restored sidebar before live data arrives", async () => {
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  gateway.publish({ client: null, phase: "connecting", hello: null });
+  const context = createContext(gateway.gateway, createSessions("main", []));
+  const { sidebar: host } = await mountSidebarContext(context);
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions([
+      projectSidebarSession({
+        key: "agent:main:active",
+        label: "Active dashboard",
+        hasBoard: true,
+      }),
+      projectSidebarSession({
+        key: "agent:main:archived",
+        label: "Archived dashboard",
+        hasBoard: true,
+        archived: true,
+      }),
+    ]),
+  });
+  host.requestUpdate();
+  await host.updateComplete;
+
+  expect(
+    host.querySelector('.sidebar-pages [data-session-key="agent:main:active"]'),
+  ).not.toBeNull();
+  expect(host.querySelector('.sidebar-pages [data-session-key="agent:main:archived"]')).toBeNull();
+  expect(host.querySelector(".sidebar-pages .sidebar-session-sort")).toBeNull();
+});
+
 it("paints the restored roster and workspace in the first sidebar update", async () => {
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
   gateway.publish({ client: null, phase: "connecting", hello: null });

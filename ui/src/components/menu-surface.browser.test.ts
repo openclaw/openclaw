@@ -167,11 +167,19 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(menu.contains(hit)).toBe(true);
     expect(surface.getBoundingClientRect().width).toBe(0);
     menu.style.left = "250px";
-    await expect.poll(() => nearby).toEqual([false, true]);
+    // Occlusion samples geometry on animation frames. Wait for that boundary
+    // rather than racing a wall-clock poll against background WebKit frames.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true]);
     expect(distant).toEqual([false]);
     menu.style.left = "850px";
-    await expect.poll(() => nearby).toEqual([false, true, false]);
-    await expect.poll(() => distant).toEqual([false, true]);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(nearby).toEqual([false, true, false]);
+    expect(distant).toEqual([false, true]);
   });
 
   it("paints a dropdown above the divider through its own popover", async () => {

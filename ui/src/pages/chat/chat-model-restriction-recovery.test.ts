@@ -40,6 +40,7 @@ function fixture(
     repeatRefusal?: boolean;
     unbound?: boolean;
     materializedSessionId?: string;
+    remembered?: boolean;
   } = {},
 ) {
   if (options.send) {
@@ -92,6 +93,16 @@ function fixture(
     currentSessionId: options.unbound ? undefined : recovery.sessionId,
     requestHandlers: {
       "sessions.list": () => (materialized ? result : initialResult),
+      "config.get": () => ({
+        hash: "config-revision",
+        config: {
+          agents: {
+            entries: {
+              "selected-agent": { nativeRuntimeConsent: options.remembered ? ["opencode"] : [] },
+            },
+          },
+        },
+      }),
       "sessions.patch": () => {
         patches += 1;
         if (patches === 1 && !options.send) {
@@ -190,7 +201,7 @@ it.each([false, true])(
     });
     expect(
       host.request.mock.calls.some(
-        ([method]) => method === "chat.send" || method.startsWith("config."),
+        ([method]) => method === "chat.send" || method === "config.patch",
       ),
     ).toBe(false);
     expect(host.chatMessage).toBe("Keep this draft; never replay it");
@@ -199,6 +210,20 @@ it.each([false, true])(
     );
   },
 );
+
+it("uses remembered native permissions without prompting or writing session consent", async () => {
+  const { host } = fixture({ remembered: true });
+  await expect(switchChatModel(host, "fixture/selected", "global", "opencode")).resolves.toBe(true);
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  const patches = requestCalls(host.request, "sessions.patch");
+  expect(patches[1]?.[1]).toMatchObject({
+    agentRuntime: "opencode",
+    permissionMode: "full",
+    sandboxMode: "off",
+  });
+  expect(patches[1]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
+  expect(requestCalls(host.request, "config.patch")).toHaveLength(0);
+});
 
 it.each([
   {
@@ -327,6 +352,18 @@ it("does not open a late refusal on a replacement connection", async () => {
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+});
+
+it("retries a first turn using remembered consent without repinning its model", async () => {
+  const { host } = fixture({ send: true, remembered: true });
+  await handleSendChat(host);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
+  const patches = requestCalls(host.request, "sessions.patch");
+  expect(patches).toHaveLength(1);
+  expect(patches[0]?.[1]).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
+  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
+  expect(patches[0]?.[1]).not.toHaveProperty("model");
+  expect(patches[0]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
 });
 
 it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
