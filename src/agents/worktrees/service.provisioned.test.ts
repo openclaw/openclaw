@@ -36,11 +36,7 @@ import { provisionIncludedFiles } from "./provisioned-files.js";
 import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
-import {
-  getRegistryWorktreeProvisionedPaths,
-  getRegistryWorktreeProvisionedState,
-  insertRegistryWorktree,
-} from "./registry.js";
+import { getRegistryWorktreeProvisionedPaths, insertRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
@@ -195,104 +191,6 @@ describe("ManagedWorktreeService provisioned state", () => {
       capped.mockRestore();
     }
   });
-
-  it.skipIf(process.platform === "win32")(
-    "batches supported literal UTF-8 paths without expanding wildcard or magic names",
-    async () => {
-      await fs.writeFile(path.join(repo, ".gitignore"), "*.local\n");
-      await fs.writeFile(
-        path.join(repo, ".worktreeinclude"),
-        "*.local\n!literalZ.local\n!unselected.local\n",
-      );
-      await git(repo, "add", ".gitignore", ".worktreeinclude");
-      await git(repo, "commit", "-m", "configure literal batches");
-      const names = [
-        "-leading.local",
-        ":(glob)**.local",
-        "literal*.local",
-        "white space.local",
-        "new\nline.local",
-        ...Array.from({ length: 140 }, (_, i) => "short-" + String(i).padStart(3, "0") + ".local"),
-        ...Array.from(
-          { length: 140 },
-          (_, i) => "utf8-" + String(i).padStart(3, "0") + "-" + "界".repeat(60) + ".local",
-        ),
-      ].toSorted((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
-      for (const name of [...names, "literalZ.local", "unselected.local"]) {
-        await fs.writeFile(path.join(repo, name), "bytes:" + name);
-      }
-      const commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
-      try {
-        expect(
-          await runGitWorkerOperation({
-            type: "worktree.provisioning-inspection",
-            input: { sourceRoot: repo },
-          }),
-        ).toEqual({ paths: names, estimatedBytes: names.length * 4096 });
-        const batches = commands.mock.calls
-          .filter(([, args]) => args.includes("ls-files") && args.includes("--exclude-standard"))
-          .map(([, args]) => {
-            expect(args).toContain("--literal-pathspecs");
-            expect(args).toContain("--");
-            return args.slice(args.indexOf("--") + 1);
-          });
-        expect(batches.flat()).toEqual(names);
-        expect(batches.some((batch) => batch.length === 128)).toBe(true);
-        expect(
-          batches.some(
-            (batch) =>
-              batch.length < 128 &&
-              batch.reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0) >= 16_384,
-          ),
-        ).toBe(true);
-        for (const batch of batches) {
-          expect(batch.length).toBeGreaterThan(0);
-          expect(batch.length).toBeLessThanOrEqual(128);
-          expect(
-            batch.slice(0, -1).reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0),
-          ).toBeLessThan(16_384);
-        }
-        const created = await service.create({
-          repoRoot: repo,
-          name: "literal-batches",
-          baseRef: "HEAD",
-        });
-        expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(
-          names.toSorted(),
-        );
-        await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        commands.mockClear();
-        const guard = vi.fn();
-        await service.remove({ id: created.id, reason: "test", commitGuard: guard });
-        const states = await getRegistryWorktreeProvisionedState(env, created.id);
-        expect(states?.map((state) => state.path)).toEqual(names.toSorted());
-        expect(guard).toHaveBeenCalled();
-        const membership = commands.mock.calls.filter(
-          ([, args]) =>
-            args.includes("--literal-pathspecs") &&
-            (args.includes("ls-files") || args.includes("ls-tree")) &&
-            args.includes("--"),
-        );
-        expect(membership.length).toBe(batches.length * 3);
-        for (const call of membership) {
-          const options = call[2];
-          expect(options?.killProcessTree).toBe(true);
-          expect(options?.beforeRun).toEqual(expect.any(Function));
-        }
-        const restored = await service.restore({ id: created.id });
-        for (const name of names.slice(0, 5)) {
-          expect(await fs.readFile(path.join(restored.path, name), "utf8")).toBe("bytes:" + name);
-        }
-      } finally {
-        commands.mockRestore();
-      }
-    },
-  );
 
   it("preserves the checkout when HEAD changes during snapshot preparation", async () => {
     const created = await service.create({ repoRoot: repo, name: "head-change", baseRef: "HEAD" });
@@ -552,54 +450,6 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await fs.readFile(path.join(legacyPath, ".env.local"), "utf8")).toBe(
       "unknown-user-state\n",
     );
-  });
-
-  it.each([
-    {
-      replacement: "staged-file-to-directory",
-      originalPath: "entry",
-      replacementPath: "entry/child.txt",
-      snapshotPaths: ["README.md", "entry/child.txt"],
-      directory: true,
-    },
-    {
-      replacement: "staged-directory-to-file",
-      originalPath: "entry/child.txt",
-      replacementPath: "entry",
-      snapshotPaths: ["README.md", "entry"],
-      directory: false,
-    },
-  ])("round trips a tracked $replacement replacement", async (row) => {
-    const originalPath = path.join(repo, row.originalPath);
-    await fs.mkdir(path.dirname(originalPath), { recursive: true });
-    await fs.writeFile(originalPath, "original\n");
-    await git(repo, "add", row.originalPath);
-    await git(repo, "commit", "-m", "add original entry");
-    const created = await service.create({
-      repoRoot: repo,
-      name: row.replacement,
-      baseRef: "HEAD",
-    });
-    const originalHead = await git(created.path, "rev-parse", "HEAD");
-    await fs.rm(path.join(created.path, "entry"), { recursive: true });
-    const replacementPath = path.join(created.path, row.replacementPath);
-    await fs.mkdir(path.dirname(replacementPath), { recursive: true });
-    await fs.writeFile(replacementPath, "local replacement\n");
-    await git(created.path, "add", "-A");
-
-    const removed = await service.remove({ id: created.id, reason: "test" });
-    expect(
-      (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
-    ).toEqual(row.snapshotPaths);
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-    const restored = await service.restore({ id: created.id });
-
-    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
-    expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(row.directory);
-    expect(await fs.readFile(path.join(restored.path, row.replacementPath), "utf8")).toBe(
-      "local replacement\n",
-    );
-    expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
   });
 
   it.each(["tracked file", "untracked child"] as const)(

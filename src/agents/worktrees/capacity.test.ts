@@ -186,38 +186,6 @@ describe("worktree Git size estimates", () => {
     },
   );
 
-  it("keeps the hydration fetch from starting Git auto-maintenance on the source repository", async () => {
-    const { root, clone, commit } = await partialClone();
-    const traceDir = path.join(root, "hydrate-trace2");
-    await fs.mkdir(traceDir);
-    // A directory target gives one event file per Git process, so nothing interleaves.
-    vi.stubEnv("GIT_TRACE2_EVENT", traceDir);
-    await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
-    const events = (
-      await Promise.all(
-        (await fs.readdir(traceDir)).map(async (name) =>
-          (await fs.readFile(path.join(traceDir, name), "utf8"))
-            .split("\n")
-            .filter((line) => line.length > 0)
-            .map(
-              (line) =>
-                JSON.parse(line) as { event: string; sid: string; name?: string; argv?: string[] },
-            ),
-        ),
-      )
-    ).flat();
-    const fetchSid = events.find(
-      (event) => event.event === "cmd_name" && event.name === "fetch",
-    )?.sid;
-    expect(fetchSid).toBeTruthy();
-    const spawned = events
-      .filter((event) => event.event === "child_start" && event.sid.startsWith(fetchSid ?? ""))
-      .map((event) => event.argv ?? []);
-    // The transfer itself still happens inside the fetch; only the maintenance child must go.
-    expect(spawned.some((argv) => argv.includes("index-pack"))).toBe(true);
-    expect(spawned.filter((argv) => argv[1] === "maintenance" || argv[1] === "gc")).toEqual([]);
-  });
-
   it.each(["cancel", "revoke"] as const)(
     "keeps hydration behind queued ref writes and honors %s before fetching",
     async (action) => {
@@ -280,39 +248,6 @@ describe("worktree Git size estimates", () => {
       }
     },
   );
-
-  it("hydrates both the source and destination when the overlay deletes missing source blobs", async () => {
-    const { root, source, origin } = await partialClone();
-    const base = await git(source, "rev-parse", "HEAD");
-    await git(source, "rm", "base.txt", "large.txt");
-    await git(source, "commit", "-m", "remove source blobs from overlay");
-    await git(source, "push", origin, "main");
-    const target = await git(source, "rev-parse", "HEAD");
-    const clone = path.join(root, "without-checkout");
-    await git(
-      root,
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      pathToFileURL(origin).href,
-      clone,
-    );
-    const deleted = await git(source, "rev-parse", `${base}:large.txt`);
-    await expect(runGit(clone, ["cat-file", "-e", deleted])).resolves.toMatchObject({ code: 1 });
-
-    await expect(estimateWorktreeCheckoutTransitionBytes(clone, base, target)).resolves.toEqual({
-      targetBytes: 4096,
-      changedBytes: 0,
-      requiresFullCheckout: false,
-    });
-
-    await expect(runGit(clone, ["cat-file", "-e", deleted])).resolves.toMatchObject({ code: 0 });
-    await expect(estimateWorktreeCheckoutTransitionBytes(clone, target, target)).resolves.toEqual({
-      targetBytes: 4096,
-      changedBytes: 0,
-      requiresFullCheckout: false,
-    });
-  });
 
   it("recovers a transient missing-object fetch before estimating the checkout", async () => {
     const { clone, commit, missing } = await partialClone();

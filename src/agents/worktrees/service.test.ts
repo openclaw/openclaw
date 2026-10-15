@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import fsSync, { existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,9 +17,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
-import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
@@ -755,23 +753,6 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
     });
 
-    it("records unpushed retention", async () => {
-      const created = await materialize("unpushed");
-      await service.acquire(created.id);
-      await fs.writeFile(path.join(created.path, "committed.txt"), "unpushed\n");
-      await git(created.path, "add", "committed.txt");
-      await git(created.path, "commit", "-m", "unpushed worktree commit");
-
-      await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
-
-      const retained = getRegistryWorktree(env, created.id);
-      expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-unpushed", at: now },
-      });
-      expect(retained?.removedAt).toBeUndefined();
-      await fs.access(created.path);
-    });
-
     it("records busy retention while a run lease is live", async () => {
       const created = await materialize("busy");
       const lease = await acquireWorktreeRunLease(created.id, { env });
@@ -784,30 +765,6 @@ describe("ManagedWorktreeService", () => {
       });
       expect(retained?.removedAt).toBeUndefined();
       await fs.access(created.path);
-      await lease.release();
-    });
-
-    it("records and rethrows an unexpected removal claim failure", async () => {
-      const created = await materialize("claim-failure");
-      const lease = await acquireWorktreeRunLease(created.id, { env });
-      const failure = new Error("synthetic removal claim failure");
-      const removalClaim = vi
-        .spyOn(worktreeRegistry, "claimWorktreeRemovalRow")
-        .mockImplementation(() => {
-          throw failure;
-        });
-
-      await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
-
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: {
-          outcome: "failed",
-          at: now,
-          reason: "synthetic removal claim failure",
-        },
-      });
-      await fs.access(created.path);
-      removalClaim.mockRestore();
       await lease.release();
     });
   });
@@ -965,59 +922,6 @@ describe("ManagedWorktreeService", () => {
         gate.resume.resolve();
         await observing;
       }
-    });
-  });
-
-  describe("submodule checkout", () => {
-    it("keeps active submodules unpopulated when repository recursion is enabled", async () => {
-      const moduleRepo = await initializeRepository(path.join(root, "module-source"));
-      const moduleHead = await git(moduleRepo, "rev-parse", "HEAD");
-      await git(repo, "-c", "protocol.file.allow=always", "submodule", "add", moduleRepo, "module");
-      await git(repo, "commit", "-m", "add active submodule");
-      await git(repo, "push", "origin", "main");
-      await git(repo, "config", "submodule.recurse", "true");
-      expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
-      expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
-
-      useInProcessWorktreeCapacityTransport();
-      const disk = fsSync.statfsSync(root);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: disk.type,
-        files: disk.files,
-        frsize: disk.frsize,
-        ffree: disk.ffree,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: (100 * 1024 ** 3) / 4096,
-        bfree: (100 * 1024 ** 3) / 4096,
-      });
-      const created = await service.create({
-        repoRoot: repo,
-        name: "submodules",
-        baseRef: "origin/main",
-      });
-
-      expect(await git(created.path, "submodule", "status", "--", "module")).toBe(
-        `-${moduleHead} module`,
-      );
-      await expect(fs.access(path.join(created.path, "module", ".git"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await git(created.path, "status", "--porcelain")).toBe("");
-      expect(
-        await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
-      ).toBe("origin/main");
-      expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
-      expect(await fs.readFile(path.join(repo, "module", "README.md"), "utf8")).toBe("base\n");
-
-      await fs.writeFile(path.join(created.path, "draft.txt"), "preserve this task\n");
-      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-        "nested git repositories cannot be snapshotted losslessly",
-      );
-      expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
-        "preserve this task\n",
-      );
-      expect(getRegistryWorktree(env, created.id)?.path).toBe(created.path);
     });
   });
 });

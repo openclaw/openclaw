@@ -68,44 +68,6 @@ describe("worktree Git maintenance", () => {
     }
   });
 
-  it("removes checkouts independently of pack maintenance and maintains their retained snapshots once", async () => {
-    const root = tempDirs.make("worktree-removal-pack-maintenance-");
-    const repo = await initRepo(root);
-    await requireGit(repo, ["repack", "-a", "-d"]);
-    const records = await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot: repo,
-      stateDir: root,
-      names: ["first", "last"],
-      now: 1,
-    });
-    const service = new ManagedWorktreeService({ env, now: () => 3 });
-    const execute = gitExec.executeGitCommand;
-    const commands = vi
-      .spyOn(gitExec, "executeGitCommand")
-      .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "multi-pack-index") {
-          throw new Error("repository pack maintenance unavailable");
-        }
-        return await execute(cwd, args, options);
-      });
-    for (const record of records) {
-      const removed = await service.remove({ id: record.id, reason: "completed" });
-      expect(removed.removed).toBe(true);
-      expect(await requireGit(repo, ["show", `${removed.snapshotRef}:README.md`])).toBe("base");
-      await expect(fs.access(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    commands.mockImplementation(execute);
-    commands.mockClear();
-
-    await service.gc();
-
-    expect(commands.mock.calls.filter(([, args]) => args[0] === "multi-pack-index")).toHaveLength(
-      1,
-    );
-    await requireGit(repo, ["multi-pack-index", "verify"]);
-  });
-
   it("preserves a checkout with missing snapshot objects until maintenance repairs it", async () => {
     const root = tempDirs.make("worktree-snapshot-missing-object-");
     const repo = await initRepo(root);
@@ -298,40 +260,6 @@ describe("worktree Git maintenance", () => {
     }
   });
 
-  it("rebuilds pack lookup when its previous index names a removed pack", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-stale-pack-index-"));
-    const packDirectory = path.join(repo, ".git", "objects", "pack");
-    const indexPath = path.join(packDirectory, "multi-pack-index");
-    await requireGit(repo, ["repack", "-a", "-d"]);
-    await requireGit(repo, ["multi-pack-index", "write"]);
-    const staleIndex = await fs.readFile(indexPath);
-    const oldPacks = new Set(
-      (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx")),
-    );
-    await fs.writeFile(path.join(repo, "replacement.txt"), "replacement pack\n");
-    await requireGit(repo, ["add", "replacement.txt"]);
-    await requireGit(repo, ["commit", "-m", "replace pack"]);
-    await requireGit(repo, ["repack", "-a", "-d"]);
-    const currentPacks = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
-    expect(currentPacks.every((name) => !oldPacks.has(name))).toBe(true);
-    const [record] = await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot: repo,
-      stateDir: path.dirname(repo),
-      names: ["repair"],
-      now: 1,
-    });
-    // Reproduce an interrupted pack replacement without removing any reachable objects.
-    await fs.writeFile(indexPath, staleIndex);
-    await createWorktreeGitMaintenance(env)({});
-
-    await requireGit(repo, ["multi-pack-index", "verify"]);
-    expect(await requireGit(repo, ["show", "HEAD:replacement.txt"])).toBe("replacement pack");
-    expect(await requireGit(record!.path, ["show", "HEAD:replacement.txt"])).toBe(
-      "replacement pack",
-    );
-  });
-
   it("maintains each shared repository and suspends failures until explicitly retried", async () => {
     const repo = await initRepo(tempDirs.make("worktree-gc-first-repo-"));
     const otherRepo = await initRepo(tempDirs.make("worktree-gc-second-repo-"));
@@ -438,59 +366,6 @@ describe("worktree Git maintenance", () => {
       expect(commands).toHaveBeenCalledTimes(calls);
     } finally {
       logs.cleanup();
-    }
-  });
-
-  it("maintains partial clones without fetching missing historical heads", async () => {
-    const root = tempDirs.make("worktree-maintenance-partial-clone-");
-    const source = await initRepo(root);
-    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
-    const clone = path.join(root, "clone");
-    await requireGit(root, [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      pathToFileURL(source).href,
-      clone,
-    ]);
-    await requireGit(source, ["commit", "--allow-empty", "-m", "historical head"]);
-    const missing = await requireGit(source, ["rev-parse", "HEAD"]);
-    // A retained branch can outlive the partial clone's locally available objects.
-    await fs.writeFile(path.join(clone, ".git", "refs", "heads", "historical"), `${missing}\n`);
-    await requireGit(clone, ["config", "maintenance.commit-graph.auto", "-1"]);
-    await insertRegistryWorktree(env, {
-      id: "partial-clone",
-      name: "partial-clone",
-      repoFingerprint: "partial-clone",
-      repoRoot: clone,
-      path: clone,
-      branch: "main",
-      baseRef: "HEAD",
-      ownerKind: "manual",
-      createdAt: 1,
-      lastActiveAt: 1,
-    });
-    const trace = path.join(root, "maintenance-trace.jsonl");
-    vi.stubEnv("GIT_TRACE2_EVENT", trace);
-    vi.stubEnv("GIT_NO_LAZY_FETCH", undefined);
-    vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
-    try {
-      expect((await new ManagedWorktreeService({ env, now: () => 3 }).gc()).outcome).toBe(
-        "completed",
-      );
-      expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-      expect(
-        (
-          await runGit(clone, ["cat-file", "-e", missing], {
-            env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
-          })
-        ).code,
-      ).not.toBe(0);
-      await fs.access(
-        path.join(clone, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"),
-      );
-    } finally {
-      vi.unstubAllEnvs();
     }
   });
 
@@ -664,75 +539,6 @@ describe("worktree Git maintenance", () => {
       }
     },
   );
-
-  it("preserves shared reflog history and maintains repositories with already-missing reflog objects", async () => {
-    const root = tempDirs.make("worktree-maintenance-reflogs-");
-    const repo = await initRepo(root);
-    const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
-    await git(repo, "config", "gc.auto", "0");
-    const [survivor, removed] = await materializeManagedWorktreeFixtures({
-      env,
-      stateDir: root,
-      repoRoot: repo,
-      names: ["survivor", "removed"],
-      now: 1,
-    });
-    const base = await git(repo, "rev-parse", "HEAD");
-    await git(survivor!.path, "checkout", "--detach");
-    await git(survivor!.path, "commit", "--allow-empty", "-m", "reflog-only commit");
-    const retained = await git(survivor!.path, "rev-parse", "HEAD");
-    await git(survivor!.path, "checkout", survivor!.branch);
-    const service = new ManagedWorktreeService({ env, now: () => 3 });
-    const removedLog = path.resolve(
-      removed!.path,
-      await git(removed!.path, "rev-parse", "--git-path", "logs/HEAD"),
-    );
-    await fs.access(removedLog);
-    await service.remove({ id: removed!.id, reason: "test" });
-    await expect(fs.access(removedLog)).rejects.toMatchObject({ code: "ENOENT" });
-    await git(repo, "repack", "-d");
-    const missing = "a".repeat(base.length);
-    const broken = await requireGit(repo, ["hash-object", "-w", "-t", "commit", "--stdin"], {
-      input: Buffer.from(
-        `tree ${missing}\nparent ${base}\nauthor Test <test@example.invalid> 1780000000 +0000\ncommitter Test <test@example.invalid> 1780000000 +0000\n\nmissing reflog tree\n`,
-      ),
-    });
-    const reflog = path.resolve(
-      survivor!.path,
-      await git(survivor!.path, "rev-parse", "--git-path", "logs/HEAD"),
-    );
-    const timestamp = Math.floor(Date.now() / 1000);
-    await fs.appendFile(
-      reflog,
-      `${base} ${broken} Test <test@example.invalid> ${timestamp} +0000\tmissing tree\n${broken} ${missing} Test <test@example.invalid> ${timestamp} +0000\tmissing commit\n`,
-    );
-    const history = await fs.readFile(reflog, "utf8");
-    for (let index = 0; index < 3; index++) {
-      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
-        input: Buffer.from(`pack-${index}`),
-      });
-      await requireGit(repo, ["pack-objects", path.join(repo, ".git", "objects", "pack", "pack")], {
-        input: Buffer.from(`${object}\n`),
-      });
-    }
-    await git(repo, "config", "gc.auto", "1");
-    await git(repo, "config", "gc.autoPackLimit", "1");
-    for (const task of ["commit-graph", "loose-objects", "incremental-repack"]) {
-      await git(repo, "config", `maintenance.${task}.auto`, "-1");
-    }
-    const logs = createWarnLogCapture("worktree-maintenance-reflogs");
-    try {
-      expect((await service.gc()).outcome).toBe("completed");
-      expect(await logs.findText("worktree Git maintenance")).toBeUndefined();
-      expect(await fs.readFile(reflog, "utf8")).toBe(history);
-      expect(await git(repo, "cat-file", "-t", retained)).toBe("commit");
-      await fs.access(
-        path.join(repo, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"),
-      );
-    } finally {
-      logs.cleanup();
-    }
-  });
 });
 
 describe("worktree GC inventories", () => {

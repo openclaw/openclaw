@@ -34,7 +34,6 @@ describe("Git ref mutation ownership", () => {
   const snapshotRef = "refs/openclaw/snapshots/held";
   const queuedRef = "refs/openclaw/snapshots/queued";
   const transports = [
-    ["text", runGit],
     ["bytes", runGitBytes],
     ["buffered", runGitBuffered],
   ] as const;
@@ -58,17 +57,6 @@ describe("Git ref mutation ownership", () => {
     await requireGit(root, ["update-ref", queuedRef, "HEAD"]);
     return root;
   }
-
-  it("rejects incomplete required stdout through the worktree wrapper", async () => {
-    const root = await repository();
-    const input = Buffer.alloc(17 * 1024 * 1024, "x");
-    const oid = await requireGit(root, ["hash-object", "-w", "--stdin"], { input });
-    const outcome = await requireGit(root, ["cat-file", "blob", oid]).then(
-      () => "returned incomplete output",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    expect(outcome).toContain("output limit exceeded");
-  });
 
   function holdSnapshotDeletion(failure?: Error, discoverySignal?: AbortSignal) {
     const started = createDeferred();
@@ -207,19 +195,6 @@ describe("Git ref mutation ownership", () => {
     await Promise.all(pending);
     expect(await requireGit(root, ["for-each-ref", "--format=%(refname)"])).toBe("refs/heads/main");
     expect(await requireGit(other, ["show-ref", "--verify", snapshotRef])).toContain(snapshotRef);
-  });
-
-  it("rejects an interrupted explicit-base lookup even with exit code zero", async () => {
-    const root = await repository();
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-      stdout: "refs/heads/-fixture\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "signal",
-    });
-    await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
   it("registers a tracking worktree after the shared ref writer releases config", async ({

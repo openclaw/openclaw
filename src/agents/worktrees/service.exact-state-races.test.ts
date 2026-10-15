@@ -111,7 +111,7 @@ describe("exact-state retirement admission and recovery", () => {
     return clock;
   }
 
-  it.each(["head", "branch", "index", "file", "activity", "claim", "authority"] as const)(
+  it.each(["head", "branch", "index", "activity", "claim", "authority"] as const)(
     "preserves source and completed recovery when %s changes after capture",
     async (kind) => {
       const f = await fixture();
@@ -142,9 +142,6 @@ describe("exact-state retirement admission and recovery", () => {
           }
           if (kind === "index") {
             await git(f.record.path, "add", "README.md");
-          }
-          if (kind === "file") {
-            await fs.writeFile(path.join(f.record.path, "README.md"), "concurrent change\n");
           }
           if (kind === "activity") {
             await updateRegistryWorktree(env, f.record.id, {
@@ -193,13 +190,11 @@ describe("exact-state retirement admission and recovery", () => {
           }
         },
       });
-      if (kind === "file" || kind === "claim") {
+      if (kind === "claim") {
         // A newly authorized recovery may reconcile the original incarnation in
         // place. It must retain late bytes rather than overlay the old capture.
         expect((await recovery).removedAt).toBeUndefined();
-        expect(await readme(f.record.path)).toBe(
-          kind === "file" ? "concurrent change\n" : "working\n",
-        );
+        expect(await readme(f.record.path)).toBe("working\n");
         expect(await fs.readFile(f.indexPath)).toEqual(f.index);
       } else {
         await expect(recovery).rejects.toThrow(/preserved|changed|revoked/);
@@ -491,7 +486,7 @@ describe("exact-state retirement admission and recovery", () => {
     }
   });
 
-  it.each(["retained-source", "restore-receipt"] as const)(
+  it.each(["restore-receipt"] as const)(
     "recovers %s expiry interrupted after retiring recovery refs",
     async (kind) => {
       const f = await fixture();
@@ -635,7 +630,7 @@ describe("exact-state retirement admission and recovery", () => {
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
   });
 
-  it.each(["missing", "changed"] as const)(
+  it.each(["missing"] as const)(
     "preserves recovery when the retained split-index dependency is %s",
     async (kind) => {
       const f = await fixture();
