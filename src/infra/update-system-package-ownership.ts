@@ -5,7 +5,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandBuffered } from "../process/exec.js";
+import { type BufferedCommandResult, runCommandBuffered } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { isPathInside } from "./fs-safe.js";
@@ -42,6 +42,15 @@ type InspectionDiagnostic = { operation: InspectionOperation } & (
   | { code?: string }
   | { budgetMs: number }
 );
+
+/**
+ * A host that never installed the optional manager reports ENOENT from the
+ * launch, not from the query. Such a manager owns no file here, so there is no
+ * database to restore and no inventory to compare against.
+ */
+function isMissingManagerExecutable(result: BufferedCommandResult): boolean {
+  return result.termination === "error" && hasNodeErrorCode(result.error, "ENOENT");
+}
 
 export class SystemPackageOwnershipError extends UpdatePreMutationError {
   readonly owned: boolean;
@@ -90,6 +99,9 @@ async function readPackageFiles(
     env: owner.env,
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
   });
+  if (isMissingManagerExecutable(result)) {
+    return [];
+  }
   // pkg may emit a config error with exit 0; only complete, silent output is authoritative.
   const output = result.stdout.toString("utf8");
   const files = output === "" ? [] : output.slice(0, -1).split("\n");

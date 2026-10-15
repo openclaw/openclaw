@@ -118,6 +118,37 @@ describe("FreeBSD pkg update admission", () => {
     },
   );
 
+  it("admits a Linux npm root when pacman is not installed, without recovery guidance", async () => {
+    await withPackageRoots(async (_base, root) => {
+      const command = vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue({
+        stdout: `${path.dirname(root)}\n`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+      const onWarning = vi.fn();
+      const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+        pkgQueryResult("", {
+          code: null,
+          termination: "error",
+          error: Object.assign(new Error("spawn pacman ENOENT"), { code: "ENOENT" }),
+        }),
+      );
+      await expect(
+        shared.resolveGlobalManager({
+          root,
+          installKind: "package",
+          timeoutMs: 1000,
+          pkgOwnership: createSystemPackageOwnershipInspection(1000, { runCommand, onWarning }),
+        }),
+      ).resolves.toBe("npm");
+      expect(command).toHaveBeenCalled();
+      expect(onWarning).not.toHaveBeenCalled();
+    }, "linux");
+  });
+
   it("reuses completed admission after a long confirmation without timing out path inspection", async () => {
     await withPackageRoots(async (_base, root) => {
       vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);

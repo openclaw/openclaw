@@ -56,6 +56,47 @@ describe("system package ownership", () => {
     expect(host).not.toHaveBeenCalled();
   });
 
+  it.each(["linux", "freebsd"] as const)(
+    "admits roots silently when the %s package manager is not installed",
+    async (platform) => {
+      const onWarning = vi.fn();
+      const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+        result("", {
+          code: null,
+          termination: "error",
+          error: Object.assign(new Error("spawn pacman ENOENT"), { code: "ENOENT" }),
+        }),
+      );
+      await withMockedPlatform(platform, async () => {
+        const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+        await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
+        await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
+      });
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(onWarning).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still warns when the package manager cannot be launched for another reason", async () => {
+    const onWarning = vi.fn();
+    const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+      result("", {
+        code: null,
+        termination: "error",
+        error: Object.assign(new Error("spawn pacman EACCES"), { code: "EACCES" }),
+      }),
+    );
+    await withMockedPlatform("linux", async () => {
+      const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+      await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
+    });
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "pacman inspection failed during pacman query (EACCES). pacman ownership could not be verified. Restore access to the active pacman database and configuration, then retry. Continuing without verified system-package ownership.",
+      ),
+    );
+  });
+
   it.each(["linux"] as const)(
     "retains the pre-mutation error contract for a positive %s owner",
     async (platform) => {
