@@ -512,9 +512,20 @@ describe("attachGatewayWsConnectionHandler", () => {
         handler.setClient({
           socket,
           connId: handler.connId,
-          connect: { role: "operator", scopes: ["operator.read"] },
+          connect: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "openclaw-control-ui",
+              version: "test",
+              platform: "test",
+              mode: "webchat",
+            },
+            role: "operator",
+            scopes: ["operator.read"],
+          },
           usesSharedGatewayAuth: false,
-        } as GatewayWsClient),
+        }),
       ).toBe(true);
       const writes = vi.spyOn(request.socket, "_writev");
       const received: unknown[] = [];
