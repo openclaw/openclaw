@@ -515,6 +515,27 @@ describe("config cli", () => {
       },
     );
 
+    it("rejects protected model map replacement unless explicitly requested", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet("agents.defaults.models", '{"openai/gpt-5.4":{}}', "--strict-json"),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("Refusing to replace agents.defaults.models");
+    });
+
     it("rejects an absent expectation when a SecretRef redirects away from the caller path", async () => {
       const existingValue = "caller-value-present";
       const refId = "REDIRECTED_REF_ID";

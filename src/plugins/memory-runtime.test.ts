@@ -227,6 +227,56 @@ describe("memory runtime handles", () => {
     expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["registered", "standalone"] as const)(
+    "resolves the %s memory runtime without activating unrelated plugins",
+    async (selection) => {
+      const runtime = createRuntime();
+      if (selection === "registered") {
+        mocks.getMemoryRuntime.mockReturnValue(runtime);
+        expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
+          backend: "builtin",
+        });
+        expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+        return;
+      }
+      const main = createRegistry(runtime);
+      const research = createRegistry();
+      runtime.getMemorySearchManager.mockImplementationOnce(async () => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(main.registry);
+        return { manager: null, error: "no index" };
+      });
+      runtime.resolveMemoryBackendConfig.mockImplementationOnce(() => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(main.registry);
+        return { backend: "builtin" };
+      });
+      mocks.loadPluginRegistryHandle.mockImplementation(({ workspaceDir }) =>
+        workspaceDir === "/workspace/research" ? research.registry : main.registry,
+      );
+      await expect(
+        getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
+      ).resolves.toMatchObject({ manager: null, error: "no index" });
+      expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
+        activate: false,
+        config: memoryConfig,
+        onlyPluginIds: ["memory-core"],
+        workspaceDir: "/workspace/main",
+      });
+      expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+        cfg: memoryConfig,
+        agentId: "main",
+      });
+      for (const agentId of ["main", "main", "research"]) {
+        expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId })).toEqual({
+          backend: "builtin",
+        });
+      }
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenNthCalledWith(1, memoryConfig, "main");
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenLastCalledWith(memoryConfig, "research");
+      expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(2);
+      expect(research.runtime.resolveMemoryBackendConfig).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["present", "missing"] as const)(
     "reloads the same memory selection after its %s capability owner retires",
     async (capability) => {

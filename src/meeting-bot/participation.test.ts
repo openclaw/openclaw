@@ -665,20 +665,23 @@ describe("meeting participation SQLite value contract", () => {
 });
 
 describe("meeting participation native correction feedback", () => {
-  it("does not authorize retry of a successful native outcome", async () => {
-    const { owner, effect } = harness();
-    effect.mockResolvedValue({ status: "succeeded", correctable: true });
-    const outcome = await owner.execute(sessionId, request);
-    expect(outcome).toEqual({ requestId: request.requestId, status: "succeeded" });
-    await expect(
-      owner.execute(sessionId, {
-        ...request,
-        requestId: "correction",
-        correctionOf: request.requestId,
-      }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).toHaveBeenCalledTimes(1);
-  });
+  it.each(["succeeded", "failed", "uncertain", "unsupported"] as const)(
+    "does not authorize retry of a %s native outcome",
+    async (status) => {
+      const { owner, effect } = harness();
+      effect.mockResolvedValue({ status, correctable: true });
+      const outcome = await owner.execute(sessionId, request);
+      expect(outcome).toEqual({ requestId: request.requestId, status });
+      await expect(
+        owner.execute(sessionId, {
+          ...request,
+          requestId: "correction",
+          correctionOf: request.requestId,
+        }),
+      ).resolves.toMatchObject({ status: "rejected" });
+      expect(effect).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not grant native correction authority after the session closes during dispatch", async () => {
     const { owner, effect } = harness();

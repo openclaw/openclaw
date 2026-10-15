@@ -506,6 +506,20 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     }
   });
 
+  it("recovers a missed terminal event from the exact settled session row", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "complete reply",
+      sessionsResult: makeSessionsResult([
+        { key: "s1", hasActiveRun: false, lastRunId: "r1", status: "done" },
+      ]),
+    });
+
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("redacts a recovered session failure before showing it", () => {
     const host = makeHost({
       chatRunId: "r1",

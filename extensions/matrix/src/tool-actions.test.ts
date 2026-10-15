@@ -122,6 +122,24 @@ describe("Matrix public message actions", () => {
     expect(mocks.reactMatrixMessage).toHaveBeenCalledWith(roomId, "$msg", "👍", authorizedOpts);
   });
 
+  it("lists custom emotes only after authorizing the selected Matrix room", async () => {
+    const result = await runMatrixAction(
+      "emoji-list",
+      { roomId: `room:${roomId}`, limit: 5 },
+      cfg,
+      {
+        ...account,
+        requesterAccountId: "ops",
+        toolContext: { currentChannelId: `room:${roomId}`, currentChannelProvider: "matrix" },
+      },
+    );
+    expect(mocks.listMatrixEmojis).toHaveBeenCalledWith(roomId, { ...authorizedOpts, limit: 5 });
+    expect(result.details).toEqual({
+      ok: true,
+      emojis: [{ name: "party", identifier: "party", url: "mxc://example.org/party" }],
+    });
+  });
+
   it("rejects custom-emote discovery when reactions or room access are disabled", async () => {
     const params = { roomId: "!blocked:example" };
     await expect(

@@ -868,6 +868,26 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
+  it("keeps effective-only bundled sidecars behind restrictive allowlists", () => {
+    const rawConfig = createStartupConfig({ allowPluginIds: ["browser"] });
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          "voice-call": { enabled: true },
+          "memory-core": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIds({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser"],
+    });
+  });
+
   it("includes auto-enabled external web search providers at startup", () => {
     const rawConfig = {
       channels: {},
