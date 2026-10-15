@@ -122,10 +122,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
 
-    Bundled providers can use `selectSupportedVideoDuration` from the private
-    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
-    from a nonempty list, preferring the longer duration on ties. Keep input
-    validation, rounding, bounds, and default durations in the provider.
+    Bundled providers can use `normalizeVideoGenerationDuration({ durationSeconds })`
+    from the private `openclaw/plugin-sdk/video-generation` subpath to round an
+    optional duration and reject values outside 1–9007199254740991 seconds after
+    rounding. Omission returns `undefined`; provider defaults remain provider-owned.
+    `selectSupportedVideoDuration` selects the nearest value from a nonempty list,
+    preferring the longer duration on ties. Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({

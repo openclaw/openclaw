@@ -721,6 +721,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           viewDropdown
+            .getByRole("menu", { name: "View", exact: true })
             .getByRole("menuitemcheckbox")
             .locator(".session-menu__text")
             .allTextContents(),

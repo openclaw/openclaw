@@ -114,19 +114,28 @@ tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
 
-Bridge rejections are logged at error level under `agents/code-mode`, including
-when the guest catches the rejection. The server record preserves the original
+Guest exceptions, rejected input, and admitted guest deadlines are logged at
+warning level under `agents/code-mode`. Worker startup/crash failures, bridge
+infrastructure failures, and output-contract violations remain errors. A bridge
+rejection is logged once at its host boundary, including when the guest catches
+it; an uncaught rejection does not add a second projected error record.
+The server record preserves the original
 error class, message, and stack head before guest projection and output limits.
 It includes session, agent-run, Code Mode run, outer tool-call, bridge-request,
 and executor worker identifiers when available. No debug flag is required. File
 logs retain the raw diagnostic; log exports apply their normal redaction.
 
+Missing or ambiguous edit anchors are input errors. Correct the patch or edit
+after inspecting the current file. Code Mode never automatically retries failed
+guest code or nested tool calls; earlier actions in the cell may have completed.
+
 Node worker heap exhaustion reports `runtime_unavailable` with the configured
 heap allowance and guidance to paginate results or retain less guest data.
 Check completed actions before retrying: worker termination does not undo
-dispatched tools. Worker lifecycle retirement reason `failure` records native
-worker failure, including heap exhaustion; it is separate from an ordinary
-tool rejection reported with `failurePhase: "bridge"`.
+dispatched tools. Worker lifecycle retirement reason `crash` records native
+worker errors, including heap exhaustion; `gc-thrash` identifies retirement by
+the near-limit GC watchdog. Both are separate from an ordinary tool rejection
+reported with `failurePhase: "bridge"`.
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
 from the submitted JavaScript, excluding internal wrappers and headless setup,

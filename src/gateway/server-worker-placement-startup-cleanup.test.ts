@@ -1,7 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -26,6 +30,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
 });
 
 import { getRuntimeConfig } from "../config/config.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { createPlacementFailureActions } from "./worker-environments/placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./worker-environments/placement-dispatch-recovery.js";
@@ -46,6 +51,93 @@ async function preservedSessionKeys() {
 
 describe("worker placement startup cleanup ownership", () => {
   workerEnvironmentSupport.setupWorkerEnvironmentServiceSuite();
+
+  it("settles an accepted retirement and stops before the next reconciliation candidate", async ({
+    signal,
+  }) => {
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const environments = workerEnvironmentSupport.createService(
+      workerEnvironmentSupport.createProvider(),
+      { scheduler },
+    );
+    const placements = createWorkerSessionPlacementStore({
+      database: workerEnvironmentSupport.testState.stateDb,
+    });
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "absent");
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
+      scheduler,
+      getCommittedRuntimeConfig: getRuntimeConfig,
+      cancelSessionWork: vi.fn(async () => {}),
+      placements,
+      environments,
+      gatewayNamespace: "gateway-test",
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+      unregisterSidecar: vi.fn(),
+    });
+    if (!sidecar) {
+      throw new Error("worker placement runtime did not start");
+    }
+    await time.advanceBy(60_000);
+    for (const sessionId of ["shutdown-first", "shutdown-next"]) {
+      await placements.startDispatch({
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        agentId: "main",
+      });
+    }
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let acceptedSignal: AbortSignal | undefined;
+    let retirementDispatches = 0;
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "workerPlacements.retire") {
+        retirementDispatches++;
+        acceptedSignal = getAsyncWorkSignal();
+        entered.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
+    let stopping: Promise<void> | undefined;
+    let sweeping: void | Promise<void>;
+    try {
+      sweeping = time.advanceBy(60_000);
+      await withinTest(entered.promise, signal);
+      let stopped = false;
+      stopping = sidecar.stop().then(() => {
+        stopped = true;
+      });
+      const pending = formatGatewayPendingCloseSteps();
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      expect(acceptedSignal?.aborted).toBe(false);
+      release.resolve();
+      await withinTest(Promise.all([stopping, sweeping]), signal);
+      expect(await placements.getAsync("shutdown-first")).toBeUndefined();
+      expect(await placements.getAsync("shutdown-next")).toMatchObject({ state: "requested" });
+      expect(retirementDispatches).toBe(1);
+      expect(pending).toContain("shutdown.worker-placement.reconcile.session-retirement=");
+    } finally {
+      release.resolve();
+      await (stopping ?? sidecar.stop());
+      recording.mockRestore();
+      await scheduler.stop();
+    }
+  });
 
   it("aborts in-flight inspection before joining placement reconciliation and retains producer custody", async () => {
     await workerEnvironmentSupport.seedReadyNodeDesktop("worker-close-inspection");

@@ -56,8 +56,6 @@ export class DraftPlaceBrowser {
   private browserRegistration: object | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
-  // Independent hide animations can overlap; keep every trigger fenced until its own completes.
-  private readonly hidingPopovers = new Set<DraftPickerKind>();
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
@@ -274,15 +272,9 @@ export class DraftPlaceBrowser {
     return this.openPopoverValue === kind;
   }
 
-  popoverHiding(kind: DraftPickerKind): boolean {
-    return this.hidingPopovers.has(kind);
-  }
-
   popoverCallbacks(kind: DraftPickerKind) {
     return {
       popoverOpen: this.popoverOpen(kind),
-      popoverHiding: this.popoverHiding(kind),
-      onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
       onPopoverShow: () => this.transitionPopover(kind, true),
       onPopoverHide: () => this.transitionPopover(kind, false),
       onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
@@ -489,11 +481,8 @@ export class DraftPlaceBrowser {
       if (kind === "where") {
         this.environmentQueryValue = "";
       }
-    } else {
-      if (this.openPopoverValue === kind) {
-        this.openPopoverValue = null;
-      }
-      this.hidingPopovers.add(kind);
+    } else if (this.openPopoverValue === kind) {
+      this.openPopoverValue = null;
     }
     if (kind === "project") {
       this.showRoot();
@@ -503,7 +492,6 @@ export class DraftPlaceBrowser {
   }
 
   onPopoverAfterHide(kind: DraftPickerKind) {
-    this.hidingPopovers.delete(kind);
     const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
     const active = this.callbacks.activeElement();
     const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
@@ -511,19 +499,6 @@ export class DraftPlaceBrowser {
     if (!active || active === body || popover?.contains(active)) {
       (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
     }
-    this.callbacks.requestUpdate();
-  }
-
-  guardPopoverTransition(event: Event, kind: DraftPickerKind) {
-    if (!this.hidingPopovers.has(kind)) {
-      return;
-    }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }
-
-  clearPopoverHiding() {
-    this.hidingPopovers.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -560,11 +535,7 @@ export class DraftPlaceBrowser {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
     void this.host.updateComplete.then(() => {
-      if (
-        requestId !== this.focusRequestId ||
-        this.openPopoverValue !== "project" ||
-        this.hidingPopovers.has("project")
-      ) {
+      if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
         return;
       }
       const active = this.callbacks.activeElement();

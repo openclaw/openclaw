@@ -451,23 +451,6 @@ describe("DraftPlaceBrowser", () => {
     },
   );
 
-  it("tracks overlapping popover hides independently", () => {
-    const { browser } = createBrowser(async () => ({}));
-
-    browser.popoverCallbacks("project").onPopoverHide();
-    browser.popoverCallbacks("where").onPopoverHide();
-
-    expect(browser.popoverHiding("project")).toBe(true);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("project");
-    expect(browser.popoverHiding("project")).toBe(false);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("where");
-    expect(browser.popoverHiding("where")).toBe(false);
-  });
-
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],
     [

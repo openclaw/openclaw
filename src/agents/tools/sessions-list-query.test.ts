@@ -1,25 +1,10 @@
+// Register closed mocks before runtime imports; keep the shared row fixtures real.
+import "./sessions-list.mocks.test-support.js";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 
-const mocks = vi.hoisted(() => ({
-  gatewayCall: vi.fn(),
-  getSessionStateVersions: vi.fn(
-    (_refs: Array<{ sessionKey: string; agentId: string }>) =>
-      ({}) as Record<string, Record<string, number>>,
-  ),
-}));
-
-vi.mock("./in-process-gateway.js", () => ({
-  hasGatewayToolRoutingContext: () => false,
-  getInProcessGatewayToolContext: () => undefined,
-  callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
-}));
-
-vi.mock("../../sessions/session-state-events.js", () => ({
-  getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
-    mocks.getSessionStateVersions(refs),
-}));
+const { mocks } = await import("./sessions-list.mocks.test-support.js");
 
 function mockSessionPages(pages: Array<Array<Record<string, unknown>>>, initialOffset = 0) {
   let pageIndex = 0;

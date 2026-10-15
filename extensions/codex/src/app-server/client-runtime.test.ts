@@ -389,7 +389,11 @@ describe("Codex app-server client runtime", () => {
     expect(successor).toMatchObject({ configFingerprint: "successor-config" });
     successor?.assertCurrent();
     await successor?.release("thread-reused");
-    expect(replacementRelease).toHaveBeenCalledExactlyOnceWith("thread-reused");
+    expect(replacementRelease).toHaveBeenCalledExactlyOnceWith(
+      "thread-reused",
+      undefined,
+      undefined,
+    );
     expect(hasCodexAppServerLiveThread(harness.client, "thread-reused")).toBe(false);
     harness.client.close();
     expect(invalidated).toHaveBeenCalledOnce();
@@ -580,7 +584,11 @@ describe("Codex app-server client runtime", () => {
       consumeCodexAppServerLiveThread(harness.client, "thread-overflow"),
     ).resolves.toBeUndefined();
     await overflow?.release("thread-overflow");
-    expect(overflowRelease).toHaveBeenCalledExactlyOnceWith("thread-overflow");
+    expect(overflowRelease).toHaveBeenCalledExactlyOnceWith(
+      "thread-overflow",
+      undefined,
+      undefined,
+    );
     expect(invalidated).toHaveBeenCalledOnce();
     await expect(consumeCodexAppServerLiveThread(harness.client, "thread-1")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
@@ -636,7 +644,7 @@ describe("Codex app-server client runtime", () => {
     expect(release).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(release).toHaveBeenCalledExactlyOnceWith("thread-expiry-retry");
+    expect(release).toHaveBeenCalledExactlyOnceWith("thread-expiry-retry", undefined, undefined);
     expect(invalidated).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(EXPECTED_LIVE_THREAD_IDLE_TIMEOUT_MS - 1);
     expect(release).toHaveBeenCalledOnce();
@@ -714,7 +722,7 @@ describe("Codex app-server client runtime", () => {
     expect(release).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(release).toHaveBeenCalledExactlyOnceWith("thread-parent");
+    expect(release).toHaveBeenCalledExactlyOnceWith("thread-parent", undefined, undefined);
   });
 
   it("keeps a failed unpin eviction owned until its original subscription can be retried", async () => {
@@ -821,6 +829,6 @@ describe("Codex app-server client runtime", () => {
     await expect(
       nextCopy.releaseCodexAppServerLiveThread(harness.client, "copy-retained"),
     ).resolves.toBe(true);
-    expect(release).toHaveBeenCalledExactlyOnceWith("copy-retained");
+    expect(release).toHaveBeenCalledExactlyOnceWith("copy-retained", undefined, undefined);
   });
 });

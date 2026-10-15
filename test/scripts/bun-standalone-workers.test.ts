@@ -81,6 +81,47 @@ describe("standalone worker discovery", () => {
 
 describe("standalone inline worker graph", () => {
   it.each([
+    "function unrelated() { let SOURCE; SOURCE = dynamicValue(); }",
+    "function unrelated(SOURCE) { SOURCE = dynamicValue(); }",
+    "function unrelated() { SOURCE = dynamicValue(); var SOURCE; }",
+  ])("keeps lazy module source separate from shadowed assignments: %s", (unrelated) => {
+    const source = `import { Worker } from "node:worker_threads";
+var SOURCE;
+const initialize = () => { SOURCE = "require('node:worker_threads').parentPort.postMessage(7)"; };
+${unrelated}
+function launch() { return new Worker(SOURCE, { eval: true }); }`;
+    const paths = fixture({ "dist/entry.mjs": source });
+    const prepared = prepareStandaloneWorkers({
+      ...paths,
+      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
+      workerEntries: [],
+      moduleEntries: ["dist/entry.mjs"],
+      parse,
+    });
+    assert.ok(prepared.entrypoints[0]);
+    expect(fs.readFileSync(prepared.entrypoints[0].replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
+      "require('node:worker_threads').parentPort.postMessage(7)\n",
+    );
+  });
+
+  it("refuses a dynamic worker source that shadows a fixed module binding", () => {
+    const paths = fixture({
+      "dist/entry.mjs": `import { Worker } from "node:worker_threads";
+const SOURCE = "wrong program";
+function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
+    });
+    expect(() =>
+      prepareStandaloneWorkers({
+        ...paths,
+        runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
+        workerEntries: [],
+        moduleEntries: ["dist/entry.mjs"],
+        parse,
+      }),
+    ).toThrow("Unsupported fixed worker source expression: Identifier SOURCE");
+  });
+
+  it.each([
     ['import { Worker as Task } from "node:worker_threads";', "new Task"],
     ['import * as threads from "worker_threads";', "new threads.Worker"],
     ['const { Worker: Task } = require("node:worker_threads");', "new Task"],

@@ -7,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
@@ -170,6 +171,20 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     resetSystemEventsForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps reaction content in the system event, not verbose diagnostics", async () => {
+    const log = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    await registerHandler(buildTelegramConfig())(
+      forumReactionContext({ isForum: false, chatType: "private" }),
+    );
+    expect(peekSystemEventEntries("agent:main:main")[0]?.text).toContain(FIRE_EMOJI);
+    const diagnostics = log.mock.calls.map(([line]) => line).join("\n");
+    expect(diagnostics).toContain("reaction event enqueued chat=5678 message=100");
+    expect(diagnostics).not.toContain("Bob");
+    expect(diagnostics).not.toContain(FIRE_EMOJI);
   });
 
   it.each(["private", "supergroup"] as const)(

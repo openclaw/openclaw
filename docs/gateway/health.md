@@ -47,6 +47,11 @@ agents still preparing and `stage` identifies the current acquisition phase.
 The Gateway remains running and completed agents remain usable. Background
 preparation clears the degraded status when all runtimes are ready.
 
+If a newer model-runtime refresh replaces preparation in progress, startup
+follows the admitted replacement through preparation and publication. Cancelling
+the retired acquisition does not stop the Gateway; genuine replacement failures
+still propagate.
+
 Transcript projection repair runs after readiness in yielding worker-backed work.
 An agent deferred by database inspection becomes usable after its session,
 credentials, and model preparation finish; rebuilding its transcript projections
@@ -162,10 +167,12 @@ export, native event-loop delay sampling runs at 20 ms resolution and the Gatewa
 publishes completed observations once per second. A healthy idle Gateway publishes
 every ten seconds and pauses the native histogram. Idle windows still track
 blocking callbacks and overdue sampling deadlines; `delayP99Ms` is zero while the
-histogram is paused. Work or an exporter becoming active restores full sampling
-at the next idle deadline, within ten seconds. Long blocking callbacks remain part
-of the observation even when they delay the publisher. No snapshot is available
-until the first window completes. Its
+histogram is paused. Work becoming active restores full sampling at the next idle
+deadline, within ten seconds. A newly interested exporter advances the pending
+sample to the current window's one-second boundary, or schedules it immediately
+if that boundary has already elapsed, without resetting the window. Long blocking
+callbacks remain part of the observation even when they delay the publisher.
+No snapshot is available until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and

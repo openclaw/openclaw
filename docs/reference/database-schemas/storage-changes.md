@@ -139,11 +139,18 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 23). Every
+Both engines use the same shared-state schema version (currently 24). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
 See the [accepted design](https://github.com/openclaw/openclaw/issues/169254).
+
+Schema 24 includes `state-v23-v24.postgres.sql`, generated from the migration
+owner's retired index names and the canonical replacement index definitions.
+It contains forward DDL only; the caller supplies the transaction, namespace,
+and version publication. PostgreSQL conformance verifies the upgraded index
+definitions against a fresh schema and preserves retained rows and local indexes.
+This readiness artifact does not enable shared-state PostgreSQL runtime support.
 
 Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
 indexes, and foreign keys with their exact source and reason. Text uses C
@@ -603,8 +610,12 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Project recents and observed checkout requests consume the Gateway's prepared
-session-row metadata, including archived rows. The existing selection owner maintains
+Project recents consume profile-scoped, recency-ordered candidates from the Gateway's
+session-row projection, including archived rows, until eight distinct results are found.
+Committed receipts maintain the creator index; uncertain metadata uses the existing
+worker admission. Ordinary recents do not reconstruct a combined session store.
+Observed checkout requests still consume the broader prepared metadata selection.
+The existing selection owner maintains
 physical-store and sentinel precedence through committed row and topology publications;
 listings do not reread or rebuild the durable session stores. Recent-project ties retain
 physical-store and SQLite binary key order. Incognito entries remain with the
@@ -2774,6 +2785,10 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
+Full refreshes submit pruning only when their metadata scan found stale rows;
+deletion still matches each observed row's checkpoint and update timestamp.
+Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
+legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

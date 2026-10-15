@@ -5,7 +5,7 @@ import { hasErrnoCode } from "../../src/infra/errno.js";
 import { runUtf8CommandWithTimeout } from "../../src/process/exec.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
-export type ClaudeCliSpawnProofKind = "native" | "node-leading" | "npm-shim";
+type ClaudeCliSpawnProofKind = "native" | "node-leading" | "npm-shim";
 
 export type ClaudeCliSpawnProofLaunch =
   | { kind: "native"; launcher: string }

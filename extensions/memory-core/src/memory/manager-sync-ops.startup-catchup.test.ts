@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import * as memorySessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   captureRuntimeConfigAsyncReader,
@@ -193,7 +193,7 @@ describe("session startup catch-up", () => {
   it("indexes a same-size file transcript whose mtime rolled back", async () => {
     const archiveName = "thread.jsonl.deleted.2026-08-01T10-00-00.000Z";
     const original = await writeSessionFile(archiveName, "version before");
-    const originalEntry = await buildSessionEntry(original.filePath);
+    const originalEntry = await memorySessions.buildSessionEntry(original.filePath);
     if (!originalEntry) {
       throw new Error("expected original file transcript entry");
     }
@@ -230,13 +230,13 @@ describe("session startup catch-up", () => {
     const archiveName = "thread.jsonl.deleted.2026-08-01T11-00-00.000Z";
     const messageTimestamp = "2026-08-01T10:30:00.000Z";
     const original = await writeSessionFile(archiveName, "unchanged content", messageTimestamp);
-    const originalEntry = await buildSessionEntry(original.filePath);
+    const originalEntry = await memorySessions.buildSessionEntry(original.filePath);
     if (!originalEntry) {
       throw new Error("expected original file transcript entry");
     }
     const rolledBackMtime = new Date(Math.max(1, original.mtimeMs - 60_000));
     await fs.utimes(original.filePath, rolledBackMtime, rolledBackMtime);
-    const restoredEntry = await buildSessionEntry(original.filePath);
+    const restoredEntry = await memorySessions.buildSessionEntry(original.filePath);
     if (!restoredEntry) {
       throw new Error("expected restored file transcript entry");
     }
@@ -275,7 +275,7 @@ describe("session startup catch-up", () => {
 
   it("converges a legacy SQLite activity fingerprint without reindexing unchanged text", async () => {
     const session = await writeSqliteSession({ updatedAt: 10 });
-    const entry = await buildSessionEntry(session.sessionKey, {
+    const entry = await memorySessions.buildSessionEntry(session.sessionKey, {
       agentId: "main",
       sessionId: session.sessionId,
       storePath: session.storePath,

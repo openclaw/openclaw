@@ -107,9 +107,9 @@ suite.define(() => {
         const model = activePane.locator("[data-chat-model-select]");
         const permission = activePane.locator("[data-chat-permission-select]");
         const menu = page.locator("openclaw-session-menu");
-        const rename = menu.locator('[value="rename"]');
-        const archive = menu.locator('[value="toggle-archived"]');
-        const fork = menu.locator('[value="fork"]');
+        const rename = menu.locator('[data-value="rename"]');
+        const archive = menu.locator('[data-value="toggle-archived"]');
+        const fork = menu.locator('[data-value="fork"]');
         const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
         await historyText.waitFor();
@@ -119,7 +119,7 @@ suite.define(() => {
           suite,
           page,
           `${name}-owned-menu.png`,
-          menu.getByRole("menu").first(),
+          menu.locator(".session-menu__panel"),
           [rename, archive],
         );
         await page.keyboard.press("Escape");
@@ -203,7 +203,7 @@ suite.define(() => {
         expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
         expect(await fork.getAttribute("disabled")).not.toBeNull();
         for (const action of [
-          menu.locator('[value="toggle-unread"]'),
+          menu.locator('[data-value="toggle-unread"]'),
           menu.getByRole("menuitem", { name: "Move to group" }),
         ]) {
           expect(await action.getAttribute("disabled")).not.toBeNull();
@@ -244,7 +244,7 @@ suite.define(() => {
           await archivedRow.waitFor();
           await archivedRow.getByRole("button", { name: "Open session menu", exact: true }).click();
           await openSessionMenuSubmenu(page, "Advanced");
-          const remove = menu.locator('[value="delete"]');
+          const remove = menu.locator('[data-value="delete"]');
           await remove.waitFor();
           expect(await remove.getAttribute("disabled")).not.toBeNull();
           await remove.click({ force: true });
@@ -252,7 +252,7 @@ suite.define(() => {
             suite,
             page,
             `${name}-archived-controls.png`,
-            menu.getByRole("menu").first(),
+            menu.locator(".session-menu__panel"),
             [remove, archive],
           );
           await page.keyboard.press("ArrowLeft");

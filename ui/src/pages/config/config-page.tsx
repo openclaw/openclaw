@@ -8,7 +8,11 @@ import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { subscribeLobsterdex } from "../../components/lobster-dex.ts";
-import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsPageHeader,
+  LearnMoreLink,
+  SettingsToggleRow,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import {
   projectNativeDeviceSettings,
@@ -28,7 +32,6 @@ import {
   projectAgentIdentity,
 } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
 import type { ConfigPageId } from "./config-sections.ts";
 import { Mcp, McpIntro } from "./mcp.tsx";
@@ -123,8 +126,9 @@ function ConfigBody(props: {
         !hasNativeBrowserBridge()
       }
     >
-      <BrowserLinkPreferencesRow
-        enabled={props.controller.browserLinksEnabled}
+      <SettingsToggleRow
+        title={t("browserLinkPreferences.openInControlUi")}
+        checked={props.config.openLinksInControlUiBrowser === true}
         onChange={(enabled) =>
           props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
         }

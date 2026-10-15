@@ -344,8 +344,8 @@ export function shouldPersistCurrentRunSessionCleanup(
   if (current.abortedLastRun !== true) {
     return true;
   }
-  // Stop is terminal, while a restart keeps custody. Only the settled command
-  // may retire its own source claim after all execution and delivery owners leave.
+  // Session Stop is terminal; process shutdown keeps custody. Only the settled
+  // command may retire its source claim after execution and delivery owners leave.
   return (
     current.status === "killed" &&
     current.lastRunId === runId &&

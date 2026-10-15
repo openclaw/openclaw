@@ -20,13 +20,14 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
+import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
@@ -34,6 +35,7 @@ import {
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import { PaneDetails, type PaneDetailsProps } from "../chat-pane-header-view.tsx";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 
@@ -49,6 +51,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   title: string;
+  titlePending?: boolean;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
   showOwnerChip?: boolean;
@@ -76,7 +79,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
-  detailsControl?: unknown;
+  detailsControl?: PaneDetailsProps;
   runAction?: unknown;
   presence?: unknown;
   sharingControl?: unknown;
@@ -163,7 +166,17 @@ function SessionTitle(props: ChatPaneHeaderProps) {
           renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color))
         }
       />
-      <span class="chat-pane__session-title-text">{props.title}</span>
+      <span class="chat-pane__session-title-text">
+        <Show
+          when={
+            props.titlePending ??
+            (!props.catalog && isSessionTitlePending(props.session?.key ?? "", props.session))
+          }
+          fallback={props.title}
+        >
+          <SessionTitlePlaceholder />
+        </Show>
+      </span>
     </>
   );
 }
@@ -410,7 +423,9 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
         </div>
         <div class="chat-pane__header-trailing">
-          <LitContent value={props.detailsControl} />
+          <Show when={props.detailsControl !== undefined}>
+            <PaneDetails {...props.detailsControl!} />
+          </Show>
           <LitContent
             value={presentedContent(
               props.presented,

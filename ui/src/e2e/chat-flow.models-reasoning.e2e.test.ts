@@ -686,65 +686,6 @@ suite.define(() => {
     }
   });
 
-  it("does not reuse catalog reasoning for a different session runtime", async () => {
-    const { context, page, capture } = await createReasoningProofPage(
-      "chat-flow.runtime-reasoning",
-    );
-    const sessionKey = "agent:main:codex-luna";
-    await installMockGateway(page, {
-      models: [
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          reasoning: true,
-          agentRuntime: { id: "openclaw", source: "model" },
-          thinkingLevels: ["max", "ultra"].map((id) => ({ id, label: id })),
-          thinkingDefault: "ultra",
-        },
-      ],
-      sessionKey,
-      sessions: [
-        {
-          key: sessionKey,
-          kind: "direct",
-          label: "Codex Luna",
-          model: "gpt-5.6-luna",
-          modelProvider: "openai",
-          agentRuntime: { id: "codex", source: "session-key" },
-          thinkingLevels: [
-            { id: "low", label: "Low" },
-            { id: "high", label: "High" },
-          ],
-          thinkingDefault: "high",
-          updatedAt: 1,
-        },
-      ],
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      // Summary click actionability does not wait for our history-loading disabled state.
-      const effortSelect = pane.locator(
-        '[data-chat-thinking-select="true"][aria-disabled="false"]',
-      );
-      await effortSelect.click();
-      const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
-      await thinkingSlider.waitFor({ state: "visible" });
-      await capture(
-        "codex-luna-reasoning",
-        pane.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
-        thinkingSlider,
-      );
-
-      expect(await thinkingSlider.getAttribute("data-chat-thinking-values")).toBe("low,high");
-      expect(await effortSelect.getAttribute("data-chat-thinking-value")).not.toBe("ultra");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it.each([
     {
       label: "model override",

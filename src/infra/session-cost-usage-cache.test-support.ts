@@ -6,6 +6,7 @@ import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
   type SessionCostUsageRollupRow,
+  type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -13,6 +14,21 @@ import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
 } from "./session-cost-usage-rollup-codec.js";
+
+export async function pruneUsageCostRollupsForTest(params: {
+  agentId: string;
+  databasePath?: string;
+  liveKeys: ReadonlySet<string>;
+  rows: readonly SessionCostUsageRollupSnapshot[];
+}): Promise<void> {
+  const owner = prepareSessionCostUsageRefreshLock(params.agentId, params.databasePath);
+  try {
+    expect(await owner.acquire()).toBe(true);
+    await owner.pruneRows(params.rows.filter((row) => !params.liveKeys.has(row.key)));
+  } finally {
+    await owner.release();
+  }
+}
 
 export function readSessionCostUsageRollupRows(
   agentId?: string,

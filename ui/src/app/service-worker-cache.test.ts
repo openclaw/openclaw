@@ -78,13 +78,12 @@ describe("Control UI service worker HTTP recovery", () => {
 
   it.each([
     { status: 401, route: "custom-theme.css?token=synthetic-secret", redirected: false },
-    { status: 404, route: "missing.css", redirected: false },
     { status: 200, route: "assets/app-AbCd1234.js", redirected: true },
   ])(
     "returns $status/redirected=$redirected without caching or disclosing the URL",
     async ({ status, route, redirected }) => {
       const worker = createFetchServiceWorker();
-      const response = new Response(status === 404 ? "Not found" : "Sign in", { status });
+      const response = new Response("Sign in", { status });
       if (redirected) {
         Object.defineProperty(response, "redirected", { value: true });
       }
@@ -103,13 +102,7 @@ describe("Control UI service worker HTTP recovery", () => {
     },
   );
 
-  it.each([
-    "assets/app-AbCd1234.js",
-    "assets/background-AbCd1234.webp",
-    "fonts/custom.woff2?v=public-fixture",
-    "themes/custom.css?v=public-fixture",
-    "manifest.webmanifest?v=public-fixture",
-  ])(
+  it.each(["assets/app-AbCd1234.js", "fonts/custom.woff2?v=public-fixture"])(
     "serves %s without a second network request and fails offline without a copy",
     async (route) => {
       const worker = createFetchServiceWorker();

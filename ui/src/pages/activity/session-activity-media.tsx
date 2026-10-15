@@ -9,8 +9,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
+import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import {
   assistantMediaPolicyKey,
@@ -93,10 +92,8 @@ export type ActivitySessionMediaProps = {
   session?: GatewaySessionRow;
 };
 
-function ActivitySessionMediaContent(
-  props: ActivitySessionMediaProps,
-  host: SolidBridgeElement<ActivitySessionMediaProps>,
-) {
+export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  let host!: HTMLElement;
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -402,12 +399,12 @@ function ActivitySessionMediaContent(
     revision();
     return displayedImages;
   };
-  const lightboxContent = () => {
+  const lightboxItem = () => {
     revision();
-    return renderChatImageLightbox(lightbox, () => closeImage());
+    return lightbox;
   };
   return (
-    <>
+    <openclaw-activity-session-media ref={(element) => (host = element)}>
       {(hasImages() || showNote()) && (
         <div class="activity-feed__media">
           {hasImages() && (
@@ -434,21 +431,15 @@ function ActivitySessionMediaContent(
           )}
         </div>
       )}
-      <LitContent render={lightboxContent} />
-    </>
+      <ChatImageLightbox item={lightboxItem()} onClose={closeImage} />
+    </openclaw-activity-session-media>
   );
 }
 
-export const ActivitySessionMedia = defineSolidBridge<ActivitySessionMediaProps>(
-  "openclaw-activity-session-media",
-  ActivitySessionMediaContent,
-  {
-    properties: {
-      context: { default: undefined!, attribute: false },
-      sessionKey: { default: "" },
-      agentId: { default: "" },
-      revision: { default: 0, type: Number },
-      session: { default: undefined, attribute: false },
-    },
-  },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-activity-session-media": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

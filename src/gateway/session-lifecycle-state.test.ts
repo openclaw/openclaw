@@ -557,10 +557,12 @@ describe("session lifecycle state", () => {
     const resumed = await persistLifecycle(yielded, {
       ts: 2_100,
       sessionId: "session-id",
+      runId: "yielded-recovery-run",
       data: { phase: "start", startedAt: 2_100 },
     });
     expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
+    expect(resumed.startedAt).toBe(2_100);
   });
 
   it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {

@@ -4,10 +4,9 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
-import {
-  ChatWorkingIndicator,
-  type ChatWorkingIndicatorOptions,
-} from "./chat-working-indicator.tsx";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+
+type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
 function mountIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,

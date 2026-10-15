@@ -543,7 +543,7 @@ Windows host-wide legacy capture cleanup remains report-only.
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
   the updater already installed: on macOS, `Package rollback launcher backup
-changed` when the updater's umask differs from the installed launcher's
+  changed` when the updater's umask differs from the installed launcher's
   permissions, and on busy hosts or slow disks a 30-second baseline package
   fingerprint timeout reported as a changed package tree. Retrying with the
   same installed updater repeats them. Install the target once with the

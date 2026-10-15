@@ -8,10 +8,7 @@ import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { resolveCronJobsStorePath } from "./paths.js";
 import { readCronQuarantinedJobsInDatabase } from "./quarantine.kernel.js";
-import {
-  readActiveCronRunReceiptOwnersInDatabase,
-  readCronRunReceiptCurrentFactsInDatabase,
-} from "./run-receipt-read.js";
+import { readCronRunReceiptCurrentFactsInDatabase } from "./run-receipt-read.js";
 
 type CronStateReadCommand = Extract<OpenClawStateReadCommand, { type: `cron.${string}` }>;
 
@@ -23,7 +20,6 @@ export function isCronStateReadCommand(
     case "cron.scratch":
     case "cron.jobNames":
     case "cron.quarantine":
-    case "cron.activeReceiptOwners":
       return true;
     default:
       return false;
@@ -60,11 +56,6 @@ export function readCronStateCommandInDatabase(
       return {
         type: command.type,
         entries: readCronQuarantinedJobsInDatabase(db, command.storeKey),
-      };
-    case "cron.activeReceiptOwners":
-      return {
-        type: command.type,
-        owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
       };
     default:
       throw new Error("Unsupported Cron read command");

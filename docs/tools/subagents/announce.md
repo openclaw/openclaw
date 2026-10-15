@@ -50,10 +50,21 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Direct child-result delivery records its transcript mirror after work already
+queued on the requester session. The send settles without waiting for that
+append, so a requester waiting on its child can resume. These tagged mirrors
+record history without closing an open keyed input; ordinary final replies still
+close the turn. Mirrors remain best-effort bookkeeping after a successful send.
+
 Blocked completion warnings identify the child run and retain the concrete delivery
 error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
+
+Restart checkpoint reconciliation retains the confirmed delivery evidence before
+clearing the active recovery claim. Delivered replies, intentionally suppressed
+delivery, and handled silent checkpoints remain distinct. A terminal run ID alone
+is not proof that the requester received its result.
 
 Transcript writer-claim changes remain retryable when no send is confirmed. If
 local retries are exhausted, the completion stays eligible for bounded requester
@@ -69,8 +80,10 @@ child's result remains available for recovery.
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
 private turn of the original requester session. The parent reviews the result,
-continues unfinished work, and records the reviewed outcome in its internal final
-reply. OpenClaw does not automatically send the child result, parent final, or
+continues unfinished work, and settles the reviewed input. Private processing that
+the input owner marks optional may finish silently; it does not by itself satisfy
+an outstanding user reply.
+OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
 through its permitted tools.
 
@@ -104,6 +117,13 @@ Waiting for the spawning parent turn does not consume a private result's deliver
 retry window. A normal parent finish starts that window when it releases the
 result. After `sessions_yield`, the yielded batch owns delivery; individual child
 cleanup cannot expire or suspend that batch's result.
+
+Session controls still require the current caller’s authority. A completion report
+does not transfer the original human’s permissions. Keep authorized cleanup with
+the original requester turn and use after-turn self-archive when appropriate,
+rather than asking a notification-only turn to acquire owner privileges.
+Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
+follow-up still follows the destination conversation’s reply requirements.
 
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;

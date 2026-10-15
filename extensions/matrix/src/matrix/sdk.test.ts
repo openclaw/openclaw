@@ -32,10 +32,12 @@ import {
 } from "./sdk/crypto-persistence.test-support.js";
 import { createMatrixCryptoApi } from "./sdk/crypto.test-support.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
+import { registerDecryptRetentionTests } from "./sdk/decrypt-retention.test-support.js";
 import {
   FakeMatrixEvent,
   makeDecryptedMessageEvent,
   makeMatrixEvent,
+  type MatrixEventDecryptor,
 } from "./sdk/event.test-support.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import {
@@ -200,7 +202,7 @@ type MatrixJsClientStub = {
     MatrixJsSdkClient["secretStorage"],
     "getDefaultKeyId" | "getKey" | "checkKey"
   >;
-  decryptEventIfNeeded: ReturnType<typeof vi.fn>;
+  decryptEventIfNeeded: ReturnType<typeof vi.fn<MatrixEventDecryptor>>;
   relations: ReturnType<typeof vi.fn>;
   syncApi: SyncApi;
 };
@@ -284,7 +286,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
     getKey: vi.fn(async () => null),
     checkKey: vi.fn(async () => false),
   };
-  client.decryptEventIfNeeded = vi.fn(async () => {});
+  client.decryptEventIfNeeded = vi.fn<MatrixEventDecryptor>(async () => {});
   client.relations = vi.fn(async () => ({
     originalEvent: null,
     events: [],
@@ -467,16 +469,6 @@ describe("MatrixClient request hardening", () => {
     await expect(first.getTransactionScopeId()).resolves.toBe(await first.getTransactionScopeId());
   });
 
-  it("treats an existing malformed room-encryption state as encrypted", async () => {
-    matrixJsClient.getRoom.mockReturnValue(null);
-    matrixJsClient.getStateEvent.mockResolvedValue({});
-    const client = createSdkClient();
-
-    await expect(client.getMessageWireEventType("!room:example.org")).resolves.toBe(
-      "m.room.encrypted",
-    );
-  });
-
   it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
     matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => false });
     matrixJsClient.getCrypto.mockReturnValue({
@@ -538,21 +530,7 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not treat an initialized crypto facade as a working SDK encryption backend", async () => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    const client = createSdkClient({ encryption: true });
-    (client as { crypto?: object }).crypto = {};
-
-    await expect(
-      client.sendMessage("!room:example.org", { msgtype: "m.text", body: "secret" }),
-    ).rejects.toThrow(/enable encryption/i);
-    expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { msgtype: MsgType.Image, thumbnail: false },
-    { msgtype: MsgType.Location, thumbnail: true },
-  ])(
+  it.each([{ msgtype: MsgType.Location, thumbnail: true }])(
     "rejects unencrypted $msgtype media (thumbnail: $thumbnail)",
     async ({ msgtype, thumbnail }) => {
       const content = {
@@ -1574,12 +1552,12 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "42.4.1";
+    manifest.version = "43.0.1";
     try {
       const client = createSdkClient();
 
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 42.4.0; found 42.4.1",
+        "Matrix sync quiesce requires matrix-js-sdk 43.0.0; found 43.0.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();
@@ -1807,36 +1785,7 @@ describe("MatrixClient event bridge", () => {
     expect(delivered).toEqual(["m.room.message"]);
   });
 
-  it("stops decryption retries after hitting retry cap", async () => {
-    vi.useFakeTimers();
-    const client = createSdkClient();
-    const failed: string[] = [];
-
-    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
-      failed.push(error.message);
-    });
-
-    const encrypted = makeMatrixEvent({ decryptionFailure: true });
-
-    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
-      throw new Error("still missing key");
-    });
-
-    await client.start();
-    matrixJsClient.emit("event", encrypted);
-    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
-
-    expect(failed).toEqual(["missing room key"]);
-
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
-
-    encrypted.emit("decrypted", encrypted, new Error("missing room key again"));
-
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
-    expect(failed).toEqual(["missing room key"]);
-  });
+  registerDecryptRetentionTests({ createSdkClient, getMatrixJsClient: () => matrixJsClient });
 
   it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();

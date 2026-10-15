@@ -255,16 +255,7 @@ export async function tryReuseCodexLiveThread(
       if (!creationPolicy && params.appServer.serviceTier === "ultrafast") {
         throw new CodexIncognitoPolicyChangeError("compaction settings");
       }
-      await params.buildFinalConfigPatch?.(
-        {
-          action: "resume",
-          binding,
-          ...(options.nativeModelInputTools
-            ? { nativeModelInputTools: options.nativeModelInputTools }
-            : {}),
-        },
-        params.client,
-      );
+      await prepareCodexThreadFinalConfigPatch(params, options.nativeModelInputTools, binding);
       throwIfAborted();
       params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };

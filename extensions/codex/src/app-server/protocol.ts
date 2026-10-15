@@ -392,6 +392,12 @@ export type CodexServerNotification = {
   params?: JsonValue;
 };
 
+export type CodexPreparedServerNotification = CodexServerNotification & {
+  threadId?: string;
+  turnId?: string;
+  completedTurn: CodexTurn | undefined;
+};
+
 export type CodexDynamicToolCallParams = {
   namespace?: string | null;
   threadId: string;

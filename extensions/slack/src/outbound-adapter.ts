@@ -36,7 +36,6 @@ import {
   SLACK_QUESTION_FINALIZATION_BLOCKS,
 } from "./reply-action-ids.js";
 import {
-  parseSlackReplyBlockSegments,
   normalizeSlackReplyPayload,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
@@ -87,12 +86,13 @@ function readSlackRenderedPresentation(
     return undefined;
   }
   try {
-    const segments = parseSlackReplyBlockSegments(slackData?.renderedPresentationSegments);
-    const authoredTextPlacement = readSlackAuthoredTextPlacement(slackData?.authoredTextPlacement);
+    const segments = slackData?.renderedPresentationSegments;
+    const authoredTextPlacement = slackData?.authoredTextPlacement;
     if (!segments || !authoredTextPlacement) {
       return undefined;
     }
     const resolution = { authoredTextPlacement, segments };
+    // A matching signature proves this exact shape came from our typed renderer.
     return safeEqualSecret(provenance, createSlackRenderedPresentationProvenance(resolution))
       ? resolution
       : undefined;
@@ -162,10 +162,6 @@ function withSlackRenderedPresentation(
       },
     },
   };
-}
-
-function readSlackAuthoredTextPlacement(value: unknown): SlackAuthoredTextPlacement | undefined {
-  return value === "none" || value === "blocks" || value === "outside-blocks" ? value : undefined;
 }
 
 type SlackOutboundSendParams = ChannelOutboundContext &

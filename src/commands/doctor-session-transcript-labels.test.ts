@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import {
@@ -17,6 +19,7 @@ import {
   prepareTranscriptPayload,
 } from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -228,12 +231,20 @@ describe("doctor SQLite session transcript label migration", () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const database = seedLegacyLabelTranscript(databaseOptions);
     const before = readTranscriptSnapshot(database, SESSION_ID);
+    const originalStorage = database.db
+      .prepare("SELECT * FROM transcript_events ORDER BY seq")
+      .all();
+    const recoveryDirectories = () =>
+      fs
+        .readdirSync(path.dirname(database.path))
+        .filter((name) => name.startsWith("openclaw-transcript-labels-recovery-"));
     const assistantJson = findEventJson(before.events, before.rows, "assistant");
     const midLineJson = findEventJson(before.events, before.rows, "mid-line-user");
 
     await runTranscriptLabelHealth(state, false);
 
     expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(before.rows);
+    expect(recoveryDirectories()).toEqual([]);
     expect(note).toHaveBeenCalledWith(
       '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
       "Session transcript labels",
@@ -241,6 +252,20 @@ describe("doctor SQLite session transcript label migration", () => {
 
     note.mockClear();
     await runTranscriptLabelHealth(state, true);
+
+    const backups = recoveryDirectories();
+    expect(backups).toHaveLength(1);
+    const backup = openNodeSqliteDatabase(
+      path.join(path.dirname(database.path), backups[0]!, "database.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      expect(backup.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
+        originalStorage,
+      );
+    } finally {
+      backup.close();
+    }
 
     const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "legacy-user");
@@ -290,6 +315,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
+    expect(recoveryDirectories()).toEqual(backups);
   });
 
   it("rejects a sibling change between detection and label repair", async () => {

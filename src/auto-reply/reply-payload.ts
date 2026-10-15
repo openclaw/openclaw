@@ -272,8 +272,12 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** The local source observer confirmed this model reply in committed chat history. */
+  localTranscriptDeliveryConfirmed?: true;
   /** Exact decoration added by normalization, not model-authored text. */
   responsePrefix?: string;
+  /** Exact usage footer appended by the host. */
+  responseUsageLine?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
@@ -330,6 +334,8 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * the live delivery vehicle unless transcriptOwner identifies an already

@@ -15,7 +15,6 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
@@ -84,6 +83,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         vi.unstubAllGlobals();
       });
       const { sidebar, page } = await mountFilters(width);
+      // A retained pointer can open the rail tooltip when the layout switches to RTL.
+      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       sidebar.dir = direction;
       const occlusion: boolean[] = [];
       const started = performance.now();

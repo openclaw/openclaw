@@ -20,13 +20,13 @@ import {
   buildClaimContradictionClusters,
   buildPageContradictionClusters,
   collectWikiClaimHealth,
+  compareWikiClaimSummaries,
   isClaimContestedStatus,
   normalizeClaimStatus,
   WIKI_AGING_DAYS,
   type WikiClaimContradictionCluster,
   type WikiClaimHealth,
   type WikiFreshness,
-  type WikiFreshnessLevel,
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import {
@@ -48,6 +48,7 @@ import {
   resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
+  decodeWikiPageUtf8,
   formatWikiLink,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
@@ -65,6 +66,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
@@ -732,7 +734,9 @@ async function refreshPageRelatedBlocks(params: {
     if (page.kind === "report") {
       continue;
     }
-    const original = await root.readText(page.relativePath);
+    // Strict admission: the Related-block refresh re-emits the whole page, so
+    // replacement-decodable bytes would be persisted over human content.
+    const original = decodeWikiPageUtf8(await root.readBytes(page.relativePath), page.relativePath);
     params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
@@ -756,38 +760,6 @@ async function refreshPageRelatedBlocks(params: {
   return updatedFiles;
 }
 
-async function writeManagedMarkdownFile(params: {
-  rootDir: string;
-  relativePath: string;
-  title: string;
-  startMarker: string;
-  endMarker: string;
-  body: string;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  params.signal?.throwIfAborted();
-  const root = await fsRoot(params.rootDir);
-  const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
-  params.signal?.throwIfAborted();
-  // Generated indexes bypass page discovery. Parse existing content here so
-  // managed-block updates cannot rewrite malformed frontmatter.
-  parseWikiMarkdown(original);
-  const updated = replaceManagedMarkdownBlock({
-    original,
-    heading: "## Generated",
-    startMarker: params.startMarker,
-    endMarker: params.endMarker,
-    body: params.body,
-  });
-  const rendered = withTrailingNewline(updated);
-  if (rendered === original) {
-    return false;
-  }
-  await root.write(params.relativePath, rendered);
-  params.signal?.throwIfAborted();
-  return true;
-}
-
 async function refreshDashboardPages(params: {
   config: ResolvedMemoryWikiConfig;
   managedImportedSourcePagePaths: Set<string>;
@@ -803,7 +775,7 @@ async function refreshDashboardPages(params: {
     params.signal?.throwIfAborted();
     const relativePath = `reports/${name}.md`;
     const root = await fsRoot(params.config.vault.path);
-    const original = await root.readText(relativePath).catch(() =>
+    const original = await readExistingWikiPageUtf8(root, relativePath, () =>
       renderWikiMarkdown({
         frontmatter: {
           pageType: "report",
@@ -890,117 +862,75 @@ function buildRootIndexBody(params: {
   return lines.join("\n");
 }
 
-const FRESHNESS_RANK: Record<WikiFreshnessLevel, number> = {
-  fresh: 3,
-  aging: 2,
-  stale: 1,
-  unknown: 0,
-};
-
-function sortClaims(page: WikiPageSummary): WikiClaim[] {
-  return page.claims.toSorted((left, right) => {
-    const leftConfidence = left.confidence ?? -1;
-    const rightConfidence = right.confidence ?? -1;
-    if (leftConfidence !== rightConfidence) {
-      return rightConfidence - leftConfidence;
-    }
-    const leftFreshness = FRESHNESS_RANK[assessClaimFreshness({ page, claim: left }).level];
-    const rightFreshness = FRESHNESS_RANK[assessClaimFreshness({ page, claim: right }).level];
-    if (leftFreshness !== rightFreshness) {
-      return rightFreshness - leftFreshness;
-    }
-    return left.text.localeCompare(right.text);
-  });
-}
-
 function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
+  const claims: MemoryWikiCompiledCacheSnapshot["claims"] = [];
   const pages = pagesInput
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
-      const digestPage: Omit<
-        MemoryWikiCompiledCacheSnapshot["digest"]["pages"][number],
-        "claimCount" | "topClaims"
-      > = Object.assign(page.id ? { id: page.id } : {}, {
-        title: page.title,
-        kind: page.kind,
-        path: page.relativePath,
-        aliases: [...page.aliases],
-        sourceIds: [...page.sourceIds],
-        questions: [...page.questions],
-        contradictions: [...page.contradictions],
-        bestUsedFor: [...page.bestUsedFor],
-        notEnoughFor: [...page.notEnoughFor],
-        relationshipCount: page.relationships.length,
-        topRelationships: page.relationships.slice(0, 5),
-      });
-      if (page.pageType) {
-        digestPage.pageType = page.pageType;
-      }
-      if (page.entityType) {
-        digestPage.entityType = page.entityType;
-      }
-      if (page.canonicalId) {
-        digestPage.canonicalId = page.canonicalId;
-      }
-      if (page.privacyTier) {
-        digestPage.privacyTier = page.privacyTier;
-      }
-      if (page.personCard) {
-        digestPage.personCard = page.personCard;
-      }
-      return Object.assign(digestPage, {
-        claimCount: page.claims.length,
-        topClaims: sortClaims(page)
-          .slice(0, 5)
-          .map((claim) =>
-            Object.assign(
-              claim.id ? { id: claim.id } : {},
-              { text: claim.text, status: normalizeClaimStatus(claim.status) },
-              typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
-              { freshnessLevel: assessClaimFreshness({ page, claim }).level },
-            ),
-          ),
-      });
-    });
-  const claims = pagesInput
-    .flatMap((page) =>
-      sortClaims(page).map((claim) => {
-        const freshness = assessClaimFreshness({ page, claim });
-        return Object.assign(claim.id ? { id: claim.id } : {}, {
-          pageId: page.id,
-          pageTitle: page.title,
-          pageKind: page.kind,
-          pagePath: page.relativePath,
-          pageType: page.pageType,
-          entityType: page.entityType,
-          canonicalId: page.canonicalId,
-          aliases: page.aliases,
-          text: claim.text,
-          status: normalizeClaimStatus(claim.status),
-          confidence: claim.confidence,
-          sourceIds: page.sourceIds,
-          evidenceKinds: uniqueStrings(claim.evidence.flatMap((entry) => entry.kind ?? [])),
-          privacyTiers: [
-            ...new Set(
+      const pageClaims = page.claims
+        .map((claim) => {
+          const freshness = assessClaimFreshness({ page, claim });
+          const summary = Object.assign(
+            claim.id ? { id: claim.id } : {},
+            { text: claim.text, status: normalizeClaimStatus(claim.status) },
+            typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
+            { freshnessLevel: freshness.level },
+          );
+          return { claim, freshness, summary };
+        })
+        .toSorted((left, right) => compareWikiClaimSummaries(left.summary, right.summary));
+      for (const { claim, freshness, summary } of pageClaims) {
+        claims.push(
+          Object.assign(claim.id ? { id: claim.id } : {}, {
+            pageId: page.id,
+            pageTitle: page.title,
+            pageKind: page.kind,
+            pagePath: page.relativePath,
+            pageType: page.pageType,
+            entityType: page.entityType,
+            canonicalId: page.canonicalId,
+            aliases: page.aliases,
+            text: summary.text,
+            status: summary.status,
+            confidence: claim.confidence,
+            sourceIds: page.sourceIds,
+            evidenceKinds: uniqueStrings(claim.evidence.flatMap((entry) => entry.kind ?? [])),
+            privacyTiers: uniqueStrings(
               [
                 page.privacyTier,
                 page.personCard?.privacyTier,
                 ...claim.evidence.map((entry) => entry.privacyTier),
               ].flatMap((entry) => entry ?? []),
             ),
-          ],
-          freshnessLevel: freshness.level,
-          lastTouchedAt: freshness.lastTouchedAt,
-        });
-      }),
-    )
-    .toSorted(
-      (left, right) =>
-        left.pagePath.localeCompare(right.pagePath) || left.text.localeCompare(right.text),
-    );
+            freshnessLevel: freshness.level,
+            lastTouchedAt: freshness.lastTouchedAt,
+          }),
+        );
+      }
+      return Object.assign(page.id ? { id: page.id } : {}, {
+        title: page.title,
+        kind: page.kind,
+        path: page.relativePath,
+        aliases: page.aliases,
+        sourceIds: page.sourceIds,
+        questions: page.questions,
+        contradictions: page.contradictions,
+        bestUsedFor: page.bestUsedFor,
+        notEnoughFor: page.notEnoughFor,
+        relationshipCount: page.relationships.length,
+        topRelationships: page.relationships.slice(0, 5),
+        ...(page.pageType ? { pageType: page.pageType } : {}),
+        ...(page.entityType ? { entityType: page.entityType } : {}),
+        ...(page.canonicalId ? { canonicalId: page.canonicalId } : {}),
+        ...(page.privacyTier ? { privacyTier: page.privacyTier } : {}),
+        ...(page.personCard ? { personCard: page.personCard } : {}),
+        claimCount: page.claims.length,
+        topClaims: pageClaims.slice(0, 5).map(({ summary }) => summary),
+      });
+    });
   return {
     digest: {
       claimCount: claims.length,
@@ -1009,7 +939,10 @@ function buildCompiledCacheSnapshot(
         buildClaimContradictionClusters({ pages: pagesInput }).length,
       pages,
     },
-    claims,
+    claims: claims.toSorted(
+      (left, right) =>
+        left.pagePath.localeCompare(right.pagePath) || left.text.localeCompare(right.text),
+    ),
     dashboards: {
       importInsights: buildMemoryWikiImportInsights(scan.importInsights),
       overview: buildMemoryWikiOverview(scan.pages, scan.overviewItems),

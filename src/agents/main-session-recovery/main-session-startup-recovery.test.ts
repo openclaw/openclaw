@@ -6,6 +6,7 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -96,6 +97,26 @@ afterEach(() => {
 });
 
 describe("main-session startup recovery", () => {
+  it("keeps archived interruptions out of writer preparation", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:archived": mainSessionEntry({ archivedAt: 1 }),
+    });
+    const before = readStore(storePath);
+    const replacements = vi.spyOn(sessionAccessor, "applySessionEntryReplacements");
+    try {
+      expect(await markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir })).toEqual({
+        marked: 0,
+        skipped: 0,
+      });
+      expect(replacements).not.toHaveBeenCalled();
+      expect(readStore(storePath)).toEqual(before);
+    } finally {
+      replacements.mockRestore();
+    }
+  });
+
   it("automatically dispatches a continuation from a persisted restart-admission refusal", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

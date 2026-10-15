@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { SESSION_LIST_SOURCES } from "../../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
@@ -22,6 +23,8 @@ type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
+type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
+type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
@@ -42,6 +45,8 @@ export class GatewayRpcDiagnostics {
     private readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
+    sessionsList?: SessionsListAttribution,
+    cronList?: CronListAttribution,
   ) {
     this.queueWaitMs = queueWaitMs;
     this.emit({
@@ -49,6 +54,8 @@ export class GatewayRpcDiagnostics {
       method,
       phase: "received",
       ...(modelsList && { modelsList }),
+      ...(sessionsList && { sessionsList }),
+      ...(cronList && { cronList }),
     });
   }
 
@@ -160,7 +167,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc")
+  return areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventInterest("gateway.rpc", true)
     ? performance.now()
     : undefined;
 }
@@ -185,13 +193,16 @@ export function createGatewayRpcDiagnostics(
   method: string,
   getMethodRegistry: (() => GatewayMethodRegistry) | undefined,
   extraHandlers: GatewayRequestHandlers,
-  catalogRequest?: {
+  listRequest?: {
     clientKind: NonNullable<ModelsListAttribution>["clientKind"];
     source: NonNullable<ModelsListAttribution>["source"];
     params: unknown;
   },
 ): GatewayRpcDiagnostics | undefined {
-  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
+  if (
+    !areDiagnosticsEnabledForProcess() ||
+    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  ) {
     return undefined;
   }
   // Only catalog-owned names become dimensions, never arbitrary request values.
@@ -202,13 +213,13 @@ export function createGatewayRpcDiagnostics(
       ? method
       : "other";
   let modelsList: ModelsListAttribution;
-  if (method === "models.list" && catalogRequest) {
+  if (method === "models.list" && listRequest) {
     // Only the frame has been validated here; reduce method params to bounded shape facts.
-    const params = asOptionalRecord(catalogRequest.params);
+    const params = asOptionalRecord(listRequest.params);
     const view = params?.view;
     modelsList = {
-      clientKind: catalogRequest.clientKind,
-      source: catalogRequest.source,
+      clientKind: listRequest.clientKind,
+      source: listRequest.source,
       view:
         view === undefined || view === "default"
           ? "default"
@@ -227,5 +238,52 @@ export function createGatewayRpcDiagnostics(
       preparedOnly: params?.preparedOnly === true,
     };
   }
-  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList);
+  let sessionsList: SessionsListAttribution;
+  if (method === "sessions.list" && listRequest) {
+    const params = asOptionalRecord(listRequest.params);
+    const rowMode = params?.rowMode;
+    sessionsList = {
+      clientKind: listRequest.clientKind,
+      source: listRequest.source,
+      callerSource:
+        SESSION_LIST_SOURCES.find((source) => source === params?.source) ?? "unspecified",
+      rowMode:
+        rowMode === undefined
+          ? "full"
+          : rowMode === "compact" || rowMode === "dashboard" || rowMode === "sidebar"
+            ? rowMode
+            : "other",
+      filter:
+        params?.search !== undefined
+          ? "search"
+          : params?.spawnedBy !== undefined
+            ? "children"
+            : params?.ownerId !== undefined
+              ? "owner"
+              : params?.involvingMe === true ||
+                  params?.involvingProfileId !== undefined ||
+                  params?.profileRelation !== undefined
+                ? "involving"
+                : params?.activeOnly === true || params?.activeMinutes !== undefined
+                  ? "active"
+                  : "general",
+    };
+  }
+  let cronList: CronListAttribution;
+  if (method === "cron.list" && listRequest) {
+    const params = asOptionalRecord(listRequest.params);
+    cronList = {
+      clientKind: listRequest.clientKind,
+      source: listRequest.source,
+      scope:
+        params?.sessionKey !== undefined
+          ? "session"
+          : params?.agentId !== undefined
+            ? "agent"
+            : "global",
+      compact: params?.compact === true,
+      page: typeof params?.offset === "number" && params.offset > 0 ? "append" : "first",
+    };
+  }
+  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList, sessionsList, cronList);
 }

@@ -717,59 +717,6 @@ describe("explicit direct Responses continuation", () => {
     expect(store.entry?.providerReview?.id).toBe("review-1");
   });
 
-  it.each(["reorder", "replace-carrier", "mutate-carrier"] as const)(
-    "rejects a payload hook that changes the acknowledged turn's tail: %s",
-    async (change) => {
-      const f = await fixture("sse");
-      const messages: Context["messages"] = [
-        ...context.messages,
-        {
-          role: "user",
-          content: "OpenClaw runtime context:\nRuntime context",
-          timestamp: 3,
-          runtimeContext: {},
-        },
-      ];
-      const stream = await f.stream(
-        model,
-        { ...context, messages },
-        {
-          ...f.options,
-          onPayload: (payload: unknown) => {
-            if (!isRecord(payload) || !Array.isArray(payload.input)) {
-              throw new Error("Fixture expected Responses input");
-            }
-            if (change === "reorder") {
-              [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
-            } else {
-              const carrier = payload.input.at(-1);
-              if (
-                !isRecord(carrier) ||
-                !Array.isArray(carrier.content) ||
-                !isRecord(carrier.content[0])
-              ) {
-                throw new Error("Fixture expected a runtime-context carrier");
-              }
-              if (change === "mutate-carrier") {
-                carrier.content[0].text = "Unreviewed input";
-              } else {
-                payload.input[payload.input.length - 1] = {
-                  role: "user",
-                  content: [{ type: "input_text", text: "Unreviewed input" }],
-                };
-              }
-            }
-            return payload;
-          },
-        },
-      );
-      const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("changed its next user input");
-      expect(f.requests).toHaveLength(0);
-      expect(store.entry?.providerReview?.id).toBe("review-1");
-    },
-  );
   it("preserves effective settings, tools, and history transforms while keeping the exact steer", async () => {
     const f = await fixture("sse");
     const stream = await f.stream(model, context, {

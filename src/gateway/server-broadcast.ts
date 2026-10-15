@@ -54,6 +54,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
   "session.tool",
+  "socket.drain",
 ]);
 
 type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
@@ -261,6 +262,12 @@ export function createGatewayBroadcaster(params: {
     // The bounded signal has no caller-provided serialization or model/config data.
     const metadataInvalidation =
       event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
+    // Older Control UI builds cannot render an unknown status phase.
+    const modelWaitStatus =
+      event === "chat" &&
+      isPlainEventPayload(payload) &&
+      payload.state === "status" &&
+      payload.phase === "waiting_for_model";
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
@@ -320,6 +327,8 @@ export function createGatewayBroadcaster(params: {
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
+        (modelWaitStatus &&
+          !hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS)) ||
         (opts?.excludeClientCapability &&
           hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
@@ -665,6 +674,7 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
+        state.socket.batchWrites?.();
         if (typeof frame === "string") {
           state.socket.send(frame, sent);
         } else {

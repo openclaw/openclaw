@@ -94,6 +94,7 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
 
 async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
+  const surface = menu.locator(".chat-header-session-menu__panel");
   const trigger = page.locator(".chat-header-session-menu__trigger");
   if (input === "keyboard") {
     await trigger.focus();
@@ -101,8 +102,8 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
   } else {
     await trigger.click();
   }
-  await menu.getByRole("menu").first().waitFor({ state: "visible" });
-  await menu.getByRole("menuitem").first().click({ trial: true });
+  await surface.waitFor({ state: "visible" });
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   await menu.locator(".board-widget__page-menu-heading").waitFor();
   return menu;
 }

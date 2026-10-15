@@ -411,7 +411,7 @@ function collectConfiguredOllamaModelIds(params: {
     if (!trimmed || trimmed === "*") {
       return;
     }
-    const trimmedName = typeof name === "string" ? name.trim() : "";
+    const trimmedName = name?.trim();
     const existing = models.get(trimmed);
     if (existing) {
       if (!existing.api && api) {

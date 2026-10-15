@@ -206,14 +206,13 @@ describe("Google Live setup timeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("rejects when the socket closes after setup but before activation", async () => {
+  it("rejects when the socket closes after setup but before start settles", async () => {
     const onStatus = vi.fn();
     const transport = await createTransport({ onStatus });
     const { start, socket } = await beginTransport(transport);
     onStatus.mockClear();
     socket.emitOpen();
     socket.emitMessage({ setupComplete: {} });
-    await Promise.resolve();
     const rejected = expect(start).rejects.toThrow("Realtime connection closed");
 
     socket.emitClose();

@@ -56,6 +56,7 @@ export type ModelProvidersViewProps = Omit<
   Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
     connected: boolean;
     loading: boolean;
+    providerDetailsReady?: boolean;
     refreshing: boolean;
     error: string | null;
     providerUsageFailed: boolean;
@@ -533,13 +534,22 @@ function ConnectedModelProviders(props: ModelProvidersViewProps) {
               message={props.messages.defaults}
             />
           </div>
-          {props.installedAgents}
-          <ProviderAccess {...props} />
-          {props.providerUsageStalled ? (
-            <div class="callout warning" role="status">
-              {t("usage.providerUsage.stalled")}
-            </div>
-          ) : undefined}
+          <Show
+            when={props.providerDetailsReady !== false}
+            fallback={
+              <div class="model-providers__loading">
+                <SettingsLoadingSkeleton rows={1} />
+              </div>
+            }
+          >
+            {props.installedAgents}
+            <ProviderAccess {...props} />
+            {props.providerUsageStalled ? (
+              <div class="callout warning" role="status">
+                {t("usage.providerUsage.stalled")}
+              </div>
+            ) : undefined}
+          </Show>
         </>
       </SettingsPage>
       <AddProvider {...props} />

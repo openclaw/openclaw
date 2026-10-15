@@ -220,6 +220,15 @@ when initialization must finish before the child runs.
     config-only bootstrap activation remain separate; persisted credentials alone
     do not enable a channel.
 
+    `gateway.loginWithQrStart` receives an optional
+    `assertCredentialPersistenceCurrent()` callback. Retain it with the QR login
+    and invoke it immediately before credential writes, including deferred writes
+    after the RPC returns. It throws when the Gateway's account configuration or
+    plugin lifetime changes. Compose it with the plugin's own active-login guard;
+    do not replace that guard or tie QR lifetime to the initiating RPC. Omitted
+    account IDs retain plugin-specific single-account profile selection; the
+    Gateway rejects omission when multiple accounts are configured.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts
@@ -420,6 +429,23 @@ when initialization must finish before the child runs.
       turn runs as a queued followup; collected turns notify every source's terminal
       observer. Human-facing channels should continue to
       deliver useful host notices.
+
+      `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
+      (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
+      source. These messages will not run, so channels should finalize their status
+      without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
+      remains pending; sources evicted from the summary cap report `queue-cap-old`.
+
+      A `queuedDeliveryCorrelations` entry stays bound to its source through collect
+      batching. Its `begin()` cleanup receives an optional settlement with
+      `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
+      `transportPending: true` means delivery remains owned by transport without a
+      later callback to this source; clear activity UI without claiming success or failure
+      unless `visibleReplySent` or `failed` already proves the outcome.
+      An omitted settlement means the attempt deferred, queued a source retry,
+      or uses a separate source-owned delivery outcome (such as a Gateway reply batch).
+      Use the settlement for delivery-dependent completion UI; an agent's successful
+      execution callback can arrive before any reply is sent.
 
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime

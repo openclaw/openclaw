@@ -437,27 +437,14 @@ describe("memory cli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it.each([["status", ["status", "--agent", "nope-zzz"]]])(
-    "rejects an unknown explicit agent before %s acquires a manager",
-    async (_name, args) => {
-      getRuntimeConfig.mockReturnValue(configuredAgents);
-
-      await expect(runMemoryCli(args)).rejects.toThrow(
-        'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.',
-      );
-      expect(getMemorySearchManager).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([["status", ["status", "--agent", ""]]])(
-    "rejects an explicitly blank agent before %s acquires a manager",
-    async (_name, args) => {
-      getRuntimeConfig.mockReturnValue(configuredAgents);
-
-      await expect(runMemoryCli(args)).rejects.toThrow("--agent must not be blank");
-      expect(getMemorySearchManager).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ["nope-zzz", 'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.'],
+    ["", "--agent must not be blank"],
+  ])("rejects invalid explicit agent %j before acquisition", async (agentId, message) => {
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    await expect(runMemoryCli(["status", "--agent", agentId])).rejects.toThrow(message);
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
 
   it("drains admitted session backfill in one apply command before preview", async () => {
     const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
@@ -1022,49 +1009,57 @@ describe("memory cli", () => {
     );
   });
 
-  it("reports a truthful no-op when the memory directory is missing", async () => {
-    const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const sync = vi.fn(async () => {});
-    mockStatusManager(
-      {
-        workspaceDir,
-        sources: ["memory"],
-        sourceCounts: [
-          {
-            source: "memory",
-            files: 0,
-            chunks: 0,
-            eligible: 0,
-            issues: ["no eligible memory files found"],
-          },
-        ],
-      },
-      { sync },
-    );
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["index"]);
-
-    expectCliSync(sync);
-    expectLogged(log, `No memory files found in ${workspaceDir}; nothing indexed (main).`);
-    expectNotLogged(log, "Memory index updated");
-    await expectPathMissing(path.join(workspaceDir, "memory"));
-    expect(process.exitCode).toBe(0);
-  });
-
-  it("describes session index sources without implying active JSONL storage", async () => {
-    const workspaceDir = await createWorkspace();
-    const sync = vi.fn(async () => {});
-    mockStatusManager({ workspaceDir, sources: ["sessions"], files: 1 }, { sync });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["index", "--verbose"]);
-
-    expectLogged(log, "sessions (current transcripts + retained transcript artifacts)");
-    expectNotLogged(log, "*.jsonl");
-    expectLogged(log, "Memory index updated (main): 1 file indexed.");
-  });
+  it.each(["missing-directory", "sessions", "unsupported"] as const)(
+    "reports the index outcome for %s",
+    async (source) => {
+      const workspaceDir =
+        source === "missing-directory"
+          ? path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`)
+          : await createWorkspace();
+      if (source === "missing-directory") {
+        await fs.mkdir(workspaceDir, { recursive: true });
+      }
+      const sync = vi.fn(async () => {});
+      mockStatusManager(
+        source === "missing-directory"
+          ? {
+              workspaceDir,
+              sources: ["memory"],
+              sourceCounts: [
+                {
+                  source: "memory",
+                  files: 0,
+                  chunks: 0,
+                  eligible: 0,
+                  issues: ["no eligible memory files found"],
+                },
+              ],
+            }
+          : source === "sessions"
+            ? { workspaceDir, sources: ["sessions"], files: 1 }
+            : {},
+        source === "unsupported" ? {} : { sync },
+      );
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["index", ...(source === "sessions" ? ["--verbose"] : [])]);
+      if (source === "unsupported") {
+        expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
+        expect(sync).not.toHaveBeenCalled();
+      } else {
+        expectCliSync(sync);
+        if (source === "missing-directory") {
+          expectLogged(log, `No memory files found in ${workspaceDir}; nothing indexed (main).`);
+          expectNotLogged(log, "Memory index updated");
+          await expectPathMissing(path.join(workspaceDir, "memory"));
+          expect(process.exitCode).toBe(0);
+        } else {
+          expectLogged(log, "sessions (current transcripts + retained transcript artifacts)");
+          expectNotLogged(log, "*.jsonl");
+          expectLogged(log, "Memory index updated (main): 1 file indexed.");
+        }
+      }
+    },
+  );
 
   it("warns on stderr when index has vector store but no semantic vectors", async () => {
     const close = vi.fn(async () => {});
@@ -1100,43 +1095,31 @@ describe("memory cli", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it.each([{ rebuild: true, closeFails: false }])(
-    "propagates search failure after close (rebuild=$rebuild, closeFails=$closeFails)",
-    async ({ rebuild, closeFails }) => {
-      const warning = "Memory index rebuilt; embedding provider cost may apply.";
-      const notice: { sequence: number; warning?: string } = { sequence: 0 };
-      const close = vi.fn(async () => {
-        if (closeFails) {
-          throw new Error("close boom");
-        }
-      });
-      const search = vi.fn(async () => {
-        if (rebuild) {
-          notice.sequence += 1;
-          notice.warning = warning;
-        }
-        throw new Error("boom");
-      });
-      mockManager({
-        search,
-        close,
-        status: () => makeMemoryStatus({ custom: { automaticRebuildNotice: notice } }),
-      });
+  it("propagates search failure and rebuild notice after closing the manager", async () => {
+    const warning = "Memory index rebuilt; embedding provider cost may apply.";
+    const notice: { sequence: number; warning?: string } = { sequence: 0 };
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => {
+      notice.sequence += 1;
+      notice.warning = warning;
+      throw new Error("boom");
+    });
+    mockManager({
+      search,
+      close,
+      status: () => makeMemoryStatus({ custom: { automaticRebuildNotice: notice } }),
+    });
 
-      const error = spyRuntimeErrors(defaultRuntime);
-      const writeJson = spyRuntimeJson(defaultRuntime);
-      await expect(runMemoryCli(["search", "oops", "--json"])).rejects.toThrow(
-        `Memory search failed: boom${rebuild ? ` ${warning}` : ""}`,
-      );
-
-      expect(search).toHaveBeenCalledTimes(1);
-      expect(close).toHaveBeenCalledTimes(1);
-      expect(writeJson).not.toHaveBeenCalled();
-      expect(error.mock.calls).toEqual(
-        closeFails ? [["Memory manager close failed: close boom"]] : [],
-      );
-    },
-  );
+    const error = spyRuntimeErrors(defaultRuntime);
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await expect(runMemoryCli(["search", "oops", "--json"])).rejects.toThrow(
+      `Memory search failed: boom ${warning}`,
+    );
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(writeJson).not.toHaveBeenCalled();
+    expect(error.mock.calls).toEqual([]);
+  });
 
   it("routes gateway secret diagnostics to stderr for json status output", async () => {
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
@@ -1227,15 +1210,6 @@ describe("memory cli", () => {
     expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
     expect(process.exitCode).toBe(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
-  });
-
-  it("logs backend unsupported message when index has no sync", async () => {
-    mockStatusManager({});
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["index"]);
-
-    expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
   });
 
   it("rejects an empty --query override before acquisition", async () => {
@@ -1615,90 +1589,100 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalledTimes(2);
   });
 
-  it("prefers persistence-relevant evidence over narrated operational logs in grounded what happened", async () => {
+  it.each([
+    {
+      name: "prefers persistence-relevant evidence over narrated operational logs in grounded what happened",
+      date: "2025-03-30.md",
+      lines: [
+        "## OpenClaw / runtime / workflow preferences and corrections",
+        "- Mariano explicitly said that when he tells Razor there has been an error, the default interpretation should be that he wants it fixed, not merely diagnosed or acknowledged.",
+        "- Mariano clarified that the problem with cron output is overlapping, independently unreasonable crons converging into dumb sludge.",
+        "",
+        "## Versions / machine state and update work",
+        "- MB Server repo updated but the active installed runtime is still old.",
+        "- jpclawhq updated and running.",
+        "",
+        "## Other context and user preferences reinforced in this session",
+        "- Mariano prefers short, punk, high-signal copy for social posts.",
+        "- He explicitly wants the assistant to treat ADHD as a reason to reduce clutter and noise, not to produce more summaries.",
+      ],
+      contains: ["prefers short, punk, high-signal copy"],
+      excludes: [
+        "MB Server repo updated but the active installed runtime is still old",
+        "jpclawhq updated and running",
+      ],
+      checkReflections: false,
+    },
+    {
+      name: "suppresses monitoring-heavy operational days instead of promoting alert sludge",
+      date: "2025-02-17.md",
+      lines: [
+        "## Heartbeat checks",
+        "- 04:17 (Europe/Madrid) heartbeat run.",
+        "- Ariston check returned warning/error:",
+        "  - Pressure LOW: 1.1 bar",
+        "- Action: alert Mariano on this heartbeat.",
+        "",
+        "## 07:15 life-context sync (travel + now)",
+        "- mariano@tpmcap.com calendar access failed (invalid_grant: token expired/revoked).",
+        "- memory/email-tracker.json checkpoint at 2025-02-17T07:03:53+01:00.",
+        "- memory/travel.md updated.",
+        "",
+        "## Heartbeat checks (07:18)",
+        "- Ariston check again reports low pressure: 1.1 bar.",
+        "- collect-temps.sh completed OK (exit 0).",
+      ],
+      contains: ["No grounded facts were extracted.", "mostly as monitoring and operational state"],
+      excludes: ["Pressure LOW", "invalid_grant"],
+      checkReflections: false,
+    },
+    {
+      name: "splits multi-fact person lines into atomic grounded candidates",
+      date: "2025-02-19.md",
+      lines: [
+        "## People mentioned with context",
+        "- Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
+        "- Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark",
+        "",
+        "## Process improvements",
+        "- Routed several inbound requests into different workflows.",
+        "- Important context was written into notes and memory surfaces.",
+      ],
+      contains: [
+        "People mentioned with context: Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
+        "Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark",
+        "Bunji — partner",
+        "Bex — girlfriend",
+      ],
+      excludes: [
+        "Bunji — Surrealist Ball Sat 28 Feb w/ Maga [",
+        "Bex — date weekend Fri-Sun London, Chateau Denmark",
+      ],
+      checkReflections: true,
+    },
+  ])("$name", async ({ date, lines, contains, excludes, checkReflections }) => {
     const workspaceDir = await createWorkspace();
-    const historyPath = await writeHistory(workspaceDir, "2025-03-30.md", [
-      "## OpenClaw / runtime / workflow preferences and corrections",
-      "- Mariano explicitly said that when he tells Razor there has been an error, the default interpretation should be that he wants it fixed, not merely diagnosed or acknowledged.",
-      "- Mariano clarified that the problem with cron output is overlapping, independently unreasonable crons converging into dumb sludge.",
-      "",
-      "## Versions / machine state and update work",
-      "- MB Server repo updated but the active installed runtime is still old.",
-      "- jpclawhq updated and running.",
-      "",
-      "## Other context and user preferences reinforced in this session",
-      "- Mariano prefers short, punk, high-signal copy for social posts.",
-      "- He explicitly wants the assistant to treat ADHD as a reason to reduce clutter and noise, not to produce more summaries.",
-    ]);
-
+    const historyPath = await writeHistory(workspaceDir, date, lines);
     const file = await previewGroundedHistory(workspaceDir, historyPath);
     const rendered = file?.renderedMarkdown ?? "";
-    expect(rendered).toContain("prefers short, punk, high-signal copy");
-    expect(rendered).not.toContain(
-      "MB Server repo updated but the active installed runtime is still old",
-    );
-    expect(rendered).not.toContain("jpclawhq updated and running");
-  });
-
-  it("suppresses monitoring-heavy operational days instead of promoting alert sludge", async () => {
-    const workspaceDir = await createWorkspace();
-    const historyPath = await writeHistory(workspaceDir, "2025-02-17.md", [
-      "## Heartbeat checks",
-      "- 04:17 (Europe/Madrid) heartbeat run.",
-      "- Ariston check returned warning/error:",
-      "  - Pressure LOW: 1.1 bar",
-      "- Action: alert Mariano on this heartbeat.",
-      "",
-      "## 07:15 life-context sync (travel + now)",
-      "- mariano@tpmcap.com calendar access failed (invalid_grant: token expired/revoked).",
-      "- memory/email-tracker.json checkpoint at 2025-02-17T07:03:53+01:00.",
-      "- memory/travel.md updated.",
-      "",
-      "## Heartbeat checks (07:18)",
-      "- Ariston check again reports low pressure: 1.1 bar.",
-      "- collect-temps.sh completed OK (exit 0).",
-    ]);
-
-    const file = await previewGroundedHistory(workspaceDir, historyPath);
-    const rendered = file?.renderedMarkdown ?? "";
-    expect(rendered).toContain("No grounded facts were extracted.");
-    expect(rendered).toContain("mostly as monitoring and operational state");
-    expect(rendered).not.toContain("Pressure LOW");
-    expect(rendered).not.toContain("invalid_grant");
-  });
-
-  it("splits multi-fact person lines into atomic grounded candidates", async () => {
-    const workspaceDir = await createWorkspace();
-    const historyPath = await writeHistory(workspaceDir, "2025-02-19.md", [
-      "## People mentioned with context",
-      "- Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
-      "- Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark",
-      "",
-      "## Process improvements",
-      "- Routed several inbound requests into different workflows.",
-      "- Important context was written into notes and memory surfaces.",
-    ]);
-
-    const file = await previewGroundedHistory(workspaceDir, historyPath);
-    const rendered = file?.renderedMarkdown ?? "";
-    expect(rendered).toContain(
-      "People mentioned with context: Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
-    );
-    expect(rendered).toContain("Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark");
-    expect(rendered).toContain("Bunji — partner");
-    expect(rendered).toContain("Bex — girlfriend");
-    expect(rendered).not.toContain("Bunji — Surrealist Ball Sat 28 Feb w/ Maga [");
-    expect(rendered).not.toContain("Bex — date weekend Fri-Sun London, Chateau Denmark");
-    expect(
-      file?.reflections?.some((item) =>
-        item.text.includes("More than one active relationship thread"),
-      ),
-    ).toBe(true);
-    expect(
-      file?.reflections?.some((item) =>
-        item.text.includes("converting messy inbound information into routed workflows"),
-      ),
-    ).toBe(false);
+    for (const text of contains) {
+      expect(rendered).toContain(text);
+    }
+    for (const text of excludes) {
+      expect(rendered).not.toContain(text);
+    }
+    if (checkReflections) {
+      expect(
+        file?.reflections?.some((item) =>
+          item.text.includes("More than one active relationship thread"),
+        ),
+      ).toBe(true);
+      expect(
+        file?.reflections?.some((item) =>
+          item.text.includes("converting messy inbound information into routed workflows"),
+        ),
+      ).toBe(false);
+    }
   });
 
   it("rolls back grounded rem backfill entries from DREAMS.md", async () => {
@@ -1994,34 +1978,6 @@ describe("memory cli", () => {
     const appliedIndex = output.indexOf(`${relativePath}:2-2`);
     expect(rejectedIndex).toBeGreaterThanOrEqual(0);
     expect(rejectedIndex).toBeLessThan(appliedIndex);
-  });
-
-  it("prints conceptual promotion signals across recall days", async () => {
-    const workspaceDir = await createWorkspace();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const nowMs = Date.now();
-    const snippet = "Configured router VLAN 10 and Glacier backup notes for vectors.";
-    for (const [query, daysAgo, score] of [
-      ["router vlan", 2, 0.9],
-      ["glacier backup", 1, 0.88],
-    ] as const) {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query,
-        nowMs: nowMs - daysAgo * dayMs,
-        results: [
-          recallResult("memory/2026-04-01.md", snippet, { startLine: 4, endLine: 8, score }),
-        ],
-      });
-    }
-    const close = mockWorkspaceManager(workspaceDir);
-    const log = spyRuntimeLogs(defaultRuntime);
-
-    await runMemoryCli(["promote", ...unrestrictedPromotion]);
-
-    expectLogged(log, "recalls=2 avg=0.890 queries=2 age=1.0d consolidate=0.30 conceptual=1.00");
-    expectLogged(log, "concepts=backup, glacier, router, vlan, configured, vectors");
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it.each([

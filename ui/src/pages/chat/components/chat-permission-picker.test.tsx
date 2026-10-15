@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
-import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
+import { ChatPermissionPicker, type ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 it("keeps locked modes unavailable and selects enabled numeric shortcuts with return focus", async () => {
   const onSelect = vi.fn();
@@ -38,6 +39,9 @@ it("includes the documentation link in keyboard menu navigation", async () => {
   trigger.focus();
   trigger.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__permission-learn-more")).not.toBeNull(),
   );
   const link = container.querySelector<HTMLAnchorElement>(".chat-controls__permission-learn-more")!;
   await waitForSolid(() => expect(document.activeElement).toBe(link));
@@ -90,4 +94,44 @@ it("keeps declared shortcuts in the menu and forwards ordinary typing to the com
   );
   expect(document.activeElement).toBe(container.querySelector("textarea"));
   expect(onSelect).toHaveBeenCalledTimes(1);
+});
+
+it("preserves option content on unrelated refreshes while admitting permission changes", async () => {
+  const options: ChatPermissionPickerProps = { canSelectFull: false, onSelect: vi.fn() };
+  const [props, setProps] = createSignal(options);
+  const { container } = mountSolid(() => <ChatPermissionPicker {...props()} />);
+  flush();
+  container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+  );
+  const row = container.querySelector<HTMLElement>('[data-chat-permission-option="default"]')!;
+  const content = row.querySelector(".chat-controls__permission-option-copy");
+  const icon = row.querySelector(".chat-controls__permission-option-icon");
+  const observer = new MutationObserver(() => {});
+  observer.observe(container, { childList: true, subtree: true });
+  onTestFinished(() => observer.disconnect());
+
+  options.disabledReason = "Unrelated connection notice";
+  setProps({ ...options });
+  flush();
+  expect(observer.takeRecords()).toHaveLength(0);
+  expect(row.querySelector(".chat-controls__permission-option-copy")).toBe(content);
+  expect(row.querySelector(".chat-controls__permission-option-icon")).toBe(icon);
+
+  options.defaultMode = "guarded";
+  options.mode = "workspace";
+  options.canSelectFull = true;
+  setProps({ ...options });
+  flush();
+  expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
+  expect(row.textContent).toContain("Default (Guarded)");
+  expect(
+    container
+      .querySelector('[data-chat-permission-option="workspace"]')
+      ?.getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(
+    container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
+  ).toBe(false);
 });

@@ -17,6 +17,7 @@ import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import type {
   ModelSetupWizardRunner,
   ModelSetupWizardCompletion,
@@ -24,7 +25,6 @@ import type {
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { buildLoginProviders } from "./login-providers.ts";
-import type { ControllerHost } from "./page-controller.ts";
 import "../../styles/model-providers.css";
 registerSettingsEnglish();
 
@@ -231,9 +231,14 @@ export class ModelProviderLoginController {
     });
   }
 
+  connectProvider(models: ModelCatalogEntry[]): Promise<void> {
+    return this.open(undefined, {
+      allowSetup: !models.some((model) => model.available !== false),
+    });
+  }
+
   async open(
     providers?: string[],
-    authChoice?: string,
     { allowSetup = Boolean(this.options.onManualProvider) }: { allowSetup?: boolean } = {},
   ): Promise<void> {
     if (!this.options.canStart() || this.busy) {
@@ -271,11 +276,7 @@ export class ModelProviderLoginController {
         }));
       if (isCurrent()) {
         const available = this.loginProviders(providers, authStatus, allowSetup);
-        const provider = authChoice
-          ? available.find((group) => group.choices.some((option) => option.id === authChoice))
-          : providers && available.length === 1
-            ? available[0]
-            : undefined;
+        const provider = providers && available.length === 1 ? available[0] : undefined;
         this.picker = {
           ...picker,
           phase: "ready",

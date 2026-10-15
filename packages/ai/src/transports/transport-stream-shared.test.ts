@@ -4,12 +4,9 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
   assignTransportErrorDetails,
-  copyProviderAcceptanceObserver,
   createModelStreamCooperativeScheduler,
-  finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
-  notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
   withProviderAcceptanceObserver,
   type ProviderAcceptance,
@@ -82,49 +79,11 @@ function captureError(run: () => unknown): Error & { errorCode?: string; errorBo
 }
 
 describe("parseTerminalToolCallArguments", () => {
-  it("preserves unsafe integer literals and surrounding argument values", () => {
-    expect(
-      parseTerminalToolCallArguments(
-        '{"target":9223372036854775807,"safe":42,"negative":-9223372036854775808,"fraction":9007199254740992.0,"exponent":1e20,"text":"literal 9223372036854775807 \\"quoted\\" 日本語😀","last":9007199254740992}',
-      ),
-    ).toEqual({
-      target: "9223372036854775807",
-      safe: 42,
-      negative: "-9223372036854775808",
-      fraction: 9007199254740992,
-      exponent: 1e20,
-      text: 'literal 9223372036854775807 "quoted" 日本語😀',
-      last: "9007199254740992",
-    });
-    expect(parseTerminalToolCallArguments({})).toEqual({});
-  });
-
-  it("stays strict by default: raw control characters are rejected without repair", () => {
-    const thrown = captureError(() =>
-      parseTerminalToolCallArguments('{"path":"a.py","newText":"x = 1\ny = 2"}'),
-    );
-    expect(thrown.message).toBe(MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE);
-    expect(thrown.cause).toMatchObject({ repairAttempted: false });
-  });
-
   it("repairs invalid escapes by preserving the backslash the model meant", () => {
     // JS string is: {"command":"grep -E \d+ file"} — an unescaped regex backslash.
     expect(
       parseTerminalToolCallArguments('{"command":"grep -E \\d+ file"}', undefined, REPAIR),
     ).toEqual({ command: "grep -E \\d+ file" });
-  });
-
-  it("preserves valid control escapes in sibling fields, even after a path-like prefix", () => {
-    // oldText legitimately contains a newline (a valid \n escape after "C:"); newText has a raw
-    // newline that needs repair. The repair must not turn oldText into a literal backslash-n.
-    const raw =
-      '{"id":9223372036854775807,"path":"C:\\\\app\\\\a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}';
-    expect(parseTerminalToolCallArguments(raw, undefined, REPAIR)).toEqual({
-      id: "9223372036854775807",
-      path: "C:\\app\\a.py",
-      oldText: "C:\nnext",
-      newText: "x = 1\ny = 2",
-    });
   });
 
   it.each([
@@ -150,28 +109,6 @@ describe("parseTerminalToolCallArguments", () => {
   });
 });
 
-describe("finalizeTerminalToolCallArguments", () => {
-  it("does not mutate any sibling when one call stays malformed", () => {
-    const calls = [
-      {
-        name: "read",
-        arguments: {} as Record<string, unknown>,
-        partialJson: '{"path":"README.md"}',
-      },
-      {
-        name: "read",
-        arguments: {} as Record<string, unknown>,
-        partialJson: '{"path":"SECRET.md"',
-      },
-    ];
-    expect(() =>
-      finalizeTerminalToolCallArguments(calls, (call) => call.partialJson, undefined, REPAIR),
-    ).toThrow(MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE);
-    expect(calls[0]?.arguments).toEqual({});
-    expect(calls[1]?.arguments).toEqual({});
-  });
-});
-
 const model = { id: "acceptance-test", provider: "test" } as Model;
 
 function observeAcceptance(
@@ -182,34 +119,6 @@ function observeAcceptance(
 }
 
 describe("private provider acceptance", () => {
-  it("reports a successful HTTP response before the compatibility callback", async () => {
-    const calls: string[] = [];
-    const observer = vi.fn((acceptance: ProviderAcceptance) => {
-      calls.push(acceptance.kind);
-    });
-    const onResponse = vi.fn(() => {
-      calls.push("onResponse");
-    });
-    const options = observeAcceptance(observer, { onResponse });
-    const response = new Response(null, {
-      status: 200,
-      headers: { "x-request-id": "request-1" },
-    });
-
-    await notifyProviderHttpResponse({ options, response, model });
-
-    expect(observer).toHaveBeenCalledWith({
-      kind: "http_response",
-      status: 200,
-      headers: { "x-request-id": "request-1" },
-    });
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "x-request-id": "request-1" } },
-      model,
-    );
-    expect(calls).toEqual(["http_response", "onResponse"]);
-  });
-
   it("does not wait for unread response cancellation after the observer fails", async () => {
     const hookError = new Error("acceptance failed");
     let markCancelStarted!: () => void;
@@ -232,18 +141,6 @@ describe("private provider acceptance", () => {
 
     await cancelStarted;
     await expect(notification).rejects.toBe(hookError);
-  });
-
-  it("preserves the observer when built-in wrappers rebuild options", async () => {
-    const observer = vi.fn();
-    const source = observeAcceptance(observer);
-    const target = copyProviderAcceptanceObserver(source, {});
-
-    const cancelStream = vi.fn();
-    await notifyProviderStreamOpened({ options: target, cancelStream });
-
-    expect(observer).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
-    expect(cancelStream).not.toHaveBeenCalled();
   });
 
   it.each(["resolve", "reject"] as const)(

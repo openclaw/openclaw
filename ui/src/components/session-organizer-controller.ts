@@ -110,13 +110,11 @@ export class SessionOrganizerController {
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(this.host, session, scope),
-    );
-  }
-
-  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+      operations.archiveSessionWithUndo(
+        this.host,
+        { ...session, hasArchiveDescendants: session.childSessionKeys.length > 0 },
+        scope,
+      ),
     );
   }
 

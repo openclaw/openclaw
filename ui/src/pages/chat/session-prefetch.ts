@@ -1,11 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -24,10 +24,9 @@ import {
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-// Coalesce row sweeps for 75 ms while leaving time to warm history before a click.
+// Coalesce navigation intent while leaving time to warm history before a click.
 const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
-const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
 type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
 
@@ -163,17 +162,7 @@ class SessionPrefetcher {
     }
     this.running = true;
     try {
-      const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
-      if (locks) {
-        await locks.request(SESSION_PREFETCH_LOCK_NAME, { ifAvailable: true }, async (lock) => {
-          // ifAvailable must skip instead of queueing so one visible tab owns the cycle.
-          if (lock) {
-            await this.prefetchIntendedSession();
-          }
-        });
-      } else {
-        await this.prefetchIntendedSession();
-      }
+      await this.prefetchIntendedSession();
     } catch (error) {
       console.debug("[chat-session-prefetch] cycle failed", error);
     } finally {
@@ -411,9 +400,9 @@ class SessionPrefetcher {
   }
 }
 
-type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
+type SessionPrefetchHost = SolidControllerHost & HTMLElement;
 
-export class SessionPrefetchController implements ReactiveController {
+export class SessionPrefetchController implements SolidController {
   private readonly prefetcher: SessionPrefetcher;
   private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];

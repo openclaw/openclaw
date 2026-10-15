@@ -9,9 +9,8 @@ import {
   createProviderOperationTimeoutResolver,
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
-  postJsonRequest,
+  postJsonResponse,
   readProviderBinaryResponse,
-  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -261,7 +260,7 @@ export async function runVydraGeneration(params: {
         defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
       })
     : params.timeoutMs;
-  const { response, release } = await postJsonRequest({
+  const submitted = await postJsonResponse<unknown>({
     url: `${baseUrl}/models/${params.model}`,
     headers: requestPolicy.headers,
     body: params.body,
@@ -270,79 +269,70 @@ export async function runVydraGeneration(params: {
     allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
     ...(requestPolicy.ssrfPolicy ? { ssrfPolicy: requestPolicy.ssrfPolicy } : {}),
     dispatcherPolicy: requestPolicy.dispatcherPolicy,
+    errorLabel: `${operationLabel} failed`,
+    responseLabel: params.kind === "image" ? "vydra.image-generation" : operationLabel,
   });
-
-  try {
-    await assertOkOrThrowHttpError(response, `${operationLabel} failed`);
-    const submitted = await readProviderJsonResponse(
-      response,
-      params.kind === "image" ? "vydra.image-generation" : operationLabel,
-    );
-    const isComplete = (payload: unknown) =>
-      resolveVydraResponseStatus(payload) === "completed" ||
-      extractVydraResultUrls(payload, params.kind).length > 0;
-    let completedPayload = submitted;
-    if (!isComplete(submitted)) {
-      const jobId = resolveVydraResponseJobId(submitted);
-      if (!jobId) {
-        throw new Error(
-          resolveVydraErrorMessage(submitted) ?? `${operationLabel} response missing job id`,
-        );
-      }
-      completedPayload = await pollProviderOperationJson<unknown>({
-        url: `${baseUrl}/jobs/${jobId}`,
-        headers: requestPolicy.headers,
-        deadline:
-          deadline ??
-          createProviderOperationDeadline({
-            timeoutMs: params.timeoutMs,
-            label: `Vydra job ${jobId}`,
-          }),
-        defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-        fetchFn,
-        maxAttempts: MAX_POLL_ATTEMPTS,
-        pollIntervalMs: POLL_INTERVAL_MS,
-        requestFailedMessage: "Vydra job status request failed",
-        timeoutMessage: `Vydra job ${jobId} did not finish in time`,
-        allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
-        ssrfPolicy: requestPolicy.ssrfPolicy,
-        dispatcherPolicy: requestPolicy.dispatcherPolicy,
-        auditContext: "vydra-job-status",
-        isComplete,
-        getFailureMessage: (payload) => {
-          const status = resolveVydraResponseStatus(payload);
-          return status === "failed" || status === "error" || status === "cancelled"
-            ? (resolveVydraErrorMessage(payload) ?? `Vydra job ${jobId} failed`)
-            : undefined;
-        },
-      });
+  const isComplete = (payload: unknown) =>
+    resolveVydraResponseStatus(payload) === "completed" ||
+    extractVydraResultUrls(payload, params.kind).length > 0;
+  let completedPayload = submitted;
+  if (!isComplete(submitted)) {
+    const jobId = resolveVydraResponseJobId(submitted);
+    if (!jobId) {
+      throw new Error(
+        resolveVydraErrorMessage(submitted) ?? `${operationLabel} response missing job id`,
+      );
     }
-    const resultUrl = extractVydraResultUrls(completedPayload, params.kind)[0];
-    if (!resultUrl) {
-      throw new Error(`${operationLabel} completed without a ${params.kind} URL`);
-    }
-    const asset = await downloadVydraAsset({
-      url: resultUrl,
-      kind: params.kind,
-      timeoutMs: deadline
-        ? createProviderOperationTimeoutResolver({
-            deadline,
-            defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-          })
-        : params.timeoutMs,
+    completedPayload = await pollProviderOperationJson<unknown>({
+      url: `${baseUrl}/jobs/${jobId}`,
+      headers: requestPolicy.headers,
+      deadline:
+        deadline ??
+        createProviderOperationDeadline({
+          timeoutMs: params.timeoutMs,
+          label: `Vydra job ${jobId}`,
+        }),
+      defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
       fetchFn,
-      maxBytes: resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
-      requestPolicy,
+      maxAttempts: MAX_POLL_ATTEMPTS,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      requestFailedMessage: "Vydra job status request failed",
+      timeoutMessage: `Vydra job ${jobId} did not finish in time`,
+      allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
+      ssrfPolicy: requestPolicy.ssrfPolicy,
+      dispatcherPolicy: requestPolicy.dispatcherPolicy,
+      auditContext: "vydra-job-status",
+      isComplete,
+      getFailureMessage: (payload) => {
+        const status = resolveVydraResponseStatus(payload);
+        return status === "failed" || status === "error" || status === "cancelled"
+          ? (resolveVydraErrorMessage(payload) ?? `Vydra job ${jobId} failed`)
+          : undefined;
+      },
     });
-    const jobId =
-      resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted);
-    return {
-      asset,
-      ...(jobId ? { jobId } : {}),
-      resultUrl,
-      status: resolveVydraResponseStatus(completedPayload) ?? "completed",
-    };
-  } finally {
-    await release();
   }
+  const resultUrl = extractVydraResultUrls(completedPayload, params.kind)[0];
+  if (!resultUrl) {
+    throw new Error(`${operationLabel} completed without a ${params.kind} URL`);
+  }
+  const asset = await downloadVydraAsset({
+    url: resultUrl,
+    kind: params.kind,
+    timeoutMs: deadline
+      ? createProviderOperationTimeoutResolver({
+          deadline,
+          defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        })
+      : params.timeoutMs,
+    fetchFn,
+    maxBytes: resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
+    requestPolicy,
+  });
+  const jobId = resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted);
+  return {
+    asset,
+    ...(jobId ? { jobId } : {}),
+    resultUrl,
+    status: resolveVydraResponseStatus(completedPayload) ?? "completed",
+  };
 }

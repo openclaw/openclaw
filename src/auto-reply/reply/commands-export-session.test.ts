@@ -319,7 +319,7 @@ describe("buildExportSessionReply", () => {
         '<script data-openclaw-export-placeholder="JS"></script>',
       ].join(""),
     );
-    hoisted.exportHtmlTemplateContents.set("template.css", "/* {{THEME_VARS}} */$&$1");
+    hoisted.exportHtmlTemplateContents.set("template.css", "$&$1");
     hoisted.exportHtmlTemplateContents.set("template.js", "const marker = '$&$1';");
     hoisted.exportHtmlTemplateContents.set("vendor/marked.min.js", "const markedMarker = '$&$1';");
     hoisted.exportHtmlTemplateContents.set(

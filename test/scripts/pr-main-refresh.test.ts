@@ -1388,15 +1388,6 @@ fi`,
     expect(f.events().filter((e) => e.kind === "fetched")).toHaveLength(1);
   });
 
-  it("propagates authentication failure under an OR-list before any main fetch", () => {
-    const f = fixture();
-    f.configure({ failAuth: true });
-    const result = f.shell("review_validate_artifacts 42 || exit 1\necho UNEXPECTED_SUCCESS");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("GitHub API preflight failed");
-    expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
-  });
-
   it("stops native merge when both writer quotas are exhausted before fetch or dispatch and releases its lock", () => {
     const f = fixture();
     f.configure({ writerRateLimited: true });
@@ -1425,14 +1416,26 @@ fi`,
     expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
   });
 
-  it.each(["enter_worktree 42 false", "review_guard 42", "review_validate_artifacts 42"])(
-    "propagates failed refresh through %s in an OR-list",
-    (command) => {
+  it.each([
+    { command: "enter_worktree 42 false", failAuth: false },
+    { command: "review_guard 42", failAuth: false },
+    { command: "review_validate_artifacts 42", failAuth: false },
+    { command: "review_validate_artifacts 42", failAuth: true },
+  ])(
+    "propagates failed refresh through $command in an OR-list (auth=$failAuth)",
+    ({ command, failAuth }) => {
       const f = fixture();
-      f.configure({ failFetch: true });
+      f.configure({ failFetch: !failAuth, failAuth });
       const result = f.shell(`${command} || exit 1\necho UNEXPECTED_SUCCESS`);
-      expect(result.stderr).toContain("injected main fetch failure");
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(
+        failAuth ? "GitHub API preflight failed" : "injected main fetch failure",
+      );
+      if (failAuth) {
+        expect(result.status).toBe(1);
+        expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
+      } else {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      }
       expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
       expect(result.stdout).not.toContain("review artifacts validated");
       expect(existsSync(join(f.local, "prep.env"))).toBe(false);

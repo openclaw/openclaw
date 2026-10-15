@@ -116,15 +116,27 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
-  const effectiveContextTokenBudget = usesSupervisionConnection
-    ? undefined
-    : params.contextTokenBudget;
   const effectiveRuntimeProviderId = usesSupervisionConnection
     ? (mutable.startupBinding?.modelProvider ?? "codex")
     : params.provider;
   const effectiveRuntimeModelId = usesSupervisionConnection
     ? (mutable.startupBinding?.model ?? "codex-native")
     : (connection.options.runtimeModelId ?? params.modelId);
+  // Same-generation model switches reuse the thread, but not its observed window.
+  const threadReportedContextTokens = isSameCodexModelId(
+    mutable.startupBinding?.model,
+    effectiveRuntimeModelId,
+  )
+    ? mutable.startupContextTokens
+    : undefined;
+  // A cap lowered after the thread reported its window still bounds the budget.
+  const effectiveContextTokenBudget = usesSupervisionConnection
+    ? undefined
+    : (params.contextTokenBudget ??
+      (threadReportedContextTokens !== undefined && params.authoredContextTokenCap !== undefined
+        ? Math.min(threadReportedContextTokens, params.authoredContextTokenCap)
+        : (threadReportedContextTokens ?? params.authoredContextTokenCap)));
+  // Keep observed capacity out of runtimeParams: it is not a thread policy change.
   const {
     authProfileId: _outerAuthProfileId,
     authoredContextTokenCap: _outerAuthoredContextTokenCap,
@@ -412,3 +424,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
 }
 
 export type CodexAttemptRuntime = Awaited<ReturnType<typeof prepareCodexAttemptRuntime>>;
+
+// Codex stores the unqualified model ("gpt-5.5") while OpenClaw may run "openai/gpt-5.5".
+function isSameCodexModelId(a: string | undefined, b: string | undefined): boolean {
+  const left = a?.trim().toLowerCase();
+  const right = b?.trim().toLowerCase();
+  if (!left || !right) {
+    return false;
+  }
+  return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+}

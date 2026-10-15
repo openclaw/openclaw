@@ -1,4 +1,8 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
@@ -60,11 +64,7 @@ import {
   sortTransportToolsByName,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-  supportsModelTools,
-} from "./transport-utils.js";
+import { supportsModelTools } from "./transport-utils.js";
 
 type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
   openclawThinkingExplicit?: boolean;

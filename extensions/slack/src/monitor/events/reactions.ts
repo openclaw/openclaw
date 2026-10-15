@@ -10,35 +10,6 @@ import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
-function shouldEmitSlackReactionNotification(params: {
-  ctx: SlackMonitorContext;
-  event: SlackReactionEvent;
-  eventScope?: SlackEventScope;
-  actorName?: string;
-}) {
-  const { ctx, event, actorName } = params;
-  if (ctx.reactionMode === "off") {
-    return false;
-  }
-  if (ctx.reactionMode === "own") {
-    return Boolean(ctx.botUserId && event.item_user === ctx.botUserId);
-  }
-  if (ctx.reactionMode === "allowlist") {
-    const allowList = normalizeStringEntriesLower(ctx.reactionAllowlist);
-    if (allowList.length === 0) {
-      return false;
-    }
-    return allowListMatches({
-      allowList,
-      teamId: params.eventScope?.teamId ?? ctx.teamId,
-      id: event.user,
-      name: actorName,
-      allowNameMatching: ctx.allowNameMatching,
-    });
-  }
-  return ctx.reactionMode === "all";
-}
-
 export function registerSlackReactionEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
@@ -93,15 +64,20 @@ export function registerSlackReactionEvents(params: {
               userId ? resolveUserName(userId, eventScope) : Promise.resolve(undefined),
             ),
           );
-          if (
-            !shouldEmitSlackReactionNotification({
-              ctx: runtimeContext,
-              event,
-              eventScope,
-              actorName: actorInfo?.name,
-            })
-          ) {
-            return;
+          if (runtimeContext.reactionMode === "allowlist") {
+            const allowList = normalizeStringEntriesLower(runtimeContext.reactionAllowlist);
+            if (
+              allowList.length === 0 ||
+              !allowListMatches({
+                allowList,
+                teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                id: event.user,
+                name: actorInfo?.name,
+                allowNameMatching: runtimeContext.allowNameMatching,
+              })
+            ) {
+              return;
+            }
           }
           const actorLabel = actorInfo?.name ?? event.user;
           const emojiLabel = event.reaction ?? "emoji";

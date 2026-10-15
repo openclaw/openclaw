@@ -484,11 +484,7 @@ function applyFalReferenceImages(
     }));
     return;
   }
-  const [input] = encoded;
-  if (!input) {
-    throw new Error("fal image edit request missing reference image");
-  }
-  requestBody.image_url = input;
+  requestBody.image_url = encoded[0];
 }
 
 function formatFalReferenceLimitError(

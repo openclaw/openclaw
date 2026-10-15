@@ -307,6 +307,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         ? noteCommentaryProgress(payload)
         : undefined,
   });
+  const forwardModelWait = wrapProgressCallback(params.replyOptions?.onItemEvent, {
+    forwardWhenSourceDeliverySuppressed: true,
+    waitForDirectBlockReplyDelivery: true,
+  });
   // CLI runners classify preambles as item events only when this handler exists.
   // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent =
@@ -325,7 +329,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           ) {
             await noteCommentaryProgress(payload);
           }
-          return await forwardItemEvent?.(payload);
+          return payload.kind === "model-wait"
+            ? await forwardModelWait?.(payload)
+            : await forwardItemEvent?.(payload);
         }
       : undefined;
   const replyResolver: InternalGetReplyFromConfig =

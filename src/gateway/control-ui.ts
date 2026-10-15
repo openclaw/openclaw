@@ -15,6 +15,7 @@ import {
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -24,7 +25,11 @@ import {
   prepareGatewayAssistantAvatar,
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
+} from "./assistant-identity.js";
 import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
@@ -329,6 +334,31 @@ export async function handleControlUiAssistantMediaRequest(
           )
         : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
+    // Local assistant-media previews retain their original animation bytes.
+    if (
+      media.reference.kind === "inbound" &&
+      mediaKind === "image" &&
+      url.searchParams.get("variant") === "thumbnail"
+    ) {
+      const { readImageThumbnailFromFile } = await import("./managed-image-thumbnail-cache.js");
+      const thumbnail = await readImageThumbnailFromFile(
+        opened,
+        undefined,
+        normalizeChatImageRenditionWidth(url.searchParams.get("width")),
+      );
+      await byteStream.close();
+      await publishResponse(() => {
+        res.setHeader("Content-Type", "image/webp");
+        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Cache-Control", "private, no-cache");
+        res.setHeader(
+          "Content-Disposition",
+          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
+        );
+        res.end(req.method === "HEAD" ? undefined : thumbnail);
+      });
+      return true;
+    }
     if (
       url.searchParams.get("playback") === "1" &&
       (mediaKind === "audio" || mediaKind === "video")
@@ -450,7 +480,7 @@ export async function handleControlUiAvatarRequest(
   requestAuth.assertCurrent();
 
   try {
-    const identity = await resolveAssistantIdentity({ cfg: opts.config, agentId });
+    const identity = await resolveAssistantIdentityAvatar({ cfg: opts.config, agentId });
     const projection = await prepareGatewayAssistantAvatar({
       cfg: opts.config,
       identity,

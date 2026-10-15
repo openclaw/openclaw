@@ -175,12 +175,27 @@ than falling back to another account. Model and route compatibility still apply.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
-Legacy jobs without a recorded inference owner require this explicit adoption
-before using host credentials; OpenClaw does not guess their historical account
-from current defaults. Environment-only and provider-config API keys have no durable
-account ownership, so new host-managed jobs reject them at creation. Store the key
-in an auth profile and select that profile instead. Credentialless models remain
-usable without an account.
+For legacy jobs without a recorded inference owner, `openclaw doctor --fix` can
+record the currently selected explicit stored account or the only eligible stored
+account. This is a one-time adoption of the current authorized account, not a claim
+about which account every historical run used. Doctor uses normal automation model
+selection, preserves inherited defaults and fallback lists, leaves existing bindings
+unchanged, and backs up cron state before committing. Multiple eligible accounts
+without an explicit selection, missing accounts, and personal accounts needing their
+owner's authorization are left unchanged with job-specific adoption instructions.
+
+Managed updates and the standard container entrypoint run repairing Doctor before
+activation. A manual source upgrade must include `openclaw doctor --fix` before
+starting the Gateway. Startup reports potentially unmigrated host-account jobs
+before scheduling; it does not capture credentials or rewrite jobs.
+
+Environment-only and provider-config API keys have no durable account ownership.
+A legacy job whose route uses such a key keeps running on that key without adoption;
+once a stored account becomes eligible for its route, the job stops with the
+adoption instructions instead of switching to that account. New host-managed jobs
+reject these keys at creation: store the key in an auth profile and select that
+profile instead. An account refusal ends the run; it never falls back to another
+model or provider. Credentialless models remain usable without an account.
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.
