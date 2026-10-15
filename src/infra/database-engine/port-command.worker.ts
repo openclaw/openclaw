@@ -3,30 +3,39 @@ import fs from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
-import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import { readBackupEngine } from "../../snapshot/database-backup.js";
+import {
+  readBackupEngine,
+  readBackupEngineImage,
+  type BackupEngine,
+} from "../../snapshot/database-backup.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
-import { resolveDatabaseEngineInput, type DatabaseEngineInput } from "./config.js";
+import { resolveDatabaseEngineInput } from "./config.js";
+import {
+  assertDatabasePortNamespaceOwner,
+  databasePortProviders,
+  sqliteDatabasePortProvider,
+  withDatabasePortConnection,
+  withDatabasePortPostgres,
+} from "./port-provider.js";
 import {
   DatabasePortDataError,
   inspectDatabasePort,
   inspectSqlitePortSchema,
   materializeDatabasePort,
+  migrateDatabasePortSource,
   readPostgresPortCapabilities,
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
-import { loadWorkboardPortDescriptor, withWorkboardPostgres } from "./workboard-port.js";
 
 type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };
-export type WorkboardPortTask =
+export type DatabasePortTask =
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
   | { operation: "migrate"; sourcePath: string }
@@ -45,7 +54,7 @@ export type WorkboardPortTask =
     } & Common &
       Identity)
   | { operation: "checkpoint"; sourcePath: string };
-export type WorkboardPortInspection = Partial<Identity> & {
+export type DatabasePortInspection = Partial<Identity> & {
   engine: "sqlite" | "postgres";
   version: number;
   descriptorHash: string;
@@ -54,7 +63,7 @@ export type WorkboardPortInspection = Partial<Identity> & {
   verification?: PortVerification;
 };
 type ReplyMap = {
-  inspect: WorkboardPortInspection;
+  inspect: DatabasePortInspection;
   preflight: Awaited<ReturnType<typeof preflight>>;
   migrate: { descriptorHash: string; verification: PortVerification };
   stage: ReplyMap["migrate"];
@@ -63,12 +72,7 @@ type ReplyMap = {
 };
 type Reply = ReplyMap[keyof ReplyMap];
 type Scope = { assertCurrent: () => void; signal?: AbortSignal };
-export class WorkboardPortError extends Error {}
-function workboardApi() {
-  return loadBundledPluginPublicArtifactModuleSync<{
-    workboardDatabasePortApi: WorkboardDatabasePortApi<DatabaseSync, DatabaseEngineInput>;
-  }>({ dirName: "workboard", artifactBasename: "database-port-api.js" }).workboardDatabasePortApi;
-}
+export class DatabasePortError extends Error {}
 function refuse(fact: string): never {
   throw new DatabasePortDataError(fact);
 }
@@ -77,22 +81,28 @@ function compare(actual: PortVerification, expected: PortVerification) {
     refuse("observed changed canonical rows or allocations; required recorded verification");
   }
 }
-async function inspectSqlite(
-  sourcePath: string,
+async function inspectSqliteImage(
+  db: DatabaseSync,
   descriptor: PortDescriptor,
   allowMigration = false,
 ) {
+  const { version, migrationRequired, pendingColumns } = descriptor.inspectSqliteSource?.(db) ?? {
+    version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
+    migrationRequired: false,
+    pendingColumns: {},
+  };
+  if (allowMigration && migrationRequired) {
+    inspectSqlitePortSchema(db, descriptor, pendingColumns);
+    return { version, migrationRequired };
+  }
+  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
+  return { version, migrationRequired, verification: { tables, allocations } };
+}
+async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
   try {
     using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
-    const { version, migrationRequired, pendingColumns } =
-      workboardApi().inspectWorkboardPortSource(db);
-    if (allowMigration && migrationRequired) {
-      inspectSqlitePortSchema(db, descriptor, pendingColumns);
-      return { version, migrationRequired };
-    }
-    const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
-    return { version, migrationRequired, verification: { tables, allocations } };
+    return await inspectSqliteImage(db, descriptor);
   } finally {
     prepared.cleanup();
   }
@@ -103,17 +113,7 @@ async function inspectPostgres(
   identity: Identity,
   verifyDefinitions = true,
 ) {
-  const owner = (
-    await db.query(
-      "SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS owned FROM pg_namespace WHERE nspname = $1",
-      [identity.namespace],
-    )
-  ).rows[0];
-  if (!owner?.owned) {
-    refuse(
-      "observed missing namespace or different owner; required namespace owned by the configured role",
-    );
-  }
+  await assertDatabasePortNamespaceOwner(db, identity.namespace);
   await db.query("SET row_security = off");
   const { tables, allocations } = await inspectDatabasePort(
     { engine: "postgres", db, namespace: identity.namespace },
@@ -124,10 +124,16 @@ async function inspectPostgres(
   return { tables, allocations };
 }
 async function preflight(
-  task: Extract<WorkboardPortTask, { operation: "preflight" }>,
+  task: Extract<DatabasePortTask, { operation: "preflight" }>,
   assertCurrent: () => void,
 ) {
-  return withWorkboardPostgres(task.config, async (db, descriptor) => {
+  return withDatabasePortConnection(task.config, async (db) => {
+    const descriptors = await Promise.all(
+      databasePortProviders.map((provider) => provider.loadDescriptor()),
+    );
+    const descriptor = descriptors.reduce((a, b) =>
+      a.minimumPostgresVersion >= b.minimumPostgresVersion ? a : b,
+    );
     const facts = await readPostgresPortCapabilities(db, descriptor);
     if (task.probe) {
       const namespace = task.namespace ?? `port_probe_${randomUUID().replaceAll("-", "")}`;
@@ -149,11 +155,12 @@ async function preflight(
   });
 }
 async function stage(
-  task: Extract<WorkboardPortTask, { operation: "stage" }>,
+  task: Extract<DatabasePortTask, { operation: "stage" }>,
   descriptor: PortDescriptor,
   assertCurrent: () => void,
+  source: Awaited<ReturnType<typeof inspectSqliteImage>>,
 ): Promise<PortVerification> {
-  const { migrationRequired, verification } = await inspectSqlite(task.sourcePath, descriptor);
+  const { migrationRequired, verification } = source;
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
@@ -185,7 +192,7 @@ async function stage(
   }
   if (task.to === "postgres") {
     try {
-      await withWorkboardPostgres(task.config, async (db) => {
+      await withDatabasePortConnection(task.config, async (db) => {
         const exists = (
           await db.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [task.namespace])
         ).rowCount;
@@ -221,7 +228,7 @@ async function stage(
       }
       // COMMIT may have succeeded despite a lost reply; the fresh connection below decides.
     }
-    await withWorkboardPostgres(task.config, async (db) =>
+    await withDatabasePortConnection(task.config, async (db) =>
       compare(await inspectPostgres(db, descriptor, task), verification),
     );
     assertCurrent();
@@ -242,7 +249,7 @@ async function stage(
     });
   }
   assertCurrent();
-  workboardApi().admitWorkboardPort(
+  await descriptor.admit?.(
     task.targetPath,
     task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined,
   );
@@ -252,10 +259,11 @@ async function stage(
   return verification;
 }
 async function verify(
-  task: Extract<WorkboardPortTask, { operation: "verify" }>,
+  task: Extract<DatabasePortTask, { operation: "verify" }>,
   descriptor: PortDescriptor,
+  source?: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
 ) {
-  const engine = readBackupEngine(task.sourcePath);
+  const engine = source?.engine ?? readBackupEngine(task.sourcePath);
   if (
     engine.engine !== task.engine ||
     (engine.engine === "postgres" &&
@@ -267,11 +275,11 @@ async function verify(
   }
   const actual =
     task.engine === "postgres"
-      ? await withWorkboardPostgres(task.config, (db) => inspectPostgres(db, descriptor, task))
-      : (await inspectSqlite(task.sourcePath, descriptor)).verification!;
+      ? await withDatabasePortConnection(task.config, (db) => inspectPostgres(db, descriptor, task))
+      : (source?.facts ?? (await inspectSqlite(task.sourcePath, descriptor))).verification!;
   compare(actual, task.verification);
 }
-async function execute(task: WorkboardPortTask, assertCurrent: () => void): Promise<Reply> {
+async function execute(task: DatabasePortTask, assertCurrent: () => void): Promise<Reply> {
   if (task.operation === "preflight") {
     return preflight(task, assertCurrent);
   }
@@ -285,44 +293,70 @@ async function execute(task: WorkboardPortTask, assertCurrent: () => void): Prom
     }
     return;
   }
-  const descriptor = await loadWorkboardPortDescriptor();
+  const source = await (async () => {
+    const prepared = prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    try {
+      const engine = readBackupEngineImage(prepared.location, task.sourcePath);
+      if (engine.engine === "postgres") {
+        if (!("config" in task) || task.operation === "stage") {
+          refuse("private migration and staging require a SQLite image");
+        }
+        const descriptor = await withDatabasePortPostgres(
+          task.config,
+          engine,
+          async (_db, family) => family,
+        );
+        return { engine, descriptor, facts: undefined };
+      }
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true, readBigInts: true });
+      const descriptor = await sqliteDatabasePortProvider(db).loadDescriptor();
+      const facts = await inspectSqliteImage(
+        db,
+        descriptor,
+        task.operation === "inspect" || task.operation === "migrate",
+      );
+      return { engine, descriptor, facts };
+    } finally {
+      prepared.cleanup();
+    }
+  })();
+  const { engine, descriptor } = source;
   const descriptorHash = createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
   if (task.operation === "inspect") {
-    const engine = readBackupEngine(task.sourcePath);
     const facts =
       engine.engine === "postgres"
-        ? await withWorkboardPostgres(task.config, async (db) => ({
+        ? await withDatabasePortConnection(task.config, async (db) => ({
             version: descriptor.version,
             migrationRequired: false,
             verification: await inspectPostgres(db, descriptor, engine, false),
           }))
-        : await inspectSqlite(task.sourcePath, descriptor, true);
+        : source.facts!;
     return { ...engine, ...facts, descriptorHash, targetVersion: descriptor.version };
-  }
-  if (task.operation === "migrate") {
-    await inspectSqlite(task.sourcePath, descriptor, true);
-    assertCurrent();
-    workboardApi().admitWorkboardPort(task.sourcePath);
   }
   if (task.operation === "migrate" || task.operation === "stage") {
     const verification =
       task.operation === "stage"
-        ? await stage(task, descriptor, assertCurrent)
-        : (await inspectSqlite(task.sourcePath, descriptor)).verification!;
+        ? await stage(task, descriptor, assertCurrent, source.facts!)
+        : await migrateDatabasePortSource(
+            task.sourcePath,
+            descriptor,
+            source.facts!.version,
+            assertCurrent,
+          );
     return { descriptorHash, verification };
   }
-  return verify(task, descriptor);
+  return verify(task, descriptor, source);
 }
 
-export function runWorkboardPortTask<T extends WorkboardPortTask>(
+export function runDatabasePortTask<T extends DatabasePortTask>(
   task: T,
   scope: Scope,
 ): Promise<ReplyMap[T["operation"]]>;
 /** Joins the one-shot native worker before the caller may publish any active pathname. */
-export async function runWorkboardPortTask(task: WorkboardPortTask, scope: Scope): Promise<Reply> {
+export async function runDatabasePortTask(task: DatabasePortTask, scope: Scope): Promise<Reply> {
   scope.assertCurrent();
   const { WorkerTaskPool } = await import("../worker-task-pool.js");
-  const pool = new WorkerTaskPool<WorkboardPortTask, Reply>({
+  const pool = new WorkerTaskPool<DatabasePortTask, Reply>({
     workerUrl: new URL(import.meta.url),
     maxWorkers: 1,
     workerOptions: { workerData: { openclawPortCommand: true } },
@@ -337,7 +371,7 @@ export async function runWorkboardPortTask(task: WorkboardPortTask, scope: Scope
       error.code === "failed" &&
       error.message.startsWith(`${task.operation}: `)
     ) {
-      throw new WorkboardPortError(error.message);
+      throw new DatabasePortError(error.message);
     }
     throw error;
   } finally {
@@ -349,17 +383,16 @@ if (parentPort && workerData?.openclawPortCommand === true) {
   serveWorkerTasks((value, _channel, control) =>
     control.runNativeSection(async () => {
       // SAFETY: The private one-shot host exclusively supplies this structured-clone task.
-      const task = value as WorkboardPortTask;
+      const task = value as DatabasePortTask;
       try {
         return await execute(task, control.throwIfCancelled);
       } catch (error) {
         const fact =
-          error instanceof DatabasePortDataError ||
-          error instanceof workboardApi().WorkboardPortSchemaError
+          error instanceof DatabasePortDataError
             ? error.message
             : "observed database validation or I/O failure; required readable, valid data and namespace privileges";
         throw new Error(
-          `${task.operation}: ${"sourcePath" in task ? task.sourcePath : "workboard"}: ${fact}. Stop the Gateway, correct the source or connection, then retry or use the retained recovery manifest.`,
+          `${task.operation}: ${"sourcePath" in task ? task.sourcePath : databasePortProviders.map((provider) => provider.id).join(", ")}: ${fact}. Stop the Gateway, correct the source or connection, then retry or use the retained recovery manifest.`,
           { cause: error },
         );
       }
