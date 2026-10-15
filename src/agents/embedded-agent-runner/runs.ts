@@ -384,6 +384,7 @@ function clearEmbeddedRunAbortability(
   opts?: { retainFinalizing?: boolean },
 ): void {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.runtimeWaits?.clear();
   if (!handle.runId || ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(handle.runId) !== handle) {
     return;
   }

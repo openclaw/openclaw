@@ -182,6 +182,7 @@ export type EmbeddedRunRegistration = {
   agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
+  runtimeWaits?: Set<() => boolean>;
   onHumanInputResolved?: () => void;
 };
 
@@ -295,6 +296,22 @@ export function registerActiveEmbeddedRunHumanInputWait(
   authority: AgentRunDelegatedAuthority,
   isPending: () => boolean,
 ): ((resolved: boolean) => void) | undefined {
+  return registerActiveEmbeddedRunWait(authority, isPending, "humanInputWaits");
+}
+
+/** Native collector waits retain their run without pausing its execution budget. */
+export function registerActiveEmbeddedRunRuntimeWait(
+  authority: AgentRunDelegatedAuthority,
+  isPending: () => boolean,
+): (() => void) | undefined {
+  return registerActiveEmbeddedRunWait(authority, isPending, "runtimeWaits");
+}
+
+function registerActiveEmbeddedRunWait(
+  authority: AgentRunDelegatedAuthority,
+  isPending: () => boolean,
+  kind: "humanInputWaits" | "runtimeWaits",
+) {
   const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(authority.operationalRunInstance.runId);
   const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   if (
@@ -307,11 +324,12 @@ export function registerActiveEmbeddedRunHumanInputWait(
   ) {
     return undefined;
   }
-  const waits = (registration.humanInputWaits ??= new Set());
+  const waits = (registration[kind] ??= new Set());
   waits.add(isPending);
-  return (resolved) => {
+  return (resolved = false) => {
     if (
       waits.delete(isPending) &&
+      kind === "humanInputWaits" &&
       resolved &&
       ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) === handle &&
       validateAgentRunDelegatedAuthority(authority) &&
@@ -359,12 +377,18 @@ export function resolveActiveEmbeddedRunRecoveryBlocker(
       return "human_input_wait";
     }
   }
-  let ownsLiveness = false;
+  let ownsLiveness: boolean;
   try {
-    ownsLiveness =
-      handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
+    ownsLiveness = handle.ownsLiveness?.() === true;
+    for (const isPending of registration.runtimeWaits ?? []) {
+      if (isPending()) {
+        ownsLiveness = true;
+      }
+    }
+    ownsLiveness = ownsLiveness && !handle.isAborted?.() && !handle.isStopped?.();
   } catch {
     // A failed runtime probe cannot exempt work from recovery.
+    ownsLiveness = false;
   }
   // Runtime probes may synchronously replace a handle or close its admission.
   if (
@@ -423,6 +447,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       handle.closeDiagnostics?.();
       if (bySession) {
         ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
+        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.runtimeWaits?.clear();
       }
       staleHandles.add(handle);
       if (index.get(id) === handle) {
