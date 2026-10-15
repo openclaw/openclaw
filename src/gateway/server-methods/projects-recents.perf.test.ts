@@ -99,8 +99,9 @@ test("project recents do not enumerate unrelated sessions after projection hydra
     );
     expect(enumerated).toBe(0);
 
+    const changed = "agent:main:recent-0";
     const moved = {
-      sessionId: marker,
+      sessionId: changed,
       updatedAt: now + 1,
       archivedAt: now,
       createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
@@ -109,13 +110,13 @@ test("project recents do not enumerate unrelated sessions after projection hydra
     // A receipt without a postimage must reenter the existing exact-key worker admission.
     runOpenClawAgentWriteTransaction(
       (database) => {
-        writeSessionEntry(database, marker, moved);
+        writeSessionEntry(database, changed, moved);
       },
       { agentId: "main" },
     );
     sessionChanges.emit({
       agentId: "main",
-      sessionKey: marker,
+      sessionKey: changed,
       scope: "session-entry",
       factsInvalidated: true,
     });
@@ -129,10 +130,11 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       },
     });
     replaceSessionEntrySync(
-      { agentId: "main", sessionKey: marker },
+      { agentId: "main", sessionKey: changed },
       {
         ...moved,
-        createdActor: { ...moved.createdActor, id: "other" },
+        updatedAt: now - unrelated,
+        spawnedCwd: "/work/recent-0",
       },
     );
     expect(await request()).toMatchObject({ ok: true, payload: { recents: expected } });

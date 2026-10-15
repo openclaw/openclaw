@@ -282,10 +282,19 @@ test("projects.list returns only the caller's deterministic resolved recents", a
           {
             sessionId: "tie-0",
             updatedAt: 3_000,
-            createdActor: { ...actor, id: foreignProfile.id },
+            createdActor: actor,
+            visibility: "draft",
             spawnedCwd: "/work/tie-0",
           },
         );
+        const changed = projection!.capture({ agentId: "main", key: tiedKeys[0] })!;
+        expect(
+          projection!.readCapabilityEntry({
+            agentId: "main",
+            key: tiedKeys[0],
+            storePath: changed.storeTarget.storePath,
+          })?.entry?.visibility,
+        ).toBe("draft");
         return result;
       });
     try {
