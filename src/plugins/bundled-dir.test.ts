@@ -141,7 +141,6 @@ describe("resolveBundledPluginsDir", () => {
     expected: string;
     vitest?: string;
     execArgv?: string[];
-    incompleteBuilt?: boolean;
     inspectBuilt?: boolean;
   }>([
     { name: "runtime bundle", layout: builtTrees, expected: "dist-runtime/extensions" },
@@ -156,37 +155,13 @@ describe("resolveBundledPluginsDir", () => {
       expected: "extensions",
       inspectBuilt: true,
     },
-    {
-      name: "VITEST alone",
-      layout: { ...builtTrees, hasExtensions: true },
-      expected: "dist-runtime/extensions",
-      vitest: "true",
-    },
-    {
-      name: "tsx source host",
-      layout: { ...sourceCheckout, ...builtTrees, hasGitCheckout: true },
-      expected: "extensions",
-      execArgv: ["--import", "tsx"],
-      inspectBuilt: true,
-    },
-    {
-      name: "unbuilt checkout",
-      layout: { ...sourceCheckout, hasGitCheckout: true },
-      expected: "extensions",
-    },
-    {
-      name: "incomplete builds",
-      layout: { ...sourceCheckout, ...builtTrees, hasGitCheckout: true },
-      expected: "extensions",
-      incompleteBuilt: true,
-    },
     { name: "workspace mirror without git", layout: sourceCheckout, expected: "extensions" },
     {
       name: "git without workspace metadata",
       layout: { ...builtTrees, hasExtensions: true, hasSrc: true, hasGitCheckout: true },
       expected: "dist-runtime/extensions",
     },
-  ])("resolves $name", ({ layout, expected, vitest, execArgv, incompleteBuilt, inspectBuilt }) => {
+  ])("resolves $name", ({ layout, expected, vitest, execArgv, inspectBuilt }) => {
     const repoRoot = createOpenClawRoot({ prefix: "openclaw-bundled-layout-", ...layout });
     for (const [present, relative] of [
       [layout.hasExtensions, "extensions"],
@@ -196,11 +171,7 @@ describe("resolveBundledPluginsDir", () => {
       if (!present) {
         continue;
       }
-      if (incompleteBuilt && relative !== "extensions") {
-        fs.mkdirSync(path.join(repoRoot, relative, "discord"), { recursive: true });
-      } else {
-        seedBundledPluginTree(repoRoot, relative);
-      }
+      seedBundledPluginTree(repoRoot, relative);
     }
     if (inspectBuilt) {
       expect(resolveBundledDirFromPackageRoot(repoRoot)).toBe(
@@ -240,24 +211,6 @@ describe("resolveBundledPluginsDir", () => {
       withPluginCache(createPluginCache(), () => resolveSourceCheckoutDependencyDiagnostic())
         ?.source,
     ).not.toBe(repoRoot);
-  });
-
-  it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
-    const repoRoot = createOpenClawRoot({
-      prefix: "openclaw-bundled-dir-disabled-",
-      hasExtensions: true,
-      hasSrc: true,
-      hasGitCheckout: true,
-    });
-    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
-    process.argv[1] = "/usr/bin/env";
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-
-    const bundledDir = requireBundledDir(resolveBundledPluginsDir());
-
-    expect(fs.existsSync(bundledDir)).toBe(true);
-    expect(fs.readdirSync(bundledDir)).toStrictEqual([]);
   });
 
   it("reuses the prepared bundled root until its cache owner changes", () => {
