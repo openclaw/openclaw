@@ -141,10 +141,11 @@ export async function withLocalWorkspaceProjection<T>(
       >
     >,
   ) => Promise<T>,
-  options: { provision?: boolean } = {},
+  options: { provision?: boolean; signal?: AbortSignal } = {},
 ) {
-  return await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, (store) =>
-    runLocalWorkspaceProjection(owner, store, run, options),
+  return await withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal: options.signal },
+    (store) => runLocalWorkspaceProjection(owner, store, run, options),
   );
 }
 

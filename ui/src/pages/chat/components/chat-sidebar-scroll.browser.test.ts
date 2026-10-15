@@ -26,11 +26,12 @@ async function mountDetailPanel(
   const container = createChatSidebarContainer();
   container.className = "side-panel__panel";
   container.style.cssText = "width:480px;height:320px;";
-  const renderDetail = (detail: SidebarContent) => html`<openclaw-chat-detail-panel
-    class="chat-sidebar"
-    .content=${detail}
-    .embedded=${true}
-  ></openclaw-chat-detail-panel>`;
+  const renderDetail = (detail: SidebarContent) =>
+    html`<openclaw-chat-detail-panel
+      class="chat-sidebar"
+      .content=${detail}
+      .embedded=${true}
+    ></openclaw-chat-detail-panel>`;
   const files = host === "Files" ? document.createElement("openclaw-chat-files-panel") : null;
   if (files) {
     files.previews = [{ id: "preview", label: "Long preview", content }];

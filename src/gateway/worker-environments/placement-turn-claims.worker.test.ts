@@ -559,6 +559,31 @@ it.each(["committed", "unknown"] as const)(
   },
 );
 
+it.each(["committed", "unknown"] as const)(
+  "publishes local release facts before observers across %s settlement",
+  async (outcome) => {
+    const requested = input(`release-projection-${outcome}`);
+    const claim = await placements.claimTurn(requested);
+    await placements.readProjection([requested.sessionId]);
+    const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
+        snapshots.push(placements.readPublishedProjection(change));
+      }
+    });
+    const corrupted = losePlacementReply(requested.sessionId, outcome);
+    try {
+      await expect(placements.releaseTurn(claim)).resolves.toMatchObject({ turnClaim: null });
+      expect(corrupted()).toBe(1);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim).toBeNull();
+      expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
+    } finally {
+      stop();
+    }
+  },
+);
+
 it("replays the same local claim without replacing its identity or a successor", async () => {
   const requested = input("idempotent");
   const claim = await placements.claimTurn(requested);
@@ -648,7 +673,7 @@ it("preserves same-session FIFO and cannot conditionally release a successor", a
   await placements.releaseTurn(next);
 });
 
-it("rolls back claim admission when live authority is revoked at commit", async () => {
+it("refuses a local claim before its effect when live authority is revoked", async () => {
   let revoked = false;
   probe.admission(operationAdmission, (request, grant, admit) => {
     if (request.stage === "commit") {
@@ -665,38 +690,6 @@ it("rolls back claim admission when live authority is revoked at commit", async 
   ).rejects.toThrow("synthetic placement admission revoked");
   expect(revoked).toBe(true);
   expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
-});
-
-it("fences retained authority before release commit and closes observers after settlement", async () => {
-  const claim = await placements.claimTurn(input("authority"));
-  const authority = await placements.prepareTurnClaimAuthority(claim);
-  const revoked = vi.fn();
-  const closed = vi.fn();
-  const unsubscribe = placements.registerTurnClaimClosedHandler(closed);
-  authority.onRevoked(revoked);
-  let commitObservation: { current: boolean; revoked: number; closed: number } | undefined;
-  probe.admission(operationAdmission, (request, grant, admit) => {
-    admit(request, grant);
-    if (request.stage === "commit") {
-      commitObservation = {
-        current: authority.isCurrent(),
-        revoked: revoked.mock.calls.length,
-        closed: closed.mock.calls.length,
-      };
-    }
-  });
-  try {
-    const released = placements.waitForTurnClaimRelease(claim.sessionId, {});
-    await placements.releaseTurn(claim);
-    await released;
-    expect(commitObservation).toEqual({ current: false, revoked: 0, closed: 0 });
-    expect(authority.isCurrent()).toBe(false);
-    expect(revoked).toHaveBeenCalledOnce();
-    expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
-  } finally {
-    unsubscribe();
-    authority.release();
-  }
 });
 
 it.each(["claim", "staged result", "workspace manifest"] as const)(
@@ -839,49 +832,51 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   }
 });
 
-it.each(["precommit contention", "authority", "entered writer"] as const)(
+it.each(["write contention", "authority"] as const)(
   "settles failed local startup without replaying it after %s",
   async (failure) => {
-    const retryable = failure === "precommit contention";
+    const retryable = failure === "write contention";
     const claim = input(`release-refused-${failure}`);
-    const refused =
-      failure === "authority"
-        ? new Error("release authority refused")
-        : Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+    const refused = new Error("release authority refused");
+    const peer = retryable ? new DatabaseSync(database.path) : undefined;
     const startupError = new Error("local backend startup failed");
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     const release = vi.spyOn(placements, "releaseTurnIfOwned");
     let assertSettlementCurrent: (() => void) | undefined;
-    let forcedSettlement: (() => Promise<void>) | undefined;
     let forcedFailure: unknown;
     const runLocal = vi.fn(async () => {
-      if (retryable) {
-        assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
-      }
-      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+      let attempts = 0;
+      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
         (admit, attachment) =>
           createAdmission((request, grant) => {
-            if (request.stage === (failure === "entered writer" ? "commit" : "transaction")) {
-              throw refused;
+            if (request.stage === "commit") {
+              if (!peer) {
+                throw refused;
+              }
+              // Hold a real writer lock through the first DML attempt, after admission.
+              peer.exec(++attempts === 1 ? "BEGIN IMMEDIATE" : "ROLLBACK");
             }
             admit(request, grant);
           }, attachment),
       );
       if (!retryable) {
-        forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
-        if (forcedSettlement) {
-          try {
-            await forcedSettlement();
-          } catch (error) {
-            forcedFailure = error;
-          }
+        try {
+          await resolveSessionPlacementForcedTerminalSettlement()?.();
+        } catch (error) {
+          forcedFailure = error;
         }
       }
       throw startupError;
     });
-    await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(
-      retryable ? startupError : refused,
-    );
+    try {
+      await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(
+        retryable ? startupError : refused,
+      );
+    } finally {
+      peer?.close();
+      vi.restoreAllMocks();
+    }
     expect(runLocal).toHaveBeenCalledOnce();
     if (retryable) {
       expect(assertSettlementCurrent).toBeDefined();
@@ -895,7 +890,6 @@ it.each(["precommit contention", "authority", "entered writer"] as const)(
         }),
       ).resolves.toBe("next turn completed");
     } else {
-      expect(forcedSettlement).toBeTypeOf("function");
       expect(forcedFailure).toBe(refused);
       expect(release).toHaveBeenCalledOnce();
       const retained = release.mock.calls[0]![0];

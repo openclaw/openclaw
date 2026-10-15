@@ -63,6 +63,7 @@ export async function readSessionTranscriptAnchorsAsync(
   }
   signal?.throwIfAborted();
   const hot = readOwnedSessionTranscriptState(scope);
+  const retained = hot && readSessionActorTranscriptReplica(hot);
   if (scope.storePath) {
     const target = {
       agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -75,7 +76,8 @@ export async function readSessionTranscriptAnchorsAsync(
           hot,
           target,
           selection,
-          readSessionActorTranscriptReplica(hot)?.tail,
+          retained?.tail,
+          retained?.anchors,
         )) ??
       readSessionActorTranscriptAnchorsFromReplica(
         { ...target, sessionKey: scope.sessionKey },

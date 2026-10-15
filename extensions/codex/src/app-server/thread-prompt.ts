@@ -134,6 +134,8 @@ export function buildDeveloperInstructions(
           hasSessionsYield,
           hasSubagentsList: toolNames.has("subagents"),
           hasSessionsSend: toolNames.has("sessions_send"),
+          sessionsCreateToolName: toolNames.get("sessions_create"),
+          suggestTaskToolName: toolNames.get("suggest_task"),
         }).join("\n")
       : undefined,
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"

@@ -1030,7 +1030,8 @@ describe("grouped chat rendering", () => {
     expect(renderTimestamp(oldTimestamp)).toBe(
       new Date(oldTimestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
     );
-    expect(renderTimestamp(now + 30_000)).toBe("just now");
+    expect(renderTimestamp(now + 30_000)).toBe("Just now");
+    expect(renderTimestamp(now - 10_000)).toBe("Just now");
 
     const nextYear = Date.UTC(2027, 3, 24, 18, 30);
     expect(renderTimestamp(nextYear)).toBe(
@@ -1098,16 +1099,39 @@ describe("grouped chat rendering", () => {
 
     expect(view.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
     expect(view.querySelector(".chat-working-indicator")).toBeNull();
-    expect(elementText(".chat-turn-recap--continuation")).toContain("Done in 4 hours, 2 minutes");
-    expect(elementText(".chat-turn-recap--continuation")).toContain("1 output token");
+    // Usage leads and the duration follows, matching the live indicator's order.
+    expect(
+      Array.from(view.querySelector(".chat-turn-recap--continuation")!.children, (child) =>
+        child.textContent?.trim(),
+      ),
+    ).toEqual(["1 output token", "·", "Done in 4 hours, 2 minutes"]);
     expect(view.querySelector(".chat-turn-recap__claw")).toBeNull();
     expect(view.querySelector(".chat-group-footer")).not.toBeNull();
+  });
+
+  it("shows live output tokens before the elapsed time", () => {
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
+        runOutputTokens: 892,
+      }),
+      view,
+    );
+
+    const status = view.querySelector(".chat-working-indicator__status");
+    const tokens = status?.querySelector(".chat-working-indicator__tokens");
+    const elapsed = status?.querySelector(".chat-working-indicator__elapsed");
+    expect(tokens?.textContent).toBe("892 output tokens");
+    expect(elapsed).not.toBeNull();
+    expect(
+      tokens!.compareDocumentPosition(elapsed!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(status?.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("relabels the working indicator while the run waits for approval", () => {
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        startupLabel: "Waiting for a response…",
+        startupLabel: "Waiting for a response",
         waitingApproval: true,
         runOutputTokens: 5_500,
       }),
@@ -2310,7 +2334,7 @@ describe("grouped chat rendering", () => {
     expect(view.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
   });
 
-  it("renders transcript image variants and structured image blocks", async () => {
+  it("renders transcript image variants with their message identity and structured image blocks", async () => {
     const firstSource = `/tmp/openclaw/${crypto.randomUUID()}-first.png`;
     const secondSource = `/tmp/openclaw/${crypto.randomUUID()}-second.jpg`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -2326,6 +2350,7 @@ describe("grouped chat rendering", () => {
       const rerender = () =>
         renderGroupedMessage(message, "user", {
           showToolCalls: false,
+          sessionKey: "agent:main:transcript-images",
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           onRequestUpdate: rerender,
@@ -2337,6 +2362,7 @@ describe("grouped chat rendering", () => {
       createUserMessage("", {
         id: "user-history-image-octet-stream",
         __openclaw: {
+          id: "saved-image-octet-stream",
           media: [{ path: firstSource, contentType: "application/octet-stream" }],
         },
       }),
@@ -2346,11 +2372,15 @@ describe("grouped chat rendering", () => {
         view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
       ).toContain(`source=${encodeURIComponent(firstSource)}`),
     );
+    const firstImageUrl = new URL(view.querySelector<HTMLImageElement>(".chat-message-image")!.src);
+    expect(firstImageUrl.searchParams.get("messageId")).toBe("saved-image-octet-stream");
+    expect(firstImageUrl.searchParams.get("sessionKey")).toBe("agent:main:transcript-images");
 
     renderUserMedia(
       createUserMessage("", {
         id: "user-history-images",
         __openclaw: {
+          id: "saved-image-pair",
           media: [
             { path: firstSource, contentType: "image/png" },
             { path: secondSource, contentType: "application/octet-stream" },
@@ -2368,6 +2398,21 @@ describe("grouped chat rendering", () => {
         expect.stringContaining(`source=${encodeURIComponent(secondSource)}`),
       ]),
     );
+    expect(
+      [...view.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
+        new URL(image.src).searchParams.get("messageId"),
+      ),
+    ).toEqual(["saved-image-pair", "saved-image-pair"]);
+    expect(
+      fetchMock.mock.calls.map(([url]) => {
+        const params = new URL(url, "http://control.test").searchParams;
+        return [params.get("source"), params.get("messageId")];
+      }),
+    ).toEqual([
+      [firstSource, "saved-image-octet-stream"],
+      [firstSource, "saved-image-pair"],
+      [secondSource, "saved-image-pair"],
+    ]);
 
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),

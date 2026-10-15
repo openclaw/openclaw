@@ -475,6 +475,143 @@ describe("google transport stream", () => {
     vi.resetModules();
   });
 
+  it.each([
+    {
+      name: "2.5 Pro low",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 2112,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "2.5 Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
+    },
+    {
+      name: "2.5 Flash off",
+      id: "gemini-2.5-flash",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
+    },
+    {
+      name: "omitted cap",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+    },
+    {
+      name: "omitted cap with Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: {},
+    },
+    {
+      name: "model ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 8000,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "thinking budget ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "high",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 7168 },
+      },
+    },
+    {
+      name: "Gemini 3 level",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+      },
+    },
+    {
+      name: "Gemini 3 automatic thinking",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true },
+      },
+    },
+    {
+      name: "dynamic budget",
+      id: "gemini-2.5-flash",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+      },
+    },
+  ] as const)(
+    "applies thinking and caller output budgets in serialized requests: $name",
+    async ({ id, reasoning, maxTokens, cap, expected }) => {
+      for (const api of ["google-generative-ai", "google-vertex"] as const) {
+        mockGoogleTextResponse();
+        const streamFn =
+          api === "google-vertex"
+            ? createGoogleVertexTransportStreamFn()
+            : createGoogleGenerativeAiTransportStreamFn();
+        const model = {
+          ...buildGeminiModel({ id, maxTokens: cap }),
+          api,
+          provider: api === "google-vertex" ? "google-vertex" : "google",
+        };
+        const stream = await streamFn(
+          model,
+          { messages: [{ role: "user", content: "Reply with ok.", timestamp: 0 }] },
+          {
+            apiKey: "test-key",
+            reasoning,
+            maxTokens,
+            project: "test-project",
+            location: "us-central1",
+          } as Parameters<typeof streamFn>[2],
+        );
+        const result = await stream.result();
+        expect(result.stopReason).toBe("stop");
+        const call = requireMockCall(
+          guardedFetchMock,
+          guardedFetchMock.mock.calls.length - 1,
+          "Google request",
+        );
+        const payload = parseRequestJsonBody(requireRequestInit(call, "Google request"));
+        expect(payload.generationConfig ?? {}).toEqual(expected);
+      }
+    },
+  );
+
   it("reports every parsed Google SSE chunk as request activity", async () => {
     const chunks = [
       { usageMetadata: { totalTokenCount: 1 } },

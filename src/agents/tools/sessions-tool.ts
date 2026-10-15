@@ -52,7 +52,7 @@ import { isSessionToolMainAlias, resolveSessionToolContext } from "./sessions-he
 import {
   captureSessionControlAuthority,
   hasSessionControlAuthority,
-  hasSessionRenameAuthority,
+  hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
@@ -201,7 +201,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   // Absence is the existing senderless system surface, not an explicit non-owner.
   const sandboxRenameOnly = opts.sandboxSessionRenameOnly === true;
   const controlOnly = opts.senderIsOwner === false || sandboxRenameOnly;
-  const renameAllowed = controlOnly && hasSessionRenameAuthority(opts.sessionControlAuthority);
+  const renameAllowed = controlOnly && hasSessionWriteAuthority(opts.sessionControlAuthority);
   const renameOnly = controlOnly && !hasSessionControlAuthority(opts.sessionControlAuthority);
   const assignmentOnly = renameOnly && !renameAllowed;
   const stopAllowed = opts.stopAllowed !== false;
@@ -253,7 +253,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         params = Object.fromEntries(
           Object.keys(SessionRenameToolSchema.properties).map((key) => [key, params[key]]),
         );
-        if (!hasSessionRenameAuthority()) {
+        if (!hasSessionWriteAuthority()) {
           throw new ToolAuthorizationError(
             "Session rename requires current session write authority",
           );

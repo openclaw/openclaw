@@ -5,6 +5,7 @@ import {
   getInternalDiagnosticEventSequence,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -33,8 +34,6 @@ type CpuUsage = ReturnType<typeof process.cpuUsage>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
-// Bun lacks async_hooks Promise before/after callbacks, so only Node counts the synthetic 20 ms step.
-const promiseHookClockStepMs = process.versions.bun ? 0 : 20;
 vi.mock("node:perf_hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:perf_hooks")>()),
   monitorEventLoopDelay: () => ({
@@ -132,7 +131,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       delayP99Ms: 0,
       degraded: false,
     });
-    expect(idleSample?.delayMaxMs).toBe(promiseHookClockStepMs);
+    expect(idleSample?.delayMaxMs).toBe(0);
     idle = false;
     await harness.samples(500);
     await harness.samples(50);
@@ -182,7 +181,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: true,
       reasons: ["event_loop_delay"],
     });
-    expect(stalledSample?.delayMaxMs).toBe(1_200 + promiseHookClockStepMs);
+    expect(stalledSample?.delayMaxMs).toBe(1_200);
     await harness.samples(50);
     expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, degraded: false });
   });
@@ -357,6 +356,43 @@ describe("event-loop measurement telemetry", () => {
   afterEach(() => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticEventsForTest();
+  });
+
+  it("advances an idle window when telemetry gains interest without resetting or replaying it", async () => {
+    const harness = createMonitorHarness({ isIdle: () => true });
+    await harness.samples(50);
+    const first = harness.monitor.snapshot();
+    expect(first).toMatchObject({ intervalMs: 1_000 });
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    await harness.samples(25);
+
+    const events: DiagnosticEventPayload[] = [];
+    const subscribe = () =>
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+        exclude: ["log.record"],
+      });
+    const stop = subscribe();
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.clock.armedAtMs).toBe(12_000);
+    await waitForDiagnosticEventsDrained();
+    expect(events).toEqual([]);
+
+    await harness.samples(24);
+    expect(harness.monitor.snapshot()).toBe(first);
+    await harness.sample();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([{ type: "gateway.event_loop.sample", intervalMs: 1_000 }]);
+    expect(harness.clock.armedAtMs).toBe(13_000);
+
+    stop();
+    await harness.samples(50);
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    expect(events).toHaveLength(1);
+    harness.monitor.stop();
+    expect(harness.clock.armedAtMs).toBeNull();
+    const stopAfterClose = subscribe();
+    expect(harness.clock.armedAtMs).toBeNull();
+    stopAfterClose();
   });
 
   it("records each sampling window once without needing a reader or inheriting reader context", async () => {

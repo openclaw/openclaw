@@ -4,6 +4,7 @@ import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import { FailoverError } from "../failover-error.js";
+import { INTER_SESSION_REPLY_POLICY_CASES } from "./attempt-execution.announce.test-support.js";
 import {
   makeSessionEntry,
   type RunAgentAttemptOverrides,
@@ -61,30 +62,8 @@ export function registerCommandReplyPolicyTests({
         privateCompletion,
         allowSilence,
         sourceTool = "subagent_settle",
-        sourceRole,
-      ] of [
-        ["agent:main:subagent:reply-required", "discord"],
-        ["agent:main:direct:completion-deliverable", "webchat"],
-        ["agent:main:direct:private-completion", "webchat", true, true],
-        [
-          "agent:main:direct:child-coordination",
-          "webchat",
-          undefined,
-          true,
-          "sessions_send",
-          "subagent",
-        ],
-        ["agent:main:direct:private-completion", "telegram", true, true],
-        ["agent:main:subagent:private-completion", "webchat", true, true],
-        ["agent:main:main", undefined],
-        ["agent:main:subagent:completion-deliverable", "webchat"],
-        ["agent:main:direct:delegated", "webchat", undefined, false, "sessions_send"],
-        ["agent:main:direct:user", "webchat", undefined, false, ""],
-        ["agent:main:telegram:direct:reply-required", "telegram"],
-        ["agent:main:telegram:group:optional", "telegram", undefined, true],
-        ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
-        ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
-      ] as const) {
+        replyExpectation,
+      ] of INTER_SESSION_REPLY_POLICY_CASES) {
         const sessionEntry = makeSessionEntry(`session-${messageChannel}`);
         const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
         const cli = providerOverride === "claude-cli";
@@ -107,9 +86,10 @@ export function registerCommandReplyPolicyTests({
           messageChannel,
           cfg: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
           opts: {
-            privateCompletion,
+            privateCompletion: privateCompletion || undefined,
+            replyExpectation,
             inputProvenance: sourceTool
-              ? { kind: "inter_session", sourceTool, sourceRole }
+              ? { kind: "inter_session", sourceTool }
               : { kind: "external_user" },
           },
         });
@@ -159,6 +139,7 @@ export function registerCommandReplyPolicyTests({
         messageChannel: "webchat",
         opts: {
           privateCompletion: true,
+          replyExpectation: "optional",
           inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
         },
       }),
