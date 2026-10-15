@@ -33,6 +33,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -2752,7 +2753,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     const messages = (await loadTranscriptEvents({ storePath, sessionId: "session" })).filter(
-      (event) => event.type === "message" && event.message.role === "user",
+      (event) => readTranscriptEventMessage(event)?.role === "user",
     );
     expect(messages).toHaveLength(1);
     expect((await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds).toContain(

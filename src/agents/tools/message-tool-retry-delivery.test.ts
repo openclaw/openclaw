@@ -84,7 +84,7 @@ describe("stranded retry message delivery", () => {
       let entry: InternalSessionEntry = {
         sessionId,
         updatedAt: 1,
-        status: "completed",
+        status: "done",
         restartRecoveryTerminalRunIds: [sourceTurnId],
       };
       await replaceSessionEntry({ ...identity, storePath }, entry);
@@ -130,7 +130,12 @@ describe("stranded retry message delivery", () => {
           runMessageAction: (input) =>
             runMessageAction({
               ...input,
-              gateway: { request: send, terminalSourceReplyReceiptOwner: "caller" },
+              gateway: {
+                request: send,
+                terminalSourceReplyReceiptOwner: "caller",
+                clientName: "gateway-client",
+                mode: "backend",
+              },
             }),
           getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
           resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
