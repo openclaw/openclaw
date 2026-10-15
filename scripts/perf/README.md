@@ -209,6 +209,18 @@ inspection. This reproduces recovery and reconnect/list pressure, rather than
 production provider latency or arbitrary plugin load. Never point it at live
 state, and apply the sandbox rules below to every Team command.
 
+Add `--writer-reads --clients 150` to measure read traffic competing with startup
+writes. This enables the Prometheus plugin, makes each synthetic catalog request
+read its persisted plugin metadata, and adds `sessions.github.options` for an
+owned synthetic session to each client's polling batch. GitHub accounts remain
+disconnected; no external publication occurs. At five minutes from restart spawn
+(or the requested shorter duration), the driver saves `writer-metrics.prom` and
+includes writer queue wait sums/counts by request class in `result.json`. These
+are cumulative exporter observations since its startup, so work before exporter
+subscription is not covered. The `execute` class groups multiple unclassified
+commands; it does not identify an individual caller. Use the same driver options
+and fresh fixtures for both revisions.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned
