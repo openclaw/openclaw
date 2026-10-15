@@ -313,25 +313,28 @@ describe("openai image generation provider", () => {
     },
   );
 
-  it.each([true])("sets private-network permission from browser opt-in: %s", async (allow) => {
-    const cfg = openAIImageConfig({
-      baseUrl: "http://127.0.0.1:44080/v1",
-      ...(allow ? { apiKey: "local-noauth" } : {}),
-    });
-    if (allow) {
-      cfg.browser = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } };
-    }
-    const result = await generateOpenAIImage("Private endpoint", {
-      cfg,
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
-    expect(jsonRequestCall()).toMatchObject({
-      url: "http://127.0.0.1:44080/v1/images/generations",
-      allowPrivateNetwork: allow,
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
-    expect(result.images).toHaveLength(1);
-  });
+  it.each([false, true])(
+    "sets private-network permission from browser opt-in: %s",
+    async (allow) => {
+      const cfg = openAIImageConfig({
+        baseUrl: "http://127.0.0.1:44080/v1",
+        ...(allow ? { apiKey: "local-noauth" } : {}),
+      });
+      if (allow) {
+        cfg.browser = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } };
+      }
+      const result = await generateOpenAIImage("Private endpoint", {
+        cfg,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
+      expect(jsonRequestCall()).toMatchObject({
+        url: "http://127.0.0.1:44080/v1/images/generations",
+        allowPrivateNetwork: allow,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
+      expect(result.images).toHaveLength(1);
+    },
+  );
 
   it("allows loopback for the synthetic mock-openai provider", async () => {
     await provider.generateImage({
@@ -380,6 +383,42 @@ describe("openai image generation provider", () => {
     expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
     expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
   });
+
+  it("serializes a direct JPEG generation request and decodes its image", async () => {
+    const result = await generateOpenAIImage("Landscape preview", {
+      count: 2,
+      size: "1024x640",
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(jsonRequestCall().body).toEqual({
+      model: "gpt-image-2",
+      prompt: "Landscape preview",
+      n: 2,
+      size: "1024x640",
+      quality: "low",
+      output_format: "jpeg",
+      background: "opaque",
+      moderation: "low",
+      output_compression: 60,
+      user: "end-user-42",
+    });
+    expect(result).toEqual({
+      model: "gpt-image-2",
+      images: [
+        { buffer: Buffer.from("png-bytes"), mimeType: "image/jpeg", fileName: "image-1.jpg" },
+      ],
+    });
+  });
   describe("when OpenAI chat models are configured", () => {
     const configuredOpenAIFallback: OpenClawConfig = {
       agents: {
@@ -392,7 +431,21 @@ describe("openai image generation provider", () => {
       },
     };
 
-    it.each(["x-request-id"])("retries rejection (%s)", async (header) => {
+    it("keeps the default Codex OAuth image model while the account accepts it", async () => {
+      mockCodexAuthOnly();
+      mockCodexImageStream();
+
+      const result = await generateOpenAIImage("Draw with the default model", {
+        authStore: { version: 1, profiles: {} },
+        cfg: configuredOpenAIFallback,
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+      expect((jsonRequestCall().body as Record<string, unknown>).model).toBe("gpt-6-astra");
+      expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
+    });
+
+    it.each(["", "x-request-id", "request-id"])("retries rejection (%s)", async (header) => {
       mockCodexAuthOnly();
       mockCodexImageStream();
       const { assertOkOrThrowHttpError } = await vi.importActual<
@@ -430,6 +483,21 @@ describe("openai image generation provider", () => {
         Buffer.from("codex-image"),
       ]);
     });
+
+    it.each([
+      "Invalid image size",
+      "Unknown model",
+      "The 'gpt-6-astra' model does not support image generation.",
+    ])("does not retry an unrelated HTTP 400: %s", async (detail) => {
+      mockCodexAuthOnly();
+      mockCodexImageStream();
+      const error = new Error(`OpenAI Codex image generation failed (HTTP 400): ${detail}`);
+      assertOkOrThrowHttpErrorMock.mockRejectedValueOnce(error);
+      await expect(
+        generateOpenAIImage("Draw an image", { cfg: configuredOpenAIFallback }),
+      ).rejects.toThrow(error);
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("preserves automatic dimensions for models that support them", async () => {
@@ -441,6 +509,22 @@ describe("openai image generation provider", () => {
     expect(result.metadata).toBeUndefined();
   });
 
+  it.each(["1024x624", "1025x1024", "3088x1024", "4096x2048", "2896x2896"])(
+    "normalizes unsupported flexible-model dimensions %s",
+    async (size) => {
+      mockGeneratedPngResponse();
+
+      const result = await generateOpenAIImage("Normalize unsupported image dimensions", {
+        size,
+      });
+
+      const normalizedSize = (jsonRequestCall().body as { size: string }).size;
+      expect(normalizedSize).not.toBe(size);
+      expect(provider.capabilities.geometry?.sizes).toContain(normalizedSize);
+      expect(result.metadata).toEqual({ requestedSize: size, normalizedSize });
+    },
+  );
+
   it("normalizes legacy native image dimensions", async () => {
     const result = await generateOpenAIImage("Wide image", {
       model: "gpt-image-1",
@@ -448,6 +532,24 @@ describe("openai image generation provider", () => {
     });
     expect(jsonRequestCall().body).toMatchObject({ model: "gpt-image-1", size: "1536x1024" });
     expect(result.metadata).toEqual({ requestedSize: "2048x1152", normalizedSize: "1536x1024" });
+  });
+
+  it("preserves custom-endpoint model and geometry choices", async () => {
+    const result = await generateOpenAIImage("Transparent custom image", {
+      cfg: openAIImageConfig({ baseUrl: "https://openai-compatible.example.com/v1" }),
+      size: "1024x624",
+      outputFormat: "png",
+      background: "transparent",
+    });
+    expect(jsonRequestCall().url).toBe(
+      "https://openai-compatible.example.com/v1/images/generations",
+    );
+    expect(jsonRequestCall().body).toMatchObject({
+      model: "gpt-image-2",
+      size: "1024x624",
+      background: "transparent",
+    });
+    expect(result.metadata).toBeUndefined();
   });
 
   it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
@@ -473,6 +575,23 @@ describe("openai image generation provider", () => {
       "https://openai-compatible.example.com/v1/images/generations",
     );
     expect(result.images).toHaveLength(1);
+  });
+
+  it("routes transparent PNG generation to the alpha-capable model without compression", async () => {
+    const result = await generateOpenAIImage("Transparent sticker", {
+      outputFormat: "png",
+      background: "transparent",
+      providerOptions: { openai: { outputCompression: 60 } },
+    });
+    expect(jsonRequestCall().body).toEqual({
+      model: "gpt-image-1.5",
+      prompt: "Transparent sticker",
+      n: 1,
+      size: "1024x1024",
+      output_format: "png",
+      background: "transparent",
+    });
+    expect(result.model).toBe("gpt-image-1.5");
   });
 
   it("serializes multipart edits with reference names, geometry, output options, and SSRF policy", async () => {
@@ -567,7 +686,7 @@ describe("openai image generation provider", () => {
     expect(logInfoMock).not.toHaveBeenCalled();
   });
 
-  it.each(["https://api.openai.com/v1?proxy=1"])(
+  it.each(["https://openai-compatible.example.test/v1", "https://api.openai.com/v1?proxy=1"])(
     "does not send subscription credentials to %s",
     async (baseUrl) => {
       mockCodexAuthOnly();
@@ -583,6 +702,26 @@ describe("openai image generation provider", () => {
     resolveApiKeyForProviderMock.mockRejectedValue(new Error("Keychain unavailable"));
     await expect(generateOpenAIImage("Auth error")).rejects.toThrow("Keychain unavailable");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit OpenAI request settings on the native transport", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openai-key", mode: "api-key" });
+    await generateOpenAIImage("Explicit settings", {
+      cfg: openAIImageConfig({
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+        headers: { "X-Test-OpenAI": "direct" },
+        request: { allowPrivateNetwork: true },
+      }),
+      authStore: createCodexOAuthAuthStore(),
+    });
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
+    expect(httpConfigCall()).toMatchObject({
+      api: "openai-responses",
+      request: { allowPrivateNetwork: true },
+    });
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(jsonRequestCall().headers?.get("X-Test-OpenAI")).toBe("direct");
   });
 
   it("uses Azure deployment-scoped JSON requests and its default timeout", async () => {
@@ -786,6 +925,46 @@ describe("openai image generation provider", () => {
       );
     });
 
+    it("uses completed image bytes and metadata instead of malformed interim data", async () => {
+      mockCodexEvents([
+        done(imageItem("not valid base64")),
+        {
+          type: "response.completed",
+          response: {
+            output: [{ ...imageItem(), revised_prompt: "completed prompt" }],
+            usage: { input_tokens: 11, output_tokens: 22, total_tokens: 33 },
+          },
+        },
+      ]);
+      const result = await generateOpenAIImage("Completed image");
+      expect(result.images).toEqual([
+        {
+          buffer: Buffer.from("codex-image"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+          revisedPrompt: "completed prompt",
+        },
+      ]);
+      expect(result.metadata).toEqual({
+        responses: [
+          {
+            usage: { input_tokens: 11, output_tokens: 22, total_tokens: 33 },
+            toolUsage: undefined,
+          },
+        ],
+      });
+    });
+
+    it("parses multiline SSE without optional spaces and trims Unicode image whitespace", async () => {
+      const event = JSON.stringify(done(imageItem("\u0085aGVsbG8=\u0085")));
+      mockCodexRawStream(
+        `data:${event.replace(',"item":', ',\ndata:"item":')}\n\ndata:${JSON.stringify(completed())}\n\n`,
+      );
+      expect((await generateOpenAIImage("Framed image")).images[0]?.buffer).toEqual(
+        Buffer.from("hello"),
+      );
+    });
+
     it.each([
       {
         name: "authoritative failure after malformed interim data",
@@ -837,6 +1016,10 @@ describe("openai image generation provider", () => {
     );
 
     it.each([
+      {
+        name: "invalid alphabet in completed output",
+        events: [completed([imageItem("aGVs!bG8=")])],
+      },
       {
         name: "noncanonical trailing bits in interim output",
         events: [done(imageItem("Zh==")), completed()],

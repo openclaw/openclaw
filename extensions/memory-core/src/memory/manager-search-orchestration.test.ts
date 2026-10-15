@@ -106,6 +106,38 @@ describe("memory index", () => {
     );
   });
 
+  it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: EmbeddingProvider;
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(3);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+  });
+
   it("keeps a healthy local provider active when the caller cancels search", async () => {
     const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
@@ -356,6 +388,56 @@ describe("memory index", () => {
       sources: ["sessions"],
     });
     expect(trustedResults[0]?.source).toBe("sessions");
+  });
+
+  it("searches the published index without flushing dirty sessions", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+      }),
+    );
+    await manager.sync({ reason: "test", force: true });
+    const content = "Quiet-period transcript canary is ORCHID-83.";
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "search-sync",
+      messages: [{ role: "assistant", timestamp: Date.now(), content }],
+    });
+    const servingFields = manager as unknown as {
+      dirty: boolean;
+      sessionsDirty: boolean;
+      sessionsDirtyFiles: Set<string>;
+      listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
+    };
+    const entries = await servingFields.listSessionCorpusEntries();
+    expect(entries).toHaveLength(1);
+    servingFields.dirty = false;
+    servingFields.sessionsDirty = true;
+    servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
+    const getSpy = vi.spyOn(MemoryIndexManager, "get");
+
+    try {
+      const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+      expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      await expect(manager.search("ORCHID-83", { minScore: 0 })).resolves.toEqual([]);
+      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+      expect(servingFields.sessionsDirty).toBe(true);
+      expect(servingFields.sessionsDirtyFiles).toEqual(
+        new Set(entries.map((entry) => entry.sessionFile)),
+      );
+    } finally {
+      getSpy.mockRestore();
+    }
+
+    await manager.sync({ reason: "test", force: true });
+    expect(await manager.search("ORCHID-83", { minScore: 0 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "sessions", snippet: expect.stringContaining(content) }),
+      ]),
+    );
   });
 
   it("keeps search usable while maintenance syncs a full memory retry", async () => {

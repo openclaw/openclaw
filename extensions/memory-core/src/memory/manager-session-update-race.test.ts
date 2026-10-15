@@ -13,7 +13,7 @@ import {
   type MemorySessionSyncTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
-import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
@@ -895,4 +895,45 @@ describe("memory session update sync", () => {
       ).toEqual(scenario.indexable ? [{ path: `sessions/main/${archiveName}` }] : []);
     },
   );
+
+  it.each([
+    {
+      kind: "heartbeat",
+      sessionKey: "agent:main:heartbeat:run-1",
+      heartbeatIsolatedBaseSessionKey: "agent:main:chat:base",
+    },
+  ])("excludes $kind transcripts from targeted memory indexing", async (systemSession) => {
+    const sessionId = "system-thread";
+    await seedSessionTranscript({
+      sessionId,
+      sessionKey: systemSession.sessionKey,
+      messages: [{ role: "assistant", timestamp: Date.now(), content: "Internal system output." }],
+    });
+    if (systemSession.heartbeatIsolatedBaseSessionKey) {
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: systemSession.sessionKey,
+        storePath: path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json"),
+        entry: {
+          sessionId,
+          updatedAt: Date.now(),
+          heartbeatIsolatedBaseSessionKey: systemSession.heartbeatIsolatedBaseSessionKey,
+        },
+      });
+    }
+    const manager = await getFreshManager(
+      createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
+      "cli",
+    );
+
+    await manager.sync({
+      reason: "targeted-generated-session",
+      sessions: [{ agentId: "main", sessionId, sessionKey: systemSession.sessionKey }],
+    });
+
+    const database = Reflect.get(manager, "db") as DatabaseSync;
+    expect(
+      database.prepare("SELECT path FROM memory_index_chunks WHERE source = 'sessions'").all(),
+    ).toEqual([]);
+  });
 });

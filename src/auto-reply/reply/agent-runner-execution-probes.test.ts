@@ -206,6 +206,80 @@ describe("executeAgentTurn: primary probe routing", () => {
       });
     },
   );
+
+  it("propagates rechecked user selections to post-run state", async () => {
+    const sessionKey = "rechecked-user-selection";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    };
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const staleAutoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.autoFallbackPrimaryProbe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        params.provider,
+        params.model,
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "user model" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => staleAutoEntry,
+    });
+
+    expectRecordFields(followupRun.run as unknown as Record<string, unknown>, {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+      modelOverrideSource: "user",
+    });
+    expect(followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
+    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+    });
+  });
+
   it("drops stale queued probe metadata after the auto fallback pin is cleared", () => {
     const probe = {
       provider: "anthropic",

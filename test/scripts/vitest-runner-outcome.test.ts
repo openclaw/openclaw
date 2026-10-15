@@ -124,74 +124,94 @@ describe.each(["direct", "delegated"])("Vitest %s terminal classification", (ent
       : [target];
   const run = () => runVitestCli("test", (exit) => runVitest(exit, args, environment));
 
-  const outcomes =
-    entry === "direct"
-      ? ([["preparation exit 1", 2]] as const)
-      : ([
-          ["clean assertion", 1],
-          ["success", 0],
-          ["preparation exit 1", 2],
-          ["missing child outcome", 2],
-        ] as const);
-  it.each(outcomes)("reports %s as exit %s", async (failure, expected) => {
+  it.each([
+    ["clean assertion", 1],
+    ["success", 0],
+    ["assertion and disposal", 2],
+    ["success and disposal", 2],
+    ["preparation exit 1", 2],
+    ["preparation rejection", 2],
+    ["worker preparation", 2],
+    ["child join", 2],
+    ["missing child outcome", 2],
+  ] as const)("reports %s as exit %s", async (failure, expected) => {
     if (failure.startsWith("success")) {
       outcome.code = 0;
     }
+    if (failure.endsWith("disposal")) {
+      lifecycle.dispose.mockRejectedValue(new Error("dispose failed"));
+    }
     if (failure === "preparation exit 1") {
       lifecycle.prepare.mockResolvedValue(1);
+    }
+    if (failure === "preparation rejection") {
+      lifecycle.prepare.mockRejectedValue(new Error("prepare failed"));
+    }
+    if (failure === "worker preparation") {
+      lifecycle.prepareWorkers.mockRejectedValue(new Error("compiler failed"));
+    }
+    if (failure === "child join") {
+      lifecycle.spawn.mockImplementation(() => ({
+        child: new EventEmitter(),
+        completion: Promise.reject(new Error("join failed")),
+      }));
     }
     if (failure === "missing child outcome") {
       outcome.code = null;
     }
     await run();
     expect(process.exitCode).toBe(expected);
-    if (failure.startsWith("preparation")) {
+    if (failure.startsWith("preparation") || failure === "worker preparation") {
       expect(lifecycle.spawn).not.toHaveBeenCalled();
     }
   });
 
-  it("retains native exit 7 when disposal fails", async () => {
-    outcome.code = 7;
+  it.each([7, 143])("retains native exit %s when disposal fails", async (code) => {
+    outcome.code = code;
     lifecycle.dispose.mockRejectedValue(new Error("dispose failed"));
     await run();
-    expect(process.exitCode).toBe(7);
+    expect(process.exitCode).toBe(code);
   });
 
-  it("joins failed disposal before interruption", async () => {
-    const disposing = createDeferred();
-    const release = createDeferred();
-    lifecycle.dispose.mockImplementation(() => {
-      disposing.resolve();
-      return release.promise.then(() => {
-        throw new Error("dispose failed");
+  it.each([false, true])(
+    "joins disposal before interruption (disposal failure=%s)",
+    async (fails) => {
+      const disposing = createDeferred();
+      const release = createDeferred();
+      lifecycle.dispose.mockImplementation(() => {
+        disposing.resolve();
+        return release.promise.then(() => {
+          if (fails) {
+            throw new Error("dispose failed");
+          }
+        });
       });
-    });
-    outcome.signal = "SIGTERM";
-    outcome.code = null;
-    const exit = vi.fn(async () => {});
-    let settled = false;
-    const running = runVitest(exit, args, environment).finally(() => {
-      settled = true;
-    });
-    try {
-      await Promise.race([disposing.promise, running]);
-      expect(lifecycle.dispose).toHaveBeenCalled();
-      expect(settled).toBe(false);
-      expect(exit).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await running;
-    }
-    expect(exit).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-  });
+      outcome.signal = "SIGTERM";
+      outcome.code = null;
+      const exit = vi.fn(async () => {});
+      let settled = false;
+      const running = runVitest(exit, args, environment).finally(() => {
+        settled = true;
+      });
+      try {
+        await Promise.race([disposing.promise, running]);
+        expect(lifecycle.dispose).toHaveBeenCalled();
+        expect(settled).toBe(false);
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await running;
+      }
+      expect(exit).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    },
+  );
 
   if (entry === "delegated") {
-    it.each([
-      { code: 1, failure: "attempt rejection" },
-      { code: 7, failure: "failure code" },
-      { code: 7, failure: "rejection" },
-      { code: 7, failure: "attempt rejection" },
-    ])("preserves exit $code through publication $failure", async ({ code, failure }) => {
+    it.each(
+      [1, 7, 143].flatMap((code) =>
+        ["failure code", "rejection", "attempt rejection"].map((failure) => ({ code, failure })),
+      ),
+    )("preserves exit $code through publication $failure", async ({ code, failure }) => {
       outcome.code = code;
       lifecycle.reports.mockResolvedValue({
         attempt: (_index: number, attemptArgs: string[]) => ({
@@ -243,7 +263,7 @@ describe("delegated numeric admission and first-native precedence", () => {
     "test/vitest/vitest.cli.config.ts",
   ];
 
-  it("serial continueOnFailure admits assertion red", async () => {
+  it.each([1, 2])("serial continueOnFailure admits only assertion red (exit %s)", async (code) => {
     const planner = await import("../../scripts/test-projects.test-support.mts");
     vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
       configs.map((config) => ({
@@ -254,7 +274,7 @@ describe("delegated numeric admission and first-native precedence", () => {
         watchMode: false,
       })),
     );
-    outcome.code = 1;
+    outcome.code = code;
     const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
     await runVitestCli("test", (exit) =>
       runTestProjects(exit, [], {
@@ -262,13 +282,15 @@ describe("delegated numeric admission and first-native precedence", () => {
         OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
       }),
     );
-    expect(lifecycle.spawn).toHaveBeenCalledTimes(3);
-    expect(process.exitCode).toBe(1);
+    expect(lifecycle.spawn).toHaveBeenCalledTimes(code === 1 ? 3 : 1);
+    expect(process.exitCode).toBe(code);
   });
 
   it.each([
     [2, 7, 7],
+    [7, 2, 7],
     [7, 143, 7],
+    [143, 7, 143],
   ] as const)(
     "joins active peers and keeps first native status: %s then %s -> %s",
     async (firstCode, secondCode, expected) => {
@@ -323,18 +345,25 @@ describe("native Bun terminal classification", () => {
     }
   });
 
-  it("classifies missing completion as infrastructure failure", async () => {
-    outcome.code = null;
-    await runVitestCli("test", (exit) =>
-      runVitest(exit, ["--native-bun", `./${target}`], environment),
-    );
-    expect(lifecycle.spawn).toHaveBeenCalledOnce();
-    expect(process.exitCode).toBe(2);
-  });
+  it.each([
+    [0, 0],
+    [1, 1],
+    [null, 2],
+  ] as const)(
+    "preserves completed exit %s and classifies missing completion as %s",
+    async (code, expected) => {
+      outcome.code = code;
+      await runVitestCli("test", (exit) =>
+        runVitest(exit, ["--native-bun", `./${target}`], environment),
+      );
+      expect(lifecycle.spawn).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(expected);
+    },
+  );
 });
 
 describe("batch terminal classification", () => {
-  it.each([0, 7])("classifies disposal after batch exit %s", async (code) => {
+  it.each([0, 1, 7, 143])("classifies disposal after batch exit %s", async (code) => {
     const { runVitestBatch } = await import("../../scripts/lib/vitest-batch-runner.mts");
     outcome.code = code;
     lifecycle.dispose.mockRejectedValue(new Error("batch dispose failed"));
@@ -350,7 +379,7 @@ describe("batch terminal classification", () => {
     expect(complete).toHaveBeenCalledExactlyOnceWith({ code: result, signal: null });
   });
 
-  it.each([1, 7])("preserves batch exit %s through publication failure", async (code) => {
+  it.each([1, 7, 143])("preserves batch exit %s through publication failure", async (code) => {
     const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
     lifecycle.reports.mockResolvedValue({
       attempt: (_index: number, args: string[]) => ({ args, complete() {}, fail() {} }),
@@ -400,10 +429,9 @@ const threeGroupPlan = {
 };
 
 describe.each(["delegated", "batch"])("%s scheduler exception outcomes", (entry) => {
-  it.each([true, false])(
-    "retains native 7 across peer rejection (native first=%s)",
-    async (nativeFirst) => {
-      const code = 7;
+  it.each([7, 143].flatMap((code) => [true, false].map((nativeFirst) => ({ code, nativeFirst }))))(
+    "retains native $code across peer rejection (native first=$nativeFirst)",
+    async ({ code, nativeFirst }) => {
       const first = createDeferred<typeof outcome>();
       const second = createDeferred<typeof outcome>();
       const admitted = createDeferred();
@@ -465,8 +493,8 @@ describe.each(["delegated", "batch"])("%s scheduler exception outcomes", (entry)
   );
 });
 
-it("retains native 7 when shard timing publication throws", async () => {
-  outcome.code = 7;
+it.each([7, 143])("retains native %s when shard timing publication throws", async (code) => {
+  outcome.code = code;
   lifecycle.timings.mockImplementation(() => {
     throw new Error("owned timing write failure");
   });
@@ -477,70 +505,82 @@ it("retains native 7 when shard timing publication throws", async () => {
     }),
   );
   expect(lifecycle.timings).toHaveBeenCalledOnce();
-  expect(process.exitCode).toBe(7);
+  expect(process.exitCode).toBe(code);
 });
 
-it("stops batch admission and joins peers after attempt mkdir fails", async () => {
-  const root = tempDirs.make("oc-report-attempt-");
-  const original = await vi.importActual<
-    typeof import("../../scripts/lib/vitest-report-owner.mts")
-  >("../../scripts/lib/vitest-report-owner.mts");
-  lifecycle.reports.mockImplementation(original.createVitestReportOwner);
-  const failed = createDeferred();
-  const peer = createDeferred<number>();
-  const runGroup = vi.fn(() => peer.promise);
-  let injected = false;
-  let indexFile = "";
-  const fail = () => {
-    injected = true;
-    failed.resolve();
-    throw new Error("owned report attempt allocation failure");
-  };
-  const mkdir = fs.mkdirSync;
-  vi.spyOn(fs, "mkdirSync").mockImplementation((directory, options) => {
-    const name = String(directory);
-    if (!injected && name.startsWith(root) && name.endsWith(path.join("2", "1"))) {
-      fail();
-    }
-    return mkdir(directory, options);
-  });
-  const write = fs.writeFileSync;
-  vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-    if (String(file).startsWith(root) && path.basename(String(file)) === "index.json") {
-      indexFile = String(file);
-      if (typeof data !== "string") {
-        throw new Error("Expected report index JSON text");
+it.each(["mkdir", "index save"])(
+  "stops batch admission and joins peers after attempt %s fails",
+  async (fault) => {
+    const root = tempDirs.make("oc-report-attempt-");
+    const original = await vi.importActual<
+      typeof import("../../scripts/lib/vitest-report-owner.mts")
+    >("../../scripts/lib/vitest-report-owner.mts");
+    lifecycle.reports.mockImplementation(original.createVitestReportOwner);
+    const failed = createDeferred();
+    const peer = createDeferred<number>();
+    const runGroup = vi.fn(() => peer.promise);
+    let injected = false;
+    let indexFile = "";
+    const fail = () => {
+      injected = true;
+      failed.resolve();
+      throw new Error("owned report attempt allocation failure");
+    };
+    const mkdir = fs.mkdirSync;
+    vi.spyOn(fs, "mkdirSync").mockImplementation((directory, options) => {
+      const name = String(directory);
+      if (
+        !injected &&
+        fault === "mkdir" &&
+        name.startsWith(root) &&
+        name.endsWith(path.join("2", "1"))
+      ) {
+        fail();
       }
+      return mkdir(directory, options);
+    });
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      if (String(file).startsWith(root) && path.basename(String(file)) === "index.json") {
+        indexFile = String(file);
+        if (typeof data !== "string") {
+          throw new Error("Expected report index JSON text");
+        }
+        const index = JSON.parse(data);
+        if (!injected && fault === "index save" && index.entries[1].state === "started") {
+          fail();
+        }
+      }
+      return write(file, data, options);
+    });
+    const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
+    let settled = false;
+    const running = runVitestCli("test", async () => {
+      process.exitCode = await runExtensionBatchPlan(threeGroupPlan, {
+        env: { ...environment, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+        runGroup,
+        vitestArgs: ["--reporter=json", `--outputFile=${path.join(root, "result.json")}`],
+      });
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await Promise.race([failed.promise, running]);
+      expect(injected).toBe(true);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runGroup).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+    } finally {
+      peer.resolve(0);
+      await running;
     }
-    return write(file, data, options);
-  });
-  const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
-  let settled = false;
-  const running = runVitestCli("test", async () => {
-    process.exitCode = await runExtensionBatchPlan(threeGroupPlan, {
-      env: { ...environment, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-      runGroup,
-      vitestArgs: ["--reporter=json", `--outputFile=${path.join(root, "result.json")}`],
-    });
-  }).finally(() => {
-    settled = true;
-  });
-  try {
-    await Promise.race([failed.promise, running]);
-    expect(injected).toBe(true);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
     expect(runGroup).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-  } finally {
-    peer.resolve(0);
-    await running;
-  }
-  expect(runGroup).toHaveBeenCalledOnce();
-  expect(process.exitCode).toBe(2);
-  const index = JSON.parse(fs.readFileSync(indexFile, "utf8"));
-  expect(index.complete).toBe(false);
-  expect(index.entries[0].attempts[0].outcome.code).toBe(0);
-  expect(index.entries[2].state).toBe("unstarted");
-});
+    expect(process.exitCode).toBe(2);
+    const index = JSON.parse(fs.readFileSync(indexFile, "utf8"));
+    expect(index.complete).toBe(false);
+    expect(index.entries[0].attempts[0].outcome.code).toBe(0);
+    expect(index.entries[2].state).toBe("unstarted");
+  },
+);

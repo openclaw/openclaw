@@ -167,6 +167,17 @@ function cachedProbe(root: string, directory: string): string {
 }
 
 describe("compiled worker content cache", () => {
+  it.each([
+    "NODE_PATH",
+    "NAPI_RS_NATIVE_LIBRARY_PATH",
+    "NAPI_RS_WASI_FLAVOR",
+    "NAPI_RS_FORCE_WASI",
+  ])("honors the explicitly selected compiler through %s", (name) => {
+    expect(useVitestWorkerCache({ [name]: "override" })).toBe(false);
+    expect(
+      useVitestWorkerCache({ CI: "1", OPENCLAW_VITEST_WORKER_CACHE: "1", [name]: "override" }),
+    ).toBe(false);
+  });
   it("requires an explicit CI cache opt-in without overriding custom loaders", () => {
     for (const ciEnv of [{ CI: "1" }, { GITHUB_ACTIONS: "true" }]) {
       expect(useVitestWorkerCache(ciEnv)).toBe(false);
@@ -275,32 +286,79 @@ describe("compiled worker content cache", () => {
     expect(f.observe().value).toBe("other");
   });
 
-  it.each(["foreign inventory", "unrecorded file"])(
-    "rejects a retained generation with %s",
-    async (damage) => {
-      const f = fixture();
-      await f.seed();
-      const cached = path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0");
-      if (damage === "foreign inventory") {
-        const stamp = path.join(cached, "stamp.json");
-        const record = JSON.parse(fs.readFileSync(stamp, "utf8"));
+  it.each([
+    ["resolution candidate", "src/value.ts", 'export const value = "shadow";\n'],
+    [
+      "package resolution metadata",
+      "package.json",
+      '{"name":"worker-cache-fixture","type":"module","imports":{"#value":"./src/value.js"}}\n',
+    ],
+    [
+      "compiler source",
+      "scripts/lib/fixture-compiler.mts",
+      'export const compilerRevision = "second";\n',
+    ],
+  ])("invalidates when %s changes", async (_label, filename, contents) => {
+    const f = fixture();
+    await f.seed();
+    f.nextInvocation();
+    f.write(filename!, contents!);
+
+    expect(await f.restore()).toBeUndefined();
+    expect(fs.existsSync(path.join(f.directory, "dist/probe.js"))).toBe(false);
+  });
+
+  it.each([
+    "corrupt",
+    "missing",
+    "incomplete inventory",
+    "foreign inventory",
+    "unrecorded file",
+    "relocated",
+  ])("rejects a retained generation with %s", async (damage) => {
+    const f = fixture();
+    await f.seed();
+    const cached = path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0");
+    if (damage === "corrupt" || damage === "missing") {
+      const probe = cachedProbe(f.root, f.directory);
+      if (damage === "corrupt") {
+        fs.appendFileSync(probe, "\nthrow new Error('corrupted seed');\n");
+      } else {
+        fs.unlinkSync(probe);
+      }
+    } else if (damage === "incomplete inventory" || damage === "foreign inventory") {
+      const stamp = path.join(cached, "stamp.json");
+      const record = JSON.parse(fs.readFileSync(stamp, "utf8"));
+      if (damage === "incomplete inventory") {
+        delete record.outputs["dist/probe.js"];
+      } else {
         const owner = ".vitest-resource-owner/owner";
         const bytes = "unrelated ownership receipt";
         fs.mkdirSync(path.dirname(path.join(cached, "outputs", owner)));
         fs.writeFileSync(path.join(cached, "outputs", owner), bytes);
         record.outputs[owner] = hashVitestWorkerArtifact(bytes);
-        fs.writeFileSync(stamp, JSON.stringify(record));
-      } else {
-        fs.writeFileSync(path.join(cached, "outputs/dist/nested/runtime.sqlite"), "runtime state");
       }
-      f.nextInvocation();
-      const cache = await createVitestWorkerCache(f.root, f.directory, f.compilerInputs);
-      expect(cache).toBeDefined();
-      expect(await cache!.restore()).toBeUndefined();
-      const absent = damage === "foreign inventory" ? ".vitest-resource-owner" : "dist";
-      expect(fs.existsSync(path.join(f.directory, absent))).toBe(false);
-    },
-  );
+      fs.writeFileSync(stamp, JSON.stringify(record));
+    } else if (damage === "unrecorded file") {
+      fs.writeFileSync(path.join(cached, "outputs/dist/nested/runtime.sqlite"), "runtime state");
+    }
+    f.nextInvocation();
+    const root = damage === "relocated" ? roots.make("vitest-worker-cache-relocated-") : f.root;
+    if (damage === "relocated") {
+      fs.cpSync(f.root, root, { recursive: true });
+    }
+    const directory = path.join(root, path.relative(f.root, f.directory));
+    const cache = await createVitestWorkerCache(root, directory, f.compilerInputs);
+    expect(cache).toBeDefined();
+    expect(await cache!.restore()).toBeUndefined();
+    const absent =
+      damage === "foreign inventory"
+        ? ".vitest-resource-owner"
+        : damage === "unrecorded file"
+          ? "dist"
+          : "dist/probe.js";
+    expect(fs.existsSync(path.join(directory, absent))).toBe(false);
+  });
 
   it("restores only compiler outputs, leaving resource claims with their invocation", async () => {
     const f = fixture();
@@ -329,24 +387,60 @@ describe("compiled worker content cache", () => {
     expect(f.observe().value).toBe("first");
   });
 
-  it("discards retention with an unexpected nested symlink", async () => {
-    const f = fixture();
-    const cache = await f.cache();
-    expect(await cache.restore()).toBeUndefined();
-    const manifest = f.prepare();
-    manifest.cacheSignature = await cache.seal(manifest);
-    const unexpected = path.join(f.directory, "dist/nested/unexpected");
-    fs.symlinkSync(
-      path.join(f.directory, "dist/nested"),
-      unexpected,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await verifyVitestWorkerArtifacts(f.directory, manifest);
+  it.each(["file", "directory", "symlink"] as const)(
+    "discards retention with an unexpected nested %s",
+    async (kind) => {
+      const f = fixture();
+      const cache = await f.cache();
+      expect(await cache.restore()).toBeUndefined();
+      const manifest = f.prepare();
+      manifest.cacheSignature = await cache.seal(manifest);
+      const unexpected = path.join(f.directory, "dist/nested/unexpected");
+      if (kind === "file") {
+        fs.writeFileSync(unexpected, "runtime state");
+      } else if (kind === "directory") {
+        fs.mkdirSync(unexpected);
+      } else {
+        fs.symlinkSync(
+          path.join(f.directory, "dist/nested"),
+          unexpected,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      await verifyVitestWorkerArtifacts(f.directory, manifest);
 
-    expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
-    expect(fs.existsSync(path.join(f.directory, "dist/nested/deeper.js"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0/stamp.json")),
-    ).toBe(false);
-  });
+      expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
+      expect(fs.existsSync(path.join(f.directory, "dist/nested/deeper.js"))).toBe(true);
+      expect(
+        fs.existsSync(path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0/stamp.json")),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["timestamps and unrelated source", "runtime-written metadata"])(
+    "restores captured compiler facts despite changes to %s",
+    async (change) => {
+      const f = fixture();
+      const cache = await f.cache();
+      expect(await cache.restore()).toBeUndefined();
+      const manifest = f.prepare();
+      manifest.cacheSignature = await cache.seal(manifest);
+      if (change === "runtime-written metadata") {
+        fs.writeFileSync(path.join(f.directory, "manifest.json"), "{}");
+      }
+      await verifyVitestWorkerArtifacts(f.directory, manifest);
+
+      expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(true);
+      f.nextInvocation();
+      if (change === "timestamps and unrelated source") {
+        fs.utimesSync(path.join(f.root, "src/value.js"), new Date(1000), new Date(1000));
+        f.write("notes/unrelated.ts", 'export const unrelated = "second";\n');
+      }
+      const restored = await f.restore();
+      expect(restored?.outputs).toEqual(manifest.outputs);
+      expect(restored?.identity).toBe(manifest.identity);
+      expect(restored?.cacheSignature).toBe(manifest.cacheSignature);
+      expect(f.observe().value).toBe("first");
+    },
+  );
 });

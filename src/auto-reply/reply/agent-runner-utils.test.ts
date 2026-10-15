@@ -255,6 +255,119 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("hydrates the queued route before resolving channel threading policy", async () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          accountId,
+          context,
+        }: {
+          accountId?: string | null;
+          context: {
+            ChatType?: string;
+            MessageThreadId?: string | number;
+            NativeChannelId?: string;
+            To?: string;
+          };
+        }) => ({
+          currentChannelId: context.NativeChannelId ?? context.To,
+          currentMessagingTarget: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+          replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
+        }),
+      },
+    });
+    const run = makeRun({ agentAccountId: "work", chatType: "direct" });
+
+    const resolved = await buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "cron-event",
+        NativeChannelId: "D1",
+        SessionKey: "agent:main:main:thread:1234:42",
+        MessageThreadId: "stale-topic",
+      },
+      replyRoute: {
+        originatingChannel: "slack",
+        originatingTo: "user:U1",
+        originatingAccountId: "work",
+        originatingChatType: "direct",
+        originatingThreadId: 42,
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.messageProvider).toBe("slack");
+    expect(resolved.messageTo).toBe("user:U1");
+    expect(resolved.currentChannelId).toBe("D1");
+    expect(resolved.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.messageThreadId).toBe(42);
+    expect(resolved.currentThreadTs).toBe("42");
+    expect(resolved.agentAccountId).toBe("work");
+    expect(resolved.chatType).toBe("direct");
+    expect(resolved.replyToMode).toBe("off");
+  });
+
+  it.each([{ provider: "webchat", currentMessageId: undefined }])(
+    "carries prepared reply routing without leaking $provider identity",
+    async ({ provider, currentMessageId }) => {
+      const run = makeRun();
+      const replyRoute = {
+        originatingChannel: "reef",
+        originatingTo: "reef:remote-agent",
+        originatingReplyToMode: "all",
+      } satisfies Pick<
+        FollowupRun,
+        "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+      >;
+
+      const resolved = await buildEmbeddedRunExecutionParams({
+        run,
+        replyRoute,
+        sessionCtx: {
+          Provider: provider,
+          To: "reef:local-agent",
+          MessageSid: "message-1",
+        },
+        hasRepliedRef: undefined,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        runId: "run-1",
+      });
+
+      expect(resolved).toMatchObject({
+        currentChannelId: "reef:remote-agent",
+        currentChannelProvider: "reef",
+        currentMessageId,
+        replyToMode: "all",
+      });
+    },
+  );
+
+  it("carries inbound audio context into embedded message tools", async () => {
+    const run = makeRun();
+
+    const resolved = await buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        To: "268300329",
+        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
+        BodyForCommands: "",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.currentInboundAudio).toBe(true);
+  });
+
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
     const sessionCtx = {
       Provider: "discord",

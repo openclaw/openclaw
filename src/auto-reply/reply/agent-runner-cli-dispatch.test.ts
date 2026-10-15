@@ -16,6 +16,7 @@ import {
 } from "../../infra/agent-events.js";
 import {
   createCliToolSummaryTracker,
+  keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
 } from "./agent-runner-cli-dispatch.js";
 
@@ -424,45 +425,112 @@ describe("runCliAgentWithLifecycle", () => {
   });
 });
 
-describe("clearCliSessionInStore", () => {
-  it("preserves active and stored entries after commit authority closes", async () => {
-    const activeEntry = {
-      sessionId: "openclaw-active",
-      updatedAt: 1,
-      cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
-      cliSessionIds: { "claude-cli": "stale-session" },
-      claudeCliSessionId: "stale-session",
-    };
-    const storedEntry = structuredClone(activeEntry);
-    const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
-    await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
-
-    let open = true;
-    const clear = clearCliSessionInStore({
-      agentId: "main",
-      provider: "claude-cli",
-      expectedCliSessionId: "stale-session",
-      expectedSessionId: activeEntry.sessionId,
-      sessionKey: "main",
-      sessionStore: { main: storedEntry },
-      storePath,
-      activeSessionEntry: activeEntry,
-      assertCommitAllowed: () => {
-        if (!open) {
-          throw new Error("owner closed");
-        }
+describe("keepCliSessionBindingOnlyWhenReused", () => {
+  it("keeps the first room-event CLI binding when no binding exists yet", () => {
+    const result = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "new-cli-session",
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: {
+            sessionId: "new-cli-session",
+            authProfileId: "profile",
+          },
+        },
       },
-    });
-    open = false;
-    await expect(clear).rejects.toThrow("owner closed");
-    for (const entry of [
-      activeEntry,
-      storedEntry,
-      loadSessionEntry({ storePath, sessionKey: "main" }),
-    ]) {
-      expect(entry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("stale-session");
-    }
+    } satisfies EmbeddedAgentRunResult;
+
+    expect(keepCliSessionBindingOnlyWhenReused({ result })).toBe(result);
   });
+
+  it("drops a replacement room-event CLI binding when an existing binding was reused", () => {
+    const onDroppedReplacement = vi.fn();
+    const result = keepCliSessionBindingOnlyWhenReused({
+      existingSessionId: "existing-cli-session",
+      onDroppedReplacement,
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "replacement-cli-session",
+            provider: "claude-cli",
+            model: "claude-opus-4-8",
+            cliSessionBinding: {
+              sessionId: "replacement-cli-session",
+              authProfileId: "profile",
+            },
+          },
+        },
+      } satisfies EmbeddedAgentRunResult,
+    });
+
+    expect(onDroppedReplacement).toHaveBeenCalledOnce();
+    expect(result.meta.agentMeta?.sessionId).toBe("");
+    expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+});
+
+describe("clearCliSessionInStore", () => {
+  it.each(["current", "closed"])(
+    "clears active and stored entries only for a %s owner",
+    async (owner) => {
+      const activeEntry = {
+        sessionId: "openclaw-active",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+        cliSessionIds: { "claude-cli": "stale-session" },
+        claudeCliSessionId: "stale-session",
+      };
+      const storedEntry = structuredClone(activeEntry);
+      const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
+
+      let open = true;
+      const clear = clearCliSessionInStore({
+        agentId: "main",
+        provider: "claude-cli",
+        expectedCliSessionId: "stale-session",
+        expectedSessionId: activeEntry.sessionId,
+        sessionKey: "main",
+        sessionStore: { main: storedEntry },
+        storePath,
+        activeSessionEntry: activeEntry,
+        assertCommitAllowed: () => {
+          if (!open) {
+            throw new Error("owner closed");
+          }
+        },
+      });
+      if (owner === "closed") {
+        open = false;
+        await expect(clear).rejects.toThrow("owner closed");
+        for (const entry of [
+          activeEntry,
+          storedEntry,
+          loadSessionEntry({ storePath, sessionKey: "main" }),
+        ]) {
+          expect(entry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("stale-session");
+        }
+        return;
+      }
+      await clear;
+
+      for (const entry of [activeEntry, storedEntry]) {
+        expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+        expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+        expect(entry.claudeCliSessionId).toBeUndefined();
+        expect(entry.updatedAt).toBeGreaterThan(1);
+      }
+      const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.claudeCliSessionId).toBeUndefined();
+    },
+  );
 
   it("does not clear a replacement binding adopted by another turn", async () => {
     const entry = {

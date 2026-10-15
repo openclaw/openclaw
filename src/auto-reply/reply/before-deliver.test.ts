@@ -3,20 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
+import { preserveReplyPayloadMediaSelectionCore } from "../../infra/outbound/reply-media-entries.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { captureDeliveredTranscriptMirror } from "./dispatch-from-config.transcript.js";
 import {
@@ -78,20 +83,113 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
-  it("drops delta mode when a hook replaces the chunk text", async () => {
-    const delivered: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      beforeDeliver: (payload) => ({ ...payload, text: "Replacement snapshot" }),
-      deliver: async (payload) => {
-        delivered.push(payload);
-      },
-    });
-    dispatcher.sendBlockReply({ text: "Answer chunk", textMode: "delta" });
-    await dispatcher.waitForIdle();
-    expect(delivered).toEqual([{ text: "Replacement snapshot" }]);
-  });
+  it.each(["unchanged", "replacement", "in-place"] as const)(
+    "retains delta mode only when a hook keeps the chunk text (%s)",
+    async (rewrite) => {
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          if (rewrite === "in-place") {
+            payload.text = "Replacement snapshot";
+          }
+          return rewrite === "replacement" ? { ...payload, text: "Replacement snapshot" } : payload;
+        },
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      dispatcher.sendBlockReply({ text: "Answer chunk", textMode: "delta" });
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        rewrite !== "unchanged"
+          ? { text: "Replacement snapshot" }
+          : { text: "Answer chunk", textMode: "delta" },
+      ]);
+    },
+  );
 
-  it.each(["tool"] as const)(
+  it.each(["raw", "prepared"] as const)(
+    "retains an in-place media selection through %s dispatch recovery",
+    async (operation) => {
+      const delivered: ReplyPayload[] = [];
+      const deliver = async (payload: ReplyPayload) => {
+        delivered.push(
+          preserveReplyPayloadMediaSelectionCore(payload, {
+            ...payload,
+            text: "Recovered full text",
+            mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          }),
+        );
+      };
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          payload.mediaUrl = undefined;
+          payload.mediaUrls?.splice(0, 1);
+          payload.attachments?.splice(0, 1);
+          return payload;
+        },
+        deliver,
+        deliverPrepared: async (plan) => deliver(plan.payload),
+      });
+      expect(
+        sendFinal(dispatcher, operation, {
+          text: "Short answer",
+          mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          attachments: [{ name: "rejected" }, { name: "selected" }],
+        }),
+      ).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: "Recovered full text",
+          mediaUrls: ["/tmp/selected.png"],
+          attachments: [{ name: "selected" }],
+        }),
+      ]);
+    },
+  );
+
+  it.each(["[[reply_to:example-id]]` literally.", "[[audio_as_voice]]` literally."])(
+    "preserves prepared literal %s and rebuilds projections after modifiers",
+    async (text) => {
+      const delivered: OutboundPayloadPlan[] = [];
+      const deliver = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: "[bot]",
+        beforeDeliver: async (payload) => ({
+          ...payload,
+          text: `${payload.text} Updated.`,
+          mediaUrl: undefined,
+          mediaUrls: ["/tmp/updated.png"],
+        }),
+        deliver,
+        deliverPrepared: async (plan) => {
+          delivered.push(plan);
+        },
+      });
+      const plan = { ...planReply({ text, mediaUrl: "/tmp/original.png" }), sourceIndex: 3 };
+      const outcome = captureReplyDispatchDeliveryOutcome(plan.payload);
+
+      expect(dispatcher.sendPreparedReply("block", plan)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        sourceIndex: 3,
+        payload: { text: `[bot] ${text} Updated.` },
+        parts: { text: `[bot] ${text} Updated.`, mediaUrls: ["/tmp/updated.png"] },
+      });
+      expect(delivered[0]?.payload.replyToId).toBeUndefined();
+      expect(delivered[0]?.payload.audioAsVoice).toBeUndefined();
+      expect(outcome.isTracked()).toBe(true);
+      await expect(outcome.promise).resolves.toBe("delivered");
+    },
+  );
+
+  it.each(["tool", "block", "final"] as const)(
     "retains raw %s delivery when prepared egress is available",
     async (kind) => {
       const delivered: ReplyPayload[] = [];
@@ -114,6 +212,47 @@ describe("beforeDeliver in reply dispatcher", () => {
 
       expect(deliverPrepared).not.toHaveBeenCalled();
       expect(delivered).toMatchObject([{ text: "Raw reply", replyToId: "real-id" }]);
+    },
+  );
+
+  it.each(["raw", "prepared"] as const)(
+    "preserves %s hook rewrites through legacy egress",
+    async (operation) => {
+      const delivered: ReplyPayload[] = [];
+      const indices: Array<number | undefined> = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: async (payload) =>
+          operation === "raw"
+            ? { text: "rewritten" }
+            : { ...payload, text: `${payload.text} Updated.` },
+        deliver: async (payload, info) => {
+          delivered.push(payload);
+          indices.push(info.assistantMessageIndex);
+        },
+      });
+      if (operation === "prepared") {
+        expect(
+          dispatcher.sendPreparedReply(
+            "final",
+            planReply({ text: "[[reply_to:example-id]]` literally." }),
+          ),
+        ).toBe(true);
+      } else {
+        dispatcher.sendBlockReply(
+          setReplyPayloadMetadata({ text: "original" }, { assistantMessageIndex: 12 }),
+        );
+      }
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      if (operation === "prepared") {
+        expect(delivered).toMatchObject([{ text: "[[reply_to:example-id]]` literally. Updated." }]);
+        expect(delivered[0]?.replyToId).toBeUndefined();
+      } else {
+        expect(delivered.map(getReplyPayloadMetadata)).toMatchObject([
+          { assistantMessageIndex: 12 },
+        ]);
+        expect(indices).toEqual([12]);
+      }
     },
   );
 
@@ -151,7 +290,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(captures.map(({ capture }) => capture()?.text)).toEqual(delivered);
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "preserves prepared BTW text through prefixes and hook replacement (%s)",
     async (replaceText) => {
       const delivered: string[] = [];
@@ -208,6 +347,13 @@ describe("beforeDeliver in reply dispatcher", () => {
       fallback: true,
     },
     {
+      name: "confirmed send",
+      result: { visibleReplySent: true },
+      state: "delivered",
+      count: "delivered",
+      fallback: true,
+    },
+    {
       name: "ordinary invisible result",
       result: { visibleReplySent: false },
       state: "delivered",
@@ -248,7 +394,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     },
   );
 
-  it.each(["raw"] as const)(
+  it.each(["raw", "prepared"] as const)(
     "delivers the attached %s fallback when the primary payload is cancelled",
     async (operation) => {
       const delivered: string[] = [];
@@ -305,36 +451,68 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(receipt?.counts.final.cancelled).toBe(0);
   });
 
-  it("retries a deferred pre-transport failure without queue custody", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        if (payload.mediaUrl) {
-          const cause = Object.assign(new Error("connect failed"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          });
-          const error = Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
-            queueCustody: undefined,
-          });
-          return { finalization: Promise.reject(error) };
-        }
-        delivered.push(payload.text ?? "");
-        return undefined;
-      },
-      propagateRetryableNoSendFailure: true,
-    });
+  it.each([
+    { queueCustody: undefined, deferred: false },
+    { queueCustody: "held", deferred: false },
+    { queueCustody: "released", deferred: false },
+    { queueCustody: undefined, deferred: true },
+    { queueCustody: "held", deferred: true },
+    { queueCustody: "released", deferred: true },
+  ] as const)(
+    "retries a proven pre-transport failure only without held queue custody ($queueCustody, deferred=$deferred)",
+    async ({ queueCustody, deferred }) => {
+      const delivered: string[] = [];
+      const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (payload.mediaUrl) {
+            const cause = Object.assign(new Error("connect failed"), {
+              code: "ECONNREFUSED",
+              syscall: "connect",
+            });
+            const error = Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
+              queueCustody,
+            });
+            if (deferred) {
+              return { finalization: Promise.reject(error) };
+            }
+            throw error;
+          }
+          delivered.push(payload.text ?? "");
+          return undefined;
+        },
+        propagateRetryableNoSendFailure: true,
+      });
 
-    dispatcher.sendFinalReply(primary);
+      dispatcher.sendFinalReply(primary);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(queueCustody === "held" ? [] : ["caption"]);
+      expect(receipt?.counts.final.failedBeforeSend).toBe(queueCustody === "held" ? 1 : 0);
+      expect(receipt?.counts.final.failedAfterSend).toBe(0);
+      expect(receipt?.anyVisibleDelivered).toBe(queueCustody !== "held");
+    },
+  );
+
+  it("does not call a proven permanent rejection pending", async () => {
+    const payload: ReplyPayload = { text: "rejected", mediaUrl: "/tmp/voice.ogg" };
+    attachReplyDispatchUndeliveredFallback(payload, { text: "rejected" });
+    const capture = captureReplyDispatchDeliveryOutcome(payload);
+    const deliver = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("rejected before dispatch", {
+        cause: undefined,
+        retryable: false,
+      });
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(payload);
     dispatcher.markComplete();
     const receipt = await dispatcher.waitForIdle();
-
-    expect(delivered).toEqual(["caption"]);
-    expect(receipt?.counts.final.failedBeforeSend).toBe(0);
-    expect(receipt?.counts.final.failedAfterSend).toBe(0);
-    expect(receipt?.anyVisibleDelivered).toBe(true);
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(receipt?.hasPendingDelivery).toBeUndefined();
+    expect(capture.hasPendingDelivery()).toBe(false);
   });
 
   it("does not rerun dynamic prefix normalization after pre-side-effect preparation", async () => {
@@ -361,56 +539,78 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(delivered).toEqual(["[first] reply"]);
   });
 
-  it("notifies cancellation when beforeDeliver throws", async () => {
-    const delivered: string[] = [];
-    const cancelled: Array<{
-      assistantMessageIndex?: number;
-      kind: string;
-      text: string;
-    }> = [];
-    const errors: Array<{
-      assistantMessageIndex?: number;
-      kind: string;
-      message: string;
-    }> = [];
+  it.each(["cancel", "throw"] as const)(
+    "notifies cancellation when beforeDeliver exits with %s",
+    async (outcome) => {
+      const delivered: string[] = [];
+      const cancelled: Array<{
+        assistantMessageIndex?: number;
+        kind: string;
+        text: string;
+      }> = [];
+      const errors: Array<{
+        assistantMessageIndex?: number;
+        kind: string;
+        message: string;
+      }> = [];
 
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-      onBeforeDeliverCancelled: (payload, info) => {
-        cancelled.push({
-          assistantMessageIndex: info.assistantMessageIndex,
-          kind: info.kind,
-          text: payload.text ?? "",
-        });
-      },
-      onError: (err, info) => {
-        errors.push({
-          assistantMessageIndex: info.assistantMessageIndex,
-          kind: info.kind,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      },
-      beforeDeliver: async () => {
-        throw new Error("pre-delivery failed");
-      },
-    });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        onBeforeDeliverCancelled: (payload, info) => {
+          cancelled.push({
+            assistantMessageIndex: info.assistantMessageIndex,
+            kind: info.kind,
+            text: payload.text ?? "",
+          });
+        },
+        onError: (err, info) => {
+          errors.push({
+            assistantMessageIndex: info.assistantMessageIndex,
+            kind: info.kind,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        },
+        beforeDeliver: async (payload) => {
+          if (outcome === "throw") {
+            throw new Error("pre-delivery failed");
+          }
+          return payload.text?.includes("blocked") ? null : payload;
+        },
+      });
 
-    dispatcher.sendBlockReply(
-      setReplyPayloadMetadata({ text: "blocked block" }, { assistantMessageIndex: 9 }),
-    );
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+      if (outcome === "throw") {
+        dispatcher.sendBlockReply(
+          setReplyPayloadMetadata({ text: "blocked block" }, { assistantMessageIndex: 9 }),
+        );
+      } else {
+        dispatcher.sendFinalReply({ text: "blocked reply" });
+        dispatcher.sendFinalReply({ text: "safe reply" });
+      }
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual([]);
-    expect(cancelled).toEqual([{ assistantMessageIndex: 9, kind: "block", text: "blocked block" }]);
-    expect(errors).toEqual([
-      { assistantMessageIndex: 9, kind: "block", message: "pre-delivery failed" },
-    ]);
-    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 1, final: 0 });
-    expect(receipt?.counts.block).toMatchObject({ cancelled: 0, failedBeforeSend: 1 });
-  });
+      if (outcome === "throw") {
+        expect(delivered).toEqual([]);
+        expect(cancelled).toEqual([
+          { assistantMessageIndex: 9, kind: "block", text: "blocked block" },
+        ]);
+        expect(errors).toEqual([
+          { assistantMessageIndex: 9, kind: "block", message: "pre-delivery failed" },
+        ]);
+        expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 1, final: 0 });
+        expect(receipt?.counts.block).toMatchObject({ cancelled: 0, failedBeforeSend: 1 });
+      } else {
+        expect(delivered).toEqual(["safe reply"]);
+        expect(cancelled).toEqual([
+          { assistantMessageIndex: undefined, kind: "final", text: "blocked reply" },
+        ]);
+        expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 2 });
+        expect(receipt?.counts.final.cancelled).toBe(1);
+      }
+    },
+  );
 
   it.each(["provider", "cancellation observer"] as const)(
     "records custody before waiting for the %s",
@@ -452,42 +652,65 @@ describe("beforeDeliver in reply dispatcher", () => {
     },
   );
 
-  it.each([
-    {
-      label: "admitted direct no-send",
-      error: () =>
-        Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
-      expected: "prepared",
-      failedBeforeSend: true,
-      admitDirect: true,
-      deferred: false,
-    },
-    {
-      label: "ambiguous provider failure",
-      error: () => new Error("send outcome unknown"),
-      expected: "unknown",
-      failedBeforeSend: false,
-      admitDirect: false,
-      deferred: true,
-    },
-    {
-      label: "queue-owned pre-send failure",
-      error: () =>
-        Object.assign(
-          new OutboundDeliveryError("connect failed", {
-            cause: Object.assign(new Error("connect failed"), {
-              code: "ECONNREFUSED",
-              syscall: "connect",
+  it.each(
+    [
+      ...[false, true].map((admitDirect) => ({
+        label: admitDirect ? "admitted direct no-send" : "proven pre-send failure",
+        error: () =>
+          Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
+        expected: "prepared",
+        failedBeforeSend: true,
+        admitDirect,
+      })),
+      {
+        label: "ambiguous provider failure",
+        error: () => new Error("send outcome unknown"),
+        expected: "unknown",
+        failedBeforeSend: false,
+        admitDirect: false,
+      },
+      {
+        label: "queue-owned pre-send failure",
+        error: () =>
+          Object.assign(
+            new OutboundDeliveryError("connect failed", {
+              cause: Object.assign(new Error("connect failed"), {
+                code: "ECONNREFUSED",
+                syscall: "connect",
+              }),
             }),
-          }),
-          { queueCustody: "held" },
-        ),
-      expected: "queued",
-      failedBeforeSend: true,
-      admitDirect: false,
-      deferred: true,
-    },
-  ] as const)(
+            { queueCustody: "held" },
+          ),
+        expected: "queued",
+        failedBeforeSend: true,
+        admitDirect: false,
+      },
+      {
+        label: "queue-owned wrapped partial send",
+        error: () =>
+          createChannelPartialDeliveryError(
+            Object.assign(
+              new OutboundDeliveryError("remaining send failed", {
+                cause: new Error("remaining send failed"),
+                results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+              }),
+              { queueCustody: "held" },
+            ),
+            { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+          ),
+        expected: "queued",
+        failedBeforeSend: false,
+        admitDirect: false,
+      },
+    ].flatMap((entry) =>
+      entry.admitDirect
+        ? [{ ...entry, deferred: false }]
+        : [
+            { ...entry, deferred: false },
+            { ...entry, deferred: true },
+          ],
+    ),
+  )(
     "records $label before reporting the error (deferred=$deferred)",
     async ({ error, expected, failedBeforeSend, deferred, admitDirect }) => {
       const fixture = await makePendingFinalFixture();
@@ -549,10 +772,12 @@ describe("beforeDeliver in reply dispatcher", () => {
     },
   );
 
-  it.each([
-    { operation: "raw", replaced: false },
-    { operation: "prepared", replaced: true },
-  ] as const)(
+  it.each(
+    (["raw", "prepared"] as const).flatMap((operation) => [
+      { operation, replaced: false },
+      { operation, replaced: true },
+    ]),
+  )(
     "suppresses a $operation call after its owner is terminal or replaced ($replaced)",
     async ({ operation, replaced }) => {
       const fixture = await makePendingFinalFixture();

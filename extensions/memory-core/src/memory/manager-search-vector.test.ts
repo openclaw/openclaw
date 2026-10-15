@@ -156,6 +156,77 @@ describe("searchVector sqlite-vec KNN", () => {
     );
   }
 
+  it.each([9_007_199_254_740_993n])(
+    "scans the full signed rowid domain across sparse unsafe-integer batch boundaries from %s",
+    async (firstHighRowid) => {
+      const db = createFallbackDb();
+      try {
+        // Four low identities put an unsafe odd rowid at the first batch boundary;
+        // the two starting values exercise both Number rounding directions.
+        const highRows = Array.from(
+          { length: 252 },
+          (_, index) => firstHighRowid + BigInt(index) * 2n,
+        );
+        const boundary = highRows.at(-1)!;
+        const rowids = [
+          -9_223_372_036_854_775_808n,
+          -9_007_199_254_740_993n,
+          -1n,
+          0n,
+          ...highRows,
+          boundary + 1n,
+          boundary + 2n,
+          boundary + 1_000_000n,
+          9_223_372_036_854_775_807n,
+        ];
+        const winnerIndex = 256;
+        const runnerUpIndex = rowids.length - 1;
+        const ids = rowids.map((_, index) => `row-${index}`);
+        const insert = db.prepare(`INSERT INTO memory_index_chunks
+          (chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+          VALUES (?, ?, 'memory/boundary.md', 'memory', 1, 2, 'hash', 'target-model', 'boundary body', ?, 1)`);
+        insert.setReadBigInts(true);
+        for (const [index, rowid] of rowids.entries()) {
+          const vector =
+            index === winnerIndex ? [1, 0] : index === runnerUpIndex ? [0.8, 0.6] : [0, 1];
+          insert.run(rowid, ids[index]!, encodeMemoryEmbedding(vector));
+        }
+
+        const scanned: string[] = [];
+        db.function("observe_embedding", (id, embedding) => {
+          scanned.push(String(id));
+          if (scanned.length > rowids.length) {
+            throw new Error("Fallback cursor repeated an already-scanned row");
+          }
+          return embedding;
+        });
+        db.exec(`
+          ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
+          CREATE VIEW memory_index_chunks AS
+            SELECT chunk_rowid AS rowid, id, path, source, start_line, end_line, model, text,
+                   observe_embedding(id, embedding) AS embedding FROM observed_chunks;
+        `);
+
+        const results = await searchVectorFixture(db, { limit: rowids.length });
+        expect(scanned).toEqual(ids);
+        expect(results.map((result) => result.id)).toEqual([
+          ids[winnerIndex],
+          ids[runnerUpIndex],
+          ...ids.filter((_, index) => index !== winnerIndex && index !== runnerUpIndex),
+        ]);
+        expect(results[0]?.score).toBe(1);
+        expect(results[1]?.score).toBeCloseTo(0.8);
+        expect(
+          results.every(
+            (result) => typeof result.startLine === "number" && typeof result.endLine === "number",
+          ),
+        ).toBe(true);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("searches provider-declared model aliases while excluding arbitrary paths", async () => {
     const db = createFallbackDb();
     try {

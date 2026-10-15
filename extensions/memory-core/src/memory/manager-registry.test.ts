@@ -19,7 +19,7 @@ describe("memory index", () => {
     closeAllMemorySearchManagers,
   });
   const { provider: providerFixture } = fixture;
-  const { createConfig: createCfg, requireManager, trackManager } = fixture;
+  const { createConfig: createCfg, getFreshManager, requireManager, trackManager } = fixture;
 
   it("waits for scoped manager close before initializing a replacement", async () => {
     let releaseProviderClose: () => void = () => {};
@@ -542,5 +542,18 @@ describe("memory index", () => {
 
     expect(Object.is(second, first)).toBe(false);
     expect(Object.is(secondAgain, second)).toBe(true);
+  });
+
+  it("retains failed embedding provider close for the next explicit close", async () => {
+    providerFixture.providerCloseFailuresRemaining = 1;
+    const cfg = createCfg({});
+    const manager = await getFreshManager(cfg);
+
+    await manager.probeEmbeddingAvailability();
+    await expect(manager.close()).rejects.toThrow("provider close failed");
+    expect(providerFixture.providerCloseCalls).toBe(1);
+    await manager.close();
+
+    expect(providerFixture.providerCloseCalls).toBe(2);
   });
 });

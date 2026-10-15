@@ -476,6 +476,48 @@ describe("installPluginFromNpmSpec e2e", () => {
     }
   });
 
+  it("keeps third-party peer dependencies in the owning npm project across later installs", async () => {
+    const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-third-party-peer-e2e");
+    const pluginWithRuntimePeer = uniquePackageName("runtime-peer-plugin");
+    const laterPlugin = uniquePackageName("later-plugin");
+    const runtimePeer = uniquePackageName("runtime-peer");
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: pluginWithRuntimePeer,
+          peerDependencies: { [runtimePeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+        { packageName: laterPlugin },
+        { packageName: runtimePeer },
+      ]),
+    );
+
+    const first = await installNpmPlugin({
+      spec: `${pluginWithRuntimePeer}@1.0.0`,
+      npmRoot,
+    });
+    if (!first.ok) {
+      throw new Error(first.error);
+    }
+    const firstProjectRoot = pluginNpmProjectRoot(npmRoot, pluginWithRuntimePeer);
+    await expect(
+      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
+    ).resolves.toBeTruthy();
+
+    const second = await installNpmPlugin({
+      spec: `${laterPlugin}@1.0.0`,
+      npmRoot,
+    });
+    if (!second.ok) {
+      throw new Error(second.error);
+    }
+
+    await expect(
+      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
+    ).resolves.toBeTruthy();
+  });
+
   it("plans peers from installed optional dependencies", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-optional-peer-e2e");
     const pluginWithOptionalDependency = uniquePackageName("optional-owner-plugin");
