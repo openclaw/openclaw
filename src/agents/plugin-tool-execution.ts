@@ -1,0 +1,252 @@
+import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
+import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import type { SkillSnapshot } from "../skills/types.js";
+import {
+  bindOperatorModelExecution,
+  type AdmittedRunOperatorAuthority,
+} from "./admitted-run-context.js";
+import { parseModelRef } from "./model-selection-normalize.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
+import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
+import { shellEscape } from "./sandbox/remote-shell-command.js";
+import type { SandboxContext } from "./sandbox/types.js";
+import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
+import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
+import { canonicalizePath } from "./utils/paths.js";
+
+export type PluginToolExecutionCapabilities = Pick<
+  OpenClawPluginToolContext,
+  "sandbox" | "modelExecution" | "assertCompleteResult"
+>;
+
+/** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
+export function preparePluginToolExecutionCapabilities(params: {
+  sandbox?: SandboxContext | null;
+  skillsSnapshot?: SkillSnapshot;
+  signal?: AbortSignal;
+  authority?: AdmittedRunOperatorAuthority;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  config?: OpenClawConfig;
+  agentDir?: string;
+  agentId?: string;
+  modelContextWindowTokens?: number;
+}): (assertInvocationCurrent: () => void, signal?: AbortSignal) => PluginToolExecutionCapabilities {
+  const sandbox = params.sandbox;
+  const backend = sandbox?.backend;
+  const workspaceDir = sandbox?.workspaceCwd
+    ? sandbox.fsBridge?.resolvePath({ filePath: sandbox.workspaceCwd, cwd: sandbox.workspaceDir })
+        .containerPath
+    : sandbox?.containerWorkdir;
+  const authority = params.authority;
+  const hostRoot = authority
+    ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+    : null;
+  const installedSkillRoots: Record<string, string> = {};
+  if (sandbox?.backend) {
+    const mounts = resolveSandboxMountSelection({
+      ...sandbox,
+      workdir: sandbox.containerWorkdir,
+      binds: sandbox.docker.binds,
+    }).mounts;
+    for (const skill of params.skillsSnapshot?.resolvedSkills ?? []) {
+      if (
+        !["openclaw-managed", "openclaw-library", "openclaw-bundled"].includes(skill.source) ||
+        skill.fileHost === "workspace"
+      ) {
+        continue;
+      }
+      const usage = sandbox.skillUsagePaths?.find(
+        (entry) =>
+          entry.skillName === skill.name && entry.skillFile === canonicalizePath(skill.filePath),
+      );
+      if (!usage) {
+        continue;
+      }
+      const mount = mounts
+        .filter((entry) => {
+          const relative = path.relative(entry.hostPath, usage.readPath);
+          return (
+            relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+          );
+        })
+        .toSorted((left, right) => right.hostPath.length - left.hostPath.length)[0];
+      if (mount?.readOnly) {
+        const root = path.posix.dirname(
+          path.posix.join(
+            mount.containerPath,
+            path.relative(mount.hostPath, usage.readPath).split(path.sep).join("/"),
+          ),
+        );
+        const shadowed = mounts.some(
+          (other) =>
+            other !== mount &&
+            (other.containerPath === root ||
+              other.containerPath.startsWith(`${root}/`) ||
+              (root.startsWith(`${other.containerPath}/`) &&
+                other.containerPath.length > mount.containerPath.length)),
+        );
+        if (!shadowed) {
+          installedSkillRoots[skill.name] = root;
+        }
+      }
+    }
+  }
+  const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
+  return (assertInvocationCurrent, pluginSignal) => ({
+    assertCompleteResult(text) {
+      assertInvocationCurrent();
+      assertCompleteToolResult(text, resultBudget);
+    },
+    ...(authority && hostRoot
+      ? {
+          modelExecution: {
+            cliEntryPath: path.join(hostRoot, "openclaw.mjs"),
+            async run(model, action, signal) {
+              assertInvocationCurrent();
+              const selected = parseModelRef(model, "openai");
+              if (!selected || !model.includes("/")) {
+                throw new Error("A provider/model selection is required.");
+              }
+              const scope = bindOperatorModelExecution(authority, selected)!;
+              const combined = AbortSignal.any(
+                [scope.signal, params.signal, pluginSignal, signal].filter(
+                  (value): value is AbortSignal => Boolean(value),
+                ),
+              );
+              const assertCurrent = () => {
+                combined.throwIfAborted();
+                assertInvocationCurrent();
+                scope.assertCurrent();
+              };
+              try {
+                assertCurrent();
+                const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
+                assertCurrent();
+                const resolved = await resolveModelAsync(
+                  selected.provider,
+                  selected.model,
+                  params.agentDir,
+                  params.config,
+                  {
+                    preparedModelRuntime: params.preparedModelRuntime,
+                    agentId: params.agentId,
+                    assertCurrent,
+                    abortSignal: combined,
+                    agentRuntimeId: "openclaw",
+                  },
+                );
+                assertCurrent();
+                if (!resolved.model) {
+                  throw new Error(resolved.error);
+                }
+                const result = await action({
+                  signal: combined,
+                  assertCurrent,
+                  model: resolved.model,
+                });
+                assertCurrent();
+                return result;
+              } finally {
+                scope.release();
+              }
+            },
+          },
+        }
+      : {}),
+    ...(backend && workspaceDir
+      ? {
+          sandbox: {
+            workspaceDir,
+            installedSkillRoots: Object.freeze(installedSkillRoots),
+            async run({ argv, input, signal, maxOutputBytes = 4_000_000 }) {
+              const combined = AbortSignal.any(
+                [params.signal, pluginSignal, signal].filter((value): value is AbortSignal =>
+                  Boolean(value),
+                ),
+              );
+              const assertCurrent = () => {
+                combined.throwIfAborted();
+                assertInvocationCurrent();
+              };
+              assertCurrent();
+              if (
+                !Number.isSafeInteger(maxOutputBytes) ||
+                maxOutputBytes < 1 ||
+                maxOutputBytes > SANDBOX_COMMAND_MAX_BUFFER_BYTES
+              ) {
+                throw new Error("Sandbox command output limit is outside the supported range.");
+              }
+              const cleanup = prepareSandboxProcessCleanup(backend, {});
+              const spec = await backend.buildExecSpec({
+                command: argv.map(shellEscape).join(" "),
+                workdir: workspaceDir,
+                env: cleanup.env,
+                usePty: false,
+                stdin: input !== undefined,
+              });
+              let completed = false;
+              let exitCode: number | null = null;
+              let timedOut = false;
+              await using resources = new AsyncDisposableStack();
+              resources.defer(async () => {
+                try {
+                  await backend.finalizeExec?.({
+                    status: completed ? "completed" : "failed",
+                    exitCode,
+                    timedOut,
+                    token: spec.finalizeToken,
+                  });
+                } catch (error) {
+                  throw new Error("Sandbox command finalization failed.", { cause: error });
+                }
+              });
+              resources.defer(async () => {
+                if (!completed) {
+                  try {
+                    await runOutsideCommandProcessScope(() => cleanup.terminate());
+                  } catch (error) {
+                    throw new Error("Sandbox process cleanup could not be confirmed.", {
+                      cause: error,
+                    });
+                  }
+                }
+              });
+              assertCurrent();
+              spec.assertCurrent?.();
+              if (input !== undefined && spec.stdinMode !== "pipe-open") {
+                throw new Error("This sandbox backend does not support piped command input.");
+              }
+              const result = await runCommandWithTimeout(spec.argv, {
+                cwd: spec.cwd,
+                baseEnv: spec.env,
+                input: input ?? "",
+                signal: combined,
+                killProcessTree: true,
+                maxOutputBytes,
+                outputCapture: "head",
+                terminateOnOutputLimit: true,
+              });
+              completed =
+                result.termination === "exit" &&
+                !result.outputLimitExceeded &&
+                !result.stdoutTruncatedBytes &&
+                !result.stderrTruncatedBytes &&
+                result.cleanup !== "uncertain";
+              exitCode = result.code;
+              timedOut = result.termination === "timeout";
+              assertCurrent();
+              if (!completed) {
+                throw new Error(`Sandbox command did not complete (${result.termination}).`);
+              }
+              return { stdout: result.stdout, stderr: result.stderr, code: result.code ?? 1 };
+            },
+          },
+        }
+      : {}),
+  });
+}

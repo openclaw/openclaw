@@ -147,6 +147,8 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  assertInvocationCurrent?: () => void;
+  pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Policy-approved publication unavailable in this workspace, retained for new children. */
   inheritedPublicationToolRef?: { current?: AnyAgentTool };

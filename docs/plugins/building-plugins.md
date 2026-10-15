@@ -282,6 +282,23 @@ turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
 account, thread, and media access policy; the capability expires when the turn
 ends.
 
+Version 2 factories can also receive `toolContext.sandbox` and
+`toolContext.modelExecution`. The sandbox capability executes literal argument
+vectors in the actual prepared sandbox and exposes only selected host-installed
+skill roots protected by its owner. Its working directory is a sandbox path,
+not a host repository mirror. Commands retain invocation, cancellation, and
+process-cleanup ownership. The model capability binds an explicit model to the
+original caller's current policy, resolves it through the model owner, and
+provides an abort signal plus a final-effect assertion for the operation. Its
+`cliEntryPath` identifies the running host installation through the package-root
+owner; plugins do not infer it from guest paths or package self-resolution.
+`assertCompleteResult(text)` refuses output that would exceed the initiating
+model's direct output budget. The catalog's full-value calls retain Code Mode
+inbox admission instead of the direct text cap.
+Neither capability grants new model, tool, or filesystem permissions. Retained
+capabilities fail after their owning run or plugin closes. The bundled
+[Auto Review tool](/tools/autoreview) is a consumer of these capabilities.
+
 ```typescript
 register(api) {
   api.registerTool(

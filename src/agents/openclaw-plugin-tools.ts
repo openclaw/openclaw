@@ -29,6 +29,7 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
+import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -340,6 +341,17 @@ function* resolveOpenClawPluginToolSteps(
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
     ...pluginToolInputs,
+    bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+      sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
+      skillsSnapshot: params.options?.skillsSnapshot,
+      signal: params.options?.abortSignal,
+      authority: params.options?.pluginExecutionAuthority,
+      modelContextWindowTokens: params.options?.modelContextWindowTokens,
+      preparedModelRuntime,
+      config: availabilityConfig,
+      agentDir: params.options?.agentDir,
+      agentId: pluginToolInputs.context.agentId,
+    }),
     context: {
       ...pluginToolInputs.context,
       ...(delivery ? { delivery } : {}),

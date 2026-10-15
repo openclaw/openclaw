@@ -427,6 +427,8 @@ export function createAgentHarnessHostCapabilities(params: {
         ),
         skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
         operationalRunInstance,
+        pluginExecutionAuthority: callerIdentity?.operatorAuthority,
+        assertInvocationCurrent: assertCurrent,
       },
       skillReadResources: resolveSkillResourceCandidates(
         skillResourceSnapshot(options),
