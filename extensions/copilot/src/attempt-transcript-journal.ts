@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { isEchoedSettledTurnFinalizationAssistant } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  isEchoedSettledTurnFinalizationAssistant,
   projectAgentHarnessTranscriptMessageForDisplay,
   restorePreparedUserTurnOperationalMetaForRuntime,
   runAgentHarnessBeforeMessageWriteHook,

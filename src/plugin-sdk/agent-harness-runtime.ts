@@ -149,10 +149,7 @@ export {
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";
-export {
-  isEchoedSettledTurnFinalizationAssistant,
-  projectSettledTurnFinalizationAttemptResult,
-} from "../agents/harness/settled-turn-finalization-result.js";
+export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
 export const agentHarnessAttemptTerminal = {
   merge: mergeAgentRunAttemptTerminal,
   normalize: normalizeAgentRunAttemptTerminal,
