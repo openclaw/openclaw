@@ -1749,7 +1749,7 @@ private fun ChatMessageList(
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
-  streamingAssistantPhase: String? = null,
+  streamingAssistantPhase: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,

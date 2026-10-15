@@ -6274,7 +6274,12 @@ class ChatController internal constructor(
           if (!isPending) return
           val text = parseAssistantDeltaText(payload)
           if (text != null) {
-            updateStreamingAssistantText(runId, text, payload["message"].asObjectOrNull()?.let(::parseChatAssistantPhase))
+            updateStreamingAssistantText(
+              runId,
+              text,
+              payload["message"].asObjectOrNull()?.let(::parseChatAssistantPhase),
+              isChatMirror = true,
+            )
           }
         }
 
@@ -6877,10 +6882,15 @@ class ChatController internal constructor(
     runId: String?,
     text: String,
     phase: String? = null,
+    isChatMirror: Boolean = false,
   ) {
     synchronized(gatewayScopeApplyLock) {
-      _streamingAssistantPhase.value = phase
-      streamingAssistantOwner = liveRunOwner(runId)
+      val owner = liveRunOwner(runId)
+      // Gateway chat mirrors omit phase. Only an identical snapshot from the same
+      // run can inherit it; agent events still define new (possibly unlabelled) output.
+      val preservesPhase = isChatMirror && owner != null && owner == streamingAssistantOwner && text == _streamingAssistantText.value
+      _streamingAssistantPhase.value = phase ?: if (preservesPhase) _streamingAssistantPhase.value else null
+      streamingAssistantOwner = owner
       _streamingAssistantText.value = text
     }
   }

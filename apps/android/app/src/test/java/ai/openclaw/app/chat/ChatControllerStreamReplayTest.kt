@@ -206,6 +206,73 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun chatMirrorsPreservePhaseOnlyForTheSameRunsCurrentOutput() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("run"))
+        assertTrue(send("followup"))
+
+        fun assistant(
+          text: String,
+          phase: String?,
+        ) {
+          controller.handleGatewayEvent(
+            "agent",
+            buildJsonObject {
+              put("sessionKey", owner.sessionKey)
+              put("runId", "run")
+              put("stream", "assistant")
+              put(
+                "data",
+                buildJsonObject {
+                  put("text", text)
+                  if (phase != null) put("phase", phase)
+                },
+              )
+            }.toString(),
+          )
+        }
+        var seq = 0
+
+        fun mirror(
+          runId: String,
+          text: String,
+        ) {
+          controller.handleGatewayEvent("chat", chatDeltaPayload(owner.sessionKey, runId, ++seq, null, text))
+          assertEquals(text, controller.streamingAssistantText.value)
+        }
+
+        for (phase in listOf("commentary", "final_answer")) {
+          assistant("Live text", phase)
+          mirror("run", "Live text")
+          assertEquals(phase, controller.streamingAssistantPhase.value)
+          assistant("Live text continued", phase)
+          mirror("run", "Live text continued")
+          assertEquals(phase, controller.streamingAssistantPhase.value)
+        }
+
+        // A new unlabelled assistant item clears phase even if its text is identical.
+        assistant("Live text continued", null)
+        mirror("run", "Live text continued")
+        assertNull(controller.streamingAssistantPhase.value)
+
+        assistant("Final text", "final_answer")
+        mirror("run", "Different unlabelled output")
+        assertNull(controller.streamingAssistantPhase.value)
+
+        assistant("Final text", "final_answer")
+        mirror("followup", "Final text")
+        assertNull(controller.streamingAssistantPhase.value)
+
+        assistant("Final text", "final_answer")
+        terminal("run", "lifecycle-end")
+        assertNull(controller.streamingAssistantPhase.value)
+        assertNull(controller.streamingAssistantText.value)
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun emptyChatAndAssistantSnapshotsClearPendingOutput() =
     runTest {
       withPendingRunReplay {
