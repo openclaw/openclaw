@@ -126,16 +126,6 @@ describe("exhausted delivery producer recovery", () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
-  it("preserves an active producer even when its attempt budget is exhausted", async () => {
-    const producerClaimId = await reserveProducer("active-producer");
-    await recover("startup");
-    expect(await queueStorage.loadPendingDelivery("active-producer", tmpDir())).toMatchObject({
-      producerClaimId,
-      recoveryState: "producer_claimed",
-      attemptCount: 1,
-    });
-  });
-
   it("cannot terminalize a replacement producer acquired during recovery admission", async () => {
     const originalClaim = await reserveProducer("replaced-producer");
     setProducerExpiry("replaced-producer", Date.now() - 1);

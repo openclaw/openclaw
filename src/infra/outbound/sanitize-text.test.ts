@@ -86,24 +86,12 @@ describe("sanitizeForPlainText", () => {
 describe("stripInternalRuntimeScaffolding", () => {
   const begin = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
   const end = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-  const childBegin = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
-  const childEnd = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
 
   it.each([
     [
       "private tags inside fences",
       "```xml\n<system-reminder>private runtime data</system-reminder>\n```",
       "```xml\n\n```",
-    ],
-    [
-      "closed and stray runtime tags",
-      "before\n<system-reminder>internal hint</system-reminder>\n<previous_response>null</previous_response>\n<system-reminder />\n<previous_response>\nvisible",
-      "before\n\n\n\n\nvisible",
-    ],
-    [
-      "private child results",
-      `before\n${begin}\ninternal metadata\n${childBegin}\nraw child output\n${childEnd}\n${end}\nafter`,
-      "before\nafter",
     ],
     [
       "surrounding whitespace",

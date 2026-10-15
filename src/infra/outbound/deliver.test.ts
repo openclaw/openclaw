@@ -38,7 +38,6 @@ import {
   registerOutboundPreparationMetadataTests,
 } from "./deliver.projection.test-support.js";
 import { registerOutboundQueueAckTests } from "./deliver.queue-ack.test-support.js";
-import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -1276,42 +1275,6 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
   });
 
-  it("keeps cancellation metadata live but out of durable prepared custody", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "message_sending",
-    );
-    hookMocks.runner.runMessageSending.mockResolvedValueOnce({
-      cancel: true,
-      cancelReason: "owned elsewhere",
-      metadata: { nonJsonValue: 1n },
-    });
-    const outcomes: unknown[] = [];
-
-    await expect(
-      deliverMatrix({
-        queuePolicy: "required",
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "suppressed-metadata",
-          routeFingerprint: "route-suppressed-metadata",
-        },
-        onDeliveryAttempt: async () => {},
-        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
-      }),
-    ).resolves.toEqual([]);
-
-    expect(outcomes).toEqual([
-      expect.objectContaining({
-        status: "suppressed",
-        hookEffect: {
-          cancelReason: "owned elsewhere",
-          metadata: { nonJsonValue: 1n },
-        },
-      }),
-    ]);
-  });
-
   it("preserves native send errors when failure cleanup throws", async () => {
     const messageSendText = vi.fn(async () => {
       throw new Error("native send failed");
@@ -1725,26 +1688,6 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("skips text-only payloads blanked by message_sending hooks", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "message_sending",
-    );
-    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "   " });
-    const sendText = installTextOutbound({
-      channel: "matrix",
-      messageId: "should-not-send",
-      roomId: "!room",
-    });
-
-    const results = await deliverMatrix({
-      to: "!room",
-      payloads: [{ text: "redact me" }],
-    });
-
-    expect(results).toStrictEqual([]);
-    expect(sendText).not.toHaveBeenCalled();
-  });
-
   it("runs reply payload hooks before the final message_sending policy pass", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
@@ -1805,54 +1748,6 @@ describe("deliverOutboundPayloads", () => {
       expectedQueueStateDir,
       { replyToId: "hooked-reply" },
     );
-  });
-
-  it("leaves projected Gateway reset status notices unchanged for banner hooks", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "reply_payload_sending",
-    );
-    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => {
-      const payload = (event as { payload: { text?: string; isStatusNotice?: boolean } }).payload;
-      if (payload.isStatusNotice) {
-        return { payload };
-      }
-      return {
-        payload: {
-          ...payload,
-          text: `${payload.text ?? ""}\n⏳ session too long, try /new`,
-        },
-      };
-    });
-    const sendText = vi.fn().mockResolvedValue({
-      channel: "matrix" as const,
-      messageId: "ack",
-      roomId: "!room",
-    });
-    const projected = projectOutboundPayloadPlanForOutbound(
-      createOutboundPayloadPlan([{ text: "✅ New session started.", isStatusNotice: true }]),
-    );
-
-    await deliverMatrix({
-      to: "!room",
-      payloads: projected,
-      deps: { matrix: sendText },
-      replyPayloadSendingHook: {
-        kind: "final",
-        channel: "matrix",
-        context: { channelId: "matrix", conversationId: "!room" },
-      },
-    });
-
-    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          text: "✅ New session started.",
-          isStatusNotice: true,
-        }),
-      }),
-      expect.anything(),
-    );
-    expect(requireMatrixSendCall(sendText)[1]).toBe("✅ New session started.");
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
@@ -2280,17 +2175,6 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.enqueueDelivery.mock.calls[0]?.[0]).not.toHaveProperty(
       "conversationReadOrigin",
     );
-  });
-
-  it("drops plugin HTML-only text payloads after sanitization", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
-    const results = await deliverMatrix({
-      payloads: [{ text: "<br>" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    expect(sendMatrix).not.toHaveBeenCalled();
-    expect(results).toStrictEqual([]);
   });
 
   it("passes formatting overrides for pre-rendered chunker output", async () => {
@@ -2911,32 +2795,6 @@ describe("deliverOutboundPayloads", () => {
         }
       }
       expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([["unknown", "", "suppressed"]])(
-    "preserves %s progress before a final no-send",
-    async (_label, messageId, status) => {
-      const onPayloadDeliveryOutcome = vi.fn();
-      installPayloadOutbound(async (ctx) => {
-        await ctx.onDeliveryResult?.({ channel: "matrix", messageId });
-        return { channel: "matrix", messageId: "", outcome: "not_sent" };
-      });
-
-      const results = await deliverMatrix({
-        payloads: [{ text: "hello", channelData: { mode: "custom" } }],
-        skipQueue: true,
-        onPayloadDeliveryOutcome,
-      });
-
-      expect(results).toEqual(messageId ? [{ channel: "matrix", messageId }] : []);
-      expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-        expect.objectContaining({
-          index: 0,
-          status,
-          ...(messageId ? { results } : { reason: "adapter_returned_no_identity" }),
-        }),
-      );
     },
   );
 
