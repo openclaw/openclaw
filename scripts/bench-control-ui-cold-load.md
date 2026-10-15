@@ -38,6 +38,54 @@ The Online run also requires the saved sidebar view to survive the reload. If it
 returns to Sessions, the run fails instead of reporting Sessions measurements as
 Online measurements.
 `--runs` accepts 1–20 reloads. `--output` selects the artifact parent.
+`--bundle-dir` serves an already built production bundle instead of rebuilding it;
+keep its build identity equal to the checkout head. This preserves a baseline
+bundle while production sources are edited.
+
+`--live-events` adds 125 synthetic live frames over 20 seconds after each reload
+settles. The stream mixes full presence snapshots, session patches for displayed,
+held-but-hidden, and outside-window rows, open-session messages and assistant
+streaming, changing catalog hosts, and unrelated cron/run-state activity. The live
+phase runs after tracing and CPU sampling stop. The selected session starts with an
+active canonical run; live messages and deltas advance its history receipt before
+publishing the event, so later history reads retain the same messages and stream. Capture ends after all frames
+arrive and the planned 20-second stream plus 750 ms have elapsed; busy sessions
+need not become idle. `plannedWindowMs` and the observed `elapsedMs` distinguish
+the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records Lit
+updates and bounded `requestUpdate` scheduling stacks per event label, plus DOM
+snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
+shows the synthetic final state. Row attachment and viewport visibility distinguish
+an absent row from a rendered row below the fold.
+
+For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
+`requestUpdate` invalidations and `prepareRender`/`commitRender` projection lifecycle
+passes. Bounded owner and session-data origin stacks identify their callers. These
+are not full Solid render counts: fine-grained bindings update independently. The
+init probe captures the existing host-to-owner WeakMap registration, restores that
+tap immediately, and restores the owner wrappers at the end of the live phase.
+A missing Solid owner fails the capture instead of reporting zero work. Lit tags
+retain their original per-tag `performUpdate` counters; zero Lit updates for a
+ported Solid tag are a measurement gap, not a performance improvement.
+
+`solidChat` counts every page/pane owner request, owner publication, actual
+projection `render` read, pane prepare/commit, and page after-commit call separately.
+Each projection pass retains the pending producer stacks and request IDs, including
+requests coalesced by the owner. IDs remain attached to their publication batch,
+so a request that drives an early projection and a later queued publication is
+visible on both passes. Unattributed passes and remaining pending producers are
+explicit. Existing lifecycle hook notifications distinguish owner facts from
+element invalidation/commit notifications; their combined count is not a DOM
+commit count. The probe preserves and restores the hook's complete descriptor,
+including the existing test adapter's accessor, along with all owner methods.
+These are projection/lifecycle counts, not all fine-grained Solid binding work.
+
+Live updates are attributed to the most recently delivered event label. Paced
+refreshes and clock-driven presence updates may finish during a later event's
+interval; inspect their scheduling stacks before treating a per-label count as
+causal. Compare total steady-state render counts and renders per second as well.
+Wall-clock durations and frame coalescing vary on a loaded host. The benchmark's
+static RPC responses are not authority for live title/run-state correctness; use
+focused browser contracts with updated authoritative mock responses for that proof.
 
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
@@ -46,7 +94,7 @@ JavaScript stacks, Lit updates per tag, source-mapped CPU self-time hotspots,
 Solid flush self/inclusive sampled time, and RPC request/response bytes. The top
 20 CPU entries retain browser/GC overhead alongside source-attributed call sites.
 A reload settles after all scheduled fixture events and outstanding RPCs complete,
-then 750 ms with no wire or Lit activity. That quiet interval is measurement padding,
+then 750 ms with no wire, Lit, or captured Solid sidebar lifecycle activity. That quiet interval is measurement padding,
 not part of a correctness test.
 
 Filmstrip frames come from Chrome tracing. Significant changes compare consecutive

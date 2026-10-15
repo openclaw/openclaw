@@ -125,6 +125,103 @@ async function instrumentedWorker(prefix: string, source: string) {
 }
 
 describe("Code Mode worker lifecycle", () => {
+  it.each([
+    {
+      name: "host continuation",
+      source: "await yield_control();",
+      phase: "host",
+      code: "internal_error",
+      calls: 1,
+      resumeTimeoutMs: Number.NaN,
+    },
+    {
+      name: "guest same-message exception",
+      source: 'throw new Error("invalid code mode continuation budget");',
+      phase: "guest",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      name: "host source wrapper",
+      source: "return true;",
+      prelude: "}",
+      phase: "host",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      name: "guest syntax",
+      source: "return (",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+    {
+      name: "guest pending promise",
+      source: "await new Promise(() => {});",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+    {
+      name: "bridge rejection",
+      source: "await yield_control();",
+      phase: "bridge",
+      code: "internal_error",
+      calls: 1,
+      rejectBridge: true,
+    },
+    {
+      name: "guest deadline",
+      source: "await yield_control(); while (true) {}",
+      phase: "guest",
+      code: "timeout",
+      calls: 1,
+      resumeTimeoutMs: 30,
+    },
+    {
+      name: "host admission deadline",
+      source: "return true;",
+      phase: "host",
+      code: "timeout",
+      calls: 0,
+      timeoutMs: 0,
+    },
+  ])("preserves $name failure provenance without replay", async (fixture) => {
+    const onFailure = vi.fn();
+    const onBoundary = vi.fn(async (state: CodeModeWorkerBoundary) => ({
+      kind: "continue" as const,
+      timeoutMs: fixture.resumeTimeoutMs ?? 1_000,
+      pendingRequests: [],
+      settledRequests: state.pendingRequests.map(({ id }) => ({
+        id,
+        ok: fixture.rejectBridge !== true,
+        json: JSON.stringify({ message: "synthetic bridge failure", code: "tool_error" }),
+      })),
+    }));
+    const result = await runCodeModeWorker(
+      {
+        ...input(fixture.source, { ...config, timeoutMs: fixture.timeoutMs ?? config.timeoutMs }),
+        prelude: fixture.prelude,
+      },
+      10_000,
+      undefined,
+      undefined,
+      { onBoundary, onFailure },
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      code: fixture.code,
+      failurePhase: fixture.phase,
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      fixture.phase,
+      expect.stringMatching(/^code-mode-quickjs:/),
+    );
+    expect(onBoundary).toHaveBeenCalledTimes(fixture.calls);
+  });
+
   it("preserves legacy snapshot errors without source-location metadata", async () => {
     const { wasmModule: wasm } = await modules;
     const vm = await QuickJS.create({ wasm, memoryLimit: config.memoryLimitBytes });

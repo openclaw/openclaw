@@ -13,6 +13,7 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
+import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -22,12 +23,12 @@ type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "
 };
 
 type AgentsHomeProps = {
+  canCreate: boolean;
   cards: AgentCard[];
   context: ApplicationContext;
   connected: boolean;
   loading: boolean;
   error: string | null;
-  canCreate: boolean;
   onRetry: () => void;
 };
 
@@ -70,23 +71,22 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           actions={
             <>
               {manage()}
-              <a
-                class="btn primary"
-                href={
-                  props.canCreate
-                    ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`
-                    : pathForRoute("agents", props.context.basePath)
-                }
-                onClick={(event) =>
-                  navigate(
-                    event,
-                    props.canCreate ? "custodian" : "agents",
-                    props.canCreate ? { search: "?intent=new-agent" } : undefined,
-                  )
-                }
+              <ReasonedDisabledControl
+                reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
               >
-                {t("agentsHome.create")}
-              </a>
+                <button
+                  class="btn primary"
+                  disabled={!props.canCreate}
+                  title={!props.canCreate ? t("custodian.accessRequired") : undefined}
+                  onClick={() => {
+                    if (props.canCreate) {
+                      props.context.navigate("custodian", { search: "?intent=new-agent" });
+                    }
+                  }}
+                >
+                  {t("agentsHome.create")}
+                </button>
+              </ReasonedDisabledControl>
             </>
           }
         />

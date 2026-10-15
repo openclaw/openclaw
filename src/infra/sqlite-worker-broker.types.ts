@@ -2,6 +2,7 @@ import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import type { SqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
@@ -59,6 +60,7 @@ export type Job = {
 };
 export type Slot = {
   custody: SqliteWorkerSlotCustody;
+  databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
@@ -92,6 +94,7 @@ export type Actor = {
   openDispatch: DispatchState;
   initialized: boolean;
   backendClosed: boolean;
+  deliveredStateContext?: SqliteWorkerStateContext;
   cleanupState?: "pending" | "complete";
   closing?: Promise<void>;
   retirementRequested?: boolean;
@@ -120,6 +123,7 @@ export type EnqueueOptions = {
 export type StoreClient = {
   actor: Actor;
   close(): Promise<void>;
+  retireIdle?: () => Promise<void> | undefined;
   sealed: boolean;
   isAvailable(): boolean;
   scopes: Set<Promise<void>>;
@@ -140,6 +144,8 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  /** The caching owner synchronously seals an idle client, or declines reclamation. */
+  retireIdle?: () => Promise<void> | undefined;
   onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
   preparation?: Buffer<ArrayBuffer>;
@@ -179,6 +185,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeStopped"
   | "onNativeLost"
   | "signal"
+  | "retireIdle"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

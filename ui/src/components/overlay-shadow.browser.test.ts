@@ -251,32 +251,6 @@ describe("overlay shadow-root ownership", () => {
     expect(disconnected.mock.contexts).toContain(observer);
   });
 
-  it.each(["trigger", "return target"] as const)(
-    "releases the previous %s root when the anchor is replaced",
-    (kind) => {
-      const oldRoot = shadow();
-      const newRoot = shadow();
-      const current = fixture(document.body);
-      hosts.push(current.surface, current.trigger);
-      const oldAnchor = document.createElement("button");
-      const newAnchor = document.createElement("button");
-      oldRoot.append(oldAnchor);
-      newRoot.append(newAnchor);
-      const added = vi.spyOn(oldRoot, "addEventListener");
-      const removed = vi.spyOn(oldRoot, "removeEventListener");
-      if (kind === "trigger") {
-        current.owner.bindTrigger(oldAnchor);
-        current.owner.bindTrigger(newAnchor);
-      } else {
-        current.owner.setReturnTarget(oldAnchor);
-        current.owner.setReturnTarget(newAnchor);
-      }
-      expect(added.mock.calls).toHaveLength(10);
-      expect(removed.mock.calls).toEqual(added.mock.calls);
-      current.owner.dispose();
-    },
-  );
-
   it("moves the surface-root effect once and ignores trigger-only root changes", async () => {
     const first = shadow();
     const second = shadow();

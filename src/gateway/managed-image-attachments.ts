@@ -40,6 +40,7 @@ import {
   captureChannelReadScope,
   withChannelReadAuthority,
 } from "../shared/channel-read-authority.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
@@ -77,10 +78,7 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
-import {
-  encodeImageThumbnail,
-  resolveManagedImageThumbnail,
-} from "./managed-image-thumbnail-cache.js";
+import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
 import {
   createManagedOutgoingImageTicket,
   verifyManagedOutgoingImageTicket,
@@ -918,23 +916,6 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, stateDir);
 }
 
-async function readManagedImageThumbnailFromFile(
-  opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
-  maxBytes?: number,
-): Promise<Buffer> {
-  if (maxBytes !== undefined && opened.stat.size > maxBytes) {
-    throw new Error("Managed image exceeds the preview byte limit");
-  }
-  const cacheKey = `${opened.realPath}\0${opened.stat.mtimeMs}\0${opened.stat.size}`;
-  return await resolveManagedImageThumbnail(cacheKey, async () => {
-    const source = await opened.handle.readFile();
-    if (maxBytes !== undefined && source.byteLength > maxBytes) {
-      throw new Error("Managed image exceeds the preview byte limit");
-    }
-    return await encodeImageThumbnail(source);
-  });
-}
-
 /** Read a local preview through the same transcript ownership and thumbnail cache as HTTP. */
 export async function readManagedOutgoingImageThumbnail(
   params: ManagedOutgoingMediaArtifactRequest & {
@@ -958,7 +939,7 @@ export async function readManagedOutgoingImageThumbnail(
         filePath: resolveManagedImageOriginalPath(record),
       });
       try {
-        const thumbnail = await readManagedImageThumbnailFromFile(opened, maxBytes);
+        const thumbnail = await readImageThumbnailFromFile(opened, maxBytes);
         assertCurrent();
         signal.throwIfAborted();
         return thumbnail;
@@ -1152,11 +1133,6 @@ export async function createManagedOutgoingMediaBlocks(params: {
               transparent: { format: "png", compressionLevel: 9 },
               transparency: "auto",
             });
-            // The encoder owns limit fitting; reject an invalid result instead of re-encoding it.
-            const resizedLimitError = getManagedImageMetadataLimitError(resized, label, limits);
-            if (resizedLimitError) {
-              throw createManagedImageAttachmentError(resizedLimitError);
-            }
             assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
             const replacement = await saveMediaBuffer(
               resized.data,
@@ -1456,7 +1432,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
             // is a lower-fidelity representation of the same transcript attachment.
             const thumbnail =
               mediaKind === "image"
-                ? await readManagedImageThumbnailFromFile(opened).catch(() => null)
+                ? await readImageThumbnailFromFile(
+                    opened,
+                    undefined,
+                    normalizeChatImageRenditionWidth(requestUrl.searchParams.get("width")),
+                  ).catch(() => null)
                 : null;
             await byteStream.close();
             assertCurrent?.();
@@ -1467,7 +1447,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
             const sourceName = path.parse(responseFilename ?? "generated-image").name;
             res.statusCode = 200;
             res.setHeader("content-length", String(thumbnail.byteLength));
-            writeMediaHeaders("image/png", `${sourceName}-thumbnail.png`);
+            writeMediaHeaders("image/webp", `${sourceName}-thumbnail.webp`);
             res.end(req.method === "HEAD" ? undefined : thumbnail);
             return true;
           }

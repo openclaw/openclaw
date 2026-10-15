@@ -36,7 +36,10 @@ import {
   getOpenClawAgentMigrationSchema,
   hasPendingCurrentVersionAgentDatabaseMigration,
 } from "../state/openclaw-agent-db-schema-helpers.js";
-import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchemaSteps,
+  ensureOpenClawAgentSchema,
+} from "../state/openclaw-agent-db-schema.js";
 import { assertSupportedAgentMigrationSchemas } from "../state/openclaw-agent-db-session-migrations.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -57,7 +60,10 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
+import {
+  backupDoctorSqliteRepair,
+  repairDoctorSqliteIndexCorruption,
+} from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
@@ -103,6 +109,7 @@ async function migrateAgentDatabase(params: {
   pathname: string;
   maintenance: OpenClawStateLeaseContext;
   preparedArchives?: ReadonlySet<string>;
+  migratedFromVersion?: number;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
   const schemaWarnings: string[] = [];
@@ -163,7 +170,7 @@ async function migrateAgentDatabase(params: {
       };
     }
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
-    const initialVersion = userVersion;
+    const initialVersion = params.migratedFromVersion ?? userVersion;
     const prepareSchema = async () => {
       userVersion = readSqliteUserVersion(database);
       if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -184,7 +191,13 @@ async function migrateAgentDatabase(params: {
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
         // The canonical owner admits supported versions and converges additive schema;
         // media must not enumerate later schema revisions independently.
-        await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+        if (params.migratedFromVersion !== undefined) {
+          // The version phase verified this file under the same Doctor custody.
+          // Only ordinary additive maintenance remains before readers can open it.
+          ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
+        } else {
+          await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
+        }
         userVersion = readSqliteUserVersion(database);
       }
     };
@@ -292,6 +305,14 @@ async function migrateAgentDatabase(params: {
           .where("meta_key", "=", MEDIA_ROWS_MIGRATION_META_KEY),
       );
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
+    let preserved = false;
+    const beforeRewrite = () => {
+      if (!preserved) {
+        const backup = backupDoctorSqliteRepair(params.pathname, "media-persistence");
+        preserved = true;
+        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
+      }
+    };
     if (needsRepair) {
       const changedLegacySessions = new Set<string>();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
@@ -305,6 +326,7 @@ async function migrateAgentDatabase(params: {
             pathname: params.pathname,
             writer: owner,
             legacyTextStorage,
+            beforeRewrite,
             onChangedSession: legacyTextStorage
               ? (sessionId) => {
                   changedLegacySessions.add(sessionId);
@@ -314,6 +336,7 @@ async function migrateAgentDatabase(params: {
           const rewrittenTrajectoryRows = scanTrajectoryRows({
             database,
             pathname: params.pathname,
+            beforeRewrite,
           });
           if (mediaSchemaUpgrade) {
             database.exec(`PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};`);
@@ -388,6 +411,7 @@ async function migrateAgentDatabase(params: {
       start: { generation: "", sessionId: "" },
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
+      beforeRewrite,
       transformLine: transformMediaArchiveContent,
     });
     refreshSqlitePlannerStatistics(database);
@@ -569,6 +593,9 @@ export async function migrateLegacyMediaPersistence(
               pathname,
               maintenance,
               preparedArchives: preparedDiscovery.preparedTranscriptArchives,
+              migratedFromVersion: preparedDiscovery.versionMigrations?.find(
+                (migration) => migration.path === pathname,
+              )?.foundVersion,
             });
             maintenance.assertOwned();
             if (!result.deferred) {
@@ -584,7 +611,10 @@ export async function migrateLegacyMediaPersistence(
             // A prior attempt may have committed the schema before publishing its registration.
             registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
             const schemaAdvanced = result.finalVersion > result.initialVersion;
-            if (schemaAdvanced) {
+            if (
+              schemaAdvanced &&
+              !preparedDiscovery.versionMigrations?.some((migration) => migration.path === pathname)
+            ) {
               changes.push(
                 `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
               );

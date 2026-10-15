@@ -263,7 +263,6 @@ describe("ACP routed delivery custody", () => {
       );
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(false);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
@@ -308,7 +307,6 @@ describe("ACP routed delivery custody", () => {
         );
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-        expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
         expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
         expect(coordinator.hasDeliveredVisibleText()).toBe(false);
         expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
@@ -330,7 +328,6 @@ describe("ACP routed delivery custody", () => {
       );
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(coordinator.hasDeliveredFinalReply()).toBe(true);
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(true);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
@@ -365,7 +362,6 @@ describe("ACP routed delivery custody", () => {
           payload: { text: "The answer." },
         }),
       );
-      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
     },
   );
 });
@@ -441,7 +437,6 @@ describe("ACP partial direct delivery", () => {
     await expect(coordinator.recoverBlockText()).resolves.toBe(false);
     expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
     expect(coordinator.hasPendingFinalTtsMedia()).toBe(true);
-    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 });
@@ -493,7 +488,6 @@ it("releases outer cancellation while retaining admitted final ownership and tra
     expect(finalSettled).toBe(false);
     expect(transcriptSettled).toBe(false);
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
   } finally {
     finalization.reject(
       Object.assign(

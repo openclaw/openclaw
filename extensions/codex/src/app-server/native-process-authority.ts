@@ -309,6 +309,17 @@ export class CodexNativeProcessAuthority {
     }
   }
 
+  static assertCleanup(
+    authority: CodexNativeProcessAuthority | undefined,
+    host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
+  ): void {
+    if (authority?.source) {
+      authority.assertCurrent();
+    } else {
+      host.assertActive();
+    }
+  }
+
   hasCurrentProcesses(client: CodexAppServerClient, threadId: string): boolean {
     this.assertCurrent();
     return [...this.commands].some(

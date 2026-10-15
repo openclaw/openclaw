@@ -371,10 +371,7 @@ export async function prepareWorkspaceSkillStatus(
   let runtime = sources.runtime;
   if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills) {
     const bins = [...new Set(["brew", ...sources.entries.flatMap(resolveSkillRequiredBins)])];
-    let facts = await prepareBinaryAvailability(bins);
-    while (!facts.isCurrent()) {
-      facts = await prepareBinaryAvailability(bins);
-    }
+    const facts = await prepareBinaryAvailability(bins);
     runtime = { platform: process.platform, bins: bins.filter(facts.hasBinary) };
   }
   return {

@@ -322,15 +322,16 @@ it(
         await client.stopAndWait();
         client = undefined;
         await gateway.stopGateway();
+        // Per-input warnings precede the notice write; the final summary follows it.
         const previousRecoveryWarnings = gateway
           .logs()
-          .split("Session delivery recovery blocked").length;
+          .split("Session delivery recovery blocked for ").length;
         await gateway.startGateway();
         client = await connect();
         await vi.waitFor(
           () =>
             expect(
-              gateway.logs().split("Session delivery recovery blocked").length,
+              gateway.logs().split("Session delivery recovery blocked for ").length,
             ).toBeGreaterThan(previousRecoveryWarnings),
           { timeout: 30_000 },
         );

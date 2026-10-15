@@ -333,7 +333,7 @@ export async function fetchGitHubApi(
       }).finally(() => {
         const finishedAt = performance.now();
         if (authMs + finishedAt - authorizedAt >= 500) {
-          log.info("Slow GitHub API request", {
+          log.debug("Slow GitHub API request", {
             authMs,
             networkMs: Math.round(finishedAt - authorizedAt),
             resource,

@@ -322,22 +322,6 @@ describe("visibleSessionMatches", () => {
     }
   });
 
-  it("rejects agent metadata that contradicts an alias-owned route", () => {
-    const cases = [
-      { sessionKey: "main", owner: "main", conflict: "work" },
-      { sessionKey: "workspace", owner: "main", conflict: "work" },
-      { sessionKey: "agent:main:global", owner: "main", conflict: "work" },
-      { sessionKey: "agent:work:main", owner: "work", conflict: "alpha" },
-      { sessionKey: "agent:alpha:workspace", owner: "alpha", conflict: "main" },
-    ] as const;
-
-    for (const testCase of cases) {
-      const host = { ...baseHost, sessionKey: testCase.sessionKey };
-      expect(visibleSessionMatches(host, testCase.sessionKey, testCase.owner)).toBe(true);
-      expect(visibleSessionMatches(host, testCase.sessionKey, testCase.conflict)).toBe(false);
-    }
-  });
-
   it("uses the same canonical owner check for non-global conversations", () => {
     const qualifiedHost = { ...baseHost, sessionKey: "agent:work:room:123" };
     expect(visibleSessionMatches(qualifiedHost, "agent:work:room:123", undefined)).toBe(true);

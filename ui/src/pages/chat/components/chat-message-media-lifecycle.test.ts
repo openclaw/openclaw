@@ -1,16 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { createLitTestRenderer } from "../../../test-helpers/lit-render.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
+  projectMessageMedia,
   releaseChatMediaResourceSubscriber,
   schedulePairingQrExpiryRefresh,
   type ImageBlock,
@@ -18,13 +22,15 @@ import {
 } from "./chat-message-media.ts";
 
 const subscribers = new Set<() => void>();
+const { render, cleanup } = createLitTestRenderer();
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-28T00:00:00.000Z"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
   }
@@ -47,24 +53,26 @@ function managedImageResourceKey(source: string): string {
     undefined,
     undefined,
     "",
-    `${source.replace(/\/full$/u, "/thumbnail")}?v=2`,
+    `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`,
     "",
     "thumbnail",
+    480,
   ]);
 }
 
 function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`) {
   const NativeUrl = URL;
   let blobIndex = 0;
+  const createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
   const revokeObjectURL = vi.fn<(url: string) => void>();
   vi.stubGlobal(
     "URL",
     class extends NativeUrl {
-      static override createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
+      static override createObjectURL = createObjectURL;
       static override revokeObjectURL = revokeObjectURL;
     },
   );
-  return { blobUrl: `blob:${prefix}-0`, revokeObjectURL };
+  return { blobUrl: `blob:${prefix}-0`, createObjectURL, revokeObjectURL };
 }
 
 function imageResponse() {
@@ -79,10 +87,12 @@ function renderManagedImage(
   source: string,
   options: ImageRenderOptions = {},
   artifactId?: string,
+  mimeType?: string,
 ) {
   const image: ImageBlock = {
     url: source,
     alt: "Managed image",
+    ...(mimeType ? { mimeType } : {}),
     ...(artifactId ? { artifactId } : {}),
   };
   render(renderMessageImages([image], options), container);
@@ -132,6 +142,126 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
 }
 
 describe("chat media resource lifecycle", () => {
+  it.each([
+    { mimeType: "image/gif", managed: true, variant: "full" },
+    { mimeType: "image/gif", managed: false, variant: "full" },
+    { mimeType: "image/png", managed: true, variant: "thumbnail" },
+    { mimeType: "image/png", managed: false, variant: "thumbnail" },
+  ])(
+    "loads the explicit inline image variant ($mimeType, managed: $managed)",
+    async ({ mimeType, managed, variant }) => {
+      const source = managedImageSource();
+      const artifactId = "inline-image-" + crypto.randomUUID();
+      const { blobUrl } = installManagedImageUrls();
+      const fetchMock = vi.fn(async (_url: string) => ({
+        ok: true,
+        blob: async () => new Blob(["pixels"], { type: mimeType }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      const resolveArtifactDownload = vi.fn(async (_params: unknown) => ({
+        url: source,
+        ...(!managed ? { blob: new Blob(["pixels"], { type: mimeType }) } : {}),
+      }));
+      const message = {
+        role: "assistant",
+        content: [{ type: "image", artifactId, mimeType, ...(managed ? { url: source } : {}) }],
+      };
+      const images = projectMessageMedia(message, normalizeMessage(message).content).images;
+      const container = document.createElement("div");
+      const rerender = observeSubscriber(() =>
+        render(
+          renderMessageImages(images, {
+            sessionKey: "agent:main:main",
+            resolveArtifactDownload,
+            onRequestUpdate: rerender,
+          }),
+          container,
+        ),
+      );
+      rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
+        {
+          sessionKey: "agent:main:main",
+          artifactId,
+          variant,
+          ...(variant === "thumbnail" ? { previewWidth: 480 } : {}),
+        },
+      ]);
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+        managed
+          ? [
+              variant === "full"
+                ? source
+                : source.replace(/\/full$/u, "/thumbnail") + "?v=4&width=480",
+            ]
+          : [],
+      );
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
+      render(null, container);
+    },
+  );
+
+  it("retries a GIF original and reuses it when the viewer opens", async () => {
+    const source = managedImageSource();
+    const { blobUrl } = installManagedImageUrls();
+    const fetchMock = vi
+      .fn(async (_url: string) => ({
+        ok: true,
+        blob: async () => new Blob(["gif"], { type: "image/gif" }),
+      }))
+      .mockResolvedValueOnce({ ok: false, blob: async () => new Blob() });
+    vi.stubGlobal("fetch", fetchMock);
+    const onOpenImage = vi.fn();
+    const container = document.createElement("div");
+    const rerender = observeSubscriber(() =>
+      renderManagedImage(
+        container,
+        source,
+        { onRequestUpdate: rerender, onOpenImage },
+        undefined,
+        "image/gif",
+      ),
+    );
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    const retry = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Retry"),
+    );
+    expect(retry).toBeDefined();
+    retry?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onOpenImage).toHaveBeenCalledOnce();
+    const opened = onOpenImage.mock.calls[0]?.[0];
+    expect(opened.src).toBe(blobUrl);
+    expect(opened.loadDisplayImage).toBeUndefined();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([source, source]);
+    opened.release?.();
+    render(null, container);
+  });
+
+  it("does not restart a failed fixture image after its root is cleaned up", async () => {
+    const source = managedImageSource();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, rerender } = createManagedImagePane(source);
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.textContent).toContain("Retry");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await cleanup();
+    releaseChatMediaResourceSubscriber(rerender);
+    registerEnglishCatalog(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([false, true])(
     "discards late transcript images and reauthorizes changed sessions or connections (HTTP: %s)",
     async (http) => {
@@ -167,24 +297,20 @@ describe("chat media resource lifecycle", () => {
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
       oldImage.resolve({ url: "data:image/png;base64,b2xk" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 1);
-      if (!http) {
-        expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(http ? [] : [imageSource]);
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
 
       options.connectionEpoch = 2;
       rerender();
       await vi.advanceTimersByTimeAsync(0);
       expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
-        { sessionKey: "first-session", artifactId, variant: "thumbnail" },
-        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
-        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
+        { sessionKey: "first-session", artifactId, variant: "thumbnail", previewWidth: 480 },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail", previewWidth: 480 },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail", previewWidth: 480 },
       ]);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 2);
-      if (!http) {
-        expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+        http ? [] : [imageSource, imageSource],
+      );
       render(null, container);
     },
   );
@@ -789,18 +915,13 @@ describe("chat media resource lifecycle", () => {
 
   it("replaces an old auth scope without accepting its late image", async () => {
     const source = managedImageSource();
-    const { blobUrl } = installManagedImageUrls();
+    const { blobUrl, createObjectURL } = installManagedImageUrls();
+    const previousImage = createDeferred<ReturnType<typeof imageResponse>>();
     let previousSignal: AbortSignal | undefined;
     const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
       if (new Headers(init?.headers).get("Authorization") === "Bearer old-token") {
-        return new Promise<Response>((_resolve, reject) => {
-          previousSignal = init?.signal ?? undefined;
-          previousSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("auth changed", "AbortError")),
-            { once: true },
-          );
-        });
+        previousSignal = init?.signal ?? undefined;
+        return previousImage.promise;
       }
       return Promise.resolve(imageResponse());
     });
@@ -816,6 +937,15 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(previousSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(blobUrl);
+
+    // A transport can finish despite cancellation; the old scope cannot publish its bytes.
+    previousImage.resolve(imageResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createObjectURL).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
@@ -852,7 +982,9 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls) {
-      expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`);
+      expect(requestUrl).toBe(
+        `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`,
+      );
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

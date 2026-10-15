@@ -3,6 +3,7 @@ import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -44,22 +45,35 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
 
+// Transcript producers replace changed rows and envelopes; shared subtrees stay
+// immutable. Weak keys do not keep evicted payloads alive.
+const transcriptSizes = new WeakMap<object, number>();
+
 // Residency is a heap estimate, not a wire-size limit. Trusted postimages are
 // acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(value: unknown): number {
+function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): number {
   if (typeof value === "string") {
     return 16 + value.length * 2;
   }
   if (!value || typeof value !== "object") {
     return 8;
   }
-  if (Array.isArray(value)) {
-    return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
+  const known = sizes?.get(value);
+  if (known !== undefined) {
+    return known;
   }
   let bytes = 32;
-  for (const key in value) {
-    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
+  if (Array.isArray(value)) {
+    bytes = value.reduce<number>(
+      (total, child) => total + 16 + estimateReplicaBytes(child, sizes),
+      bytes,
+    );
+  } else {
+    for (const key in value) {
+      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), sizes);
+    }
   }
+  sizes?.set(value, bytes);
   return bytes;
 }
 
@@ -277,7 +291,7 @@ function discard(cell: ReplicaCell): void {
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  cell.entry = entry;
+  cell.entry = freezeJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
@@ -294,6 +308,13 @@ function retainSnapshot(
   }
   const previousTranscript = cell.transcript;
   discard(cell);
+  // Freeze borrowed entry facts once per installed revision, not on every read.
+  freezeJsonSnapshot(state.target);
+  freezeJsonSnapshot(state.entry);
+  freezeJsonSnapshot(state.members);
+  freezeJsonSnapshot(state.participants);
+  Object.freeze(state.dependencySessionIds);
+  Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
   cell.bytes = estimateReplicaBytes(state);
@@ -314,7 +335,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
     pool.snapshots += 1;
   }
   const previousBytes = cell.transcriptBytes;
-  const bytes = estimateReplicaBytes(transcript);
+  const bytes = estimateReplicaBytes(transcript, transcriptSizes);
   cell.transcript = transcript;
   cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
@@ -403,7 +424,7 @@ function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentit
   return token ? { cell, state, incarnation: cell.generation } : undefined;
 }
 
-/** Entry projections share actor residency; they never certify live authority. */
+/** Borrow frozen entry facts; callers copy changed fields and retain their own live authority. */
 export function readSessionActorEntryFacts(
   target: FileTarget,
   snapshotFields: SessionActorEntryFacts["snapshots"] = "full",
@@ -414,12 +435,11 @@ export function readSessionActorEntryFacts(
   }
   const { cell, state, incarnation } = current;
   const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
-  // Project a shallow shell before cloning potentially large, unrequested snapshots.
-  return structuredClone({
-    target,
+  return Object.freeze({
+    target: state.target,
     entry:
       state.entry && snapshotFields !== "full"
-        ? attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields)
+        ? Object.freeze(attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields))
         : state.entry,
     members: state.members,
     participants: state.participants,
@@ -429,12 +449,14 @@ export function readSessionActorEntryFacts(
     snapshots:
       snapshotFields === "full"
         ? snapshots
-        : snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+        : Object.freeze(
+            snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+          ),
     projection: cell.snapshot
-      ? {
+      ? Object.freeze({
           hasBoard: cell.snapshot.hasBoard,
           activitySummaryWatermark: cell.snapshot.transcript.watermark,
-        }
+        })
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
@@ -575,16 +597,7 @@ export function retainSessionActorEntryFacts(
       }
     }
     cell.generation = incarnation;
-    // The private copy isolates mutable reader results; no borrowed reference escapes this owner.
-    retainEntry(
-      cell,
-      structuredClone({
-        ...facts,
-        target,
-        dependencySessionIds,
-        writeToken,
-      }),
-    );
+    retainEntry(cell, { ...facts, target, dependencySessionIds, writeToken });
   }
 }
 

@@ -3,7 +3,6 @@ import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-syn
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { MultiSelect } from "../../components/multi-select.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
@@ -444,8 +443,9 @@ describe("renderAgents", () => {
       container,
     );
 
-    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
-    expect(field?.value).toEqual([]);
+    const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
+    expect(field).not.toBeNull();
+    expect(field?.querySelectorAll(".multi-select__chip")).toHaveLength(0);
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
@@ -819,11 +819,10 @@ describe("renderAgents toolbar", () => {
     expect(onCreateAgent).toHaveBeenCalledOnce();
   });
 
-  it("preserves creation permission gating with multiple agents", () => {
+  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
-    const defaults = createProps();
     try {
       renderView(
         {
@@ -833,13 +832,26 @@ describe("renderAgents toolbar", () => {
             scope: "per-sender",
             agents: [{ id: "alpha" }, { id: "beta" }],
           },
-          access: { ...defaults.access, canCreateAgent: false },
+          access: {
+            canCreateAgent: false,
+            canPatchConfig: false,
+            canUpdateConfig: false,
+            canUpdateIdentity: false,
+            canWriteFiles: false,
+            canRunCron: false,
+          },
           onCreateAgent,
         },
         container,
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
-      expect(container.querySelector(".agents-create-btn")).toBeNull();
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton).not.toBeNull();
+      expect(createButton?.disabled).toBe(true);
+      expect(createButton?.title).toContain("openclaw.chat");
+      expect(createButton?.title).toContain("operator.admin");
+      expect(createButton?.title).toContain("reconnect");
+      createButton?.click();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();

@@ -9,6 +9,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SessionDetailsController } from "../../components/session-details-controller.ts";
+import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import "../../components/session-menu.ts";
@@ -55,6 +56,7 @@ import {
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
+import { ControllerHost, SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { SessionsPageArchive } from "./archive-actions.ts";
@@ -116,60 +118,42 @@ type SessionsPageState = Pick<
   sessionMenuWork: SessionsPageMenuProps["work"];
 };
 
-export class SessionsPageController {
-  private subscribedContext?: ApplicationContext;
-  private contextSubscriptions: (() => void)[] = [];
-  private readonly listeners = new Set<() => void>();
-  private pendingUpdate: Promise<boolean> | null = null;
-  private connected = false;
+export class SessionsPageController extends ControllerHost {
   context?: ApplicationContext;
   routeData?: SessionsRouteData;
 
-  get isConnected() {
-    return this.connected;
-  }
-  get updateComplete() {
-    return this.pendingUpdate ?? Promise.resolve(true);
-  }
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-
-  requestUpdate = () => this.invalidate();
-
-  private invalidate() {
-    if (this.pendingUpdate || !this.connected) {
-      return;
-    }
-    this.pendingUpdate = Promise.resolve().then(() => {
-      this.pendingUpdate = null;
-      if (!this.connected) {
-        return false;
-      }
-      this.bindContextSubscriptions();
-      this.gatewayLifecycle.refresh();
-      this.synchronize();
-      for (const listener of this.listeners) {
-        listener();
-      }
-      return true;
+  constructor() {
+    super();
+    new SubscriptionsController(this)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(() => this.context?.navigation)
+      .watchStore(() => this.context?.runtimeConfig)
+      .watchStore(() => this.context?.plugins)
+      .watch(
+        () => this.context?.agentSelection,
+        (selection) => this.observeAgentScope(selection),
+      );
+    this.addController({
+      hostUpdate: () => {
+        this.gatewayLifecycle.refresh();
+        this.synchronize();
+      },
     });
   }
-  connect(context: ApplicationContext) {
-    this.context = context;
-    if (!this.connected) {
-      this.connected = true;
-      this.bindContextSubscriptions();
+
+  override connect(context?: ApplicationContext) {
+    this.context = context ?? this.context;
+    if (!this.isConnected) {
+      super.connect();
       this.gatewayLifecycle.connect();
     }
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
   setContext(context: ApplicationContext) {
     this.context = context;
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
   setRouteData(routeData?: SessionsRouteData) {
     if (this.routeData === routeData) {
@@ -177,7 +161,7 @@ export class SessionsPageController {
     }
     this.routeData = routeData;
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
 
   // Presentation writes stay synchronous; Solid observes published revisions.
@@ -210,7 +194,7 @@ export class SessionsPageController {
         const changed = !Object.is(Reflect.get(target, key), value);
         Reflect.set(target, key, value);
         if (changed) {
-          this.invalidate();
+          this.requestUpdate();
         }
         return true;
       },
@@ -233,7 +217,7 @@ export class SessionsPageController {
   private listRequest?: Promise<void>;
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
-  private readonly details = new SessionDetailsController(() => this.invalidate(), {
+  private readonly details = new SessionDetailsController(() => this.requestUpdate(), {
     captureScope: () => this.captureRequestScope(),
     isCurrent: (scope) => this.isRequestScopeCurrent(scope),
     row: () => this.state.result?.sessions.find((row) => row.key === this.state.expandedSessionKey),
@@ -253,33 +237,10 @@ export class SessionsPageController {
       this.clearSearchTimer();
       this.bindSessionList();
     }
-    this.invalidate();
+    this.requestUpdate();
   });
-  private bindContextSubscriptions() {
-    const context = this.context;
-    if (context === this.subscribedContext) {
-      return;
-    }
-    this.clearContextSubscriptions();
-    this.subscribedContext = context;
-    if (!context) {
-      return;
-    }
-    this.contextSubscriptions = [
-      ...[context.agentIdentity, context.navigation, context.runtimeConfig, context.plugins].map(
-        (source) => source.subscribe(() => this.invalidate()),
-      ),
-      this.observeAgentScope(context.agentSelection),
-    ];
-  }
 
-  private clearContextSubscriptions() {
-    this.contextSubscriptions.forEach((stop) => stop());
-    this.contextSubscriptions = [];
-    this.subscribedContext = undefined;
-  }
-
-  private readonly gatewayLifecycle = new GatewayPageBinding(() => this.invalidate(), {
+  private readonly gatewayLifecycle = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       const retiredResult = this.listBinding?.sessions.listSnapshot(this.listBinding.query).result;
@@ -343,19 +304,17 @@ export class SessionsPageController {
     this.details.synchronize();
   }
 
-  disconnect() {
-    this.connected = false;
+  override disconnect() {
+    super.disconnect();
     this.unsubscribeList?.();
     this.unsubscribeList = undefined;
     this.listBinding = undefined;
-    this.clearContextSubscriptions();
     this.invalidatePageWork();
     // Dialogs mount on document.body, so navigating away would otherwise leave
     // one over the destination, still submitting against this detached page.
     this.inputDialog.abort();
     this.details.reset();
     this.gatewayLifecycle.dispose();
-    this.listeners.clear();
   }
 
   private retirePageOperations() {
@@ -1396,9 +1355,6 @@ export class SessionsPageController {
               sessionScope: true,
             });
             break;
-          case "archive-tree":
-            void this.archiveActions.archiveTree(row);
-            break;
           case "move-to-group":
             this.assignCategory(row.key, action.category);
             break;
@@ -1411,7 +1367,8 @@ export class SessionsPageController {
                 sessionScope: true,
               });
             } else {
-              void this.archiveActions.archive(row);
+              const rows = this.state.result?.sessions ?? [];
+              void this.archiveActions.archive(row, hasSessionArchiveDescendants(row, rows));
             }
             break;
           case "assign-owner": {

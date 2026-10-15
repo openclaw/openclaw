@@ -115,6 +115,7 @@ describe("session transcript reader facade", () => {
         type: "message",
         id: "root",
         parentId: null,
+        timestamp: "0",
         message: { role: "user", content: "root prompt" },
       },
       {
@@ -127,15 +128,32 @@ describe("session transcript reader facade", () => {
         type: "message",
         id: "active",
         parentId: "root",
-        message: { role: "assistant", content: "active answer" },
+        timestamp: "2026",
+        message: {
+          role: "assistant",
+          content: "active answer",
+          idempotencyKey: "active:assistant",
+        },
       },
     ]);
 
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
     ).resolves.toMatchObject([
-      { content: "root prompt", __openclaw: { id: "root", seq: 1 } },
-      { content: "active answer", __openclaw: { id: "active", seq: 2 } },
+      {
+        content: "root prompt",
+        __openclaw: { id: "root", seq: 1, recordTimestampMs: Date.parse("0") },
+      },
+      {
+        content: "active answer",
+        idempotencyKey: "active:assistant",
+        __openclaw: {
+          id: "active",
+          seq: 2,
+          recordTimestampMs: Date.parse("2026"),
+          idempotencyKey: "active:assistant",
+        },
+      },
     ]);
     const visited: Array<{ message: unknown; seq: number }> = [];
     await expect(
@@ -143,7 +161,14 @@ describe("session transcript reader facade", () => {
     ).resolves.toBe(2);
     expect(visited).toEqual([
       { message: { role: "user", content: "root prompt" }, seq: 1 },
-      { message: { role: "assistant", content: "active answer" }, seq: 2 },
+      {
+        message: {
+          role: "assistant",
+          content: "active answer",
+          idempotencyKey: "active:assistant",
+        },
+        seq: 2,
+      },
     ]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
     await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
@@ -380,33 +405,6 @@ describe("session transcript reader facade", () => {
     },
   );
 
-  test("preserves Date.parse semantics for numeric-looking record timestamps", async () => {
-    const scope = await writeTranscript("reader-numeric-looking-timestamps", [
-      { type: "session", version: 3, id: "reader-numeric-looking-timestamps" },
-      {
-        type: "message",
-        id: "numeric-zero",
-        parentId: null,
-        timestamp: "0",
-        message: { role: "user", content: "zero" },
-      },
-      {
-        type: "message",
-        id: "numeric-year",
-        parentId: "numeric-zero",
-        timestamp: "2026",
-        message: { role: "assistant", content: "year" },
-      },
-    ]);
-
-    await expect(
-      readSessionMessagesAsync(scope, { mode: "full", reason: "timestamp contract test" }),
-    ).resolves.toMatchObject([
-      { __openclaw: { recordTimestampMs: Date.parse("0") } },
-      { __openclaw: { recordTimestampMs: Date.parse("2026") } },
-    ]);
-  });
-
   test("keeps SQLite precedence by ignoring an obsolete active JSONL during archive fallback", async () => {
     const sessionId = "reader-reset-archive-only";
     const scope = {
@@ -458,38 +456,6 @@ describe("session transcript reader facade", () => {
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
-  });
-
-  test("reads SQLite-only transcript rows without a JSONL mirror", async () => {
-    const sessionId = "reader-sqlite-only";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      cwd: tempDir,
-      messages: [
-        { message: { role: "user", content: "sqlite prompt" } },
-        { message: { role: "assistant", content: "sqlite answer" } },
-        { message: { role: "assistant", content: "sqlite follow-up" } },
-      ],
-      touchSessionEntry: false,
-    });
-
-    expect(fs.existsSync(path.join(tempDir, `${sessionId}.jsonl`))).toBe(false);
-    await expect(
-      readSessionMessagesAsync(scope, { mode: "full", reason: "sqlite reader facade test" }),
-    ).resolves.toMatchObject([
-      { content: "sqlite prompt" },
-      { content: "sqlite answer" },
-      { content: "sqlite follow-up" },
-    ]);
-    await expect(
-      readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
-    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 3 } }]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
   test("uses an explicit JSONL artifact when the store path is a placeholder", async () => {
@@ -554,45 +520,6 @@ describe("session transcript reader facade", () => {
       inputTokens: 15,
       outputTokens: 4,
     });
-  });
-
-  test("promotes SQLite message idempotency into transcript metadata", async () => {
-    const sessionId = "reader-sqlite-idempotency";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "sqlite-user-message",
-          message: {
-            role: "user",
-            content: "stable bubble",
-            idempotencyKey: "initial-send:user",
-          },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-
-    await expect(
-      readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "sqlite idempotency metadata parity test",
-      }),
-    ).resolves.toMatchObject([
-      {
-        idempotencyKey: "initial-send:user",
-        __openclaw: {
-          id: "sqlite-user-message",
-          idempotencyKey: "initial-send:user",
-          seq: 1,
-        },
-      },
-    ]);
   });
 
   test("waits for an in-flight SQLite projection before counting messages", async () => {

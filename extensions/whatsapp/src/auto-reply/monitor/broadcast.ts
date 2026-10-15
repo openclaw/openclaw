@@ -9,7 +9,6 @@ import {
   DEFAULT_MAIN_KEY,
 } from "openclaw/plugin-sdk/routing";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
@@ -22,7 +21,7 @@ function buildBroadcastRouteKeys(params: {
   peerId: string;
   agentId: string;
 }) {
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const sessionKey = buildAgentSessionKey({
     agentId: params.agentId,
     channel: "whatsapp",
@@ -84,7 +83,7 @@ export async function maybeBroadcastMessage(params: {
   whatsappInboundLog.info(
     `Broadcasting message to ${group.agents.length} agents (${group.strategy})`,
   );
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const isGroupConversation = admission.conversation.kind === "group";
   const groupHistorySnapshot = isGroupConversation
     ? [...(params.groupHistories.get(params.groupHistoryKey) ?? [])]

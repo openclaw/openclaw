@@ -208,17 +208,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) =>
     exportedInternalOrTrustedContext(evt, metadata) ??
     internalOrTrustedParentContext(evt, metadata);
-  const trackTrustedSpan = (
-    evt: DiagnosticEventPayload,
-    metadata: DiagnosticEventMetadata,
-    span: ReturnType<typeof tracer.startSpan>,
-  ) => {
-    const spanId = trustedTraceContext(evt, metadata)?.spanId;
-    if (spanId) {
-      activeTrustedSpans.set(spanId, span);
-    }
-    return span;
-  };
   const trackInternalOrTrustedSpan = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -361,7 +350,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     activeInternalOrTrustedContext,
     exportedInternalOrTrustedContext,
     exportedSpanContextForDiagnosticTraceContext,
-    trackTrustedSpan,
     trackInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     getTrackedInternalOrTrustedSpan,

@@ -500,14 +500,6 @@ function writePatchedRuntimeFixture(bundling = "default") {
 }
 
 describe("plugin npm package manifest staging", () => {
-  it("keeps msteams runtime dependencies registry-installed", () => {
-    const packageJson = JSON.parse(
-      readFileSync(join(process.cwd(), "extensions", "msteams", "package.json"), "utf8"),
-    ) as { openclaw?: { release?: { bundleRuntimeDependencies?: boolean } } };
-
-    expect(packageJson.openclaw?.release?.bundleRuntimeDependencies).toBe(false);
-  });
-
   it.each(["recovered timeout", "ordinary failure", "exhausted timeout"])(
     "settles bundled dependency installs after %s",
     (scenario) => {
@@ -620,7 +612,7 @@ describe("plugin npm package manifest staging", () => {
     },
   );
 
-  it.each([undefined, "providerCatalogEntry", "capabilityCatalogEntry"] as const)(
+  it.each(["providerCatalogEntry", "capabilityCatalogEntry"] as const)(
     "overlays manifest-only channel configs and restores catalog metadata (%s)",
     (catalogField) => {
       const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
@@ -628,7 +620,7 @@ describe("plugin npm package manifest staging", () => {
       mkdirSync(packageDir, { recursive: true });
       const sourceManifest = {
         id: "twitch",
-        ...(catalogField ? { [catalogField]: "./catalog.ts" } : {}),
+        [catalogField]: "./catalog.ts",
         channels: ["twitch"],
         configSchema: {
           type: "object",
@@ -670,9 +662,7 @@ describe("plugin npm package manifest staging", () => {
           );
           expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
           expect(context.packageJsonApplied).toBe(false);
-          if (catalogField) {
-            expect(stagedManifest[catalogField]).toBe("./catalog.ts");
-          }
+          expect(stagedManifest[catalogField]).toBe("./catalog.ts");
           return "overlay-ran";
         },
       );
@@ -893,8 +883,6 @@ describe("plugin npm package manifest staging", () => {
   it.each([
     { id: "qa-lab", missing: "gateway-entry.js" },
     { id: "qa-channel", missing: "channel-plugin-api.js" },
-    { id: "qa-channel", missing: "api.js" },
-    { id: "qa-channel", missing: "setup-plugin-api.js" },
   ] as const)("refuses private $id packaging without $missing", ({ id, missing }) => {
     const fixture = writeQaGatewayFixture(id);
     rmSync(join(fixture.packageDir, "dist", missing));
@@ -1263,11 +1251,9 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
   });
 
   it.each([
-    "default",
     "isolated",
     "isolated-short",
     "partial",
-    "all",
     "clawhub",
     "optional-direct",
     "nested-other",

@@ -7,6 +7,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
+import { isTransientRestartRecoveryError } from "../../infra/restart-recovery-errors.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   classifySessionKeyShape,
@@ -77,6 +78,9 @@ export async function resolveRestartRecoveryDispatchTarget(
       ? { agentId: target.agentId, sessionKey: target.canonicalKey }
       : undefined;
   } catch (err) {
+    if (isTransientRestartRecoveryError(err)) {
+      throw err;
+    }
     mainSessionRecoveryLog.warn(
       `failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`,
     );

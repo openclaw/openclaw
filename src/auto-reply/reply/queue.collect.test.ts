@@ -622,7 +622,15 @@ describe("followup queue collect routing", () => {
     );
     controller.abort();
     refreshQueuedFollowupSession({ key: q.key, nextModel: "current-model" });
-    await q.drain();
+    const canceled: string[] = [];
+    await q.drain(async (run) => {
+      if (isFollowupRunAborted(run)) {
+        canceled.push(run.prompt);
+        return;
+      }
+      await q.runFollowup(run);
+    });
+    expect(canceled).toEqual(["private direct content"]);
     expect(q.calls).toHaveLength(1);
     expect(q.calls[0]?.run.model).toBe("current-model");
     expect(q.calls[0]?.run.requestedRouteResolution).toBe("raw");
@@ -1019,6 +1027,7 @@ describe("followup queue collect routing", () => {
     const controller = new AbortController();
     const onComplete = vi.fn();
     const begin = vi.fn(() => () => undefined);
+    const summaryBegin = vi.fn(() => () => undefined);
     const runFollowup = async (run: FollowupRun) => {
       q.calls.push(run);
       if (q.calls.length >= 2) {
@@ -1027,6 +1036,7 @@ describe("followup queue collect routing", () => {
     };
     q.add({
       ...createRun({ prompt: "dropped ambient" }),
+      deliveryCorrelations: [{ begin: summaryBegin }],
       currentInboundEventKind: "room_event",
       currentInboundContext: { text: "dropped context" },
     });
@@ -1045,6 +1055,7 @@ describe("followup queue collect routing", () => {
     expect(q.calls[0]?.currentInboundEventKind).toBe("room_event");
     expect(q.calls[0]?.currentInboundContext).toBeUndefined();
     expect(q.calls[0]?.abortSignal).toBeUndefined();
+    expect(q.calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(summaryBegin);
     expect(q.calls[1]?.prompt).toBe("live ambient");
     expect(q.calls[1]?.currentInboundEventKind).toBe("room_event");
     expect(q.calls[1]?.currentInboundAudio).toBe(true);
@@ -1247,8 +1258,10 @@ describe("followup queue collect routing", () => {
     const q = createQueueCase({ mode: "followup", cap: 1 }, 1);
     const elidedComplete = vi.fn();
     const elided = new AbortController();
+    const abortedCleanup = vi.fn();
     const runFollowup = async (run: FollowupRun) => {
       if (run.abortSignal?.aborted) {
+        abortedCleanup(run.prompt);
         return;
       }
       q.calls.push(run);
@@ -1269,6 +1282,7 @@ describe("followup queue collect routing", () => {
     expect(q.calls[0]?.prompt).toContain("retained summary");
     expect(q.calls[1]?.prompt).toBe("live item");
     expect(elidedComplete).toHaveBeenCalledTimes(1);
+    expect(abortedCleanup).toHaveBeenCalledExactlyOnceWith("elided and cancelled");
   });
 
   it("does not replay elided sources after an admitted summary failure", async () => {

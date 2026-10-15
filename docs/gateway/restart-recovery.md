@@ -38,6 +38,11 @@ During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
 
+After the HTTP listener binds, interrupted main-session marking overlaps session
+projection preparation. Both settle before channels start and the Gateway reports
+ready. Post-ready recovery reuses the completed store checks instead of repeating
+that scan.
+
 ## What survives a restart
 
 | State                          | Storage                                            | Behavior across restart                                                 |
@@ -58,6 +63,19 @@ and session admission. The old queue and execution authority are never reused.
 This preserves each browser outbox's order without submitting already-consumed
 messages again. Different browsers can reconnect in a different order.
 
+Requests refused before dispatch and chat sends interrupted while waiting for
+session admission return a retryable `UNAVAILABLE` error with
+`details.reason: "gateway-restarting"`. A restart does not turn an unstarted
+message into a terminal Stop result. The Control UI and native chat outboxes
+retain the original message ID and retry after the Gateway becomes available.
+Native Apple live sends with attachments restore the draft for manual retry;
+already queued attachments retain their outbox recovery.
+
+A disconnected RPC may already have performed its work. Clients reconcile
+accepted or uncertain sends through their existing receipts and history rather
+than automatically replaying every pending RPC. Already running main-session
+turns use the recovery owner described below; the drain budget is unchanged.
+
 Accepted Control UI input is committed to its admitted source session before ACP
 execution or question consumption. If the conversation routes to a bound ACP
 session, the source keeps the original request and the bound session owns the ACP
@@ -70,6 +88,17 @@ Inputs accepted by older versions without resumable custody also require explici
 An uncertain submission stays unconfirmed until its outcome can be reconciled
 or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
+
+Accepted `sessions_send` agent updates recover from their saved input and original
+delivery ID. Temporary admission, worker capacity, and storage-readiness failures
+get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
+Each attempt checks the original source and destination sessions and current
+communication permission again. Reset, replaced, archived, or permission-denied
+sessions stop automatic delivery. Unknown failures and exhausted retries leave the
+input saved, with a fixed failure-reason code and attempt count recorded in the
+recovery notice details. The notice explains the failure and directs you to resend
+the update or ask the sender to retry. Detailed diagnostics stay in operator logs. Recovery never
+reruns the sender task or restores old approvals.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
@@ -344,6 +373,18 @@ begin/end timing for fast steps too. The supervisor deadline remains
 the hard upper bound. Clean database restart proof is published only after writer
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.
+
+Worker-placement maintenance stops admitting new candidates when drain begins.
+Optional session-evidence reads and disk probes are canceled. Node retention stops
+new preparation and cancels supported requests; an in-progress shared bundle
+build remains joined. An accepted retirement, workspace recovery, reclaim, or
+publication effect still settles before its database or transport closes. A later restart
+resumes deferred maintenance from durable state. Deadline diagnostics name the
+pending placement subphase, such as
+`shutdown.worker-placement.reconcile.session-retirement`, `reconcile.active`, or
+`reconcile.publications`. These joins keep the worker transports and shared
+database available until accepted effects have recorded their outcomes.
+
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -1145,6 +1186,9 @@ existing restart delivery and continuation behavior.
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle. Exhaustion tombstones that session until it is
   inspected and replaced.
+  Temporary target-resolution failures use the existing bounded startup retries
+  without charging a dispatch attempt. Missing owners and mismatched stores
+  remain skipped.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.

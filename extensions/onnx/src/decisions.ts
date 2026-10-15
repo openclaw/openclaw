@@ -50,9 +50,6 @@ function rubric(question: DecisionQuestion) {
 }
 
 function probabilities(logits: readonly number[]): number[] {
-  if (logits.length < 2 || logits.some((value) => !Number.isFinite(value))) {
-    throw new Error("ONNX returned invalid label logits.");
-  }
   const max = Math.max(...logits);
   const weights = logits.map((value) => Math.exp(value - max));
   const sum = weights.reduce((total, value) => total + value, 0);
@@ -93,17 +90,11 @@ export function createOnnxProvider(
         });
         const results = await client.classify(context.model, inputs, context.signal);
         context.signal.throwIfAborted();
-        if (results.length !== entries.length) {
-          throw new Error("ONNX returned an incomplete batch.");
-        }
         const answers = new Map<string, DecisionAnswer>();
         let inputTokens = 0;
         entries.forEach(([id, question], index) => {
           const result = results[index]!;
           const labels = inputs[index]!.labels;
-          if (result.logits.length !== labels.length) {
-            throw new Error("ONNX returned an incomplete distribution.");
-          }
           const values = probabilities(result.logits);
           inputTokens += result.inputTokens;
           if (question.type === "boolean") {

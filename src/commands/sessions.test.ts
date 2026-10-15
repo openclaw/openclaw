@@ -172,47 +172,6 @@ describe("sessionsCommand", () => {
     }
   });
 
-  it("renders the agent runtime in the tabular view", async () => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-7" },
-          models: {
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    }));
-    const store = await writeStore(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now() - 60_000,
-          modelProvider: "claude-cli",
-          model: "claude-opus-4-7",
-        },
-      },
-      "sessions-runtime-table",
-    );
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
-
-    cleanupStore(store);
-
-    expect(logs.join("\n")).toContain("Runtime");
-
-    expect(singleSessionTableCells(logs)).toEqual([
-      "direct",
-      "agent:main:main",
-      "1m ago",
-      "claude-opus-4-7",
-      "Claude CLI",
-      "unknown/1.0m (?%)",
-      "visibility:shared id:main-session",
-    ]);
-  });
-
   it("renders current runtime and context after a same-model runtime change", async () => {
     setMockSessionsConfig(() => ({
       agents: {

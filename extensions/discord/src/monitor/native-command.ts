@@ -242,14 +242,12 @@ async function dispatchDiscordCommandInteraction(
     channelName,
     channelSlug,
     rawChannelId,
+    memberRoleIds,
     threadParentId,
   } = channelContext;
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.slice()
-    : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
     accountId,
@@ -264,14 +262,10 @@ async function dispatchDiscordCommandInteraction(
     (nativeRouteState ??= resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      guildId: interaction.guild?.id ?? undefined,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
+      interaction,
+      channelContext,
       conversationId: rawChannelId || "unknown",
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      threadBindings,
     }));
   const canBypassConfiguredAcpGuildGuards = () => {
     if (!interaction.guild || !shouldBypassConfiguredAcpGuildGuards(commandName)) {
@@ -290,9 +284,6 @@ async function dispatchDiscordCommandInteraction(
         ? "This channel is disabled."
         : "This channel is not allowed.",
     );
-  }
-  if (policy?.isCurrent() === false) {
-    return reject("Access policy changed. Try this interaction again.", true);
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
@@ -374,6 +365,7 @@ async function dispatchDiscordCommandInteraction(
   const effectiveRoute = routeState.effectiveRoute;
   const { ctxPayload, sessionKey, commandTargetSessionKey } =
     await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext,
       interaction,
       channelContext,

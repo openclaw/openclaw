@@ -1033,22 +1033,19 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
-  it("stamps and validates independent OpenClaw and Peekaboo source revisions", () => {
-    const { result, openClawCommit, peekabooCommit } = runSourceProvenanceStampHarness();
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(`${openClawCommit}\n${peekabooCommit}\n`);
-    expect(result.stderr).toBe("");
-  });
-
   it.each([
+    { key: undefined, diagnostic: "" },
     { key: "OpenClawGitCommit", diagnostic: "Release app OpenClaw source mismatch" },
     { key: "PeekabooSourceCommit", diagnostic: "Release app Peekaboo source mismatch" },
-  ])("fails release validation independently for a wrong $key", ({ key, diagnostic }) => {
-    const { result } = runSourceProvenanceStampHarness(key);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(diagnostic);
+  ])("validates independent source stamps (corrupt key: $key)", ({ key, diagnostic }) => {
+    const { result, openClawCommit, peekabooCommit } = runSourceProvenanceStampHarness(key);
+    expect(result.status, result.stderr).toBe(key ? 1 : 0);
+    if (key) {
+      expect(result.stderr).toContain(diagnostic);
+    } else {
+      expect(result.stdout).toBe(`${openClawCommit}\n${peekabooCommit}\n`);
+      expect(result.stderr).toBe("");
+    }
   });
 
   it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
@@ -1398,23 +1395,17 @@ describe("package-mac-app plist stamping", () => {
     expect(preInstallBlock).toContain("\nrequire_swift_toolchain\n");
   });
 
-  it("fails with an actionable error when Swift tools are too old", () => {
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.0.3",
+  it.each([
+    { selectedDeveloperDir: "command-line-tools", xcodebuildFailure: undefined },
+    {
       selectedDeveloperDir: "xcode",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
-    expect(result.stderr).toContain("Current Swift is 6.0");
-  });
-
-  it("rejects Command Line Tools even when they provide Swift 6.3", () => {
+      xcodebuildFailure: "xcodebuild: error: SDK metadata is unavailable",
+    },
+  ] as const)("rejects unusable Xcode: $selectedDeveloperDir", (options) => {
     const result = runSwiftToolchainHarness({
       swiftVersion: "6.3.1",
-      selectedDeveloperDir: "command-line-tools",
+      ...options,
     });
-
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires a full Xcode developer directory");
     expect(result.stderr).toContain(
@@ -1424,23 +1415,14 @@ describe("package-mac-app plist stamping", () => {
       "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
     );
     expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
-  });
-
-  it("preserves the native Xcode failure before generic selection guidance", () => {
-    const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.3.1",
-      selectedDeveloperDir: "xcode",
-      xcodebuildFailure: diagnostic,
-    });
-
-    expect(result.status).toBe(1);
-    const diagnosticIndex = result.stderr.indexOf(diagnostic);
-    const guidanceIndex = result.stderr.indexOf(
-      "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
-    );
-    expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
-    expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
+    if (options.xcodebuildFailure) {
+      const diagnosticIndex = result.stderr.indexOf(options.xcodebuildFailure);
+      const guidanceIndex = result.stderr.indexOf(
+        "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
+      );
+      expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+      expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
+    }
   });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
@@ -1647,52 +1629,52 @@ try {
     expect(macosCi).toContain("test/scripts/mac-elevation-artifact.test.ts");
   });
 
-  it("copies complete main and MLX helper SwiftPM bundles into packaged app resources", () => {
-    const { appRoot, result } = runSwiftPMResourceBundleHarness();
+  it.each([undefined, "OpenClawKit_OpenClawKit.bundle"])(
+    "requires complete main and MLX resource bundles (missing: %s)",
+    (missingBundle) => {
+      const { appRoot, result } = runSwiftPMResourceBundleHarness({ missingBundle });
+      if (missingBundle) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
+        expect(result.stderr).toContain(missingBundle);
+        return;
+      }
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    for (const bundle of swiftPMResourceBundles) {
-      expect(
-        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
-      ).toBe(bundle);
-      expect(existsSync(path.join(appRoot, bundle))).toBe(false);
-    }
-    for (const file of mlxTTSResourceFiles) {
-      expect(readFileSync(path.join(appRoot, "Contents", "Resources", file), "utf8")).toBe(file);
-      expect(existsSync(path.join(appRoot, file))).toBe(false);
-    }
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      for (const bundle of swiftPMResourceBundles) {
+        expect(
+          readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+        ).toBe(bundle);
+        expect(existsSync(path.join(appRoot, bundle))).toBe(false);
+      }
+      for (const file of mlxTTSResourceFiles) {
+        expect(readFileSync(path.join(appRoot, "Contents", "Resources", file), "utf8")).toBe(file);
+        expect(existsSync(path.join(appRoot, file))).toBe(false);
+      }
+    },
+  );
 
-  it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    for (const [file, contents] of fixtures) {
-      expect(readFileSync(file, "utf8")).toBe(contents);
-    }
-    expect(readdirSync(backupRoot)).toEqual([]);
-  });
-
-  it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("restore failed\n");
-    const backups = readdirSync(backupRoot).map((file) =>
-      readFileSync(path.join(backupRoot, file), "utf8"),
-    );
-    expect(backups).toHaveLength(fixtures.size);
-    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
-  });
-
-  it("fails closed when a required SwiftPM resource bundle is missing", () => {
-    const missingBundle = "OpenClawKit_OpenClawKit.bundle";
-    const { result } = runSwiftPMResourceBundleHarness({ missingBundle });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
-    expect(result.stderr).toContain(missingBundle);
-  });
+  it.each([false, true])(
+    "restores resource sources or retains failed backups (%s)",
+    (failRestore) => {
+      const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(failRestore);
+      expect(result.status).toBe(failRestore ? 1 : 0);
+      expect(result.stderr).toBe(failRestore ? "restore failed\n" : "");
+      if (failRestore) {
+        const backups = readdirSync(backupRoot).map((file) =>
+          readFileSync(path.join(backupRoot, file), "utf8"),
+        );
+        expect(backups).toHaveLength(fixtures.size);
+        expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
+      } else {
+        for (const [file, contents] of fixtures) {
+          expect(readFileSync(file, "utf8")).toBe(contents);
+        }
+        expect(readdirSync(backupRoot)).toEqual([]);
+      }
+    },
+  );
 
   it("compiles app localizations into signed resources", () => {
     const script = readFileSync(scriptPath, "utf8");
@@ -1943,12 +1925,8 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
 
   // Each real Git fixture owns a separate checkout and deadline; do not aggregate
   // independent verification scenarios into one long synchronous test.
-  it.each(["nested-gitlink"] as const)("accepts committed Peekaboo source (%s)", (mutation) => {
-    const result = runRealCompiledPeekabooHarness(mutation);
-    expect(result.status, result.stderr).toBe(0);
-  });
-
   it.each([
+    "nested-gitlink",
     "assume-unchanged",
     "corrupt-object",
     "dirty-gitlink",
@@ -1956,12 +1934,14 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     "gitlink-sibling",
     "ignored",
     "replacement-ref",
-  ] as const)("rejects uncommitted Peekaboo source (%s)", (mutation) => {
+  ] as const)("verifies compiled Peekaboo source (%s)", (mutation) => {
     const result = runRealCompiledPeekabooHarness(mutation);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Compiled Peekaboo checkout does not exactly match its committed source",
-    );
+    expect(result.status, result.stderr).toBe(mutation === "nested-gitlink" ? 0 : 1);
+    if (mutation !== "nested-gitlink") {
+      expect(result.stderr).toContain(
+        "Compiled Peekaboo checkout does not exactly match its committed source",
+      );
+    }
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {

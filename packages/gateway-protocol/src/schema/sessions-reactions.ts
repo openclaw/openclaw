@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingIdentitySchema } from "./sessions-sharing.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionReactionTargetParamsSchema = {
   sessionKey: NonEmptyString,
@@ -38,7 +39,7 @@ export const MessageReactionSummarySchema = closedObject({
 });
 
 export const SessionReactionMirrorSchema = closedObject({
-  status: Type.Union([Type.Literal("delivered"), Type.Literal("failed"), Type.Literal("skipped")]),
+  status: stringLiteralUnion(["delivered", "failed", "skipped"]),
   reason: Type.Optional(Type.String()),
 });
 
@@ -68,7 +69,7 @@ export const SessionReactionEventSchema = closedObject({
   sessionId: NonEmptyString,
   messageId: NonEmptyString,
   emoji: ReactionEmojiSchema,
-  action: Type.Union([Type.Literal("added"), Type.Literal("removed")]),
+  action: stringLiteralUnion(["added", "removed"]),
   actor: SessionSharingIdentitySchema,
   reactions: Type.Array(MessageReactionSummarySchema),
 });
