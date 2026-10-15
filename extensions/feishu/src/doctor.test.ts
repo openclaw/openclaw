@@ -352,9 +352,10 @@ describe("Feishu doctor state repair", () => {
     const writer = new DatabaseSync(sqlitePath);
     try {
       writer.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
-      writer
-        .prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?")
-        .run(walUpdatedAt, healthy.sessionKey);
+      await upsertSessionEntry({
+        ...healthy,
+        entry: { sessionId: healthy.sessionId, updatedAt: walUpdatedAt },
+      });
       expect(fs.statSync(`${sqlitePath}-wal`).size).toBeGreaterThan(0);
       expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
 
