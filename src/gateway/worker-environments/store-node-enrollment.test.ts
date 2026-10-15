@@ -150,6 +150,25 @@ describe("worker environment node enrollment store", () => {
     });
   }
 
+  it("refuses first-device redemption from a closed enrollment invocation", async () => {
+    await startProvisioning();
+    const { manager, enrollment, token, verification } = await beginConnect();
+    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
+
+    manager.close(enrollment);
+
+    await expect(
+      consumeDeviceBootstrapTokenWithSetupCompletion({
+        baseDir: root,
+        token,
+        deviceId: verification.deviceId,
+        completedAtMs: Date.now(),
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
+      }),
+    ).resolves.toBeNull();
+    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
+  });
+
   it("does not revoke a replacement bearer when a superseded ensure returns late", async () => {
     await startProvisioning();
     const manager = createManager();
@@ -250,6 +269,25 @@ describe("worker environment node enrollment store", () => {
       delivery.afterResult = undefined;
       ensureSpy.mockRestore();
     }
+  });
+
+  it("refuses first-device redemption through a fresh manager without a live binding", async () => {
+    await startProvisioning();
+    const { manager, token, verification } = await beginConnect();
+    manager.stop();
+    const replacement = createManager();
+    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
+
+    await expect(
+      consumeDeviceBootstrapTokenWithSetupCompletion({
+        baseDir: root,
+        token,
+        deviceId: verification.deviceId,
+        completedAtMs: Date.now(),
+        admitsCloudWorkerSetup: replacement.admitsNodeSetupCompletion,
+      }),
+    ).resolves.toBeNull();
+    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
   });
 
   it("adopts the surviving bearer after restart only for its exact credential digest", async () => {
