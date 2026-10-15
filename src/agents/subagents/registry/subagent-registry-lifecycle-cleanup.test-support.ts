@@ -1,4 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { describePendingFakeTimers } from "../../../../test/helpers/fake-timer-diagnostics.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -637,14 +638,17 @@ export function registerDeliveryRetryOwnerTests({
     const persist = vi.fn();
     helperMocks.safeRemoveAttachmentsDir.mockRejectedValue(new Error("cleanup failed"));
     const { entry, controller } = createAttachmentCleanupFixture(persist);
+    const join = observeRootWork();
 
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
-      await waitForLifecycleState(() => expect(readLifecycleRun(entry).cleanupHandled).toBe(false));
+      await join(true);
+      expect(readLifecycleRun(entry).cleanupHandled).toBe(false);
       expect(vi.getTimerCount()).toBe(1);
 
       for (let attempts = 0; attempts < 10 && vi.getTimerCount() > 0; attempts += 1) {
         await vi.runOnlyPendingTimersAsync();
+        await join(true);
       }
 
       expect(helperMocks.safeRemoveAttachmentsDir.mock.calls.length).toBeGreaterThan(1);
@@ -652,8 +656,9 @@ export function registerDeliveryRetryOwnerTests({
       expect(readLifecycleRun(entry).cleanupHandled).toBe(false);
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
       expect(persist).toHaveBeenLastCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
     } finally {
+      await join();
       helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();

@@ -180,6 +180,8 @@ type ManagedServiceStopParams = {
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
   assertCurrent?: (phase?: "restore") => void;
+  /** Revalidate a parent deadline immediately before the native stop side effect. */
+  assertDeadline?: () => void;
   timeoutMs?: number;
   warn?: (message: string) => void;
 } & (
@@ -213,13 +215,12 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(
     return unavailableServiceState(expected);
   }
   try {
-    if (params.phase === "inspect") {
-      return await stopManagedServiceBeforeMutableUpdate(params);
-    }
-    return await withGatewayServiceOperationLock(
-      params.expectedService?.serviceEnv ?? process.env,
-      (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
-    );
+    return params.phase === "inspect"
+      ? await stopManagedServiceBeforeMutableUpdate(params)
+      : await withGatewayServiceOperationLock(
+          params.expectedService?.serviceEnv ?? process.env,
+          (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
+        );
   } catch (error) {
     if (
       error instanceof ServiceInspectionError &&
@@ -241,8 +242,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   assertNative?: () => void,
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
-  const updateRun = params.updateRun;
-  const recordPhase = params.recordPhase;
+  const { updateRun, recordPhase } = params;
   const executorFence = updateRun?.executorFence;
   const assertExecutor = () => {
     if (params.updateRun !== updateRun || updateRun?.executorFence !== executorFence) {
@@ -631,11 +631,13 @@ async function stopManagedServiceBeforeMutableUpdate(
         await recordPhase("activating");
         assertCurrent();
       }
+      params.assertDeadline?.();
       stoppedAtMs = Date.now();
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
         assertCurrent,
+        beforeEffect: params.assertDeadline,
         warn,
         ...(updateRun
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
