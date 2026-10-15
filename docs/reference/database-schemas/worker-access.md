@@ -4883,8 +4883,8 @@ transaction. Its reader remains retained until commit or cleanup. Commit takes
 the writer again, refreshes live protection, and checks current authority, selected
 rows, transcript versions, and active ancestry. Only changed or newly protected
 candidates invalidate the retained selection. Conflicting selections return
-for fresh planning; unrelated writes invalidate age hints without cancelling the
-plan. Each actor retains at most two preparations, allowing a revoked
+for fresh planning; unrelated writes retain age hints, which entry receipts update
+without a second revision check. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
 operation and native close release those readers. No-op plans carry their current
 age and count facts through settlement. Automatic maintenance prepares protection
@@ -4894,7 +4894,11 @@ read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
 Gateway main thread. Exhaustive protected-only results suppress further passes
-until eligibility, policy, or the existing age deadline changes.
+until eligibility, policy, or the existing age deadline changes. Delivery settlement
+retains the entry count and tightens the retention deadline from its receipt when
+it releases the last durable claim. A young store below the capacity threshold
+stays idle without a count snapshot, age query, or empty write transaction; an
+already-due deadline or capacity pressure resumes exact planning.
 Committed registry publications update the retained capture before the final host
 maintenance grant, without another candidate read or worker-side registry digest.
 Protection published after that grant is ordered after the admitted maintenance
