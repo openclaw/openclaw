@@ -173,7 +173,7 @@ Themes can choose a neutral prompt mark instead of the lobster mascot and supply
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
-Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. Existing users keep this theme artwork until they change their background preference.
+Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without one for the current mode, use neutral artwork. Existing users keep this theme artwork until they change their background preference.
 
 In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Conversations** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with conversation backgrounds off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
 

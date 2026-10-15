@@ -280,40 +280,52 @@ export function createSessionRowRefresh(
     const preparation = owner.runAsOwner(async () => {
       try {
         const attempted = new Set<string>();
-        while (selectionNeedsPreparation(options)) {
+        const held = new Set<Promise<void>>();
+        let candidates: Iterator<string> | undefined;
+        while (!owner.state().disposed) {
           for (
             let pending = owner.prepareRegistryFacts();
             pending;
             pending = owner.prepareRegistryFacts()
           ) {
+            candidates = undefined;
             await pending;
           }
           if (owner.state().topologyDirty) {
+            candidates = undefined;
             await owner.topology();
           }
           if (owner.state().disposed || owner.state().topologyDirty) {
             continue;
           }
+          if (owner.membership.needsPreparation) {
+            candidates = undefined;
+          }
           await owner.membership.prepare();
-          if (owner.state().registryPrepared) {
-            for (const id of owner.dirty) {
-              const row = owner.rows.get(id);
-              if (
-                row?.entryAcquisitionPending &&
-                row.storedEntry &&
-                row.sharingEntry === row.storedEntry &&
-                !row.unresolvedDatabaseFacts
-              ) {
-                owner.acquireEntry(row, row.storedEntry);
+          if (!candidates) {
+            // Acquire lineage before any batch; keep the dirty cursor across accepted batches.
+            // Restart only when another preparation owner or a joined read changes readiness.
+            if (owner.state().registryPrepared) {
+              for (const id of owner.dirty) {
+                const row = owner.rows.get(id);
+                if (
+                  row?.entryAcquisitionPending &&
+                  row.storedEntry &&
+                  row.sharingEntry === row.storedEntry &&
+                  !row.unresolvedDatabaseFacts
+                ) {
+                  owner.acquireEntry(row, row.storedEntry);
+                }
               }
             }
+            candidates = owner.dirty.values();
           }
           if (!metadataOnly && owner.catalog.needsInitialRead) {
             await owner.catalog.refresh();
           }
           const selected = new Set<string>();
-          const held = new Set<Promise<void>>();
-          for (const id of owner.dirty) {
+          for (let next = candidates.next(); !next.done; next = candidates.next()) {
+            const id = next.value;
             if (attempted.has(id) || !rowNeedsDatabaseRead(id, metadataOnly)) {
               continue;
             }
@@ -346,6 +358,8 @@ export function createSessionRowRefresh(
             }
           } else {
             await Promise.all(held);
+            held.clear();
+            candidates = undefined;
           }
         }
         if (!owner.state().disposed) {
