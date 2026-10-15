@@ -190,9 +190,13 @@ then use a fresh checkout of the same commit, so qualification build outputs
 cannot dirty the release source.
 
 The qualification proof includes Gateway process and host resource snapshots around
-simulator boot. Setup failures add a bounded process sample, a read-only worker/queue
-snapshot, and classified Gateway events; cleanup failures identify the fixture owner.
-The artifact excludes raw logs, command arguments, paths, and pairing credentials.
+simulator boot and elapsed setup RPC authentication, dispatch, and response timings.
+The setup-code request has a 60-second deadline; a request still pending after 10 seconds
+captures one bounded process sample, a read-only worker/queue snapshot, and classified
+Gateway events. Setup failures also capture this evidence, and cleanup failures identify
+the fixture owner. Diagnostic capture finishes before fixture cleanup and does not
+change the setup result. The artifact excludes raw logs, command arguments, paths,
+and pairing credentials.
 
 The entry point freezes the live App Store plan and unchanged source SHA,
 generates reviewed release notes from changes since the latest public build,

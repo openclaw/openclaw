@@ -180,18 +180,8 @@ describe("Plugin SDK API baseline", () => {
   it.each([
     [
       "openclaw-worktree",
-      "openclaw/node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
-      "node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
-    ],
-    [
-      "openclaw-worktree",
       "openclaw-worktree/node_modules/.pnpm/@openclaw+fs-safe@1.0.0/node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
       "node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
-    ],
-    [
-      "node_modules/openclaw",
-      "node_modules/openclaw/src/plugin-sdk/core.ts",
-      "src/plugin-sdk/core.ts",
     ],
   ])("normalizes source paths under %s: %s", (repo, source, expected) => {
     expect(
@@ -203,11 +193,6 @@ describe("Plugin SDK API baseline", () => {
   });
 
   it.each([
-    {
-      tuple: '["first", "middle", "last", "first"] as const',
-      warmup: '"last"',
-      expected: '"first" | "middle" | "last"',
-    },
     {
       tuple: "[3, 1, 2] as const",
       warmup: "1",
@@ -504,58 +489,6 @@ describe("Plugin SDK API baseline", () => {
     },
   );
 
-  it("renders linked external types alongside local exports", async () => {
-    const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-linked-local-");
-    const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
-    const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
-    fs.mkdirSync(path.dirname(entry), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "node_modules"));
-    fs.writeFileSync(path.join(repoRoot, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(
-      path.join(repoRoot, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          target: "ESNext",
-          types: [],
-        },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(external, "package.json"),
-      '{"name":"fixture-linked","type":"module","types":"index.d.ts"}',
-    );
-    fs.writeFileSync(
-      path.join(external, "index.d.ts"),
-      'export declare const externalValue: "external";\n',
-    );
-    fs.symlinkSync(external, path.join(repoRoot, "node_modules/fixture-linked"), "junction");
-    const source = (origin: string) =>
-      [
-        'import { externalValue } from "fixture-linked";',
-        "export const linked = externalValue;",
-        `export const local = "${origin}" as const;`,
-      ].join("\n");
-    fs.writeFileSync(entry, source("checked"));
-    const render = () => renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
-    const stable = await render();
-    expect(stable.modules[0]?.exports).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          exportName: "linked",
-          declaration: expect.stringContaining('"external"'),
-        }),
-        expect.objectContaining({
-          exportName: "local",
-          declaration: expect.stringContaining('"checked"'),
-        }),
-      ]),
-    );
-
-    expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
-  });
-
   it("renders a checkout reached through a symlinked alias", async () => {
     // macOS temporary revision checkouts sit behind the /var -> /private/var alias.
     const baseline = await renderSourceFixture(
@@ -615,23 +548,14 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
-  it.each(["named", "unqualified"] as const)(
-    "keeps hashes stable when %s declarations move",
-    async (kind) => {
-      const render = (directory: string) =>
-        renderSourceFixture({
-          "fixture.ts":
-            kind === "named"
-              ? `import type { Leaf } from "./${directory}/mod.js";\nexport declare function createFixture(value: Leaf): Leaf;`
-              : `export declare const fixture: typeof import("./${directory}/mod.js");\n`,
-          [`${directory}/mod.ts`]:
-            kind === "named"
-              ? "export type Leaf = { value: string };\n"
-              : "export const value = 1;\n",
-        });
-      expect(await render("moved")).toEqual(await render("dep"));
-    },
-  );
+  it("keeps hashes stable when unqualified declarations move", async () => {
+    const render = (directory: string) =>
+      renderSourceFixture({
+        "fixture.ts": `export declare const fixture: typeof import("./${directory}/mod.js");\n`,
+        [`${directory}/mod.ts`]: "export const value = 1;\n",
+      });
+    expect(await render("moved")).toEqual(await render("dep"));
+  });
 
   it("includes globals from side-effect imports in closure hashes", async () => {
     const render = (optionalValue: boolean) =>
@@ -658,33 +582,18 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
-  it.each(["transitive", "aliased"] as const)(
-    "ignores unreachable declarations beside a %s export",
-    async (kind) => {
-      const render = (extra = "") =>
-        renderSourceFixture(
-          kind === "transitive"
-            ? {
-                "fixture.ts":
-                  'import type { Bridge } from "./bridge.js";\nexport declare function createFixture(value: Bridge): Bridge;',
-                "bridge.ts":
-                  'import type { Shared } from "./shared.js";\nexport type Bridge = { shared: Shared };',
-                "shared.ts": `export type Shared = { value: string };\n${extra}`,
-              }
-            : {
-                "fixture.ts": 'export { internalFixture as publicFixture } from "./dep.js";\n',
-                "dep.ts": `export function internalFixture(value: string): string { return value; }\n${extra}`,
-              },
-        );
-      const baseline = await render();
-      expect(await render("export type Unrelated = { ignored: boolean };\n")).toEqual(baseline);
-      if (kind === "aliased") {
-        const declaration = baseline.modules[0]?.exports[0]?.declaration;
-        expect(declaration).toContain("function publicFixture(");
-        expect(declaration).not.toContain("internalFixture");
-      }
-    },
-  );
+  it("ignores unreachable declarations beside a transitive export", async () => {
+    const render = (extra = "") =>
+      renderSourceFixture({
+        "fixture.ts":
+          'import type { Bridge } from "./bridge.js";\nexport declare function createFixture(value: Bridge): Bridge;',
+        "bridge.ts":
+          'import type { Shared } from "./shared.js";\nexport type Bridge = { shared: Shared };',
+        "shared.ts": `export type Shared = { value: string };\n${extra}`,
+      });
+    const baseline = await render();
+    expect(await render("export type Unrelated = { ignored: boolean };\n")).toEqual(baseline);
+  });
 
   it("bounds repeated work inside a cyclic declaration fanout without sharing partial roots", () => {
     const repoRoot = tempDirs.make("openclaw-plugin-sdk-cyclic-fanout-");

@@ -10,11 +10,14 @@ import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscr
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
@@ -33,6 +36,7 @@ import {
   notifyRenderLifecycleForTest,
   type RenderLifecycle,
 } from "./render-lifecycle.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
@@ -79,6 +83,23 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   get attachmentReads(): ChatAttachmentReadLifecycle {
     return this.attachmentReadsValue;
+  }
+
+  projectRunActivity(state: TState | undefined) {
+    return state?.connected
+      ? {
+          client: state.client,
+          agentId: resolveChatAgentId(state),
+          working: isChatRunWorking({
+            runActive: hasDirectSessionRun(state),
+            queue: state.chatQueue,
+            runStatus: state.chatRunStatus,
+            sessionKey: state.sessionKey,
+            startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
+          }),
+          completion: state.chatRunStatus,
+        }
+      : null;
   }
 
   takeAttachmentReads(): ChatAttachmentReadLifecycle {
