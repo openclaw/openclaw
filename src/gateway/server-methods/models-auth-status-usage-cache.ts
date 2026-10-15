@@ -243,6 +243,7 @@ function recordProviderUsageMetricsRefresh(params: {
 }
 
 export function clearModelAuthStatusUsageCache(): void {
+  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   usageMetricsGeneration += 1;
