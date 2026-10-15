@@ -6,6 +6,7 @@ import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
@@ -375,7 +376,20 @@ describe("shared proof capture", () => {
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
       const app = document.createElement("openclaw-app");
       vi.stubGlobal("openclawControlUi", {
+        snapshot: (): ReturnType<ControlUiReadiness["hook"]["snapshot"]> => ({
+          generation: 7,
+          booted: true,
+          gatewayPhase: "connected",
+          routeReady: true,
+          rosterReady: false,
+          ready: false,
+          basePath: "/private-base",
+          sessionKey: "private-session",
+          route: null,
+          terminalActivationReady: false,
+        }),
         diagnostics: () => ({
+          settlementError: failure === "storage" ? "private-settlement-error" : null,
           gateway: {
             phase: failure === "storage" ? "private-phase" : "connected",
             hello: {
@@ -651,6 +665,15 @@ describe("shared proof capture", () => {
             failure === "evaluation"
               ? { available: false }
               : {
+                  readiness: {
+                    generation: 7,
+                    booted: true,
+                    gatewayPhase: "connected",
+                    routeReady: true,
+                    rosterReady: false,
+                    ready: false,
+                    settlementFailed: failure === "storage",
+                  },
                   gatewayPhase: failure === "storage" ? "unknown" : "connected",
                   connected: true,
                   canvasWidgets: [

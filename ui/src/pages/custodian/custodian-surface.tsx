@@ -7,6 +7,7 @@ import { handleMarkdownTableInteraction } from "../../components/markdown-tables
 import { OptionCard } from "../../components/option-card.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/openclaw-mascot.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
@@ -38,7 +39,6 @@ import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianChannelOnboardingNudge, CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSetupCard } from "./custodian-setup-card.tsx";
-import { renderCustodianWizardControls } from "./custodian-surface.ts";
 import {
   createPluginHelpRequest,
   currentPluginHelpReference,
@@ -134,8 +134,27 @@ function TranscriptEntry(props: {
             <Show when={step().title}>
               <strong class="custodian__wizard-title">{formatUiExternalText(step().title!)}</strong>
             </Show>
-            <LitContent
-              render={() => renderCustodianWizardControls(props.store(), props.message, step())}
+            <WizardStepControls
+              step={step()}
+              value={props.store().wizardValue}
+              busy={!props.store().canSend}
+              inputId={`custodian-wizard-input-${props.message.id}`}
+              sensitiveRevealed={props.store().wizardSecretVisible}
+              onValueChange={(value) => props.store().setWizardValue(value)}
+              onAnswer={(value) => props.store().answerWizardStep(props.message, value)}
+              onToggleSensitiveVisibility={() => props.store().toggleWizardSecretVisibility()}
+              leadingAction={
+                props.store().wizardCancelAvailable ? (
+                  <button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    disabled={!props.store().canSend}
+                    onClick={() => props.store().cancelWizardStep(props.message)}
+                  >
+                    {t("custodian.cancel")}
+                  </button>
+                ) : undefined
+              }
             />
           </section>
         )}

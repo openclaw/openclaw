@@ -109,6 +109,9 @@ describePosix("prior-CI forward main admission", () => {
         expect(result.output).toContain(
           proofSeconds > 900 ? "900s/32-round limit" : "60s settle limit",
         );
+        if (transport === "rest" && proofSeconds < 900) {
+          expect(result.output).toContain("after 1 observations; stopped before intent/dispatch");
+        }
         expectNoDispatch(f);
       }
     },

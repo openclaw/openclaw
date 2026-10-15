@@ -244,13 +244,12 @@ extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/structures.ts	7
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
-extensions/discord/src/markdown.ts	4
+extensions/discord/src/markdown.ts	1
 extensions/discord/src/monitor/agent-components.plugin-interactive.ts	1
 extensions/discord/src/monitor/channel-access.ts	1
 extensions/discord/src/monitor/exec-approvals.ts	1
 extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	2
-extensions/discord/src/monitor/gateway-supervisor.ts	1
 extensions/discord/src/monitor/ingress.ts	6
 extensions/discord/src/monitor/message-channel-info.ts	1
 extensions/discord/src/monitor/message-forwarded.ts	5
@@ -930,7 +929,6 @@ extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	2
 extensions/whatsapp/src/connection-owner.ts	1
-extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	3
@@ -2598,14 +2596,12 @@ ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-organizer-controller.ts	5
-ui/src/components/settings-sidebar.ts	3
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/components/web-awesome.ts	2
-ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	5
 ui/src/lib/board/gateway-provider.ts	2

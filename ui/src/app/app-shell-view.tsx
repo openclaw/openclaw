@@ -8,6 +8,7 @@ import {
   renderContextNewSessionAction,
   renderNewSessionLink,
 } from "../components/new-session-link.ts";
+import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -238,11 +239,13 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             tabindex={view().mobileNavLayout ? -1 : undefined}
             inert={view().navigationSurfaceHidden}
           >
-            <LitRouteHost
-              renderValue={() =>
-                view().settingsTakeover ? view().navigationContent : props.host.navigationSidebar
-              }
-            />
+            <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
+              <LazySettingsSidebar
+                loader={props.host.settingsSidebar}
+                revision={props.host.shellRevision()}
+                sidebarProps={view().settingsSidebarProps}
+              />
+            </Show>
           </div>
         </Show>
         <Show
@@ -323,7 +326,11 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             <LitRouteHost renderValue={() => renderFloatingUpdateCard(view().floatingUpdateCard)} />
           </Show>
           <Show when={view().embedNavigation}>
-            <LitRouteHost renderValue={() => view().navigationContent} />
+            <LazySettingsSidebar
+              loader={props.host.settingsSidebar}
+              revision={props.host.shellRevision()}
+              sidebarProps={view().settingsSidebarProps}
+            />
           </Show>
           <ShellLayoutProvider
             value={{

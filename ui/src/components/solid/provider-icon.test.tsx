@@ -1,9 +1,26 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
+import type { CloudProfileIdentity } from "../provider-icon-data.ts";
+import { Icon } from "./icon.tsx";
 import { CloudProfileIcon, ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
 
 afterEach(cleanup);
+
+function svgGeometry(element: Element | null): unknown {
+  return element
+    ? {
+        tag: element.localName,
+        namespace: element.namespaceURI,
+        attributes: Object.fromEntries(
+          [...element.attributes]
+            .filter((attribute) => attribute.name !== "aria-hidden")
+            .map((attribute) => [attribute.name, attribute.value]),
+        ),
+        children: [...element.children].map(svgGeometry),
+      }
+    : null;
+}
 
 it("updates provider brands, aliases, and grapheme fallbacks without retaining stale assets", () => {
   const [provider, setProvider] = createSignal("google");
@@ -27,16 +44,19 @@ it("updates provider brands, aliases, and grapheme fallbacks without retaining s
 });
 
 it("keeps cloud identity separate and changes from a branded service to infrastructure symbols", () => {
-  const [providerId, setProviderId] = createSignal("google");
+  const [profile, setProfile] = createSignal<CloudProfileIdentity>({
+    providerId: "crabbox",
+    providerDisplayId: "google",
+  });
   const view = render(() => (
     <>
-      <CloudProfileIcon profile={{ providerId: providerId() }} />
+      <CloudProfileIcon profile={profile()} />
       <ProviderFallbackIcon label="   " />
     </>
   ));
   expect(view.container.querySelector("[data-provider-icon=gcp]")).not.toBeNull();
   expect(view.container.querySelector(".provider-brand-icon--fallback")?.textContent).toBe("?");
-  setProviderId("docker");
+  setProfile({ providerId: "docker" });
   flush();
   expect(view.container.querySelector("[data-provider-icon]")).toBeNull();
   expect(view.container.querySelector(".cloud-profile-icon svg")?.getAttribute("viewBox")).toBe(
@@ -44,4 +64,19 @@ it("keeps cloud identity separate and changes from a branded service to infrastr
   );
   expect(view.container.querySelector(".cloud-profile-icon polygon")).toBeNull();
   expect(view.container.querySelector(".cloud-profile-icon polyline")).not.toBeNull();
+});
+
+it.each([
+  ["machine0", "server"],
+  ["incus", "server"],
+  ["docker", "box"],
+  ["constructor", "cloud"],
+] as const)("uses shared generic geometry for %s", (providerId, expectedIcon) => {
+  const actual = render(() => <CloudProfileIcon profile={{ providerId }} />);
+  const expected = render(() => <Icon name={expectedIcon} />);
+  expect(svgGeometry(actual.container.querySelector("svg"))).toEqual(
+    svgGeometry(expected.container.querySelector("svg")),
+  );
+  expect(actual.container.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
+  expect(actual.container.querySelector("[data-provider-icon]")).toBeNull();
 });

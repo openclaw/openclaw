@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openUrl } from "../infra/browser-open.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -14,7 +15,6 @@ import {
   formatControlUiSshHint,
   handleReset,
   normalizeGatewayTokenInput,
-  openUrl,
   probeGatewayConfiguredModel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,

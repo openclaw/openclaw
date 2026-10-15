@@ -1,0 +1,119 @@
+/* @vitest-environment jsdom */
+
+import { createSignal, flush } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { openSlot } from "./sidebar-layout.ts";
+import "../../components/board/board-view.ts";
+
+type BoardTestPane = HTMLElement & {
+  context: ApplicationContext;
+  state: ChatPageHost;
+  resolveBoardProvider: () => BoardProvider;
+  resolveBoardView: () => ResolvedBoardView;
+  renderBoardPanel: (board: ResolvedBoardView, layout: ChatPageHost["sidebarLayout"]) => unknown;
+  releaseBoardProviderLease: () => void;
+};
+
+type BoardSnapshot = BoardProvider["snapshot$"]["value"];
+
+function createGatewayBoardPane(sessionKey: string) {
+  const snapshot: BoardSnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
+  const request = vi.fn<(method: string, params: unknown) => Promise<BoardSnapshot>>(
+    async () => snapshot,
+  );
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const { pane: base } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
+  const pane = base as unknown as BoardTestPane;
+  pane.state.sessionKey = sessionKey;
+  Reflect.set(pane, "boardProviderLifecycleConnected", true);
+  pane.context = {
+    ...pane.context,
+    gateway: {
+      ...pane.context.gateway,
+      snapshot: { client, phase: "connected", hello: { features: { methods: ["board.get"] } } },
+    },
+  } as unknown as ApplicationContext;
+  // The board custom element must be connected before its loading state commits.
+  const container = document.body.appendChild(document.createElement("div"));
+  const layout = openSlot({ columns: [] }, "dashboard");
+  const [content, setContent] = createSignal<unknown>(emptyLegacyContent);
+  const mounted = mountSolid(() => <LitContent value={content()} />, { container });
+  return {
+    pane,
+    request,
+    snapshot,
+    container,
+    draw: () => {
+      setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+      flush();
+    },
+    cleanup: () => {
+      mounted.unmount();
+      container.remove();
+      pane.releaseBoardProviderLease();
+    },
+  };
+}
+
+describe("chat pane board loading states", () => {
+  it("shows a board skeleton until the snapshot arrives", async () => {
+    const sessionKey = "agent:main:pending-board";
+    const { pane, request, snapshot, container, draw, cleanup } =
+      createGatewayBoardPane(sessionKey);
+    let complete!: (snapshot: BoardSnapshot) => void;
+    request.mockReturnValueOnce(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    const provider = pane.resolveBoardProvider();
+    try {
+      draw();
+      const view = container.querySelector("openclaw-board-view")!;
+      await view.updateComplete;
+      const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
+      await skeleton?.updateComplete;
+      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("board");
+      expect(skeleton?.getAttribute("role")).toBe("status");
+      expect(container.textContent?.trim()).toBe("");
+      complete(snapshot);
+      await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+      draw();
+      await view.updateComplete;
+      await view.updateComplete;
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(container.querySelector("openclaw-board-view")).toBe(view);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("replaces the skeleton with a styled alert when the snapshot fails to load", async () => {
+    const { pane, request, container, draw, cleanup } = createGatewayBoardPane(
+      "agent:main:failing-board",
+    );
+    request.mockRejectedValueOnce(new Error("gateway offline"));
+    const provider = pane.resolveBoardProvider();
+    try {
+      await vi.waitFor(() => expect(provider.loadError$.value).toBeTruthy());
+      draw();
+      const alert = container.querySelector('[role="alert"]');
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(alert?.classList.contains("board-session-surface__state--error")).toBe(true);
+      expect(alert?.textContent).toContain("gateway offline");
+    } finally {
+      cleanup();
+    }
+  });
+});
