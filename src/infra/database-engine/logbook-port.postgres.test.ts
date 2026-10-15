@@ -172,13 +172,13 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       assertCurrent,
     });
     namespaces.add(restored.namespace);
-    const { tables, allocations } = await inspectDatabasePort(
+    const { tables, allocations: restoredAllocations } = await inspectDatabasePort(
       { engine: "postgres", db: client, namespace: restored.namespace },
       descriptor,
       storeId,
       true,
     );
-    expect({ tables, allocations }).toEqual(forward);
+    expect({ tables, allocations: restoredAllocations }).toEqual(forward);
     using anchor = openNodeSqliteDatabase(anchorPath);
     expect(anchor.prepare("SELECT * FROM openclaw_engine_anchor").get()).toEqual({
       engine: "postgres",
