@@ -473,7 +473,13 @@ function createOperationAdmission(
       }
       const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
       if (granted) {
-        if (request.stage === "transaction" || request.stage === "commit") {
+        if (
+          request.stage === "transaction" ||
+          request.stage === "commit" ||
+          (request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            request.facts.kind === "schema-maintenance")
+        ) {
           recordSqliteWorkerWriteGrant(admission);
         }
         Atomics.notify(decision, 0);

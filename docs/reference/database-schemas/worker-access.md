@@ -190,7 +190,7 @@ scope keys receive a fresh receipt identity, so old cached reads remain invalid.
 Worker exit releases handle references without advancing data revisions, so
 session and auth caches held by live siblings survive idle-worker retirement.
 Native writes settle their receipts before returning or closing. If an operation
-received a transaction or commit grant but its outcome is unknown, the broker
+received a transaction, commit, or schema-maintenance grant but its outcome is unknown, the broker
 invalidates receipts for its admitted write locations before settling the caller.
 This covers a worker dying after durable COMMIT but before receipt publication;
 the operation owner still handles unknown-outcome recovery.

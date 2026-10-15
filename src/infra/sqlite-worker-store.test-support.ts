@@ -19,6 +19,7 @@ import {
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 
 let pendingCloses = 0;
 type ReplyOwnership = { kind: string; before: number; after: number };
@@ -76,7 +77,7 @@ export type FixtureOperations = {
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
   commitWithoutReceipt: {
-    input: { value: string; stage: "transaction" | "commit" };
+    input: { value: string; stage: "transaction" | "commit" | "schema-maintenance" };
     output: never;
   };
   commitUnserializable: { input: { value: string }; output: symbol };
@@ -227,13 +228,24 @@ function createFixtureBackend(
             process.exit(17);
           }
         };
-        runSqliteImmediateTransactionSync(db, () => {
-          requestSqliteWorkerOperationAdmission({ stage: command.input.stage, facts: undefined });
-          executeSqliteQuerySync(
-            db,
-            query.insertInto("entries").values({ value: command.input.value }),
-          );
-        });
+        const write = () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            if (command.input.stage !== "schema-maintenance") {
+              requestSqliteWorkerOperationAdmission({
+                stage: command.input.stage,
+                facts: undefined,
+              });
+            }
+            executeSqliteQuerySync(
+              db,
+              query.insertInto("entries").values({ value: command.input.value }),
+            );
+          });
+        if (command.input.stage === "schema-maintenance") {
+          withStateDatabaseSchemaMaintenance({ databasePath }, write);
+        } else {
+          write();
+        }
         throw new Error("Fixture COMMIT did not exit");
       }
       if (command.type === "database.domain.execute") {

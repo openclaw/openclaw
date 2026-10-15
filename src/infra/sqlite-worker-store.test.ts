@@ -894,7 +894,7 @@ describe("SQLite worker store", () => {
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
 
-  it.each(["transaction", "commit"] as const)(
+  it.each(["transaction", "commit", "schema-maintenance"] as const)(
     "invalidates saved authority receipts when a %s-granted writer dies inside native COMMIT",
     async (stage) => {
       const file = databasePath();
