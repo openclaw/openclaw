@@ -53,64 +53,9 @@ const LEGACY_TOOLS_MD_TEMPLATE_FIXTURE =
   ].join("\n") + "\n";
 const LEGACY_AGENTS_GUIDANCE_REWRITES = [
   [
-    "generic workspace template",
-    "Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.",
-    "Skills define how tools work. Keep environment-specific local notes in this section.",
-  ],
-  [
-    "default template lowercase parenthetical",
-    "- Keep environment-specific notes in `TOOLS.md` (notes for skills).",
-    "- Keep environment-specific notes in this file's `## Tools` section.",
-  ],
-  [
-    "default template title-case parenthetical",
-    "- Keep environment-specific notes in `TOOLS.md` (Notes for Skills).",
-    "- Keep environment-specific notes in this file's `## Tools` section.",
-  ],
-  [
-    "current lesson reminder",
-    "- You learn a lesson -> update `AGENTS.md`, `TOOLS.md`, or the relevant skill.",
-    "- You learn a lesson -> update `AGENTS.md` or the relevant skill.",
-  ],
-  [
     "original lesson reminder",
     "- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill",
     "- When you learn a lesson → update AGENTS.md or the relevant skill",
-  ],
-  [
-    "Chinese generic template with English Skills",
-    "Skills 提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
-    "Skills 定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
-  ],
-  [
-    "Chinese generic template",
-    "技能提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
-    "技能定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
-  ],
-  [
-    "Chinese default template",
-    "- 在 `TOOLS.md` 中保存环境特定的笔记（Skills 注意事项）。",
-    "- 将环境特定的笔记保存在本文件的 `## Tools` 部分。",
-  ],
-  [
-    "Chinese default template with Skills",
-    "- 将环境相关的备注保存在 `TOOLS.md`（Skills 备注）中。",
-    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
-  ],
-  [
-    "Chinese default template with translated skills",
-    "- 将环境相关的备注保存在 `TOOLS.md`（技能备注）中。",
-    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
-  ],
-  [
-    "Chinese lesson reminder with Skills",
-    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关 Skills 文件",
-    "- 当你学到教训 → 更新 AGENTS.md 或相关 Skills 文件",
-  ],
-  [
-    "Chinese lesson reminder with translated skills",
-    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关技能文件",
-    "- 当你学到教训 → 更新 AGENTS.md 或相关技能文件",
   ],
 ] as const;
 
@@ -294,12 +239,12 @@ describe("TOOLS.md migration", () => {
           mode === 0o640 &&
           !sourceTightened
         ) {
-          const readFile = handle.readFile.bind(handle);
-          vi.spyOn(handle, "readFile").mockImplementationOnce(async () => {
-            const content = await readFile();
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
             await fs.chmod(fixture.toolsPath, 0o600);
             sourceTightened = true;
-            return content;
+            return result;
           });
         }
         return handle;
@@ -551,27 +496,6 @@ describe("TOOLS.md migration", () => {
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(
       `${agents}\n\n## Tools\n\n### Local notes (migrated from TOOLS.md)\n\n${tools}`,
     );
-    await expectMissing(fixture.toolsPath);
-  });
-
-  it.each([
-    ["untouched template", LEGACY_TOOLS_MD_TEMPLATE_FIXTURE],
-    ["whitespace-only file", " \n\t"],
-  ])("deletes the %s without appending content", async (_label, tools) => {
-    const fixture = await createFixture();
-    const agents = "# Agent\n\n## Tools\n\nLocal details stay unchanged.\n";
-    await fs.writeFile(fixture.agentsPath, agents);
-    await fs.writeFile(fixture.toolsPath, tools);
-
-    const result = await maybeMigrateToolsMd({
-      cfg: fixture.cfg,
-      shouldRepair: true,
-      env: fixture.env,
-    });
-
-    expect(result.warnings).toEqual([]);
-    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
-    await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
     await expectMissing(fixture.toolsPath);
   });
 

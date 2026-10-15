@@ -11,14 +11,14 @@ import {
   createSessionCapabilityFixture,
 } from "../pages/chat/chat-pane.test-support.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
-import type { ChatProps } from "../pages/chat/chat-view.ts";
+import type { ChatProps } from "../pages/chat/chat-view.tsx";
 import { renderChatDetailSlot } from "../pages/chat/components/chat-detail-slot.ts";
-import "../pages/chat/components/chat-detail-panel.ts";
+import "../pages/chat/components/chat-detail-panel.tsx";
 import {
   createSessionWorkspaceProps,
   renderSessionWorkspaceRail,
 } from "../pages/chat/components/chat-session-workspace.ts";
-import "../pages/chat/components/chat-sidebar-region.runtime.ts";
+import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
 

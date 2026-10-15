@@ -20,7 +20,7 @@ const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // the narration throttle so replacement cadence stays consistent.
 const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
-type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
+export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
 type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
@@ -85,6 +85,8 @@ export class SidebarSessionProjection {
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
   private readonly childModes = new Map<string, SidebarExpansionMode>();
+  private readonly observedChildKeys = new Map<string, readonly string[]>();
+  private restoredChildrenPending = false;
   private readonly heldSubtitles = new Map<
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
@@ -177,12 +179,15 @@ export class SidebarSessionProjection {
       this.resetMembership();
     }
     if (
+      !this.restoredChildrenPending &&
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity)
     ) {
       this.childModes.clear();
+      this.observedChildKeys.clear();
     }
+    this.restoredChildrenPending = false;
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -201,12 +206,27 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const staleKeys = new Set([...this.childModes.keys(), ...this.heldSubtitles.keys()]);
+    const staleKeys = new Set([
+      ...this.childModes.keys(),
+      ...this.observedChildKeys.keys(),
+      ...this.heldSubtitles.keys(),
+    ]);
     const observeTree = (session: SidebarRecentSession) => {
       staleKeys.delete(session.key);
-      if (session.containsActiveDescendant && !this.childModes.has(session.key)) {
+      const previousChildren = this.observedChildKeys.get(session.key);
+      const mode = this.childModes.get(session.key);
+      // New children reveal their parent once; ordinary refreshes and reordering
+      // must not undo an explicit collapse or the operator's Show more choice.
+      const hasNewChild =
+        previousChildren !== undefined &&
+        session.childSessionKeys.some((key) => !previousChildren.includes(key));
+      if (
+        (mode === undefined && session.containsActiveDescendant) ||
+        (hasNewChild && mode !== "expanded-fully")
+      ) {
         this.childModes.set(session.key, "expanded");
       }
+      this.observedChildKeys.set(session.key, session.childSessionKeys);
       this.observeSubtitle(session, input.subtitle);
       for (const child of session.children) {
         observeTree(child);
@@ -215,6 +235,7 @@ export class SidebarSessionProjection {
     input.rows.forEach(observeTree);
     for (const key of staleKeys) {
       this.childModes.delete(key);
+      this.observedChildKeys.delete(key);
       this.heldSubtitles.delete(key);
     }
 
@@ -324,6 +345,26 @@ export class SidebarSessionProjection {
   isChildrenExpanded(key: string): boolean {
     const mode = this.childModes.get(key);
     return mode === "expanded" || mode === "expanded-fully";
+  }
+
+  captureChildrenDisplay(key: string): SidebarExpansionMode | undefined {
+    return this.childModes.get(key);
+  }
+
+  restoreChildrenDisplay(
+    rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[],
+  ): void {
+    this.childModes.clear();
+    this.observedChildKeys.clear();
+    for (const row of rows) {
+      if (row.childrenDisplayMode !== undefined) {
+        this.childModes.set(row.key, row.childrenDisplayMode);
+      }
+    }
+    // The first authoritative projection changes the connection scope; these
+    // admitted modes belong to that handoff, not the preceding empty projection.
+    this.restoredChildrenPending = this.childModes.size > 0;
+    this.revision += 1;
   }
 
   isChildrenFullyShown(key: string): boolean {

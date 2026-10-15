@@ -373,7 +373,9 @@ export const codexNativeTaskAssignmentMigration = {
     }
     const { bindingStoreKey, readStoredCodexAppServerBinding } =
       await import("../app-server/session-binding-record.js");
-    const sessionStore = await import("openclaw/plugin-sdk/session-store-runtime");
+    const { getSessionEntry, resolveStorePath } =
+      await import("openclaw/plugin-sdk/session-store-runtime");
+    const sessionStore: AssignmentSessionStore = { getSessionEntry, resolveStorePath };
     let imported = 0;
     let settled = 0;
     const store = params.context.openPluginStateKeyedStore<StoredCodexAppServerBinding>({

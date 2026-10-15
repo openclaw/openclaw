@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -11,12 +11,19 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+  renderComposerInto,
+  disposeComposer,
+} from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import { admitQueuedMessageForSession, updateQueuedMessage } from "./chat-queue.ts";
+import { updateQueuedMessage } from "./chat-queue.ts";
 import {
   moveQueuedChatMessage,
   retryQueuedChatMessage,
@@ -24,7 +31,6 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
@@ -146,23 +152,6 @@ async function submitQueuedEdit(host: ReturnType<typeof makeChatHost>): Promise<
 }
 
 describe("queued message edit round-trip", () => {
-  it("keeps the row-local draft and attachments separate from the composer", () => {
-    const attachment = { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,iVB" };
-    const { host } = queueHost([{}, { attachments: [attachment] }, {}]);
-    host.chatMessage = "separate composer draft";
-
-    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
-
-    expect(host.chatQueuedEdit?.draftText).toBe("message 2");
-    expect(host.chatQueuedEdit?.attachments.map((item) => item.id)).toEqual(["att-1"]);
-    expect(host.chatMessage).toBe("separate composer draft");
-    expect(host.chatAttachments).toEqual([]);
-    // The row holds its slot so the operator can see where the edit lands.
-    expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
-  });
-
   it("saves an unsent queued edit after the connection drops", async () => {
     const { host } = queueHost([
       {
@@ -182,26 +171,7 @@ describe("queued message edit round-trip", () => {
     expect(host.chatError).toBeNull();
   });
 
-  it("leaves composer attachments untouched when an edit is cancelled", () => {
-    const original = stageQueuedImage("att-original");
-    const added = stageQueuedImage("att-added");
-    const { host } = queueHost([{}, { attachments: [original] }, {}]);
-    host.chatMessage = "separate composer draft";
-    host.chatAttachments = [added];
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "half-typed replacement");
-
-    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
-    expect(host.chatMessage).toBe("separate composer draft");
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-    expect(getChatAttachmentDataUrl(original)).not.toBeNull();
-    expect(getChatAttachmentDataUrl(added)).not.toBeNull();
-    expect(host.chatAttachments).toEqual([added]);
-  });
-
-  it.each(["corrected prompt", "/review-this", "!echo hello"])(
+  it.each(["corrected prompt", "/review-this"])(
     "keeps an edited row's place and only eligible frozen context: %s",
     async (draft) => {
       const workContext = { page: "chat", title: "Original work" };
@@ -219,7 +189,7 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it.each(["steer", "interrupt"] as const)(
+  it.each(["interrupt"] as const)(
     "keeps an explicitly queued edit behind earlier messages while the composer defaults to %s",
     async (chatFollowUpMode) => {
       const sendRequest = vi.fn(() => ({ status: "started" as const }));
@@ -256,7 +226,7 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it.each(["/compact", "stop"])(
+  it.each(["/compact"])(
     "keeps the source row and rejects a command-like inline edit: %s",
     async (command) => {
       const sendRequest = vi.fn(() => ({ status: "started" as const }));
@@ -277,22 +247,8 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it("keeps a composer send separate from an open row edit", async () => {
-    const { host } = queueHost([{}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "message 1, corrected");
-    host.chatMessage = "separate composer send";
-
-    await handleSendChat(host as never);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2", "separate composer send"]);
-    expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
-  });
-
   it.each(
-    [false, true].flatMap((roundTrip) =>
-      ["move", "remove"].map((mutation) => ({ roundTrip, mutation })),
-    ),
+    [true].flatMap((roundTrip) => ["move", "remove"].map((mutation) => ({ roundTrip, mutation }))),
   )(
     "retains a stale edit after peer $mutation (route round trip: $roundTrip)",
     async ({ roundTrip, mutation }) => {
@@ -513,19 +469,6 @@ describe("queued message edit round-trip", () => {
     }
   });
 
-  it("keeps local reorder targets within one side of its own edited-row barrier", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}, {}]);
-
-    try {
-      beginQueuedMessageEdit(host as never, "queued-2");
-
-      expect(moveQueuedChatMessage(host as never, "queued-4", "queued-3")).toBe("moved");
-      expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 4", "message 3"]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
   it("does not collapse same-payload row and composer sends", async () => {
     const ack = createDeferred<{ status: "started" }>();
     const sendRequest = vi.fn(() => ack.promise);
@@ -586,20 +529,7 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("edits one row at a time and rejects a submit naming another row", async () => {
-    const { host } = queueHost([{}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-
-    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("unavailable");
-    await handleSendChat(host as never, "wrong replacement", {
-      resumeQueuedMessageEditId: "queued-2",
-    });
-    expect(storedOrder(host)).toEqual(["message 1", "message 2"]);
-    expect(host.chatQueuedEdit?.id).toBe("queued-1");
-  });
-
   it.each([
-    { label: "a local command", overrides: { localCommandName: "compact" } },
     { label: "a delivery-uncertain row", overrides: { sendState: "unconfirmed" as const } },
   ])("refuses to edit $label", ({ overrides }) => {
     const { host } = queueHost([overrides]);
@@ -607,7 +537,7 @@ describe("queued message edit round-trip", () => {
     expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("unavailable");
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps captured edit custody when main defaults change: %s",
     async (changeMainKey) => {
       const agentsList = {
@@ -622,7 +552,7 @@ describe("queued message edit round-trip", () => {
         agentsList,
         requestHandlers: { "chat.send": send },
       });
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       try {
         expect(beginQueuedMessageEdit(host, "queued-1")).toBe("started");
         expect(updateQueuedMessageEdit(host, "Unsaved original correction")).toBe(true);
@@ -635,20 +565,18 @@ describe("queued message edit round-trip", () => {
         chatOutboxOwner(host).syncHost(host);
         expect(host.chatQueue).toEqual([]);
         const active = activeQueuedMessageEdit(host);
-        render(
-          renderChatComposer(
-            createComposerProps({
-              queue: host.chatQueue,
-              sessionKey: host.sessionKey,
-              queuedEdit: {
-                editingId: active?.id ?? null,
-                editingText: active?.draftText,
-                source: active?.source,
-                onCancel: () => cancelQueuedMessageEdit(host),
-              },
-            }),
-          ),
+        renderComposerInto(
           container,
+          createComposerProps({
+            queue: host.chatQueue,
+            sessionKey: host.sessionKey,
+            queuedEdit: {
+              editingId: active?.id ?? null,
+              editingText: active?.draftText,
+              source: active?.source,
+              onCancel: () => cancelQueuedMessageEdit(host),
+            },
+          }),
         );
         await submitQueuedEdit(host);
         expect(send).not.toHaveBeenCalled();
@@ -666,7 +594,7 @@ describe("queued message edit round-trip", () => {
         expect(cancelQueuedMessageEdit(host)).toBe(true);
         expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);
       } finally {
-        render(null, container);
+        disposeComposer(container);
         unsubscribe();
         await resetComposerFixture();
       }

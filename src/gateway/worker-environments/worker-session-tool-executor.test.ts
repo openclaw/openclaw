@@ -6,6 +6,9 @@ import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/i
 import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -23,6 +26,7 @@ import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lin
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
+import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 const {
   workerSessionToolTestMocks,
@@ -76,6 +80,79 @@ describe("worker session tool topology", () => {
   });
 
   afterEach(() => resetGlobalHookRunner());
+
+  it.each([
+    {
+      name: "permitted",
+      allow: ["sessions_spawn", "github_publish"],
+      deny: [],
+      promptAllow: undefined,
+      expected: true,
+    },
+    { name: "unrestricted", allow: undefined, deny: [], promptAllow: undefined, expected: true },
+    {
+      name: "explicitly denied",
+      allow: ["sessions_spawn", "github_publish"],
+      deny: ["github_publish"],
+      promptAllow: undefined,
+      expected: false,
+    },
+    {
+      name: "prompt restricted",
+      allow: ["sessions_spawn", "github_publish"],
+      deny: [],
+      promptAllow: ["sessions_spawn"],
+      expected: false,
+    },
+  ])(
+    "captures $name publication for a new worker child",
+    async ({ allow, deny, promptAllow, expected }) => {
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      const config = { tools: { allow, deny } };
+      const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
+      const runtime = getFixture().createToolRuntime({
+        inheritedPublicationToolRef,
+        prepareTools: (adapters) =>
+          createOpenClawCodingToolsInternal(
+            {
+              config,
+              sessionKey: SOURCE.sessionKey,
+              githubPublicationAvailable: false,
+              inheritedPublicationToolRef,
+              wrapBeforeToolCallHook: false,
+              toolConstructionPlan: {
+                includeBaseCodingTools: false,
+                includeShellTools: false,
+                includeChannelTools: false,
+                includeOpenClawTools: true,
+                includePluginTools: false,
+              },
+              conversationCapabilityProfile: resolveConversationCapabilityProfile({
+                config,
+                sessionKey: SOURCE.sessionKey,
+                preparedSessionCapabilityStore: {},
+              }),
+            },
+            undefined,
+            undefined,
+            { tools: adapters, policy: prepareCoreToolPolicy({}) },
+          ),
+      });
+      const surface = await runtime.getSurface(identity);
+      expect(surface.tools.map((tool) => tool.definition.name)).not.toContain("github_publish");
+      runtime.applyPromptToolsAllow(promptAllow);
+      runtime.applyPromptToolsAllow(["sessions_spawn", "github_publish"]);
+      await spawn("publication-child");
+      const policy = gatewayCreate.mock.calls[0]?.[0]?.creation?.inheritedToolPolicy;
+      expect(policy.allow.includes("github_publish")).toBe(expected);
+      expect(
+        gatewayRuntimeIdentity.mock.calls[0]?.[1]?.sessionSpawnContext.inheritedToolPolicy.allow,
+      ).toEqual(policy.allow);
+      expect(placements.isWorkerTurnToolAuthorized(sourceClaim, "github_publish")).toBe(false);
+      await runtime.close();
+      expect(() => runtime.getInheritedPublicationToolName()).toThrow("Worker tool surface closed");
+    },
+  );
 
   it("rejects tool publication when the source run closes during preparation", async () => {
     const started = createDeferred();
@@ -862,29 +939,7 @@ describe("worker spawn startup composition", () => {
   );
 });
 
-describe("sender-restricted worker session creation", () => {
-  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
-    inheritedToolPolicySource: "sender",
-  });
-
-  it("refuses forced visible creation before child effects and replays the refusal", async () => {
-    const { setEntry, spawn } = getFixture();
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    const first = await spawn("restricted-worker-spawn");
-    const replay = await spawn("restricted-worker-spawn");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(JSON.parse(first.resultJson)).toMatchObject({
-      details: {
-        status: "forbidden",
-        error: "This sender may only start hidden helpers of the same agent.",
-      },
-    });
-    expect(gatewayCreate).not.toHaveBeenCalled();
-    expect(dispatchChild).not.toHaveBeenCalled();
-    expect(gatewayRequest).not.toHaveBeenCalled();
-  });
-});
+registerWorkerDelegationPolicyTests(fixtureMocks);
 
 describe.each([false, true])(
   "worker spawn parent authority (audit=%s)",

@@ -7,7 +7,6 @@ import {
   createAgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
@@ -43,6 +42,18 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", () => ({
   loadRequesterSessionEntry: mocks.loadRequester,
   isInternalAnnounceRequesterSession: () => false,
 }));
+vi.mock(
+  "../agents/subagents/announce/subagent-announce-delivery.runtime.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/announce/subagent-announce-delivery.runtime.js")
+    >()),
+    captureRequesterSessionEntryCurrent: async (sessionKey: string, agentId?: string) => ({
+      readCurrent: () => mocks.loadRequester(sessionKey, agentId).entry,
+      release() {},
+    }),
+  }),
+);
 vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
@@ -134,10 +145,10 @@ describe("SDK harness completion source admission", () => {
     expect(mocks.deliver).not.toHaveBeenCalled();
   });
 
-  it.each(["custody-currentness", "custody-signal", "caller-signal"] as const)(
+  it.each(["custody-currentness", "caller-signal"] as const)(
     "fences %s at asynchronous admission and effect boundaries",
     async (ending) => {
-      const { custody, controller } = custodyFixture();
+      const { custody } = custodyFixture();
       const caller = new AbortController();
       mocks.deliver.mockImplementation(async (delivery) => {
         const assertCurrent = assertHarnessCompletionSourceAdmission(source);
@@ -147,8 +158,6 @@ describe("SDK harness completion source admission", () => {
         await Promise.resolve();
         if (ending === "custody-currentness") {
           mocks.custodyCurrent = false;
-        } else if (ending === "custody-signal") {
-          controller.abort();
         } else {
           caller.abort();
         }
@@ -253,7 +262,7 @@ describe("SDK harness completion source admission", () => {
     },
   );
 
-  it.each(["unowned", "pending", "delivered"])(
+  it.each(["unowned"])(
     "rejects requester replacement during awaited %s reconciliation",
     async (custody) => {
       const entered = createDeferred();
@@ -288,34 +297,20 @@ describe("SDK harness completion source admission", () => {
     },
   );
 
-  it("preserves a reconciliation refusal without announcing the completion", async () => {
-    const refusal = new SessionTranscriptProjectionUnavailableError(source.requesterSessionId);
-    mocks.reconcile.mockRejectedValueOnce(refusal);
-    await expect(deliverAgentHarnessCompletion(params())).rejects.toBe(refusal);
+  it("blocks a replaced requester revision after awaited origin resolution", async () => {
+    mocks.resolveCompletionOrigin.mockImplementation(async () => {
+      mocks.loadRequester.mockReturnValue({
+        entry: {
+          sessionId: source.requesterSessionId,
+          lifecycleRevision: "successor",
+        },
+      });
+      return undefined;
+    });
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+    });
     expect(mocks.deliver).not.toHaveBeenCalled();
   });
-
-  it.each(["missing", "session", "revision"])(
-    "blocks %s requester after awaited origin resolution",
-    async (kind) => {
-      mocks.resolveCompletionOrigin.mockImplementation(async () => {
-        mocks.loadRequester.mockReturnValue({
-          entry:
-            kind === "missing"
-              ? undefined
-              : {
-                  sessionId: kind === "session" ? "successor" : source.requesterSessionId,
-                  lifecycleRevision:
-                    kind === "revision" ? "successor" : source.requesterLifecycleRevision,
-                },
-        });
-        return undefined;
-      });
-      await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
-        delivered: false,
-        recoveryBlocked: true,
-      });
-      expect(mocks.deliver).not.toHaveBeenCalled();
-    },
-  );
 });

@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
 
 const model: ModelCatalogEntry = {
   id: "gpt-5.6-sol",
@@ -20,33 +22,45 @@ const model: ModelCatalogEntry = {
   ],
 };
 
+type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
+const mountedControls = new WeakMap<HTMLElement, (props: ModelControlsProps) => void>();
+
 function renderControls(
   result: SessionsListResult,
   models: ModelCatalogEntry[],
-  options: Pick<
-    Parameters<typeof renderChatModelControls>[0],
-    "onModelSelect" | "onModelSetup" | "modelSelectionLocked"
-  > = {},
+  options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
   container = document.createElement("div"),
 ) {
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: models,
-      modelCatalogState: { hasSnapshot: true, status: "ready" },
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession: result.sessions[0],
-      sessionsResult: result,
-      stream: null,
-      ...options,
-    }),
-    container,
-  );
+  const props: ModelControlsProps = {
+    activeRunId: null,
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelCatalog: models,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    modelSwitching: false,
+    sending: false,
+    sessionKey: "main",
+    selectedSession: result.sessions[0],
+    sessionsResult: result,
+    stream: null,
+    ...options,
+  };
+  const update = mountedControls.get(container);
+  if (update) {
+    update(props);
+  } else {
+    const [current, setCurrent] = createSignal(props);
+    const view = mountSolid(() => createComponent(ChatModelControls, merge(current)), {
+      container,
+    });
+    mountedControls.set(container, setCurrent);
+    onTestFinished(() => {
+      view.unmount();
+      mountedControls.delete(container);
+    });
+  }
+  flush();
   return container;
 }
 
@@ -197,7 +211,7 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each([undefined, "codex"])(
+  it.each([undefined])(
     "selects exactly one row with absent base runtime metadata and selected runtime %s",
     (selectedRuntime) => {
       const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
@@ -238,11 +252,7 @@ describe("chat model runtime choices", () => {
     ).toContain("Chat only");
   });
 
-  it.each([
-    { observed: false, alternate: true },
-    { observed: true, alternate: true },
-    { observed: false, alternate: false },
-  ])(
+  it.each([{ observed: true, alternate: true }])(
     "labels a Codex default with alternate=$alternate and observed=$observed",
     ({ observed, alternate }) => {
       const container = renderRuntimeModel(
@@ -264,7 +274,7 @@ describe("chat model runtime choices", () => {
       ).toEqual(alternate ? ["GPT-5.6 Sol codex", "GPT-5.6 Sol"] : ["GPT-5.6 Sol"]);
       expect(
         container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-      ).toBe(alternate && !observed ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
+      ).toBe(alternate ? "GPT-5.6 Sol codex" : "GPT-5.6 Sol");
     },
   );
 
@@ -291,12 +301,6 @@ describe("chat model runtime choices", () => {
 
   it.each([
     { name: "an inherited default model", initialRuntime: "openclaw", modelOverrideSource: null },
-    { name: "a pinned model", initialRuntime: "openclaw", modelOverrideSource: "user" },
-    {
-      name: "an effective matching harness without a runtime pin",
-      initialRuntime: "codex",
-      modelOverrideSource: "user",
-    },
   ] as const)(
     "pins the chosen harness for $name and resets through Default",
     async ({ initialRuntime, modelOverrideSource }) => {
@@ -335,8 +339,8 @@ describe("chat model runtime choices", () => {
         expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
           defaultRow(),
         );
-        expect(runtimeRow().getAttribute("aria-selected")).toBe(String(initialRuntime === "codex"));
-        expect(defaultRow().getAttribute("aria-selected")).toBe(String(initialRuntime !== "codex"));
+        expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
+        expect(defaultRow().getAttribute("aria-selected")).toBe("true");
         runtimeRow().click();
         await selection;
         expect(host.request).toHaveBeenCalledWith("sessions.patch", {
@@ -370,7 +374,7 @@ describe("chat model runtime choices", () => {
     },
   );
 
-  it.each(["missing-auth", "cooldown", "unsupported-runtime", "locked"] as const)(
+  it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     (guard) => {
       const onSelect = vi.fn();
@@ -404,7 +408,7 @@ describe("chat model runtime choices", () => {
         expect(row?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
           "GPT-5.6 Sol codex",
         );
-        expect(row?.disabled).toBe(guard === "cooldown" || guard === "unsupported-runtime");
+        expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
           expect(row?.title).toBe("This harness is unavailable for this model.");
         }

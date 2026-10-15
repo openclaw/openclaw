@@ -3,8 +3,8 @@
  *
  * Timer ticks, hook dispatch queues, and heartbeat wakeups have no Gateway
  * request of their own, so trusted built-in tools (terminal, dashboard) resolve
- * no context and fail mid-run. RPC-triggered runs already inherit a scope from
- * their caller and must keep it.
+ * no context and fail mid-run. RPC admission keeps its caller scope; accepted
+ * scheduler-owned execution replaces that scope for work that can outlive the request.
  */
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";

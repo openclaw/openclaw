@@ -1,8 +1,9 @@
-import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
-import { mountMenu } from "../test-helpers/session-menu.ts";
+import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { menuItem, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
@@ -34,46 +35,44 @@ it.each(
       );
       root = await mountMenu({ context, onAction, compact: surface === "compact assignment" });
       await shown;
-      const groups = [
-        ...root.querySelectorAll<HTMLElement>(
-          ":scope > wa-dropdown > wa-dropdown-item:not([disabled])",
-        ),
-      ];
-      const assignment = groups.findIndex(
-        (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
-      );
-      expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
-      await userEvent.hover(groups[assignment]!);
-      groups[assignment]!.focus();
+      await userEvent.hover(assignment);
+      assignment.focus();
       await userEvent.keyboard("{Enter}");
     } else {
       root = document.createElement("div");
       roots.push(root);
       document.body.append(root);
-      render(
-        html`${renderChatSessionSharing({
-          session: { key: "agent:main:people", kind: "direct", updatedAt: 1, sharingRole: "owner" },
-          state: {
-            loading: false,
-            result: {
-              sessionKey: "agent:main:people",
-              role: "owner",
-              allowedVisibilities: ["shared"],
-              members: [],
-              identities: Array.from({ length: count }, (_, i) => ({
-                type: "human" as const,
-                id: `person-${i}`,
-                label: `Person ${String(i).padStart(4, "0")}`,
-              })),
+      mountSolid(
+        () =>
+          createComponent(ChatSessionSharing, {
+            session: {
+              key: "agent:main:people",
+              kind: "direct",
+              updatedAt: 1,
+              sharingRole: "owner",
             },
-          },
-          onOpen: vi.fn(),
-          onVisibilityChange: vi.fn(),
-          onMemberChange: onAction,
-        })}`,
-        root,
+            state: {
+              loading: false,
+              result: {
+                sessionKey: "agent:main:people",
+                role: "owner",
+                allowedVisibilities: ["shared"],
+                members: [],
+                identities: Array.from({ length: count }, (_, i) => ({
+                  type: "human" as const,
+                  id: `person-${i}`,
+                  label: `Person ${String(i).padStart(4, "0")}`,
+                })),
+              },
+            },
+            onOpen: vi.fn(),
+            onVisibilityChange: vi.fn(),
+            onMemberChange: onAction,
+          }),
+        { container: root },
       );
       const trigger = page.getByRole("button", { name: "Session sharing", exact: true });
       await expect.element(trigger).toBeVisible();

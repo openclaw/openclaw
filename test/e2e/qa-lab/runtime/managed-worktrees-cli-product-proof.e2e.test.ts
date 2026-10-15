@@ -206,7 +206,7 @@ describe("managed worktrees child CLI product proof", () => {
       expect(
         activeList.worktrees.find((record) => record.id === created.id)?.removedAt,
       ).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
     },
   );
 });

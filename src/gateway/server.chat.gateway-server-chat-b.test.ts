@@ -88,6 +88,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { CHAT_DOT_PNG_BASE64, INLINE_DOT_PNG_IMAGE } from "./server.chat-image.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -104,6 +105,7 @@ import {
   type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -136,6 +138,8 @@ vi.mock(
       >();
     return {
       ...actual,
+      // Keep background recovery out of this shared-store chat fixture.
+      scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
       retryRestartAbortedMainSessionRecovery:
         restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
     };
@@ -248,6 +252,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
 }
 
 async function withDirectChatSession(
@@ -883,6 +888,64 @@ describe("gateway server chat", () => {
           plan: { steps: [{ step: "Inspect", status: "in_progress" }] },
         });
         expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
+
+        // A queued chat source keeps its accepted identity when the runtime gets
+        // a new ID. History must use the same ID and buffer as live delivery.
+        context.chatRunState.registry.add("run-embedded", {
+          sessionKey: "main",
+          clientRunId: "run-queued-client",
+        });
+        await handler({
+          runId: "run-embedded",
+          seq: 8,
+          stream: "assistant",
+          ts: 1_008,
+          data: { text: "Queued reply", delta: "Queued reply" },
+        });
+        const queuedResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: "queued-history",
+          params: makeMainSessionParams(),
+          respond: captureChatResult(queuedResponses),
+          context,
+        });
+        expect(queuedResponses).toEqual([
+          expect.objectContaining({
+            ok: true,
+            payload: expect.objectContaining({
+              inFlightRun: expect.objectContaining({
+                runId: "run-queued-client",
+                text: "Queued reply",
+                sessionAbortable: true,
+              }),
+            }),
+          }),
+        ]);
+        for (const registration of [
+          { sessionKey: "agent:main:other", agentId: "main" },
+          { sessionKey: "main", agentId: "other" },
+        ]) {
+          context.chatRunState.registry.remove("run-embedded", "run-queued-client");
+          context.chatRunState.registry.add("run-embedded", {
+            ...registration,
+            clientRunId: "run-queued-client",
+          });
+          const otherSourceResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+          await callDirectChat(method, {
+            id: `other-source-history-${registration.agentId}`,
+            params: makeMainSessionParams(),
+            respond: captureChatResult(otherSourceResponses),
+            context,
+          });
+          expect(otherSourceResponses).toEqual([
+            expect.objectContaining({
+              ok: true,
+              payload: expect.objectContaining({
+                inFlightRun: expect.objectContaining({ runId: "run-embedded", text: "" }),
+              }),
+            }),
+          ]);
+        }
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
       }
@@ -1188,7 +1251,7 @@ describe("gateway server chat", () => {
           },
         },
       });
-      recordAgentProvenance(
+      await recordAgentProvenance(
         "research",
         { createdVia: "agent", creatorAgentId: "main" },
         { nowMs: 42 },
@@ -1698,9 +1761,9 @@ describe("gateway server chat", () => {
                   },
                 },
               });
-              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const { loadGatewaySessionEntryReadOnlyAsync } = await import("./session-utils.js");
               setRuntimeConfigSnapshot(initialConfig);
-              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              const loaded = await loadGatewaySessionEntryReadOnlyAsync("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
               expect(loaded.canonicalKey).toBe("agent:work:main");
@@ -2315,9 +2378,11 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async ({
+    signal,
+  }) => {
     openDirectChatSession();
-    const dispatchRelease = createDeferred();
+    const [dispatchEntered, dispatchRelease] = [createDeferred(), createDeferred()];
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
@@ -2325,9 +2390,7 @@ describe("gateway server chat", () => {
       });
 
       const firstCatalogSnapshot =
-        createDeferred<
-          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
-        >();
+        createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
@@ -2335,10 +2398,11 @@ describe("gateway server chat", () => {
           .mockImplementationOnce(() => firstCatalogSnapshot.promise)
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+      dispatchInboundMessageMock.mockImplementation(async () => {
+        dispatchEntered.resolve();
+        await dispatchRelease.promise;
+      });
 
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
         message: "see image",
         idempotencyKey: "idem-attachment-race",
@@ -2347,7 +2411,8 @@ describe("gateway server chat", () => {
             type: "image",
             mimeType: "image/png",
             fileName: "dot.png",
-            content: pngB64,
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
           },
         ],
       });
@@ -2361,31 +2426,25 @@ describe("gateway server chat", () => {
           context,
         });
 
+      const duplicateResponse = {
+        id: "duplicate",
+        ok: true,
+        payload: { runId: "idem-attachment-race", status: "in_flight" },
+        error: undefined,
+      };
       const first = Promise.resolve(callSend("first"));
       await waitForFast(() => {
         expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
-      ]);
+      expect(responses).toEqual([duplicateResponse]);
 
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       await first;
 
       expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
+        duplicateResponse,
         {
           id: "first",
           ok: true,
@@ -2393,6 +2452,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
+      await withinTest(dispatchEntered.promise, signal);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -2725,12 +2785,12 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntryAsync: loadGatewaySessionEntry }] =
         await Promise.all([
           import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
+          import("./session-entry-load.test-support.js"),
         ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const seededSession = await loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -2743,7 +2803,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = await loadGatewaySessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",
@@ -3003,8 +3063,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
       dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
         const [params] = args as [
@@ -3032,7 +3090,7 @@ describe("gateway server chat", () => {
               type: "image",
               mimeType: "image/png",
               fileName: "dot.png",
-              content: pngB64,
+              content: CHAT_DOT_PNG_BASE64,
             },
           ],
         }),
@@ -3042,9 +3100,7 @@ describe("gateway server chat", () => {
 
       expect(responses[0]?.ok).toBe(true);
       await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-      expect(captured?.replyOptions?.images).toEqual([
-        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0, fileName: "dot.png" },
-      ]);
+      expect(captured?.replyOptions?.images).toEqual([INLINE_DOT_PNG_IMAGE]);
       expect(captured?.ctx?.media).toEqual([
         expect.objectContaining({
           path: expect.any(String),
@@ -3111,8 +3167,6 @@ describe("gateway server chat", () => {
             ],
           ),
         });
-        const pngB64 =
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
         let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
           const [params] = args as [
@@ -3138,7 +3192,7 @@ describe("gateway server chat", () => {
                 type: "image",
                 mimeType: "image/png",
                 fileName: "dot.png",
-                content: pngB64,
+                content: CHAT_DOT_PNG_BASE64,
               },
             ],
           }),
@@ -3574,6 +3628,7 @@ describe("gateway server chat", () => {
         status: "interrupted",
       });
     } finally {
+      await getDirectChatSessionWorkRelease();
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
     }
@@ -4916,7 +4971,8 @@ describe("gateway server chat", () => {
         createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
         makeTranscriptTextEvent("NO_REPLY", {
           message: {
-            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            // Exceed the response budget while staying below raw-page admission.
+            padding: "x".repeat(historyMaxBytes + 1024),
             timestamp: Date.now() + 1,
           },
         }),
@@ -5220,7 +5276,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
+  test("chat.history waits for a dirty projection to rebuild", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
@@ -5230,7 +5286,7 @@ describe("gateway server chat", () => {
         resolveSqliteTranscriptScope(makeMainSessionScope(testState.sessionStorePath)),
       );
       const database = openOpenClawAgentDatabase(databaseOptions);
-      // Keep the writer-held rebuild pending until the real RPC observes its dirty state.
+      // Release the writer so the history worker can rebuild the marked projection.
       await runExclusiveSqliteSessionWrite(
         databaseOptions,
         async () => {
@@ -5240,14 +5296,10 @@ describe("gateway server chat", () => {
             )
             .run("sess-main");
           expect(marked.changes).toBe(1);
-          const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-          expect(rebuilding.ok).toBe(false);
-          expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
         },
         "sessions.transcript-index.preflight",
       );
 
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
       const ready = await rpcReq<{ messages?: unknown[] }>(
         ws,
         "chat.history",

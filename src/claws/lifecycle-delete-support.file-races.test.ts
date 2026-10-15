@@ -1,7 +1,8 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestClawBytes } from "./digest.js";
 import { removeClawWorkspaceFile } from "./lifecycle-delete-support.js";
@@ -43,7 +44,9 @@ describe("Claw workspace removal file-only moves", () => {
       },
     });
 
-    const result = await removeClawWorkspaceFile(record, () => undefined);
+    const result = await removeClawWorkspaceFile(record, {
+      assertCurrentFinal: () => undefined,
+    });
 
     expect(stagedPath).not.toBe("");
     expect(result.action).toBe("error");
@@ -76,7 +79,9 @@ describe("Claw workspace removal file-only moves", () => {
       },
     });
 
-    const result = await removeClawWorkspaceFile(record, () => undefined);
+    const result = await removeClawWorkspaceFile(record, {
+      assertCurrentFinal: () => undefined,
+    });
 
     expect(swapped).toBe(true);
     expect(result.action).toBe("error");
@@ -90,14 +95,13 @@ describe("Claw workspace removal file-only moves", () => {
 
   it("still restores its staged file after removal authority is lost", async () => {
     const { target, record } = await fixture();
-    const assertCurrent = vi
-      .fn<() => void>()
-      .mockImplementationOnce(() => undefined)
-      .mockImplementation(() => {
-        throw new Error("removal authority lost");
-      });
-
-    const result = await removeClawWorkspaceFile(record, assertCurrent);
+    const result = await removeClawWorkspaceFile(record, {
+      assertCurrentFinal: () => {
+        if (!existsSync(target)) {
+          throw new Error("removal authority lost");
+        }
+      },
+    });
 
     expect(result).toMatchObject({ action: "error", message: "Error: removal authority lost" });
     await expect(fs.readFile(target, "utf8")).resolves.toBe("owned memory");

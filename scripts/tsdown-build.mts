@@ -43,6 +43,11 @@ import {
   TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
+import {
+  finalizeTsdownRuntimeCaches,
+  TSDOWN_CACHE_GROUPS_ENV,
+  TSDOWN_CACHE_PENDING_ENV,
+} from "./lib/tsdown-runtime-cache.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -82,6 +87,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
+  "tsconfig.packages.json",
   "scripts/tsdown-build.mts",
   "scripts/build-all.mts",
   "scripts/lib/build-artifact-cache.mts",
@@ -293,8 +299,13 @@ function listExistingGeneratedDeclarationOutputPaths(
   roots: string[],
 ) {
   const protectedPaths = new Set<string>();
+  // Postbuild recreates the staging-only overlay from canonical dist declarations.
+  const runtimeOverlay = path.resolve(cwd, "dist-runtime");
   for (const root of roots) {
-    collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
+    const outputRoot = path.resolve(cwd, root);
+    if (outputRoot !== runtimeOverlay) {
+      collectDeclarationOutputPaths(outputRoot, protectedPaths, fsImpl);
+    }
   }
   return protectedPaths;
 }
@@ -676,17 +687,13 @@ export function describeInsufficientTsdownHeap(
     : TSDOWN_MAX_OLD_SPACE_MB_ENV;
   const fatal = explicitHeapMb === null;
   const outcome = fatal
-    ? budget.unresolvedCgroupMemory
-      ? [
-          "Stopping before any build output is removed. Pick one:",
-          "  - run the build where the process cgroup limit is visible",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
-      : [
-          "Stopping before any build output is removed. Pick one:",
-          "  - give this machine or container more memory",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
+    ? [
+        "Stopping before any build output is removed. Pick one:",
+        budget.unresolvedCgroupMemory
+          ? "  - run the build where the process cgroup limit is visible"
+          : "  - give this machine or container more memory",
+        `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
+      ]
     : [
         `Continuing because ${heapOverrideEnv} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
       ];
@@ -917,8 +924,9 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   });
   const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
+  const mainConfig = hasForwardedConfig && selectsMainConfig(forwardedArgs);
   if (
-    (!hasForwardedConfig || selectsMainConfig(forwardedArgs)) &&
+    (!hasForwardedConfig || mainConfig) &&
     TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group)) &&
     TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group))
   ) {
@@ -943,45 +951,17 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     // Watchers are long-lived, so sequential group orchestration would block forever on the
     // first child. Keep watch mode inside tsdown's single owning process.
     const groups =
-      declarationsEnabled && selectsMainConfig(forwardedArgs)
+      declarationsEnabled && mainConfig
         ? resolveSerializedMainConfigGroups(forwardedFilters)
         : null;
     return [
       resolveTsdownBuildInvocation({
         ...params,
         ...(groups ? { args: [...groups.flatMap((group) => ["--filter", group]), ...aiArgs] } : {}),
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
+        env: mainConfig ? mainEnv : env,
       }),
     ];
   }
-
-  if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
-      const serializedGroups = resolveSerializedMainConfigGroups(forwardedFilters);
-      if (serializedGroups) {
-        return serializedGroups.map((group) =>
-          resolveTsdownBuildInvocation({
-            ...params,
-            args: ["--filter", group, ...aiArgs],
-            env: mainEnv,
-          }),
-        );
-      }
-    }
-    return [
-      resolveTsdownBuildInvocation({
-        ...params,
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
-      }),
-    ];
-  }
-
-  const invocations = [
-    resolveTsdownBuildInvocation({
-      ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
-    }),
-  ];
 
   const forwardedFilterSet = new Set(forwardedFilters);
   const uniqueForwardedFilters = SELECTABLE_MAIN_CONFIG_GROUPS.filter((group) =>
@@ -990,11 +970,32 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const hasUnknownFilter = forwardedFilters.some(
     (filter) => filter !== "." && !SELECTABLE_MAIN_CONFIG_GROUPS.includes(filter),
   );
-  const serializedGroups = forwardedFilters.includes(".")
-    ? SERIALIZED_MAIN_CONFIG_GROUPS
-    : !hasUnknownFilter && uniqueForwardedFilters.length > 1
-      ? uniqueForwardedFilters
-      : null;
+  const serializedGroups = hasForwardedConfig
+    ? declarationsEnabled && mainConfig
+      ? resolveSerializedMainConfigGroups(forwardedFilters)
+      : null
+    : forwardedFilters.includes(".")
+      ? SERIALIZED_MAIN_CONFIG_GROUPS
+      : !hasUnknownFilter && uniqueForwardedFilters.length > 1
+        ? uniqueForwardedFilters
+        : null;
+  if (hasForwardedConfig && !serializedGroups) {
+    return [
+      resolveTsdownBuildInvocation({
+        ...params,
+        env: mainConfig ? mainEnv : env,
+      }),
+    ];
+  }
+
+  const invocations = hasForwardedConfig
+    ? []
+    : [
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+        }),
+      ];
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
     invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
     return invocations;
@@ -1315,7 +1316,84 @@ async function executeTsdownInvocation(
   count: number,
 ): Promise<number> {
   const startedAt = performance.now();
-  const result = await runTsdownBuildInvocation(invocation);
+  const pendingRoot = createTsdownCachePendingRoot(invocation);
+  try {
+    return await executeValidatedTsdownInvocation(invocation, index, count, startedAt, pendingRoot);
+  } finally {
+    if (pendingRoot) {
+      fs.rmSync(pendingRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+function createTsdownCachePendingRoot(invocation: TsdownBuildInvocation) {
+  const args = invocation.args.slice(1);
+  const env = invocation.options.env;
+  if (env.OPENCLAW_BUILD_CACHE === "0" || env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1") {
+    return undefined;
+  }
+  // Unknown CLI overrides may affect output bytes or selection. Let tsdown own
+  // those builds unchanged; only the wrapper's normal release plan is cached.
+  const valued = new Set([
+    "--config-loader",
+    "--logLevel",
+    "--concurrency",
+    "--filter",
+    "-F",
+    "--config",
+    "-c",
+  ]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (valued.has(arg)) {
+      index++;
+      continue;
+    }
+    if (arg === "--no-clean" || arg === "--no-dts") {
+      continue;
+    }
+    return undefined;
+  }
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  if (config && !["tsdown.config.ts", "tsdown.ai.config.ts"].includes(config)) {
+    return undefined;
+  }
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  if (
+    filters.some(
+      (filter) => ![TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP].includes(filter),
+    )
+  ) {
+    return undefined;
+  }
+  fs.mkdirSync(".artifacts", { recursive: true });
+  return fs.mkdtempSync(path.resolve(".artifacts/tsdown-cache-pending-"));
+}
+
+async function executeValidatedTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+  startedAt: number,
+  pendingRoot: string | undefined,
+): Promise<number> {
+  const cachedInvocation = pendingRoot
+    ? {
+        ...invocation,
+        options: {
+          ...invocation.options,
+          env: {
+            ...invocation.options.env,
+            [TSDOWN_CACHE_PENDING_ENV]: pendingRoot,
+            [TSDOWN_CACHE_GROUPS_ENV]: readForwardedOptions(invocation.args, [
+              "--filter",
+              "-F",
+            ]).join(","),
+          },
+        },
+      }
+    : invocation;
+  const result = await runTsdownBuildInvocation(cachedInvocation);
   if (result.error) {
     throw result.error;
   }
@@ -1340,6 +1418,9 @@ async function executeTsdownInvocation(
     return 124;
   }
 
+  if (result.status === 0 && pendingRoot) {
+    finalizeTsdownRuntimeCaches(pendingRoot);
+  }
   return result.status ?? 1;
 }
 

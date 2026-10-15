@@ -1,10 +1,10 @@
 // Shared state database recovery tests cover eviction of a corruption-poisoned cached handle.
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -67,7 +67,7 @@ function insertProbeEvent(env: NodeJS.ProcessEnv, eventKey: string): void {
   );
 }
 
-function readProbeEventKeys(database: { db: DatabaseSync }): string[] {
+function readProbeEventKeys(database: { db: EngineConnection }): string[] {
   const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
   const { rows } = executeSqliteQuerySync(
     database.db,

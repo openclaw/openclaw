@@ -5,10 +5,12 @@ import type { onAgentEvent } from "../../../infra/agent-events.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function registerRequesterSelfYieldFollowupTests<Response>({
   requesterSessionKey,
+  prepareChildSession,
   createGatewayContext,
   getLifecycleHandler,
   callGatewayMock,
@@ -21,6 +23,7 @@ export function registerRequesterSelfYieldFollowupTests<Response>({
   setReleaseAgentCallGate,
 }: {
   requesterSessionKey: string;
+  prepareChildSession: PrepareRequesterWakeChildSession;
   createGatewayContext: () => GatewayRequestContext;
   getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0];
   callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>>;
@@ -40,10 +43,12 @@ export function registerRequesterSelfYieldFollowupTests<Response>({
     const childSessionKey = "agent:main:subagent:self-yield-followup";
     const kickoffRunId = "run-self-yield-kickoff";
     const followupRunId = "run-self-yield-followup";
+    const sessionEntry = await prepareChildSession(childSessionKey, "sess-self-yield-followup");
     await registry.registerSubagentRun(
       createSubagentRunParams({
         runId: kickoffRunId,
         childSessionKey,
+        sessionEntry,
         requesterAgentId: "main",
         expectsCompletionMessage: true,
         gatewayContextResolver: context.resolveGatewayContext,
@@ -62,6 +67,7 @@ export function registerRequesterSelfYieldFollowupTests<Response>({
       createSubagentRunParams({
         runId: followupRunId,
         childSessionKey,
+        sessionEntry,
         requesterAgentId: "main",
         expectsCompletionMessage: false,
         gatewayContextResolver: context.resolveGatewayContext,

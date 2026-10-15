@@ -22,6 +22,7 @@ import {
   neutralizeMarkdownFences,
   selectInboundHistoryContext,
 } from "./channel-prompt-context.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
@@ -71,15 +72,21 @@ function refreshActiveGoalContextText(
   if (!activeGoalContext) {
     return retained.join("\n\n");
   }
-  if (insertionIndex === undefined) {
-    const anchorIndex = retained.findLastIndex((block) => block.startsWith("Current message:"));
-    insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
-  }
-  retained.splice(Math.min(insertionIndex, retained.length), 0, activeGoalContext);
+  const markerIndex = retained.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  // A thread marker can precede a separate inline current-message header.
+  const anchorIndex =
+    markerIndex >= 0
+      ? markerIndex
+      : retained.findLastIndex((block) => block.startsWith("Current message:"));
+  insertionIndex = Math.min(
+    insertionIndex ?? retained.length,
+    anchorIndex >= 0 ? anchorIndex : retained.length,
+  );
+  retained.splice(insertionIndex, 0, activeGoalContext);
   return retained.join("\n\n");
 }
 
-/** Refreshes only a previously injected goal line when a queued turn is admitted. */
+/** Refreshes the captured goal when a queued turn is admitted. */
 export function refreshActiveGoalContext(
   context: CurrentInboundPromptContext | undefined,
   sessionEntry: SessionEntry | undefined,
@@ -203,19 +210,6 @@ function sanitizeTranscriptText(
   return kind === "body" ? sanitized || undefined : sanitized;
 }
 
-function formatChannelStructuredContextLabel(label: unknown): string {
-  const normalized = normalizePromptMetadataString(label)?.replace(/\s+/g, " ").trim();
-  return normalized ? `${normalized}:` : "Structured object:";
-}
-
-function formatStructuredContextRelation(value: unknown): string | undefined {
-  const relation = sanitizeTranscriptText(value);
-  if (relation === "around_reply_target") {
-    return "around replied-to message";
-  }
-  return relation?.replaceAll("_", " ");
-}
-
 function formatChatWindowTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -268,7 +262,11 @@ function formatChatWindowStructuredContext(
     return undefined;
   }
   const label = sanitizeTranscriptText(entry.label) ?? "Chat window";
-  const relation = formatStructuredContextRelation(entry.payload["relation"]);
+  const rawRelation = sanitizeTranscriptText(entry.payload["relation"]);
+  const relation =
+    rawRelation === "around_reply_target"
+      ? "around replied-to message"
+      : rawRelation?.replaceAll("_", " ");
   const order = sanitizeTranscriptText(entry.payload["order"]);
   const qualifiers = [order, relation].filter(Boolean).join(", ");
   const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
@@ -313,23 +311,6 @@ function isChatWindowHistoryContext(
   }
   const relation = normalizePromptMetadataString(entry.payload["relation"]);
   return relation === "before_current_message" || relation === "selected_for_current_message";
-}
-
-function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
-  const payload = {
-    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
-    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
-    accuracy_m:
-      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
-        ? ctx.LocationAccuracy
-        : undefined,
-    source: normalizePromptMetadataString(ctx.LocationSource),
-    is_live: ctx.LocationIsLive === true ? true : undefined,
-    name: sanitizePromptBody(ctx.LocationName),
-    address: sanitizePromptBody(ctx.LocationAddress),
-    caption: sanitizePromptBody(ctx.LocationCaption),
-  };
-  return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
 function readInboundHistoryMediaTypes(value: unknown): string[] {
@@ -627,8 +608,20 @@ export function buildInboundUserContextPrefix(
     appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
-  const locationContext = buildLocationContextPayload(ctx);
-  if (locationContext) {
+  const locationContext = {
+    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
+    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
+    accuracy_m:
+      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
+        ? ctx.LocationAccuracy
+        : undefined,
+    source: normalizePromptMetadataString(ctx.LocationSource),
+    is_live: ctx.LocationIsLive === true ? true : undefined,
+    name: sanitizePromptBody(ctx.LocationName),
+    address: sanitizePromptBody(ctx.LocationAddress),
+    caption: sanitizePromptBody(ctx.LocationCaption),
+  };
+  if (Object.values(locationContext).some((value) => value !== undefined)) {
     appendJsonContext("Location:", locationContext);
   }
 
@@ -641,7 +634,8 @@ export function buildInboundUserContextPrefix(
       blocks.push(chatWindow);
       continue;
     }
-    appendJsonContext(formatChannelStructuredContextLabel(entry.label), {
+    const label = normalizePromptMetadataString(entry.label)?.replace(/\s+/g, " ").trim();
+    appendJsonContext(label ? `${label}:` : "Structured object:", {
       source: normalizePromptMetadataString(entry.source),
       type: normalizePromptMetadataString(entry.type),
       payload: entry.payload,

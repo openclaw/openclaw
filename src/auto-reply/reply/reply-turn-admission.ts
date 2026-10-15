@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { COMMAND_ADMISSION_OWNER } from "../../agents/agent-command-admission-owner.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -8,10 +9,10 @@ import {
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
   isRestartRecoveryTombstone,
   SessionWorkStartChangedError,
-  resolveSessionWorkStartError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
 } from "../../config/sessions/lifecycle.js";
@@ -21,10 +22,13 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  resolveSessionWorkStartBlock,
+  type SessionWorkStartError,
+} from "../../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
-import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -39,11 +43,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
-  type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createReplyOperation,
+  hasCommittedReplyOperationOutcome,
   isReplyRunSuccessorAdmissionBlocked,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
@@ -65,24 +69,10 @@ import {
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
 import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
+import type { ReplyTurnAdmission, ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
-
-type ReplyTurnAdmission =
-  | {
-      status: "owned";
-      operation: ReplyOperation;
-      sessionEntry?: SessionEntry;
-      databaseClaim?: SessionAdmissionDatabaseClaim;
-    }
-  | {
-      status: "skipped";
-      reason: "active-run" | "aborted" | "lifecycle-invalidated";
-      activeOperation?: ReplyOperation;
-      sessionEntry?: SessionEntry;
-      lifecycleAdmission?: SessionWorkAdmissionLease;
-    };
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
 class ReplyOperationChangedDuringAdmissionError extends Error {}
@@ -117,11 +107,14 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
 function rejectLifecycleInvalidatedWork(params: {
   kind: ReplyTurnKind;
   message: string;
+  error?: SessionWorkStartError;
   restartRecoveryTombstone?: boolean;
   transientSessionChange?: boolean;
 }): never {
   if (params.kind === "queued_followup") {
-    const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const error = new QueuedFollowupLifecycleInvalidatedError(params.message, {
+      cause: params.error,
+    });
     if (params.restartRecoveryTombstone === true) {
       Object.assign(error, { code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
     }
@@ -133,42 +126,14 @@ function rejectLifecycleInvalidatedWork(params: {
   if (params.kind === "visible" && params.transientSessionChange === true) {
     throw new SessionWorkStartChangedError(params.message);
   }
-  throw new Error(params.message);
+  throw params.error ?? new Error(params.message);
 }
 
-type ReplyTurnAdmissionParams = {
-  assertRequestCurrent?: () => void;
-  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
-  agentId?: string;
-  sessionKey: string;
-  sessionId: string;
-  expectedSessionId?: string;
-  /** Observed predecessors, from oldest to newest. */
-  expectedActiveOperations?: readonly ReplyOperation[];
-  storePath?: string;
-  kind: ReplyTurnKind;
-  resetTriggered: boolean;
-  allowRestartTombstoneParentFork?: boolean;
-  allowRestartTombstoneReset?: boolean;
-  routeThreadId?: string | number;
-  originatingLeafEntryId?: string | null;
-  /**
-   * Move this already-held operation into sessionKey's run slot instead of
-   * creating a new one. Used when a native command turn (admitted under its
-   * slash source key) continues into a full agent turn on the target session.
-   */
-  adoptOperation?: ReplyOperation;
-  upstreamAbortSignal?: AbortSignal;
-  resolveGatewayContext?: GatewayContextResolver;
-  waitTimeoutMs?: number;
-  waitForActive?: boolean;
-  retainLifecycleAdmissionOnActive?: boolean;
-  onLifecycleInterrupt?: () => void;
-};
-
+/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
   const workSignal = getAsyncWorkSignal();
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
   const releaseForeground =
@@ -288,8 +253,13 @@ export async function admitReplyTurn(
         let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
+              agentId: params.agentId,
               owner: REPLY_WORK_ADMISSION_OWNER,
               scope: storePath,
+              isSettling: () =>
+                operation !== undefined &&
+                (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
+              getAbortReason: () => operation?.abortSignal.reason,
               resolveGatewayContext,
               identities: [params.sessionKey],
               storeWriterIdentities:
@@ -311,6 +281,7 @@ export async function admitReplyTurn(
                 assertDatabaseOwnerCurrent();
                 const assertCurrent = () => {
                   params.assertRequestCurrent?.();
+                  workspaceReadiness?.assertCurrent();
                   assertDatabaseOwnerCurrent();
                   if (
                     !admitting ||
@@ -332,6 +303,7 @@ export async function admitReplyTurn(
                   {
                     signal,
                     assertCurrent,
+                    onRegistryChange: params.onDatabaseRegistration,
                   },
                 );
                 try {
@@ -378,10 +350,11 @@ export async function admitReplyTurn(
                 if (activeOperationRotatedExpectedSession) {
                   expectedSessionId = currentEntry?.sessionId;
                 }
-                const archivedSessionError = resolveSessionWorkStartError(
+                const archivedSessionError = resolveSessionWorkStartBlock(
                   params.sessionKey || sessionId,
                   currentEntry,
                   {
+                    allowPendingWorkspace: workspaceReadiness ? true : undefined,
                     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
                     allowRestartTombstoneReplacement:
                       (params.resetTriggered && params.allowRestartTombstoneReset === true) ||
@@ -391,21 +364,44 @@ export async function admitReplyTurn(
                 if (archivedSessionError) {
                   const tombstone = currentEntry?.mainRestartRecovery?.tombstone;
                   if (params.kind === "visible" && tombstone) {
-                    log.warn(`${archivedSessionError} Recovery reason: ${tombstone.reason}`);
+                    log.warn(
+                      `${archivedSessionError.message} Recovery reason: ${tombstone.reason}`,
+                    );
                   }
                   rejectLifecycleInvalidatedWork({
                     kind: params.kind,
-                    message: archivedSessionError,
+                    message: archivedSessionError.message,
+                    error: archivedSessionError,
                     restartRecoveryTombstone: isRestartRecoveryTombstone(currentEntry),
                   });
                 }
                 sessionId = currentEntry?.sessionId ?? sessionId;
+                params.captureRunSelection?.();
               },
             })
           : undefined;
         try {
           if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
             throw new ReplyRunSuccessorAdmissionBlockedError(params.sessionKey);
+          }
+          const commandOwnerRelease =
+            params.kind === "queued_followup" &&
+            storePath &&
+            !replyRunRegistry.get(params.sessionKey)
+              ? getSessionWorkAdmissionOwnerRelease({
+                  scope: storePath,
+                  identities: [params.sessionKey, sessionId],
+                  owner: COMMAND_ADMISSION_OWNER,
+                  phase: "acquired",
+                })
+              : undefined;
+          if (commandOwnerRelease) {
+            // Direct commands retain execution fences through durable cleanup.
+            // Only detached followups wait here; a visible dispatch may still hold
+            // the pre-dispatch reply lease that the command needs to finish.
+            admission?.release();
+            await racePromiseWithAbortSignal(commandOwnerRelease, params.upstreamAbortSignal);
+            continue;
           }
           const mayWaitForRecoveryOwner =
             storePath && !params.resetTriggered && params.allowRestartTombstoneParentFork !== true;
@@ -515,6 +511,9 @@ export async function admitReplyTurn(
             // Reacquire the full admission; its session ID alone grants no authority.
             throw new ReplyOperationChangedDuringAdmissionError();
           }
+          if (!storePath) {
+            params.captureRunSelection?.();
+          }
           if (params.adoptOperation) {
             // The dispatch closures own this object's abort/delivery lifecycle,
             // so the reservation must move rather than be recreated. Throws
@@ -561,7 +560,12 @@ export async function admitReplyTurn(
           throw error;
         }
         const { operationAdmission, releaseWorkerDatabaseClaim } =
-          bindReplyOperationDatabaseAdmission(operation, params, admission, admittedDatabaseClaim);
+          bindReplyOperationDatabaseAdmission(
+            operation,
+            { sessionKey: params.sessionKey, workSignal },
+            admission,
+            admittedDatabaseClaim,
+          );
         if (releaseWorkerDatabaseClaim) {
           const admittedOperation = operation;
           let releasingForRestart = false;
@@ -651,7 +655,7 @@ export async function admitReplyTurn(
           return { status: "skipped", reason: "aborted" };
         }
         if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
-          return { status: "skipped", reason: "lifecycle-invalidated" };
+          return { status: "skipped", reason: "lifecycle-invalidated", error: error.cause };
         }
         if (error instanceof ReplyOperationChangedDuringAdmissionError) {
           continue;

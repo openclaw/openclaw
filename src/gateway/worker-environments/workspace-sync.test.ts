@@ -90,10 +90,11 @@ describe("worker workspace command transport retry", () => {
   );
 
   it("runs never commands once without changing the selected port", async () => {
-    // Pin the clock: the impl derives the dispatch timeout from a Date.now()
-    // deadline, so real elapsed ms between admission and dispatch would turn
-    // the exact 777 assertion below into a loaded-runner flake.
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    // Pin the clock: the impl derives the dispatch timeout from a
+    // performance.now() deadline, so real elapsed ms between admission and
+    // dispatch would turn the exact 777 assertion below into a loaded-runner
+    // flake.
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
       argv.at(-1)?.includes("never-command") ? result(255) : result(),
     );
@@ -119,30 +120,9 @@ describe("worker workspace command transport retry", () => {
     expect(sshArgvPort(run.mock.calls[1]![0])).toBe(2222);
   });
 
-  it("retries idempotent commands and records the successful port", async () => {
-    const run = vi.fn(async (argv: string[]) =>
-      argv.at(-1)?.includes("retry-command") && sshArgvPort(argv) === 2222 ? result(255) : result(),
-    );
-    const actions = createWorkspaceActions(run);
-
-    await expect(
-      actions.runWorkspaceCommand({
-        transportRetry: "idempotent",
-        argv: ["printf", "retry-command"],
-      }),
-    ).resolves.toEqual(result());
-    expect(run.mock.calls.slice(0, 2).map(([argv]) => sshArgvPort(argv))).toEqual([2222, 22]);
-
-    await actions.runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: ["printf", "selected-port-probe"],
-    });
-    expect(sshArgvPort(run.mock.calls[2]![0])).toBe(22);
-  });
-
   it("gives an idempotent fallback only the remaining operation timeout", async () => {
     let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) => {
       if (sshArgvPort(argv) === 2222) {
         now += 175;

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -40,7 +41,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     // Independent scenarios must not restore the previous case's cached reader.
     pane.paneId = `maintenance-history-${movement}`;
     pane.initialize(context);
-    document.body.append(pane);
+    document.body.append(pane.element);
     await pane.updateComplete;
     // Connect normally: the pane lifecycle must supply the scroll-policy owners.
     const state = (pane as unknown as TestChatPane).state;
@@ -65,8 +66,9 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     }));
     const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
     await vi.advanceTimersByTimeAsync(0);
-    const { container, renderRows, transcript } = await mounting;
-    let maximum = 1400;
+    const { container, renderRows, transcript, session } = await mounting;
+    session.setContentReady(true);
+    let maximum = 800;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, get: () => maximum + 600 },
@@ -89,7 +91,14 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
         scrolling = event.scrolling;
       }
     });
-    container.scrollTop = 800;
+    // Finish initial anchoring before exercising maintenance above the end.
+    renderRows(rows);
+    flush();
+    vi.advanceTimersToNextFrame();
+    flush();
+    expect(container.scrollTop).toBe(800);
+    expect(transcript.scrollToEnd({ behavior: "instant" })).toBe(true);
+    expect(transcript.isPositionSettled).toBe(true);
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
     const sentinel = container.appendChild(document.createElement("div"));
@@ -111,6 +120,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(scrolling).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(state.chatFollowLocked).toBe(false);
+    maximum = 1400;
 
     if (movement === "native end clamp") {
       // The browser clamps the current position as the scroll range shrinks,
@@ -149,6 +159,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
+      toolResultMaxChars: 2_000,
       offset: 2,
     });
     expect(state.chatFollowLocked).toBe(true);

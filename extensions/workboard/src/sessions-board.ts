@@ -10,7 +10,6 @@ import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
 import type { WorkboardBoardStore } from "./store-boards.js";
-import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
@@ -48,8 +47,6 @@ type SourceRow = SourceSnapshot["sessions"][number];
 type Placements = Awaited<ReturnType<WorkboardBoardStore["listSessionPlacements"]>>;
 type CachedFacts = {
   source: SourceRow;
-  observation: number;
-  redactionRevision: SourceSnapshot["redactionRevision"];
   facts: WorkboardSessionFacts;
   stale?: boolean;
   pin?: Placements[number];
@@ -59,7 +56,6 @@ type PreparedProjection = {
   read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>;
   revision: WorkboardBoardStore["sessionsRevision"];
   sourceRevision: string;
-  observation: number;
   board: WorkboardSessionsBoard;
   expires: number;
   facts?: Map<string, CachedFacts>;
@@ -105,35 +101,6 @@ function inScope(facts: WorkboardSessionFacts, board: WorkboardSessionsBoard, no
   );
 }
 
-function retainSessionState(
-  previous: WorkboardSessionFacts,
-  current: WorkboardSessionFacts,
-): WorkboardSessionFacts {
-  const facts: WorkboardSessionFacts = {
-    ...current,
-    lifecycleRevision: previous.lifecycleRevision,
-    run: previous.run,
-    archived: previous.archived,
-    lastActivityAt: previous.lastActivityAt,
-    observerDigest: previous.observerDigest
-      ? {
-          health: previous.observerDigest.health,
-          headline: "",
-          revision: previous.observerDigest.revision,
-        }
-      : undefined,
-    pullRequests: previous.pullRequests.map(({ number, state, url }) => ({
-      number,
-      state,
-      ...(url ? { url } : {}),
-    })),
-    pullRequestsUnavailable: previous.pullRequestsUnavailable,
-    pullRequestsRateLimited: previous.pullRequestsRateLimited,
-  };
-  freezeCardList(facts);
-  return facts;
-}
-
 function createOwner(
   params: SessionsBoardServiceParams,
   context: ParametersOfStart,
@@ -143,7 +110,6 @@ function createOwner(
   const projections = new Map<string, PreparedProjection>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
   let revision = params.store.sessionsRevision;
-  let observation = 0;
   const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
@@ -182,16 +148,10 @@ function createOwner(
     board: WorkboardSessionsBoard,
     source: SourceSnapshot,
     placements: Map<string, Placements[number]>,
-    admittedRevision: typeof revision,
-    admittedObservation: number,
     preparedFacts?: Map<string, CachedFacts>,
   ) => {
-    if (params.store.sessionsRevision === admittedRevision) {
-      for (const key of source.missingSessionKeys ?? []) {
-        if ((lastKnown.get(key)?.observation ?? 0) <= admittedObservation) {
-          lastKnown.delete(key);
-        }
-      }
+    for (const key of source.missingSessionKeys ?? []) {
+      lastKnown.delete(key);
     }
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
@@ -206,7 +166,6 @@ function createOwner(
       const previous = preparedFacts?.get(row.key);
       if (
         previous?.source === row &&
-        previous.redactionRevision === source.redactionRevision &&
         !row.unavailable &&
         isDeepStrictEqual(previous.pin, placements.get(row.key))
       ) {
@@ -214,38 +173,24 @@ function createOwner(
         continue;
       }
       const { isMain: _isMain, unavailable: failure, pullRequestsStale: _stale, ...facts } = row;
+      const current: CachedFacts = {
+        source: row,
+        facts,
+      };
       if (failure) {
         unavailable.add(row.key);
         reasons.add(failure);
         const previousFacts = lastKnown.get(row.key);
         const known = previousFacts?.facts.sessionId === row.sessionId ? previousFacts : undefined;
-        resolved.set(row.key, {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts: !known
-            ? facts
-            : known.redactionRevision === source.redactionRevision
-              ? known.facts
-              : retainSessionState(known.facts, facts),
-          stale: known?.stale,
-        });
+        current.facts = known ? known.facts : facts;
+        current.stale = known?.stale;
       } else {
-        const current = {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts,
-          stale: row.pullRequestsStale,
-        };
-        resolved.set(row.key, current);
-        // A late read cannot replace the current generation's fallback facts.
-        if (
-          params.store.sessionsRevision === admittedRevision &&
-          (lastKnown.get(row.key)?.observation ?? 0) <= admittedObservation
-        ) {
-          lastKnown.set(row.key, current);
-        }
+        current.stale = row.pullRequestsStale;
+      }
+      resolved.set(row.key, current);
+      // Concurrent reads may leave an older fallback until the next successful refresh.
+      if (!failure) {
+        lastKnown.set(row.key, current);
       }
     }
     const fallback = sessionsBoardFallback(board);
@@ -278,7 +223,7 @@ function createOwner(
       const match = known
         ? board.sessions.columns.find((column) => sessionMatchesColumn(ruleFacts, column))
         : undefined;
-      const placed = Object.freeze({
+      const placed = {
         ...facts,
         columnId: pinned ? pin.columnId : (match ?? fallback).id,
         source: pinned ? ("operator" as const) : ("state" as const),
@@ -289,7 +234,7 @@ function createOwner(
             : match
               ? "Matched column rules"
               : "fallback",
-      });
+      };
       sessions.push(placed);
       resolved.set(key, { ...cached, pin, row: placed });
     }
@@ -309,7 +254,6 @@ function createOwner(
         `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
       );
     }
-    Object.freeze(sessions);
     return {
       complete: unavailable.size === 0 && !source.missingSessionKeys?.length,
       facts: resolved,
@@ -330,7 +274,6 @@ function createOwner(
     const assertReadCurrent = interactiveAuthority(caller);
     assertReadCurrent();
     hasRead = true;
-    const admittedObservation = ++observation;
     if (revision !== params.store.sessionsRevision) {
       boards.clear();
       revision = params.store.sessionsRevision;
@@ -338,18 +281,13 @@ function createOwner(
     const admittedRevision = revision;
     let boardRead = boards.get(id);
     if (!boardRead) {
-      boardRead = params.store.getSessionsBoard(id).then((board) => {
-        freezeCardList(board);
-        return board;
-      });
+      boardRead = params.store.getSessionsBoard(id);
       if (boards.size >= 64) {
         boards.delete(boards.keys().next().value!);
       }
       boards.set(id, boardRead);
       void boardRead.catch(() => {
-        if (boards.get(id) === boardRead) {
-          boards.delete(id);
-        }
+        boards.delete(id);
       });
     }
     const board = await boardRead;
@@ -357,12 +295,8 @@ function createOwner(
     return params.gateway.withSessionFacts(sessionSelection(board, view), async (source) => {
       assertReadCurrent();
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
-      const current = projections.get(key);
-      const cacheable =
-        params.store.sessionsRevision === admittedRevision &&
-        (!current || current.observation <= admittedObservation);
       const admittedAt = now();
-      const previous = cacheable ? current : undefined;
+      const previous = projections.get(key);
       let projection = previous;
       if (
         projection &&
@@ -372,19 +306,16 @@ function createOwner(
       ) {
         projection = undefined;
       }
-      const joined = Boolean(projection);
       if (!projection) {
         const prepared: PreparedProjection = {
           revision: admittedRevision,
           sourceRevision: source.revision,
-          observation: admittedObservation,
           board,
           expires: source.activityExpiresAt ?? Infinity,
           read: Promise.resolve().then(async () => {
             const placements =
               (previous?.board === board ? previous.placements : undefined) ??
               (await params.store.listSessionPlacements(id));
-            assertReadCurrent();
             prepared.placements = placements;
             const {
               snapshot: result,
@@ -394,8 +325,6 @@ function createOwner(
               board,
               source,
               new Map(placements.map((pin) => [pin.sessionKey, pin])),
-              admittedRevision,
-              admittedObservation,
               isDeepStrictEqual(previous?.board.sessions.columns, board.sessions.columns)
                 ? previous?.facts
                 : undefined,
@@ -406,43 +335,29 @@ function createOwner(
               prepared.expires,
             );
             prepared.facts = complete ? facts : undefined;
-            const snapshot = Object.freeze({
+            const snapshot = {
               ...result,
-              revision: Object.freeze({ ...admittedRevision, boardId: id, scope: randomUUID() }),
-            });
+              revision: { ...admittedRevision, boardId: id, scope: randomUUID() },
+            };
             return { snapshot, complete };
           }),
         };
-        if (cacheable) {
-          if (projections.size >= 64) {
-            projections.delete(projections.keys().next().value!);
-          }
-          projections.set(key, prepared);
+        if (projections.size >= 64) {
+          projections.delete(projections.keys().next().value!);
         }
+        projections.set(key, prepared);
         projection = prepared;
       }
       try {
         const { snapshot, complete } = await projection.read;
         assertReadCurrent();
-        const expired = projection.expires < admittedAt;
-        if (
-          (!complete || expired || params.store.sessionsRevision !== admittedRevision) &&
-          projections.get(key) === projection
-        ) {
+        if (!complete || params.store.sessionsRevision !== admittedRevision) {
           projections.delete(key);
-        }
-        if (joined && expired) {
-          return await read(id, view, caller);
         }
         return snapshot;
       } catch (error) {
-        if (projections.get(key) === projection) {
-          projections.delete(key);
-        }
+        projections.delete(key);
         assertReadCurrent();
-        if (joined) {
-          return await read(id, view, caller);
-        }
         throw error;
       }
     });

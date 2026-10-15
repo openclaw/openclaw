@@ -178,6 +178,7 @@ struct ChatAssistantRunFrame<Content: View>: View {
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
+        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
     }
 }
 

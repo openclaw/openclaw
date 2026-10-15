@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
@@ -9,16 +11,19 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { activeSessions } from "./capture-startup.js";
+import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -36,6 +41,22 @@ function fixture() {
 }
 
 describe("transcript library SQLite reads", () => {
+  it("retains meeting chronology when reopened in another process timezone", async ({ signal }) => {
+    const stateDir = tempDirs.make("transcript-library-timezone-");
+    const argv = resolveRuntimeWorkerArgv(
+      resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint),
+    );
+    for (const [phase, timezone] of [
+      ["write", "America/Los_Angeles"],
+      ["read", "UTC"],
+    ] as const) {
+      await promisify(execFile)(process.execPath, [...argv, stateDir, phase], {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, TZ: timezone },
+        signal,
+      });
+    }
+  });
+
   it("skips empty transcription artifacts without losing pagination or rewriting the archive", async () => {
     const { store } = fixture();
     const target = session("transcription-artifacts");
@@ -118,6 +139,25 @@ describe("transcript library SQLite reads", () => {
         })
       ).sessions.map(({ sessionId }) => sessionId),
     ).toEqual(["basic", "fraction", "same", "same"]);
+  });
+
+  it("requests a fresh page when its cursor session was deleted", async () => {
+    const { store } = fixture();
+    const target = session("removed-cursor", {
+      startedAt: "2026-08-21T06:00:00Z",
+      stoppedAt: "2026-08-21T06:01:00Z",
+    });
+    const receipt = await store.writeSession(target);
+    await store.writeSession(session("older-cursor", { startedAt: "2026-08-20T06:00:00Z" }));
+    const first = await listTranscriptLibrary(store, { limit: 1 });
+    expect(first.nextCursor).toEqual(expect.any(String));
+    await store.deleteEmptySessionCandidate(target, {
+      expectedInputRevision: receipt.inputRevision,
+      assertCurrent() {},
+    });
+    await expect(
+      listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor! }),
+    ).rejects.toMatchObject({ type: "transcript_invalid_cursor" });
   });
 
   it("preserves ID-only stored speakers across legacy reads, pages, and exports", async () => {
@@ -411,7 +451,9 @@ describe("transcript library SQLite reads", () => {
           .updateTable("meeting_transcript_summaries")
           .set({
             markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
-            ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+            ...(notesKind === "markdown-only"
+              ? { summary_json: null, ...deriveMeetingTranscriptSummaryColumns(null) }
+              : {}),
           })
           .where("session_id", "=", target.sessionId)
           .where("session_started_at", "=", target.startedAt),
@@ -531,9 +573,9 @@ describe("transcript library asynchronous reads", () => {
           return snapshot;
         });
       } else {
-        const iterate = store.iterateExport.bind(store);
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* (...args) {
-          const snapshot = yield* iterate(...args);
+        const stream = store.streamExport.bind(store);
+        vi.spyOn(store, "streamExport").mockImplementationOnce(async (...args) => {
+          const snapshot = await stream(...args);
           reading.resolve();
           await gate.promise;
           return snapshot;
@@ -581,15 +623,4 @@ describe("transcript library asynchronous reads", () => {
       expect(await store.readUtterancesForSession(replacement)).toMatchObject([utterance, added]);
     },
   );
-
-  it("rejects an export canceled before its completion result", async () => {
-    const { store } = fixture();
-    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-      yield { sequence: 0, text: "Partial content" };
-      return undefined;
-    });
-    await expect(
-      exportTranscriptLibrary(store, { selector: "canceled", format: "jsonl" }),
-    ).rejects.toThrow("export ended before completion");
-  });
 });

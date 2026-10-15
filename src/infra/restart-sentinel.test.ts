@@ -108,6 +108,10 @@ import {
 } from "./restart-sentinel-store.js";
 import {
   clearRestartSentinelIfRevision,
+  markUpdateFailureReportReceiptPending,
+  markUpdateFailureReportReceiptPrepared,
+  readUpdateFailureReportReceipt,
+  reserveUpdateFailureReportReceipt,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   hasRestartSentinel,
@@ -300,6 +304,49 @@ describe("restart sentinel", () => {
       );
     });
   });
+
+  it.each(["transaction", "commit"])(
+    "keeps the report prepared when publication authority retires at %s admission",
+    async (stage) => {
+      await withRestartSentinelStateDir(async () => {
+        const attemptId = `receipt-refusal-${stage}`;
+        const reservationId = "report-owner";
+        const digest = "a".repeat(64);
+        await reserveUpdateFailureReportReceipt(attemptId, reservationId, digest);
+        await markUpdateFailureReportReceiptPrepared(attemptId, reservationId, digest);
+        let current = true;
+        admission.beforeGrant = (requested) => {
+          if (requested === stage) {
+            current = false;
+          }
+        };
+        const refusal = new Error("Report publisher retired");
+        try {
+          await expect(
+            markUpdateFailureReportReceiptPending(
+              attemptId,
+              reservationId,
+              digest,
+              process.env,
+              undefined,
+              () => {
+                if (!current) {
+                  throw refusal;
+                }
+              },
+            ),
+          ).rejects.toBe(refusal);
+        } finally {
+          admission.beforeGrant = undefined;
+        }
+        await expect(readUpdateFailureReportReceipt(attemptId)).resolves.toMatchObject({
+          status: "prepared",
+          reservationId,
+          previewDigest: digest,
+        });
+      });
+    },
+  );
 
   it("ignores legacy files without mutating them", async () => {
     await withRestartSentinelStateDir(
@@ -769,6 +816,52 @@ describe("restart sentinel", () => {
           installedAtMs: ts,
         });
       });
+    });
+  });
+
+  it("keeps the verified update outcome when optional install history cannot be written", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const root = process.cwd();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        continuation: { kind: "agentTurn", message: "Continue after the update." },
+        stats: {
+          mode: "git",
+          root,
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "bbbbbbbb", version: "expected-version" },
+        },
+      });
+      const { db } = openOpenClawStateDatabase();
+      db.exec(`
+        CREATE TRIGGER reject_install_history BEFORE INSERT ON gateway_restart_sentinel
+        WHEN NEW.sentinel_key = 'latest-update-install'
+        BEGIN SELECT RAISE(ABORT, 'fixture install history unavailable'); END;
+      `);
+      try {
+        const finalized = await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb",
+          root,
+        );
+        expect(finalized).toMatchObject({
+          payload: {
+            status: "ok",
+            continuation: { kind: "agentTurn", message: "Continue after the update." },
+            stats: { after: { version: "actual-version", sha: "bbbbbbbb" } },
+          },
+        });
+        await expect(readRestartSentinel()).resolves.toEqual(finalized);
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+        expect(mockWarn).toHaveBeenCalledWith(
+          "Failed to record update install history: fixture install history unavailable",
+        );
+      } finally {
+        db.exec("DROP TRIGGER reject_install_history");
+      }
     });
   });
 

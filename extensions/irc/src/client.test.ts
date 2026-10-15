@@ -293,9 +293,15 @@ async function collectPrivmsgBodies(
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-function maxLineBytes(bodies: string[]): number {
+// The line recipients get: the server puts our `:nick!user@host ` in front, and 512 bytes bounds
+// that relayed line, so measure it with the longest user@host a server can give us.
+const RELAY_PREFIX = `:bot!${"u".repeat(11)}@${"h".repeat(63)} `;
+
+function maxRelayedLineBytes(bodies: string[]): number {
   return Math.max(
-    ...bodies.map((body) => Buffer.byteLength(`PRIVMSG #general :${body}\r\n`, "utf8")),
+    ...bodies.map((body) =>
+      Buffer.byteLength(`${RELAY_PREFIX}PRIVMSG #general :${body}\r\n`, "utf8"),
+    ),
   );
 }
 
@@ -437,8 +443,8 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     },
     {
       name: "joined emoji at the byte cap",
-      text: `${"漢".repeat(162)}👨‍👩‍👧‍👦tail`,
-      bodies: ["漢".repeat(162), "👨‍👩‍👧‍👦tail"],
+      text: `${"漢".repeat(133)}👨‍👩‍👧‍👦tail`,
+      bodies: ["漢".repeat(133), "👨‍👩‍👧‍👦tail"],
     },
     {
       name: "combining mark at the character cap",
@@ -491,7 +497,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       try {
         const bodies = await collectPrivmsgBodies(server, text, limit);
         expect(bodies.length).toBeGreaterThan(1);
-        expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
+        expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
         expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
         expect(bodies.join(separator)).toBe(text);
         if (lengths) {
@@ -622,6 +628,61 @@ describe("irc client inbound line bound", () => {
       const { client, errors, waitForLine } = await connectToFlood(server);
       await withTimeout(waitForLine(":server PING :done"), 2000, "IRC repeated normal lines");
       expect(errors).toEqual([]);
+      client.quit("test complete");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("irc client inbound CTCP", () => {
+  it("hands ACTION and plain messages to ingress but not CTCP queries", async () => {
+    const inbound = [
+      ":scanner!ctcp@scanner.example PRIVMSG bot :\u0001VERSION\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001PING 1760000000\u0001",
+      ":alice!a@example.com PRIVMSG #ops :\u0001TIME\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001version\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001pInG 123\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001time",
+      ":alice!a@example.com PRIVMSG bot :\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001ACTION waves\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001action waves\u0001",
+      ":alice!a@example.com PRIVMSG bot :hello",
+      ":alice!a@example.com PRIVMSG bot :VERSION",
+      ":alice!a@example.com PRIVMSG bot :hello\u0001",
+    ];
+    const server = await startIrcTestServer((socket) => {
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+          for (const message of inbound) {
+            socket.write(`${message}\r\n`);
+          }
+          socket.write(":server PING :done\r\n");
+        }
+      });
+    });
+    const done = createDeferred<void>();
+    const dispatched: string[] = [];
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        onPrivmsg: (event) => {
+          dispatched.push(event.rawLine);
+        },
+        onLine: (line) => {
+          if (line === ":server PING :done") {
+            done.resolve();
+          }
+        },
+      });
+      await withTimeout(done.promise, 2000, "IRC inbound CTCP lines");
+      expect(dispatched).toEqual(inbound.slice(7));
       client.quit("test complete");
     } finally {
       await server.close();

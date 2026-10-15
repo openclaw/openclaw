@@ -243,7 +243,7 @@ Restricts tools for the current turn's originating requester. This is defense-in
 }
 ```
 
-Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard.
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are standard OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard.
 
 Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 

@@ -151,6 +151,13 @@ export function buildMistralRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) =>
+    Boolean(
+      normalizeProviderConfig(providerConfig).apiKey ||
+      normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+    );
   return {
     id: "mistral",
     label: "Mistral Realtime Transcription",
@@ -158,11 +165,9 @@ export function buildMistralRealtimeTranscriptionProvider({
     defaultModel: MISTRAL_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
-      ),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
@@ -196,12 +201,7 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        try {
-          callbacks.onError?.(error);
-        } catch {
-          // The terminal provider error already owns the outcome. Do not let an
-          // observer exception re-enter shared error dispatch and emit it twice.
-        }
+        callbacks.onError?.(error);
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({

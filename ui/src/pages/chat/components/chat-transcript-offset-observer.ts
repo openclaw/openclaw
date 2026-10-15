@@ -18,8 +18,7 @@ type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end" }
-    | { behavior: ScrollBehavior; target: "index" }
+    | { behavior: ScrollBehavior; target: "end" | "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null = null;
   touching = false;
@@ -146,7 +145,7 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
-  const recordProgrammaticScroll = (before: number, after: number, maintenance: boolean) => {
+  const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
     publish({
@@ -156,11 +155,9 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic: owner.isProgrammaticScroll(),
     });
-    // Measurement and clamped retries can run during an outstanding end command.
-    // Keep their provenance after publishing any preceding native input.
-    if (!maintenance && (owner.state.scrollCommand || owner.state.pendingScrollOffset)) {
-      owner.state.maintenanceScrollOffset = null;
-    } else if (before !== after) {
+    // Commands can move upward as rows retire. Keep the actual write's
+    // provenance until its native event arrives, even after command retirement.
+    if (before !== after) {
       owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
     }
@@ -171,7 +168,7 @@ export function observeTranscriptOffset(
     if (maintenance && before !== after) {
       owner.onLayoutCorrection(before, after);
     }
-    recordProgrammaticScroll(before, after, maintenance);
+    recordProgrammaticScroll(before, after);
   };
   owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
@@ -185,7 +182,7 @@ export function observeTranscriptOffset(
         }
         if (observation.type === "resize" && observation.scrollCorrection) {
           const { before, after } = observation.scrollCorrection;
-          recordProgrammaticScroll(before, after, true);
+          recordProgrammaticScroll(before, after);
         }
       })
     : undefined;

@@ -1,11 +1,15 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
-type SessionTitleTarget = { storePath: string; sessionKey: string; sessionId: string };
+type SessionTitleTarget = {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+};
 const requestKey = (target: SessionTitleTarget) =>
   `${target.storePath}\0${target.sessionKey}\0${target.sessionId}`;
 
-// One request per session generation; callers share settlement and pending requests
+// One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
 const pending = new Map<string, Promise<boolean>>();
 export const sessionTitleRequests = {

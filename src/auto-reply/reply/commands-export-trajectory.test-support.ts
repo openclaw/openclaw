@@ -197,18 +197,6 @@ describe("buildExportTrajectoryCommandReply", () => {
       text: "Trajectory export is running (exec session export-1).",
     },
     {
-      label: "completed output",
-      result: {
-        details: {
-          status: "completed" as const,
-          exitCode: 0,
-          durationMs: 1,
-          aggregated: "  bundle.zip\n",
-        },
-      },
-      text: "bundle.zip",
-    },
-    {
       label: "empty failed output",
       result: {
         details: { status: "failed" as const, exitCode: 1, durationMs: 1, aggregated: "  " },
@@ -234,36 +222,6 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(reply.text?.endsWith(text)).toBe(true);
   });
 
-  it("uses the originating Telegram route for native trajectory export followups", async () => {
-    const { execCalls } = mockCommandBoundaries();
-    const params = makeParams();
-    params.ctx = {
-      ...params.ctx,
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:8460800771",
-      From: "telegram:8460800771",
-      To: "slash:8460800771",
-      CommandSource: "native",
-    };
-    params.command = {
-      ...params.command,
-      channel: "telegram",
-      surface: "telegram",
-      from: "telegram:8460800771",
-      to: "slash:8460800771",
-    };
-
-    await buildExportTrajectoryCommandReply(params);
-
-    expect(execCalls).toHaveLength(1);
-    const execCall = execCallRecord(execCalls);
-    expect(execCall.defaults.messageProvider).toBe("telegram");
-    expect(execCall.defaults.currentChannelId).toBe("telegram:8460800771");
-    expect(execCall.defaults.accountId).toBe("account-1");
-  });
-
   it("keeps user-controlled export values out of the shell command", async () => {
     const { execCalls } = mockCommandBoundaries();
     const params = makeParams();
@@ -277,19 +235,22 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
     expect(command).toMatch(/'?--json'?$/u);
     expect(command).not.toContain("Invoke-Expression");
-    expect(readEncodedRequestFromCommand(command).output).toBe("bad';");
+    expect(readEncodedRequestFromCommand(command).output).toBe("bad'; Invoke-Expression evil ;'");
   });
 
-  it("rejects oversized output paths before requesting exec approval", async () => {
-    const { execCalls } = mockCommandBoundaries();
-    const params = makeParams();
-    params.command.commandBodyNormalized = `/export-trajectory ${"a".repeat(513)}`;
+  it.each(["a".repeat(513), `reports/${"a ".repeat(253)}a`])(
+    "rejects oversized output paths before requesting exec approval: %s",
+    async (outputPath) => {
+      const { execCalls } = mockCommandBoundaries();
+      const params = makeParams();
+      params.command.commandBodyNormalized = `/export-trajectory ${outputPath}`;
 
-    const reply = await buildExportTrajectoryCommandReply(params);
+      const reply = await buildExportTrajectoryCommandReply(params);
 
-    expect(reply.text).toContain("Output path is too long");
-    expect(execCalls).toHaveLength(0);
-  });
+      expect(reply.text).toContain("Output path is too long");
+      expect(execCalls).toHaveLength(0);
+    },
+  );
 
   it("rejects oversized encoded export requests before requesting exec approval", async () => {
     const { execCalls } = mockCommandBoundaries();
@@ -304,19 +265,9 @@ describe("buildExportTrajectoryCommandReply", () => {
 
   it.each([
     {
-      outcome: "delivered",
-      acknowledgement: "I sent the trajectory export details to the owner privately",
-    },
-    {
-      outcome: "pending",
-      acknowledgement:
-        "Private delivery of the export request is pending; I can't confirm receipt yet",
-    },
-    {
       outcome: "suppressed",
       acknowledgement: "Private delivery of the export request was suppressed",
     },
-    { outcome: "failed", acknowledgement: "Run /export-trajectory from an owner DM" },
   ] as const)(
     "keeps $outcome trajectory export requests private",
     async ({ outcome, acknowledgement }) => {

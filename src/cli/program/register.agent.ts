@@ -60,8 +60,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsBindCommand(opts, runtime);
+        const { agentsUpdateBindingsCommand } =
+          await import("../../commands/agents.commands.bind.js");
+        await agentsUpdateBindingsCommand("bind", opts, runtime);
       });
     });
 
@@ -74,8 +75,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsUnbindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsUnbindCommand(opts, runtime);
+        const { agentsUpdateBindingsCommand } =
+          await import("../../commands/agents.commands.bind.js");
+        await agentsUpdateBindingsCommand("unbind", opts, runtime);
       });
     });
 

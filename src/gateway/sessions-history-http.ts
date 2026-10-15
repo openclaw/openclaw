@@ -9,14 +9,21 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptUpdateVersion,
 } from "../sessions/transcript-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
@@ -43,15 +50,20 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { resolveCursorSeq } from "./session-history-tail.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import {
+  prepareSessionMutationFacts,
+  type PreparedSessionSourceFacts,
+  type SessionFactsRead,
+} from "./session-sharing-preparation.js";
+import { prepareProjectedSessionSharing } from "./session-sharing.js";
+import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
 } from "./session-transcript-path.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -132,6 +144,8 @@ function resolveSessionHistoryHttpClient(
       scopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+    preparedSessionProfile: requestAuth.preparedSessionProfile,
+    internal: { operatorRoleActor: requestAuth.operatorRoleActor },
   };
 }
 
@@ -156,6 +170,7 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
+  const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   // Session history intentionally uses the shared-secret HTTP trust model:
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
@@ -168,19 +183,86 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth, operatorScopes } = authResult;
+  const assertResponseCurrent = () => {
+    if (res.destroyed || res.writableEnded) {
+      throw new Error("Session history response closed");
+    }
+  };
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: canonicalKey },
+    { assertCurrent: assertResponseCurrent, authorize: assertResponseCurrent },
+  );
+  const assertSessionCurrent = source?.owner?.captureSessionReadGuard(canonicalKey);
+  const assertSourceCurrent = () => {
+    source?.authority.assertCurrent();
+    assertSessionCurrent?.();
+  };
+  return serveAuthorizedSessionHistory(
+    req,
+    res,
+    opts,
+    url,
+    source ? canonicalKey : sessionKey,
+    authResult,
+    source,
+    assertSourceCurrent,
+  );
+}
 
-  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+async function serveAuthorizedSessionHistory(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: GatewayHttpRequestAuthOptions & { getCommittedRuntimeConfig?: () => OpenClawConfig },
+  url: URL,
+  sessionKey: string,
+  authResult: NonNullable<Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>>,
+  source: CapturedSessionActorStorageOwner | undefined,
+  assertSourceCurrent: () => void,
+): Promise<boolean> {
+  const { cfg, requestAuth, operatorScopes } = authResult;
+  let sharing: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
+  using sharingLifetime = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        sharing?.release();
+      }
+    },
+  };
+  let target: GatewaySessionStoreTargetWithStore;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
-    target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: sessionKey,
-      exactRead: true,
-      // Preserve configured-store initialization; retired and incognito targets stay read-only.
-      readOnly: false,
-    });
-    entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+    if (source) {
+      assertSourceCurrent();
+      entry = readCapturedSessionActorEntry(source, sessionKey);
+      target = {
+        agentId: source.agentId,
+        canonicalKey: sessionKey,
+        storePath: source.path,
+        storeKeys: [sessionKey],
+        store: entry ? { [sessionKey]: entry } : {},
+        readSource: { agentId: source.agentId, path: source.path },
+      };
+    } else {
+      const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
+      sharing = await prepareSessionMutationFacts({
+        cfg,
+        agentId,
+        sessionKey,
+        allowMissing: true,
+      });
+      const current = sharing.readCurrent(getRuntimeConfig());
+      const resolved = current.target;
+      entry = resolved?.entry;
+      target = {
+        ...sharing.storageTarget,
+        storeKeys: resolved?.storeKeys ?? [sharing.storageTarget.canonicalKey],
+        store: entry ? { [resolved!.storeKey]: entry } : {},
+        readSource: current.sourcePath
+          ? { agentId: current.sourceAgentId ?? agentId, path: current.sourcePath }
+          : undefined,
+      };
+    }
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
       throw error;
@@ -205,8 +287,11 @@ export async function handleSessionHistoryHttpRequest(
   const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
   if (
     !entry?.sessionId ||
-    createSessionListEntryFilter({ cfg, client: historyClient })?.(target.canonicalKey, entry) ===
-      false
+    prepareProjectedSessionSharing({
+      cfg,
+      client: historyClient,
+      isMember: () => false,
+    }).entryFilter?.(target.canonicalKey, entry) === false
   ) {
     sendSessionNotFound();
     return true;
@@ -230,9 +315,18 @@ export async function handleSessionHistoryHttpRequest(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
+  const streamClosed = createDeferredCore();
   const publishAuthorizedHistory = async (
     publish: (presentation: HistoryPresentation) => void,
   ): Promise<boolean> => {
+    try {
+      const pending = sharing?.prepareRead();
+      if (pending) {
+        await Promise.race([pending, streamClosed.promise]);
+      }
+    } catch {
+      return false;
+    }
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       ...opts,
@@ -263,11 +357,29 @@ export async function handleSessionHistoryHttpRequest(
       requestedScopes,
     );
     const currentConfig = getRuntimeConfig();
-    const currentTarget = resolveSessionSharingTarget({
-      cfg: currentConfig,
-      sessionKey: target.canonicalKey,
-      agentId: target.agentId,
-    });
+    try {
+      assertSourceCurrent();
+    } catch {
+      return false;
+    }
+    let currentTarget;
+    try {
+      if (source) {
+        const currentEntry = readCapturedSessionActorEntry(source, sessionKey);
+        currentTarget = currentEntry
+          ? {
+              agentId: source.agentId,
+              canonicalKey: sessionKey,
+              storePath: source.path,
+              entry: currentEntry,
+            }
+          : null;
+      } else {
+        currentTarget = sharing!.readCurrent(currentConfig).target;
+      }
+    } catch {
+      return false;
+    }
     if (
       currentTarget === null ||
       currentTarget.agentId !== historyTarget.agentId ||
@@ -277,10 +389,11 @@ export async function handleSessionHistoryHttpRequest(
       currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
       (entry.sessionStartedAt !== undefined &&
         currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
-      createSessionListEntryFilter({ cfg: currentConfig, client: currentClient })?.(
-        currentTarget.canonicalKey,
-        currentTarget.entry,
-      ) === false
+      prepareProjectedSessionSharing({
+        cfg: currentConfig,
+        client: currentClient,
+        isMember: () => false,
+      }).entryFilter?.(currentTarget.canonicalKey, currentTarget.entry) === false
     ) {
       return false;
     }
@@ -377,7 +490,7 @@ export async function handleSessionHistoryHttpRequest(
       ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
-    // Cursor refreshes reread SQLite, so their next page remains complete.
+    // Cursor refreshes reread the owner, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
   }
 
@@ -401,6 +514,8 @@ export async function handleSessionHistoryHttpRequest(
       clearInterval(streamResources.heartbeat);
     }
     streamResources.unsubscribe?.();
+    sharing?.release();
+    streamClosed.resolve();
   }
 
   function closeStream() {
@@ -453,8 +568,14 @@ export async function handleSessionHistoryHttpRequest(
   res.on("finish", handleResponseStreamFinish);
   res.on("error", handleResponseStreamError);
 
-  setSseHeaders(res);
-  res.write("retry: 1000\n\n");
+  if (
+    !(await publishAuthorizedHistory(() => {
+      setSseHeaders(res);
+      res.write("retry: 1000\n\n");
+    }))
+  ) {
+    closeStream();
+  }
   if (isStreamClosed()) {
     return true;
   }
@@ -581,5 +702,10 @@ export async function handleSessionHistoryHttpRequest(
       }
     });
   });
+  sharingLifetime.transferred = true;
+  if (source) {
+    await streamClosed.promise;
+    await streamQueue;
+  }
   return true;
 }

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { shortenHomePath } from "../utils.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 
 export function resolveFileNpmSpecToLocalPath(
   raw: string,
@@ -84,6 +85,7 @@ export function isSourceCheckoutBundledPath(localPath: string): boolean {
 
 export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
+  pin?: boolean;
   findBundledSource: BundledLookup;
 }): { bundledSource: BundledPluginSource; warning: string } | null {
   // Bundled plugin ids win before npm lookup so local official plugins do not hit the registry.
@@ -122,8 +124,16 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
     return null;
   }
   // Bare IDs already selected local source above. Npm package requests must not
-  // persist disposable source-checkout build output; packaged bundles remain image-owned.
-  if (isSourceCheckoutBundledPath(bundledSource.localPath)) {
+  // persist disposable source-checkout build output. Explicit registry choices
+  // also bypass development image copies; release bundles remain image-owned.
+  if (
+    isSourceCheckoutBundledPath(bundledSource.localPath) ||
+    ((params.pin || parsedNpmSpec.selector) &&
+      isBundledPluginInsideDevSourceRoot({
+        rootDir: bundledSource.localPath,
+        env: process.env,
+      }))
+  ) {
     return null;
   }
   return {

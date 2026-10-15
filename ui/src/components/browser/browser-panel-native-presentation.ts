@@ -88,6 +88,14 @@ export class BrowserPanelNativePresentation {
     if (!this.connected) {
       return;
     }
+    this.synchronizeStage();
+    if (!this.canPresent()) {
+      this.hide();
+    }
+    this.schedule();
+  }
+
+  private synchronizeStage(): void {
     const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
     if (stage !== this.stage) {
       this.resizeObserver?.disconnect();
@@ -111,10 +119,6 @@ export class BrowserPanelNativePresentation {
         }
       }
     }
-    if (!this.canPresent()) {
-      this.hide();
-    }
-    this.schedule();
   }
 
   readonly schedule = (): void => {
@@ -152,6 +156,11 @@ export class BrowserPanelNativePresentation {
   }
 
   private report(): void {
+    if (!this.connected) {
+      return;
+    }
+    // Nested Solid content can mount after the owner commit that scheduled this frame.
+    this.synchronizeStage();
     const stage = this.stage;
     if (!stage || !this.canPresent()) {
       this.hide();

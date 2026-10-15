@@ -221,16 +221,82 @@ export function validatePreparedNpmBundleDescriptor({
   return descriptor;
 }
 
-function githubJson(repository, suffix, runGh, query) {
-  return JSON.parse(
-    runGh([
-      "api",
-      `repos/${repository}/${suffix}`,
-      "--method",
-      "GET",
-      ...(query ? ["--jq", query] : []),
-    ]),
-  );
+function githubJson(repository, suffix, runGh, query, includeHeaders = false) {
+  const raw = runGh([
+    "api",
+    `repos/${repository}/${suffix}`,
+    "--method",
+    "GET",
+    ...(query ? ["--jq", query] : []),
+    ...(includeHeaders ? ["--include"] : []),
+  ]);
+  return JSON.parse(includeHeaders ? githubResponse(raw).body : raw);
+}
+
+function githubResponse(raw) {
+  const boundary = /\r?\n\r?\n/u.exec(raw);
+  const lines = boundary ? raw.slice(0, boundary.index).split(/\r?\n/u) : [];
+  const status = Number(/^HTTP\/\d+(?:\.\d+)? ([1-5]\d{2})\b/u.exec(lines.shift() ?? "")?.[1]);
+  const headers = new Map();
+  for (const line of lines) {
+    const colon = line.indexOf(":");
+    if (colon > 0) {
+      headers.set(line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim());
+    }
+  }
+  return { status, headers, body: boundary ? raw.slice(boundary.index + boundary[0].length) : raw };
+}
+
+function readCurrentProducerJob(repository, jobId, runGh) {
+  // Fit one primary quota reset inside the producer's six-hour job / 350-minute
+  // artifact wait. Only this read retries; shared identity/mutation transport does not.
+  const deadline = performance.now() + 65 * 60_000;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return githubJson(repository, `actions/jobs/${jobId}`, runGh, undefined, true);
+    } catch (error) {
+      const { status, headers, body } = githubResponse(String(error?.stdout ?? ""));
+      const retryAfter = headers.get("retry-after");
+      const retryAt =
+        retryAfter === undefined
+          ? Number.NaN
+          : /^\d+$/u.test(retryAfter)
+            ? Date.now() + Number(retryAfter) * 1000
+            : Date.parse(retryAfter);
+      const reset = headers.get("x-ratelimit-reset");
+      const resetAt =
+        headers.get("x-ratelimit-remaining") === "0" && /^\d+$/u.test(reset ?? "")
+          ? Number(reset) * 1000
+          : Number.NaN;
+      const throttled =
+        status === 429 ||
+        (status === 403 &&
+          (Number.isFinite(retryAt) ||
+            headers.get("x-ratelimit-remaining") === "0" ||
+            /API rate limit (?:already )?exceeded|secondary rate limit/iu.test(
+              `${body}\n${error?.stderr ?? ""}`,
+            )));
+      if (error?.status !== 1 || error?.signal || !throttled) {
+        throw error;
+      }
+      const directives = [retryAt, resetAt].filter(Number.isFinite);
+      const delay = directives.length
+        ? Math.max(1000, ...directives.map((at) => at - Date.now()))
+        : 60_000 * 2 ** attempt;
+      // Never truncate a server delay to fit the budget or extend the 60s gh timeout.
+      if (attempt >= 3 || delay + 60_000 > deadline - performance.now()) {
+        throw new Error(
+          `Current npm producer metadata rate-limit recovery exhausted (HTTP ${status}).`,
+          { cause: error },
+        );
+      }
+      console.error(
+        `Current npm producer metadata throttled (HTTP ${status}); retrying in ${Math.ceil(delay / 1000)}s.`,
+      );
+      // This owner is a synchronous CLI; keep its producer validation synchronous too.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+  }
 }
 
 function readAttemptJobs(repository, producer, runGh) {
@@ -664,7 +730,7 @@ function resolveCurrentProducer(env, jobName, runGh = runReleaseToolingGh) {
     toolingSha: producer.workflowSha,
     jobName,
   });
-  const job = githubJson(producer.repository, `actions/jobs/${producer.jobId}`, runGh);
+  const job = readCurrentProducerJob(producer.repository, producer.jobId, runGh);
   if (
     String(job.id) !== producer.jobId ||
     String(job.run_id) !== producer.runId ||
@@ -690,6 +756,44 @@ function normalizePackModes(directory) {
       normalizePackModes(path);
     } else if (stat.isFile()) {
       chmodSync(path, stat.mode & 0o111 ? 0o755 : 0o644);
+    }
+  }
+}
+
+function runPackagePack(directory, destination, releaseRef, prepareRoot) {
+  const options = {
+    cwd: directory,
+    env: {
+      ...process.env,
+      OPENCLAW_PREPACK_PREPARED: "1",
+      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+        : {}),
+    },
+    stdio: "inherit",
+    timeout: 30 * 60 * 1000,
+  };
+  if (prepareRoot) {
+    execFileSync("pnpm", ["run", "prepack"], options);
+  }
+  try {
+    prepareRoot?.();
+    // Bundled dependencies require the hoisted linker. Root bytes are already
+    // sealed after prepack; other packages keep their pack hooks enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "pack",
+        ...(prepareRoot ? ["--config.ignore-scripts=true"] : []),
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      options,
+    );
+  } finally {
+    if (prepareRoot) {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], options);
     }
   }
 }
@@ -739,64 +843,15 @@ export function prepareNpmPackageBundle({
       { cwd: sourceDir, stdio: "inherit" },
     );
   },
-  runPack = (directory, destination) =>
-    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
-    execFileSync(
-      "pnpm",
-      ["pack", "--config.node-linker=hoisted", "--pack-destination", destination],
-      {
-        cwd: directory,
-        env: {
-          ...process.env,
-          OPENCLAW_PREPACK_PREPARED: "1",
-          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-            : {}),
-        },
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      },
-    ),
-  runRootPack = (directory, destination) => {
-    const env = {
-      ...process.env,
-      OPENCLAW_PREPACK_PREPARED: "1",
-      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-        : {}),
-    };
-    execFileSync("pnpm", ["run", "prepack"], {
-      cwd: directory,
-      env,
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    });
-    try {
+  runPack = (directory, destination) => runPackagePack(directory, destination, releaseRef),
+  runRootPack = (directory, destination) =>
+    runPackagePack(directory, destination, releaseRef, () => {
       // Frozen prepack hooks may rebuild dist even when preparation already ran.
       // Sanitize the final declarations and refresh their hashes, then disable
       // pack hooks so those exact bytes and inventory stay sealed.
       sanitizeRootDeclarations(join(directory, "dist"));
       refreshRootDistInventory(directory);
-      execFileSync(
-        "pnpm",
-        [
-          "pack",
-          "--config.ignore-scripts=true",
-          "--config.node-linker=hoisted",
-          "--pack-destination",
-          destination,
-        ],
-        { cwd: directory, env, stdio: "inherit", timeout: 30 * 60 * 1000 },
-      );
-    } finally {
-      execFileSync("pnpm", ["run", "--if-present", "postpack"], {
-        cwd: directory,
-        env,
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      });
-    }
-  },
+    }),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,

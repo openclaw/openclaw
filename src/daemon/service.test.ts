@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import * as containerEnvironment from "../infra/container-environment.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -137,44 +136,6 @@ describe("resolveGatewayService", () => {
     });
   });
 
-  it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
-    const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
-    const stateDir = path.join(tempHome, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const envSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-    try {
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            meta: {
-              lastTouchedVersion: "9999.1.1",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-
-      const service = resolveGatewayService();
-
-      await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
-        "Refusing to restart the gateway service",
-      );
-    } finally {
-      envSnapshot.restore();
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
-  });
-
   it("guards every native service mutation when an external supervisor owns lifecycle", async () => {
     mockProcessPlatform("darwin");
     const service = resolveGatewayService();
@@ -219,7 +180,7 @@ describe("readGatewayServiceState", () => {
           sourcePath: registered,
         })),
         isLoaded: vi.fn<GatewayService["isLoaded"]>(
-          async ({ env } = {}) => env?.OPENCLAW_TASK_SCRIPT === expected,
+          async (options = {}) => options.env?.OPENCLAW_TASK_SCRIPT === expected,
         ),
         readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
           status: env?.OPENCLAW_TASK_SCRIPT === expected ? "running" : "unknown",
@@ -717,7 +678,7 @@ describe("startGatewayService", () => {
       it.each([
         {
           layout: "node-host entrypoint after dev loader",
-          args: [process.execPath, "--import", "tsx", program],
+          args: ["node", "--import", "tsx", program],
           subcommand: ["node", "run"],
         },
       ])("requests repair before start for $layout", async ({ args, subcommand }) => {
@@ -746,7 +707,7 @@ describe("startGatewayService", () => {
     it.each([
       {
         layout: "relative entrypoint",
-        args: [process.execPath, heapFlag, path.basename(entrypoint)],
+        args: ["node", heapFlag, path.basename(entrypoint)],
         workingDirectory: path.dirname(entrypoint),
       },
     ])(

@@ -33,6 +33,9 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "offline canonical port preserves native cell bytes and 64-bit allocation state": [
+    "src/infra/database-engine/port.worker.ts",
+  ],
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
@@ -42,16 +45,22 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync.ts",
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    // Engine admission owns anchor metadata and schema bootstrap, not application queries.
+    "src/infra/database-engine/adapters.ts",
+    "src/infra/database-engine/open.ts",
     "src/infra/node-sqlite.ts",
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-schema-contract.ts",
+    // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
+    "src/infra/sqlite-source-fence.ts",
     "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-canonical-validation-migration.ts",
     "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
@@ -65,6 +74,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    // The outbox rebuild preserves historical rowids and stored schema-object SQL.
+    "src/state/openclaw-agent-outbox-sequence-migration.ts",
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
@@ -72,6 +83,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
+    "src/state/openclaw-state-db-meeting-chronology-migration.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
@@ -92,6 +104,8 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
+    // The scoped archive preserves native cell types, rowids, and SQLite schema SQL.
+    "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],
@@ -134,6 +148,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.meeting-transcripts-files.ts",
     "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
+    // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
+    "src/infra/state-migrations.session-window-repair.ts",
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
     // Doctor integrity PRAGMAs and lossless native 64-bit orphan-row preservation.

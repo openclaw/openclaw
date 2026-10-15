@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
@@ -9,7 +10,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -47,7 +48,7 @@ describe("suggestion dispatch through real chat input custody", () => {
     const suggestionId = "custody-suggestion";
     const runId = `session-suggestion:${suggestionId}`;
     const text = "Review this synthetic suggestion after the current task.";
-    addSessionSuggestion(fixture.scope, { id: suggestionId, authorId: profile.id, text });
+    await addSessionSuggestion(fixture.scope, { id: suggestionId, authorId: profile.id, text });
     await initializeSessionReadContext(fixture.context);
     const { db } = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(fixture.scope)));
     const claim = () =>
@@ -96,7 +97,7 @@ describe("suggestion dispatch through real chat input custody", () => {
     }
     try {
       const response = await resolveSuggestion();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(fixture.beforeApprove, JSON.stringify(response.mock.calls)).toHaveBeenCalledOnce();
       expect(response).toHaveBeenCalledOnce();
       if (beforeCustody) {
         expect(await pendingAtApproval).toEqual([
@@ -124,6 +125,16 @@ describe("suggestion dispatch through real chat input custody", () => {
       });
       expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       const recorder = await fixture.dispatchedRecorder;
+      let persistenceFailure: unknown;
+      const persistApproved = recorder.persistApproved.bind(recorder);
+      vi.spyOn(recorder, "persistApproved").mockImplementation(async (...args) => {
+        try {
+          return await persistApproved(...args);
+        } catch (error) {
+          persistenceFailure = error;
+          throw error;
+        }
+      });
       const acceptedResponse = structuredClone(response.mock.calls);
       linkEmail(email, mergedProfile.id);
       if (change === "host after custody") {
@@ -136,7 +147,10 @@ describe("suggestion dispatch through real chat input custody", () => {
       if (change === "profile after custody") {
         const transcript = loadTranscriptEventsSync(fixture.scope);
         expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
-        expect(transcript.at(-1)).toMatchObject({ message: { role: "user", content: text } });
+        expect(
+          transcript.at(-1),
+          `persistApproved failure: ${inspect(persistenceFailure, { depth: 8 })}`,
+        ).toMatchObject({ message: { role: "user", content: text } });
         expect(recorder.getAdmissionReceipt()).toBeDefined();
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         const retry = await resolveSuggestion(mergedProfile.id);

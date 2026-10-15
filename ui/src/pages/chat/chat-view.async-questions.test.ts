@@ -5,13 +5,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { admitQueuedMessageForSession, removeQueuedMessage } from "./chat-queue.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
@@ -19,7 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
-const container = document.createElement("div");
+let container: ReturnType<typeof createComposerContainer>;
 const audience = {
   role: "assistant",
   content: "Which audience?",
@@ -37,6 +39,7 @@ const terminal = (runId: string) => ({
 });
 beforeEach(() => {
   installTranscriptDomMocks();
+  container = createComposerContainer();
   document.body.append(container);
 });
 afterEach(() => {
@@ -197,7 +200,7 @@ it.each(["discard", "consumed"] as const)(
       sendError: "Synthetic rejection",
     };
     const panes = ["first", "second"].map((paneId) => {
-      const element = document.createElement("div");
+      const element = createComposerContainer();
       document.body.append(element);
       const host = makeChatHost({
         requestHandlers: {},

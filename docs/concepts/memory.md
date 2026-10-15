@@ -10,6 +10,11 @@ OpenClaw remembers things by writing plain Markdown files in your agent's
 workspace (default `~/.openclaw/workspace`). The model only remembers what gets
 saved to disk; there is no hidden state.
 
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+
 ## How it works
 
 Your agent has four memory-related files:
@@ -156,6 +161,11 @@ The agent has three tools for working with memory:
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
 
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
+
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
 that `memory_get` can read. Use `sessions_search` with distinctive text from the
@@ -208,7 +218,7 @@ auto-capture, and local Ollama embedding support. Plugin install.
 
 If you want durable memory to behave more like a maintained knowledge base
 than raw notes, use the bundled `memory-wiki` plugin. It compiles durable
-knowledge into a wiki vault with deterministic page structure, structured
+knowledge into a wiki vault with fixed page structure, structured
 claims and evidence, contradiction and freshness tracking, generated
 dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 `wiki_search`, `wiki_get`, `wiki_apply`, `wiki_lint`).
@@ -238,6 +248,10 @@ context window. The selected memory provider supplies the prompts and
 persistence target or tools. It inherits host timing unless it deliberately
 overrides an optional timing field.
 
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
+
 The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
 are still saved normally.
@@ -245,6 +259,13 @@ are still saved normally.
 Memory Core's file flush requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
+
+During that flush, `write` appends only to the daily note. Its `content` must
+contain only new text. Replayed whole notes and copied paragraphs are rejected
+without changing the file, so the model can retry with just the new entries.
+Reusing Markdown headings with new facts is allowed. This check compares text
+with normalized line endings; it does not deduplicate paraphrases or repair
+existing notes.
 
 A native provider's tools-based flush does not require a writable workspace;
 other flush plans are not resolved for sessions that cannot write it. It exposes
@@ -295,7 +316,7 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
 - **Consolidated**: a tool-free completion selects merges and supersessions
-  after the deterministic gate. The memory writer composes the result from
+  after the rule-based check. The memory writer composes the result from
   validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
@@ -322,7 +343,7 @@ The dreaming system has two related review lanes:
 Dreaming JSON journals from before July 2026 are no longer imported. The
 migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
 `short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
-state remains authoritative. If Doctor cannot establish canonical state,
+state remains authoritative. If Doctor cannot establish valid stored state,
 restore a backup from a July 2026 or newer release. An empty ingestion store
 without a previous migration acknowledgement is indistinguishable from
 unmigrated state; after verifying its SQLite state, back up and move the retired

@@ -33,7 +33,7 @@ const retryingCompactionEnd = () =>
   }) as const;
 
 type StreamUsage = AssistantMessage["usage"] & { reasoningTokens?: number };
-type UsageCall = {
+type UsageCall = Pick<AssistantMessage, "responseId" | "turnId"> & {
   usage: StreamUsage;
   streamedUsage?: StreamUsage;
   text?: string;
@@ -132,6 +132,8 @@ async function runUsageCalls(
         api: model.api,
         provider: model.provider,
         model: model.id,
+        responseId: call.responseId,
+        turnId: call.turnId,
         usage: call.usage,
         stopReason: call.stopReason ?? "stop",
         ...(call.stopReason && call.stopReason !== "stop"
@@ -244,6 +246,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       });
       const messages: string[] = [];
       try {
+        controller.observeAttempt({ providerRetryMaxRetries: 1 });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
         nowMs += 130_000;
         await runUsageCalls(
@@ -260,12 +263,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(messages).toEqual(["toolUse", stopReason]);
         expect(recovery.overflowCompactionAttempts).toBe(stopReason === "stop" ? 0 : 2);
         controller.observeAttempt({
+          providerRetryMaxRetries: 1,
           hasSuccessfulModelResponse: harness.subscription.hasSuccessfulModelResponse(),
         });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(
           stopReason === "stop",
         );
-        expect(controller.transientRetryCount).toBe(stopReason === "stop" ? 2 : 1);
+        expect(controller.transientRetryCount).toBe(1);
       } finally {
         now.mockRestore();
         harness.subscription.unsubscribe();
@@ -302,11 +306,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       [
         {
           text: "First reply.",
+          responseId: "first-provider-response",
           streamedUsage: makeUsage({ input: 100, output: 12, cost: 0.125, billed: true }),
           usage: makeUsage(),
         },
         {
           text: "Second reply.",
+          turnId: "second-runtime-turn",
           streamedUsage: makeUsage({ input: 200, output: 8, cost: 0.5, billed: true }),
           usage: makeUsage(),
         },
@@ -334,8 +340,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
       ]);
       expect(onModelUsage.mock.calls).toMatchObject([
-        [{ input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }],
-        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }],
+        [
+          { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 },
+          { responseId: "first-provider-response" },
+        ],
+        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }, { turnId: "second-runtime-turn" }],
       ]);
       expect(subscription.getUsageTotals()).toMatchObject({
         input: 300,
@@ -382,6 +391,23 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         cost: { total: 0, totalOrigin: "provider-billed" },
       },
       contextTokens: 11,
+    },
+    {
+      name: "authoritative zero token report",
+      call: {
+        usage: makeUsage({
+          usageReport: { state: "available" },
+          contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
+        }),
+      },
+      expected: {
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+        cost: { total: 0 },
+      },
+      contextTokens: 0,
     },
     {
       name: "final billing-only zero with streamed tokens",
@@ -480,7 +506,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       expect(
         onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage"),
       ).toEqual(
-        expected.output ? [{ stream: "usage", data: { outputTokens: expected.output } }] : [],
+        expected.output || call.usage.usageReport?.state === "available"
+          ? [{ stream: "usage", data: { outputTokens: expected.output } }]
+          : [],
       );
       expectDefined(terminal, "Expected assistant completion").usage.input = 999;
       const snapshot = expectDefined(

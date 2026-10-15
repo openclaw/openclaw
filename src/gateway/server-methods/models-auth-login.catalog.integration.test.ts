@@ -13,10 +13,10 @@ import {
   waitForCatalogPublication,
 } from "./models-auth-catalog.test-support.js";
 
-it(
-  "models.authLogin publishes delayed account rows to passive models.list",
+it.for([false, true])(
+  "models.authLogin publishes delayed account rows to passive models.list (configured: %s)",
   { timeout: 120_000 },
-  async ({ signal }) => {
+  async (configured, { signal }) => {
     const state = await createOpenClawTestState({
       label: "login-discovery",
       layout: "state-only",
@@ -153,7 +153,10 @@ it(
       );
       const token = "login-discovery-gateway-token";
       const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        agents: {
+          ...(configured ? { defaults: { modelPolicy: { allow: [`${provider}/*`] } } } : {}),
+          entries: { main: { workspace: state.workspaceDir } },
+        },
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },
       };
@@ -180,7 +183,20 @@ it(
           };
         };
         expect((await list()).ids).not.toContain("account-exclusive");
-        const beforeLoginWork = catalogWork.read();
+        // A configured provider can queue this refresh behind startup discovery.
+        await waitForCatalogPublication({
+          signal,
+          start: () => list(true),
+          read: list,
+          ready: ({ result }) => {
+            const { completedTasks, pendingTasks } = catalogWork.read();
+            return (
+              completedTasks > 0 &&
+              pendingTasks === 0 &&
+              !result.pendingProviders?.includes(provider)
+            );
+          },
+        });
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -231,7 +247,6 @@ it(
           maxWorkers: 1,
           workersCreated: 1,
           pendingTasks: 0,
-          completedTasks: beforeLoginWork.completedTasks + 1,
         });
         responseDelay = 0;
         const manualRefresh = await list(true);

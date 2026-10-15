@@ -55,10 +55,8 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
 
   it("retries once before surfacing the incomplete-turn warning", async () => {
     const turn = toolUseStopWithoutCall();
-    // The written call survives payload preparation as an undelivered reply.
-    expect(turn.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: PSEUDO_TOOL_CALL_TEXT }),
-    ]);
+    // Delivery hides the markup; the original assistant still drives incomplete-call detection.
+    expect(turn.payloadsWithToolMedia).toEqual([expect.objectContaining({ text: "exec" })]);
     const activateInternalPrompt = vi.fn();
 
     await expect(

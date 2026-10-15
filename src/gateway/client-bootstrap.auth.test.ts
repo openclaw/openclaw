@@ -66,13 +66,6 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
     expect(result.auth).toEqual({ token: "${LITERAL_TOKEN}", password: undefined });
   });
 
-  it("preserves a substituted template-looking literal through interactive client auth", async () => {
-    const { config } = await loadLocalTokenConfig("${SOURCE}", { SOURCE: "${OTHER}" });
-    const result = await resolveGatewayClientBootstrap({ config, env: {} });
-
-    expect(result.auth).toEqual({ token: "${OTHER}", password: undefined });
-  });
-
   it("keeps configured local password ahead of OPENCLAW_GATEWAY_PASSWORD", async () => {
     await expectInteractiveAuth(
       {

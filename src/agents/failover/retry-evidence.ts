@@ -12,7 +12,10 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyFailoverReasonFromCode } from "./classification-rules.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  isPeriodicUsageLimitErrorMessage,
+} from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
 type RateLimitWindow =
@@ -141,8 +144,18 @@ export function resolveRetryAfterMs(
 /** Usage-window evidence is distinct from a temporary throttle's retry floor. */
 export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
   return Boolean(
-    message && LONG_WINDOW_RATE_LIMIT_RE.test(message) && !SHORT_RATE_LIMIT_UNIT_RE.test(message),
+    message &&
+    (LONG_WINDOW_RATE_LIMIT_RE.test(message) || isPeriodicUsageLimitErrorMessage(message)) &&
+    !SHORT_RATE_LIMIT_UNIT_RE.test(message),
   );
+}
+
+/** Explicit shared token-bucket exhaustion, distinct from per-request throttling. */
+export function hasOrganizationTpmRateLimitEvidence(message: string | undefined): boolean {
+  const unit = message?.match(
+    /\brate limit reached\b[^\r\n]*?\bin organization\b[^:\r\n]*?\bon (tokens|requests) per min(?:ute)?\b/i,
+  )?.[1];
+  return unit?.toLowerCase() === "tokens";
 }
 
 /** Classify provider rate-limit text without deciding a caller's retry policy. */

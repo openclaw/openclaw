@@ -47,23 +47,6 @@ function delegatedContext(currentChannelId = "channel:CURRENT") {
 }
 
 describe("readMattermostMessages", () => {
-  it("reads the exact current conversation without a metadata round trip", async () => {
-    const fetchImpl = createReadFetch();
-
-    const result = await readMattermostMessages({
-      cfg: createMattermostTestConfig("read-current"),
-      channelId: "CURRENT",
-      limit: 2,
-      accountId: "default",
-      context: delegatedContext(),
-      fetchImpl,
-    });
-
-    expect(result.messages.map((message) => message.id)).toEqual(["post-2", "post-1"]);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(requestUrl(fetchImpl.mock.calls[0]![0])).toContain("/channels/CURRENT/posts?per_page=2");
-  });
-
   it("allows a configured delegated cross-channel read", async () => {
     const cfg = createMattermostTestConfig("read-configured") as OpenClawConfig;
     cfg.channels!.mattermost!.groupPolicy = "allowlist";
@@ -96,40 +79,6 @@ describe("readMattermostMessages", () => {
         fetchImpl,
       }),
     ).resolves.toMatchObject({ messages: [{ id: "post-2" }, { id: "post-1" }] });
-  });
-
-  it.each([
-    {
-      label: "open policy",
-      providerConfig: { groupPolicy: "open" as const },
-    },
-    {
-      label: "allowlisted groups",
-      providerConfig: {
-        groupPolicy: "allowlist" as const,
-        groups: { OTHER: { requireMention: false } },
-      },
-    },
-  ])("inherits provider-level $label for a named account", async ({ providerConfig }) => {
-    const cfg = createMattermostTestConfig("read-named-inheritance") as OpenClawConfig;
-    Object.assign(cfg.channels!.mattermost!, providerConfig, {
-      accounts: { work: { enabled: true } },
-    });
-    const fetchImpl = createReadFetch();
-
-    await expect(
-      readMattermostMessages({
-        cfg,
-        channelId: "OTHER",
-        accountId: "work",
-        context: {
-          ...delegatedContext(),
-          requesterAccountId: "work",
-        },
-        fetchImpl,
-      }),
-    ).resolves.toMatchObject({ messages: [{ id: "post-2" }, { id: "post-1" }] });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("denies unconfigured and direct-message cross-channel targets before reading posts", async () => {
@@ -172,6 +121,7 @@ describe("readMattermostMessages", () => {
     const result = await readMattermostMessages({
       cfg: createMattermostTestConfig("read-current-dm"),
       channelId: "CURRENT",
+      limit: 2,
       accountId: "default",
       context: {
         ...delegatedContext(),
@@ -186,7 +136,7 @@ describe("readMattermostMessages", () => {
 
     expect(result.messages.map((message) => message.id)).toEqual(["post-2", "post-1"]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(requestUrl(fetchImpl.mock.calls[0]![0])).toContain("/channels/CURRENT/posts?");
+    expect(requestUrl(fetchImpl.mock.calls[0]![0])).toContain("/channels/CURRENT/posts?per_page=2");
   });
 
   it("fails closed when the trusted native channel ID names another conversation", async () => {

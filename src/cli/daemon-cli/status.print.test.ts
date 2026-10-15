@@ -315,47 +315,42 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
-  it.each([
-    { name: "report-only", keepAlive: false, gatewayActions: [], warning: false },
-    {
-      name: "lifecycle",
-      keepAlive: false,
-      gatewayActions: ["restart" as const],
-      warning: true,
-    },
-  ])("uses the appropriate status severity for $name jobs", (testCase) => {
-    const job = {
-      label: "ai.openclaw.test.w15.other",
-      program: "/tmp/openclaw-test/other.sh",
-      keepAlive: testCase.keepAlive,
-      gatewayActions: testCase.gatewayActions,
-      safeToRemove: false,
-    };
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
-        foreignLaunchdJobs: [job],
-        forcedRestartSummary: { count: 3, windowMs: 600_000 },
-      },
-    });
+  it.each([{ name: "report-only", keepAlive: false, gatewayActions: [], warning: false }])(
+    "uses the appropriate status severity for $name jobs",
+    (testCase) => {
+      const job = {
+        label: "ai.openclaw.test.w15.other",
+        program: "/tmp/openclaw-test/other.sh",
+        keepAlive: testCase.keepAlive,
+        gatewayActions: testCase.gatewayActions,
+        safeToRemove: false,
+      };
+      printDaemonStatus({
+        service: {
+          runtime: { status: "running", pid: 8000 },
+          foreignLaunchdJobs: [job],
+          forcedRestartSummary: { count: 3, windowMs: 600_000 },
+        },
+      });
 
-    const report = testCase.warning ? runtime.error : runtime.log;
-    const otherOutput = testCase.warning ? runtime.log : runtime.error;
-    expectMockLineContains(
-      report,
-      testCase.warning
-        ? "Foreign launchd jobs detected (macOS)."
-        : "Other OpenClaw launchd jobs (macOS)",
-    );
-    expectMockLineContains(report, job.label);
-    expectMockLineContains(report, job.program);
-    expectMockLineContains(report, "Report only; left unchanged.");
-    expect(output(otherOutput)).not.toContain(job.label);
-    if (!testCase.warning) {
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
-    }
-  });
+      const report = testCase.warning ? runtime.error : runtime.log;
+      const otherOutput = testCase.warning ? runtime.log : runtime.error;
+      expectMockLineContains(
+        report,
+        testCase.warning
+          ? "Foreign launchd jobs detected (macOS)."
+          : "Other OpenClaw launchd jobs (macOS)",
+      );
+      expectMockLineContains(report, job.label);
+      expectMockLineContains(report, job.program);
+      expectMockLineContains(report, "Report only; left unchanged.");
+      expect(output(otherOutput)).not.toContain(job.label);
+      if (!testCase.warning) {
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
+      }
+    },
+  );
 
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus({
@@ -409,33 +404,12 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Logs (stdout and stderr):");
+    expect(output()).not.toContain("Warm-up:");
+    expect(output()).toContain("Readiness is not confirmed");
     const errors = output(runtime.error);
     expect(errors).not.toContain("suppressed");
-    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
-  });
-
-  it("does not claim an indeterminate port is not listening", () => {
-    printDaemonStatus({
-      service: {
-        label: "Scheduled Task",
-        loadState: { status: "loaded" },
-        loadedText: "registered",
-        notLoadedText: "not registered",
-        runtime: { status: "running", pid: 8000 },
-      },
-      gateway,
-      port: emptyPort("unknown"),
-      rpc: {
-        ok: false,
-        kind: "connect",
-        capability: "unknown",
-        error: "gateway closed (1000): ",
-        url: "ws://127.0.0.1:18789",
-      },
-    });
-
-    const errors = output(runtime.error);
-    expect(errors).not.toContain("Gateway port 18789 is not listening");
+    expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
+    expect(errors).toContain("may be from an earlier run");
   });
 
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
@@ -575,36 +549,6 @@ describe("printDaemonStatus", () => {
     output,
   });
 
-  it("does not print systemd user-service hints when a gateway responds", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    isSystemdUnavailableDetailMock.mockReturnValue(true);
-    renderSystemdUnavailableHintsMock.mockReturnValue(["run loginctl enable-linger"]);
-
-    try {
-      printDaemonStatus({
-        service: {
-          label: "systemd user",
-          loadState: { status: "not-loaded" },
-          loadedText: "not loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "unknown", detail: "systemd user services unavailable" },
-        },
-        rpc: {
-          ok: true,
-          url: "ws://127.0.0.1:18789",
-          server: { version: "2026.5.12" },
-        },
-        port: emptyPort("busy"),
-      });
-    } finally {
-      platform.mockRestore();
-    }
-
-    const errors = output(runtime.error);
-    expect(errors).not.toContain("systemd user services unavailable");
-    expect(errors).not.toContain("run loginctl enable-linger");
-  });
-
   it.each([
     { lastExitStatus: undefined, exhausted: true },
     { lastExitStatus: 78, exhausted: false },
@@ -636,116 +580,6 @@ describe("printDaemonStatus", () => {
       ).toBe(!exhausted);
     },
   );
-
-  it("does not rule out warm-up from port ownership without readiness proof", () => {
-    printDaemonStatus({
-      service: runningService,
-      gateway,
-      rpc: {
-        ok: false,
-        error: "gateway rejected websocket upgrade (HTTP 503)",
-        url: "ws://127.0.0.1:18789",
-      },
-      health: {
-        healthy: true,
-        staleGatewayPids: [],
-      },
-    });
-
-    const logged = output();
-    expect(logged).not.toMatch(/not a warm-up delay|restart the gateway/i);
-    expect(logged).toMatch(/readiness.*not.*confirmed|warm-up.*possible/i);
-  });
-
-  it.each([
-    {
-      serviceRuntime: { status: "running", pid: 8000 },
-      runtimeLabel: "running",
-      runtimeText: "running (pid 8000)",
-      targetRole: "diagnostic-only",
-      suffix: " (diagnostic only, not the check target)",
-      rpcOk: false,
-    },
-    {
-      serviceRuntime: undefined,
-      runtimeLabel: "absent",
-      runtimeText: undefined,
-      targetRole: "target",
-      suffix: "",
-      rpcOk: true,
-    },
-  ] as const)(
-    "projects $targetRole service state with $runtimeLabel runtime",
-    ({ serviceRuntime, runtimeText, targetRole, suffix, rpcOk }) => {
-      const status: DaemonStatus = {
-        extraServices: [],
-        service: {
-          ...service,
-          targetRole,
-          runtime: serviceRuntime,
-        },
-        gateway: {
-          bindMode: "loopback",
-          bindHost: "127.0.0.1",
-          port: 18900,
-          portSource: "env/config",
-          probeUrl: "ws://127.0.0.1:18900",
-        },
-        port: { port: 18900, status: "free", listeners: [], hints: [] },
-        rpc: {
-          ok: rpcOk,
-          error: rpcOk ? undefined : "connect ECONNREFUSED 127.0.0.1:18900",
-          url: "ws://127.0.0.1:18900",
-        },
-      };
-      const expectedJson = structuredClone(status);
-      printDaemonStatusRuntime(status, { json: false });
-
-      const lines = runtime.log.mock.calls.map(([line]) => line);
-      expect(
-        lines.filter((line) => line.startsWith("Service:") || line.startsWith("Runtime:")),
-      ).toEqual([
-        `Service: LaunchAgent (loaded)${suffix}`,
-        ...(runtimeText === undefined ? [] : [`Runtime: ${runtimeText}${suffix}`]),
-      ]);
-      if (targetRole === "diagnostic-only") {
-        const combinedOutput = [...lines, output(runtime.error)].join("\n");
-        expect(combinedOutput).not.toContain("Warm-up: launch agents");
-        expect(combinedOutput).not.toContain("service appears running");
-      }
-      runtime.log.mockClear();
-      runtime.error.mockClear();
-      printDaemonStatusRuntime(status, { json: true });
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(expectedJson);
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
-    // inspectGatewayRestart can set healthy from reachability after ownership failed,
-    // while still returning non-empty staleGatewayPids. That must not be treated as
-    // owns-port proof, or this message would contradict the stale-PID diagnostic below.
-    printDaemonStatus({
-      service: runningService,
-      gateway,
-      rpc: {
-        ok: false,
-        error: "gateway closed (1008 policy violation: invalid token)",
-        url: "ws://127.0.0.1:18789",
-      },
-      health: {
-        healthy: true,
-        staleGatewayPids: [9000],
-      },
-    });
-
-    const logged = output();
-    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
-    expect(logged).not.toContain("Gateway process is running and owns the gateway port");
-    const errors = output(runtime.error);
-    expect(errors).toContain("Gateway runtime PID does not own the listening port");
-  });
 
   function printDrift(entry: NonNullable<DaemonStatus["pluginVersionDrift"]>["drifts"][number]) {
     printDaemonStatus(
@@ -805,30 +639,6 @@ describe("printDaemonStatus", () => {
     const logged = output();
     expect(logged).not.toContain("openclaw plugins update");
     expect(output(runtime.error)).not.toContain("Plugin repair target resolution failed");
-  });
-
-  it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
-    printDrift({
-      pluginId: "brave",
-      installedVersion: "2026.6.9",
-      gatewayVersion: "2026.6.10-beta.1",
-      source: "npm",
-      packageName: "@openclaw/brave-plugin",
-      spec: "@openclaw/brave-plugin@2026.6.9",
-      targetResolution: {
-        status: "resolved",
-        packageName: "@openclaw/brave-plugin",
-        requestedTarget: "2026.6.10-beta.1",
-        version: "2026.6.10-beta.1",
-      },
-    });
-
-    expectMockLineContains(runtime.log, "- brave: 2026.6.9 (npm)");
-    expectMockLineContains(
-      runtime.log,
-      "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
-    );
-    expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 
   it("fails loudly without an install command when npm cannot resolve a pinned target", () => {

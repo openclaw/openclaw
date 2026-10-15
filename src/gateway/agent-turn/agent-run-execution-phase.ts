@@ -21,6 +21,7 @@ import {
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   resolveReplySourceTurnId,
@@ -70,9 +71,10 @@ import {
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
+  // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
   return await runWithChatAbortExecution(
     params.prepared.activeRunAbort.entry,
-    () => executeAgentRun(params),
+    () => runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params)),
     params.prepared.activeRunAbort.cleanup,
   );
 }
@@ -95,15 +97,12 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
   let finishUndispatchedFollowup = false;
   try {
     await using runtimeResources = new AsyncDisposableStack();
-    let preparedModelRuntimeLease = prepared.preparedModelRuntimeLease
-      ? runtimeResources.use(prepared.preparedModelRuntimeLease)
-      : undefined;
+    let preparedModelRuntimeLease = runtimeResources.use(prepared.preparedModelRuntimeLease);
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
     const abortRegistration = prepared.activeRunAbort;
-    const abortEntry = abortRegistration.entry;
-    const abortController = abortRegistration.controller;
+    const { entry: abortEntry, controller: abortController } = abortRegistration;
     const operationalRunInstance = prepared.operationalRunInstance;
     const sessionKey = abortEntry?.sessionKey;
     const admittedRunIdentity = abortEntry
@@ -166,7 +165,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             agentId: params.activeSessionAgentId,
             reason: "agent.input.settled",
           },
-          { accessChanged: false },
+          { accessChanged: false, rowScope: "runtime" },
         );
       }
     };
@@ -178,7 +177,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
           () => dispatchAgentRunWithMedia(dispatch, params),
-          () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
+          () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
         );
         dispatched = true;
         return execution;
@@ -314,6 +313,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
+            acpSession: params,
           });
         }
         if (
@@ -536,6 +536,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
+                replyExpectation: prepared.userTurn.replyExpectation,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

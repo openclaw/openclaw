@@ -3,10 +3,14 @@ import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
 
-export type OpenAIResponsesCompactionRejection = {
+/** Identity of a provider compaction checkpoint the server rejected on replay. */
+export type CompactionReplayRejection = {
   data: string;
   id?: string;
 };
+
+/** @deprecated Use CompactionReplayRejection. */
+export type OpenAIResponsesCompactionRejection = CompactionReplayRejection;
 
 export type CodeModeToolSurfaceObservation = {
   beforeToolIdentities: readonly string[];
@@ -64,6 +68,23 @@ export const reasoningTagTextPolicy = {
   },
 };
 
+const PREPARED_REQUEST_SUFFIX = Symbol("preparedRequestSuffix");
+
+/** The caller supplies a captured wire prefix; transport repair must retain its late tool results. */
+export const preparedRequestSuffix = {
+  mark(context: object, toolCallIds: ReadonlySet<string>): void {
+    Reflect.set(context, PREPARED_REQUEST_SUFFIX, toolCallIds);
+  },
+  has(context: object): boolean {
+    return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
+  },
+  toolCallId(context: object, id: string, normalized: string): string {
+    // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids && !ids.has(id) && ids.has(normalized) ? normalized : id;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
@@ -72,6 +93,8 @@ export type AnthropicContextManagementOptions = {
   anthropicServerCompaction?: boolean;
   anthropicCompactThreshold?: number;
   cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } };
+  /** Internal owner notification after Anthropic rejects a replayed compaction checkpoint. */
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
 };
 
 /** Provider options shared by the Anthropic provider and canonical transport. */
@@ -127,7 +150,7 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
   /** Internal owner notification after a server rejects a persisted compaction checkpoint. */
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;
@@ -137,6 +160,7 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
 
 /** Superset retained under the provider's published compatibility type name. */
 export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
+  streaming?: boolean;
   toolChoice?: OpenAICompletionsToolChoice;
   reasoning?: OpenAIReasoningEffort | "off";
   reasoningEffort?: OpenAIReasoningEffort | "off";

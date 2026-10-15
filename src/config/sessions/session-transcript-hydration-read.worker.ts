@@ -1,7 +1,25 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
-import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
+import type { SessionEntryWorkerInput } from "./session-transcript-worker-read.types.js";
+import {
+  MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionTranscriptWorkerValues,
+} from "./session-transcript-worker.types.js";
+
+export async function readSessionEntrySnapshotRequest(
+  request: Extract<SessionEntryWorkerInput, { mode: "snapshot" }>,
+) {
+  const { readTranscriptExportSnapshotReadOnlySync } =
+    await import("./session-accessor.sqlite-read.js");
+  const { projectSessionEntryRecord } =
+    await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+  return {
+    snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
+      projectEvent: request.includeOriginalMessages ? undefined : projectSessionEntryRecord,
+    }),
+  };
+}
 
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(
@@ -22,14 +40,6 @@ export async function readSessionTranscriptHydrationRequest(
       throw new Error("Session transcript is unavailable for maintenance planning");
     }
     return result.value;
-  }
-  const { readOpenClawDatabaseQuarantineFailure } =
-    await import("../../state/openclaw-quarantine-store.js");
-  const quarantine = readOpenClawDatabaseQuarantineFailure("agent", request.database.path, {
-    env: request.target.env,
-  });
-  if (quarantine) {
-    throw quarantine;
   }
   if (request.kind === "latest-active-message") {
     const { readLatestSessionTranscriptMessageEvent } =
@@ -69,13 +79,53 @@ export async function readSessionTranscriptHydrationRequest(
   const { streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
+    const selection = request.transcript;
+    if (
+      selection &&
+      (selection.sessionKey !== request.resolvedScope.sessionKey ||
+        selection.entryIds.length > MAX_SESSION_ROW_FACTS_KEYS)
+    ) {
+      throw new Error("Transcript hydration cohort must select its own bounded session");
+    }
+    const { readSessionTranscriptAnchorFactsInDatabase } =
+      await import("./session-transcript-anchor-read.kernel.js");
+    const { assertOpenClawAgentDatabaseIdentity } =
+      await import("../../state/openclaw-agent-db-identity.js");
+    let transcript: Extract<
+      SessionTranscriptWorkerValues["transcript-hydration"],
+      { kind: "bounded" }
+    >["transcript"];
+    let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
+    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
+      ...request.limits,
+      readOnly: true,
+      resolvedScope: request.resolvedScope,
+      onRead: (projection, rows, messagePresence) => {
+        if (!projection.hasUnindexedPrefix) {
+          residentRows = rows;
+        }
+        const { database, resolved } = projection;
+        if (request.expectedIdentity) {
+          assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+        }
+        if (selection) {
+          transcript = readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            { ...resolved, sessionKey: selection.sessionKey },
+            selection,
+            undefined,
+            projection,
+            request.preparedEntry,
+            messagePresence,
+          );
+        }
+      },
+    });
     return {
       kind: "bounded" as const,
-      snapshot: readSessionTranscriptBoundedActiveContextCore(request.target, {
-        ...request.limits,
-        readOnly: true,
-        resolvedScope: request.resolvedScope,
-      }),
+      snapshot,
+      residentRows,
+      ...(selection ? { transcript } : {}),
     };
   }
   if (!channel) {

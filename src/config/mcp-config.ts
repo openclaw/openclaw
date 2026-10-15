@@ -29,12 +29,11 @@ type ConfigMcpSuccess = {
   config: OpenClawConfig;
   mcpServers: ConfigMcpServers;
 };
-type ConfigMcpReadSuccess = ConfigMcpSuccess & {
-  runtimeConfig: Awaited<ReturnType<typeof readSourceConfigSnapshot>>["runtimeConfig"];
-  sourceConfigBeforeMigrations?: Awaited<
-    ReturnType<typeof readSourceConfigSnapshot>
-  >["sourceConfigBeforeMigrations"];
-};
+type ConfigMcpReadSuccess = ConfigMcpSuccess &
+  Pick<
+    Awaited<ReturnType<typeof readSourceConfigSnapshot>>,
+    "authoredConfig" | "runtimeConfig" | "sourceConfigBeforeMigrations"
+  >;
 type ConfigMcpFailure = { ok: false; path: string; error: string };
 type ConfigMcpReadResult =
   | (ConfigMcpReadSuccess & { ok: true; baseHash?: string })
@@ -120,10 +119,9 @@ function resolveConfiguredMcpServers(
     path: snapshot.path,
     config: structuredClone(sourceConfig),
     mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    authoredConfig: snapshot.authoredConfig,
     runtimeConfig: snapshot.runtimeConfig,
-    ...(snapshot.sourceConfigBeforeMigrations
-      ? { sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations }
-      : {}),
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
     baseHash: snapshot.hash,
   };
 }
@@ -140,6 +138,7 @@ async function commitConfiguredMcpServers(params: {
   success?: { removed?: boolean; updated?: boolean };
   independentlyOwnedName?: string;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   mutation?: { name: string; onCommitted?: McpConfigMutationHook };
 }): Promise<ConfigMcpWriteResult> {
   const next = structuredClone(params.loaded.config);
@@ -171,6 +170,10 @@ async function commitConfiguredMcpServers(params: {
         params.writeOptions.assertCurrent?.();
         params.assertCurrent?.();
       },
+      beforeCommit: async () => {
+        await params.writeOptions.beforeCommit?.();
+        await params.assertCurrentAsync?.();
+      },
     },
   });
   if (params.mutation?.onCommitted) {
@@ -183,7 +186,7 @@ async function commitConfiguredMcpServers(params: {
     });
   }
   if (params.independentlyOwnedName) {
-    markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
+    await markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
   }
   return {
     ok: true,
@@ -288,6 +291,7 @@ async function mutateConfiguredMcpServer(
     independentlyOwnedName:
       params.kind === "unset" || params.recordIndependentOwner === false ? undefined : name,
     assertCurrent: params.kind === "update" ? undefined : params.assertCurrent,
+    assertCurrentAsync: params.kind === "unset" ? params.assertCurrentAsync : undefined,
     mutation: { name, onCommitted },
   });
 }
@@ -379,6 +383,7 @@ async function unsetConfiguredMcpServer(
     name: string;
     expectedServer?: Record<string, unknown>;
     assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {

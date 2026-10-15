@@ -94,7 +94,7 @@ suite.define(() => {
           if (source === "explicit") {
             await where.click();
             await page
-              .locator("wa-popover.new-session-page__where-popover")
+              .locator(".oc-popover.new-session-page__where-popover")
               .getByRole("button", { name: "selected-worker", exact: true })
               .click();
             await page.keyboard.press("Escape");
@@ -137,7 +137,7 @@ suite.define(() => {
       await gateway.waitForRequest("projects.list");
       const project = page.locator("#new-session-project-trigger");
       await project.click();
-      const picker = page.locator("wa-popover.new-session-page__project-popover");
+      const picker = page.locator(".oc-popover.new-session-page__project-popover");
       await picker
         .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
         .fill(cloneUrl);
@@ -190,7 +190,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("projects.list");
         await page.locator("#new-session-project-trigger").click();
-        const projects = page.locator("wa-popover.new-session-page__project-popover");
+        const projects = page.locator(".oc-popover.new-session-page__project-popover");
         await projects
           .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
           .fill("acme");
@@ -342,7 +342,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("projects.list");
         await page.locator("#new-session-project-trigger").click();
-        const projects = page.locator("wa-popover.new-session-page__project-popover");
+        const projects = page.locator(".oc-popover.new-session-page__project-popover");
         await projects
           .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
           .fill("openclaw");
@@ -353,7 +353,7 @@ suite.define(() => {
         await expect.poll(() => checkout.isVisible()).toBe(true);
         await pollLocatorText(checkout).toContain("Current checkout");
         await checkout.click();
-        const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
+        const checkoutPopover = page.locator(".oc-popover.new-session-page__checkout-popover");
         await checkoutPopover
           .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
           .click();
@@ -366,7 +366,7 @@ suite.define(() => {
         expect(await baseRef.inputValue()).toBe("main");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
         await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
-          surface: checkoutPopover.locator('wa-popup [part="popup"]'),
+          surface: checkoutPopover,
           content: [baseRef],
         });
         await page.locator(".new-session-page__message").fill("inspect the worktree");
@@ -559,7 +559,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
       const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
+      const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
@@ -585,7 +585,7 @@ suite.define(() => {
         const checkoutTrigger = page.locator("#new-session-checkout-trigger");
         await checkoutTrigger.click();
         await page
-          .locator("wa-popover.new-session-page__checkout-popover")
+          .locator(".oc-popover.new-session-page__checkout-popover")
           .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
           .click();
         await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");

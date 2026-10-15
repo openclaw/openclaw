@@ -5,24 +5,13 @@ import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../../gateway/session-sharing-preparation.js";
-import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../../infra/agent-run-registry.js";
+import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
 import {
   captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../tools/gateway-caller-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
@@ -37,8 +26,6 @@ import {
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  releaseOperatorAuthority?: () => void;
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
@@ -77,8 +64,6 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
     for (const entries of value.bySession.values()) {
       for (const entry of entries) {
         entry.active = false;
-        entry.releaseOperatorAuthority?.();
-        entry.releaseOperatorAuthority = undefined;
         if (entry.kind === "followup") {
           entry.releaseFollowup();
         } else {
@@ -93,16 +78,8 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
 
 function discard(authority: RequesterCronAuthority): void {
   authority.active = false;
-  const releaseOperatorAuthority = authority.releaseOperatorAuthority;
-  authority.releaseOperatorAuthority = undefined;
-  releaseOperatorAuthority?.();
   if (authority.kind === "yield") {
     authority.sessionFacts.release();
-  }
-  // Pending rows must remember a revoked operator restriction. Forgetting it
-  // would let a later retry take the no-captured-operator dispatch path. The
-  // weak entry binding retires with its row or an explicitly captured successor.
-  if (authority.kind === "yield" && !authority.operatorAuthority) {
     for (const entry of authority.batch) {
       if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
         state.byEntry.delete(getSubagentRunRuntimeKey(entry));
@@ -120,11 +97,6 @@ function discard(authority: RequesterCronAuthority): void {
 }
 
 function isCurrent(authority: RequesterCronAuthority): boolean {
-  try {
-    authority.operatorAuthority?.assertCurrent();
-  } catch {
-    return false;
-  }
   if (
     !authority.active ||
     (authority.managementEntitlement?.source === "channel-owner" &&
@@ -184,7 +156,7 @@ export type PreparedRequesterCronAuthority = {
   release(): void | Promise<void>;
 };
 
-/** Capture the original session source before registry hydration can yield. */
+/** Capture automation management before registry hydration can yield. */
 export function prepareRequesterCronAuthority(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
@@ -194,59 +166,20 @@ export function prepareRequesterCronAuthority(params: {
   if (!requesterAgentId) {
     return undefined;
   }
-  const cronCapture = captureActiveCronManagementAuthority({
+  const capture = captureActiveCronManagementAuthority({
     runId: params.requesterTurnRunId,
     sessionKey: params.requesterSessionKey,
     agentId: requesterAgentId,
   });
-  const caller = getGatewayToolCallerIdentity();
-  const operatorAuthority = caller?.operatorAuthority;
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const runContext = getAgentRunContext(params.requesterTurnRunId);
-  // A yield transfers an accepted user's restrictions, not just automation
-  // management permission. Keep its source alive even when no Cron tool exists.
-  const operatorCapture =
-    operatorAuthority &&
-    assertCallerCurrent &&
-    caller?.agentId === requesterAgentId &&
-    caller.sessionKey === params.requesterSessionKey &&
-    caller.operationalRunInstance?.runId === params.requesterTurnRunId &&
-    caller.approvalAuthority &&
-    runContext?.sessionId
-      ? {
-          sessionId: runContext.sessionId,
-          lifecycleGeneration: caller.approvalAuthority.lifecycleGeneration,
-          isActive: () => {
-            try {
-              assertCallerCurrent();
-              return getAgentRunContext(params.requesterTurnRunId) === runContext;
-            } catch {
-              return false;
-            }
-          },
-        }
-      : undefined;
-  const capture = cronCapture ?? operatorCapture;
-  if (!capture || (operatorAuthority && !operatorCapture)) {
+  if (!capture) {
     return undefined;
   }
-  if (operatorAuthority) {
-    assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
-  }
-  let releaseOperatorAuthority = operatorAuthority?.retain?.();
-  let preparedFacts: Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
-  try {
-    preparedFacts = prepareSessionMutationFacts({
-      cfg: getRuntimeConfig(),
-      sessionKey: params.requesterSessionKey,
-      agentId: requesterAgentId,
-      allowMissing: true,
-    });
-  } catch (error) {
-    releaseOperatorAuthority?.();
-    throw error;
-  }
+  const preparedFacts = prepareSessionMutationFacts({
+    cfg: getRuntimeConfig(),
+    sessionKey: params.requesterSessionKey,
+    agentId: requesterAgentId,
+    allowMissing: true,
+  });
   // Hydration can fail before this accepted preparation is consumed.
   let readyFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
   void preparedFacts.then(
@@ -262,7 +195,6 @@ export function prepareRequesterCronAuthority(params: {
     if (!capture.isActive()) {
       throw new Error("Requester authority retired during session preparation");
     }
-    operatorAuthority?.assertCurrent();
     if ((released && !boundAuthority) || boundAuthority?.active === false) {
       throw new Error("Requester authority retired before yield handoff");
     }
@@ -279,15 +211,8 @@ export function prepareRequesterCronAuthority(params: {
     }
   };
   const releaseFacts = (sessionFacts?: SessionFactsRead<PreparedSessionMutationFacts>) => {
-    try {
-      if (sessionFacts && !boundAuthority) {
-        sessionFacts.release();
-      }
-    } catch {
-      // Cleanup must still release the retained operator authority.
-    } finally {
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
+    if (!boundAuthority) {
+      sessionFacts?.release();
     }
   };
   return {
@@ -316,10 +241,8 @@ export function prepareRequesterCronAuthority(params: {
         kind: "yield",
         requesterAgentId,
         requesterSessionId: capture.sessionId,
-        managementEntitlement: cronCapture?.managementEntitlement,
-        requesterOwner: cronCapture?.requesterOwner,
-        operatorAuthority,
-        releaseOperatorAuthority,
+        managementEntitlement: capture.managementEntitlement,
+        requesterOwner: capture.requesterOwner,
         lifecycleGeneration: capture.lifecycleGeneration,
         sessionLifecycleRevision: session.entry.lifecycleRevision,
         sessionFacts,
@@ -328,7 +251,6 @@ export function prepareRequesterCronAuthority(params: {
         active: true,
       };
       boundAuthority = authority;
-      releaseOperatorAuthority = undefined;
       const sessionAuthorities = state.bySession.get(authority.requesterSessionKey) ?? new Set();
       sessionAuthorities.add(authority);
       state.bySession.set(authority.requesterSessionKey, sessionAuthorities);
@@ -484,9 +406,6 @@ export async function withRequesterCronAuthority<T>(
       ? authority.batch.some((entry) => isSameSubagentRunOwner(entry, pause.entry))
       : sameRequesterSettleBatch(authority.batch, params.batch))
   ) {
-    if (authority?.operatorAuthority) {
-      throw new Error("Requester operator authority does not own this continuation");
-    }
     return await run();
   }
   const current = () => {
@@ -506,9 +425,6 @@ export async function withRequesterCronAuthority<T>(
   };
   if (!current()) {
     discard(authority);
-    if (authority.operatorAuthority) {
-      throw new Error("Requester operator authority is no longer current");
-    }
     return await run();
   }
   const dispatch: RequesterCronAuthorityDispatch = {
@@ -519,26 +435,7 @@ export async function withRequesterCronAuthority<T>(
     pause,
   };
   try {
-    if (!authority.operatorAuthority) {
-      return await activeDispatch.run(dispatch, run);
-    }
-    const { withOperatorToolGatewayAuthority } =
-      await import("../../gateway/server-plugin-in-process-dispatch.js");
-    if (!current()) {
-      throw new Error("Requester operator authority is no longer current");
-    }
-    return await withOperatorToolGatewayAuthority(
-      {
-        operatorRunAuthority: authority.operatorAuthority,
-        scopes: authority.operatorAuthority.scopes,
-        assertCurrent: () => {
-          if (!current()) {
-            throw new Error("Requester operator authority is no longer current");
-          }
-        },
-      },
-      () => activeDispatch.run(dispatch, run),
-    );
+    return await activeDispatch.run(dispatch, run);
   } finally {
     // The committed settlement owner retires this cohort. A returned delivery
     // failure can still need a retry, just like a thrown transport error.

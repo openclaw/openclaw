@@ -2,7 +2,7 @@
 import {
   ErrorCodes,
   validateUpdateReportParams,
-  validateUpdateReportResult,
+  type UpdateReportResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -11,9 +11,8 @@ import {
   prepareUpdateFailureReport,
   submitUpdateFailureReport,
   type UpdateFailureReportInput,
-  type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
-import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
 import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -82,7 +81,8 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
   }
   // Match update.status authority, not a legacy sentinel's timestamp. Only
   // same-run evidence may enrich a ledger row; reads never create a store.
-  const run = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
+  const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+  const run = activeRun ?? lastRun;
   if (!run) {
     return sentinel ? projectReportInput(sentinel) : null;
   }
@@ -116,31 +116,6 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
     },
   };
   return input;
-}
-
-function projectPublicSubmitResult(
-  result: Exclude<UpdateFailureReportSubmitResult, { status: "stale" }>,
-) {
-  if (result.status === "created") {
-    return {
-      status: result.status,
-      url: result.url,
-      ...(result.message ? { message: result.message } : {}),
-    };
-  }
-  if (result.status === "fallback") {
-    return {
-      status: result.status,
-      fallbackUrl: result.fallbackUrl,
-      message: result.message,
-    };
-  }
-  return {
-    status: result.status,
-    message: result.message,
-    ...(result.url ? { url: result.url } : {}),
-    ...(result.fallbackUrl ? { fallbackUrl: result.fallbackUrl } : {}),
-  };
 }
 
 function hasUpdateReportOwnerAuthority(
@@ -209,31 +184,31 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     if (!hasCurrentReportAuthority()) {
       return;
     }
-    let result;
+    let result: UpdateReportResult;
     if (params.action === "preview") {
-      if (!hasCurrentReportAuthority()) {
-        return;
-      }
       result = {
-        status: "ready" as const,
+        status: "ready",
         attemptId: prepared.attemptId,
         body: prepared.body,
         previewDigest: prepared.previewDigest,
         title: prepared.title,
       };
     } else {
-      const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
-        publicationMode,
-        hasCurrentAuthority: hasCurrentReportAuthority,
-        validateCurrentAttempt: async () => {
-          const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
-          if (currentInput?.attemptId !== params.attemptId) {
-            return false;
-          }
-          const currentPrepared = await prepareUpdateFailureReport(currentInput);
-          return currentPrepared.previewDigest === prepared.previewDigest;
-        },
-      });
+      // Accepted publication and cleanup settle even when the connection retires during transport.
+      const submitted = await context.trackExecution(() =>
+        submitUpdateFailureReport(prepared, params.previewDigest, {
+          publicationMode,
+          hasCurrentAuthority: hasCurrentReportAuthority,
+          validateCurrentAttempt: async () => {
+            const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
+            if (currentInput?.attemptId !== params.attemptId) {
+              return false;
+            }
+            const currentPrepared = await prepareUpdateFailureReport(currentInput);
+            return currentPrepared.previewDigest === prepared.previewDigest;
+          },
+        }),
+      );
       if (submitted.status === "stale") {
         respond(false, undefined, {
           code: "INVALID_REQUEST",
@@ -241,16 +216,28 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         });
         return;
       }
-      result = projectPublicSubmitResult(submitted);
+      if (submitted.status === "created") {
+        result = {
+          status: submitted.status,
+          url: submitted.url,
+          ...(submitted.message ? { message: submitted.message } : {}),
+        };
+      } else if (submitted.status === "fallback") {
+        result = {
+          status: submitted.status,
+          fallbackUrl: submitted.fallbackUrl,
+          message: submitted.message,
+        };
+      } else {
+        result = {
+          status: submitted.status,
+          message: submitted.message,
+          ...(submitted.url ? { url: submitted.url } : {}),
+          ...(submitted.fallbackUrl ? { fallbackUrl: submitted.fallbackUrl } : {}),
+        };
+      }
     }
     if (!hasCurrentReportAuthority()) {
-      return;
-    }
-    if (!validateUpdateReportResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update report status is temporarily unavailable",
-      });
       return;
     }
     respond(true, result);

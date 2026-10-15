@@ -47,6 +47,36 @@ beforeEach(() => {
 afterEach(() => unsubscribeDiagnostics?.());
 
 describe("CodexAppServerEventProjector native tool audit projection", () => {
+  it.each([
+    ["function_call", "function_call_output"],
+    ["custom_tool_call", "custom_tool_call_output"],
+    ["local_shell_call", "function_call_output"],
+    ["tool_search_call", "tool_search_output"],
+  ])("projects the raw %s lifecycle without its payload", async (callType, outputType) => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    await notify(projector, "rawResponseItem/completed", {
+      item: { type: callType, call_id: "outer-call", name: "exec", input: "private code" },
+    });
+    await notify(projector, "rawResponseItem/completed", {
+      item: { type: outputType, call_id: "outer-call", output: "private result" },
+    });
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "codex_app_server.item"),
+    ).toEqual([
+      {
+        stream: "codex_app_server.item",
+        data: { phase: "started", itemId: "outer-call", type: callType },
+      },
+      {
+        stream: "codex_app_server.item",
+        data: { phase: "completed", itemId: "outer-call", type: outputType },
+      },
+    ]);
+  });
+
   const workspaceRejection = {
     status: "declined",
     output: "patch rejected: writing outside of the project; rejected by user approval settings",

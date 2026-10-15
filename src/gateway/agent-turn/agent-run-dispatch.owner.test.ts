@@ -4,6 +4,11 @@ import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-r
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import * as transcript from "../../sessions/user-turn-transcript-admission.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
@@ -98,18 +103,22 @@ describe("Gateway dispatch run ownership", () => {
     return { f, owner, dispatch };
   }
 
-  it.each(["command", "media"] as const)(
-    "joins a captured terminal save when %s startup fails before its delivery hook",
+  it.each(["command", "command-cleanup", "media"] as const)(
+    "joins a captured terminal save with the %s producer failure",
     async (startup) => {
       const { entry, params } = createDispatch(true);
       const finishCommand = createDeferred();
       const saving = createDeferred();
       const finishSave = createDeferred();
-      const failStartup = async () => {
+      const failure = new Error("Synthetic startup failure");
+      const failStartup = async (options?: AgentCommandOpts) => {
         await finishCommand.promise;
-        throw new Error("Synthetic startup failure");
+        if (startup === "command-cleanup") {
+          await options?.beforeTerminalDelivery?.(undefined, failure);
+        }
+        throw failure;
       };
-      if (startup === "command") {
+      if (startup !== "media") {
         mocks.agentCommand.mockImplementationOnce(failStartup);
       }
       const { emitFinal } = params.io;
@@ -121,7 +130,7 @@ describe("Gateway dispatch run ownership", () => {
         const producer = entry.resolveTerminalProducer?.();
         expect(
           producer?.handoff(async (producerCompleted) => {
-            await producerCompleted;
+            expect(await producerCompleted).toBe(failure);
             saving.resolve();
             await finishSave.promise;
           }),
@@ -134,7 +143,7 @@ describe("Gateway dispatch run ownership", () => {
         await completion;
         expect(emitFinal).toHaveBeenCalledOnce();
         expect(params.cleanupAbortController).toHaveBeenCalledOnce();
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "command" ? 1 : 0);
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "media" ? 0 : 1);
         expect(entry.resolveTerminalProducer?.()).toBeUndefined();
       } finally {
         finishCommand.resolve();
@@ -265,7 +274,7 @@ describe("Gateway dispatch run ownership", () => {
     expect(params.io.emitFinal).toHaveBeenCalledOnce();
   });
 
-  it.each(["success", "failure", "cancelled"] as const)(
+  it.each(["success", "failure", "cancelled", "restart"] as const)(
     "joins continuation and input settlement before publishing final or replay for %s",
     async (outcome) => {
       const { runId, entry, params } = createDispatch();
@@ -277,6 +286,10 @@ describe("Gateway dispatch run ownership", () => {
       mocks.agentCommand.mockImplementationOnce(async () => {
         if (outcome === "failure") {
           throw new Error("Synthetic active run failure");
+        }
+        if (outcome === "restart") {
+          markGatewayRestartDraining();
+          throw new GatewayDrainingError();
         }
         if (outcome === "cancelled") {
           entry.controller.abort();
@@ -320,6 +333,7 @@ describe("Gateway dispatch run ownership", () => {
             outcome !== "failure",
             expect.objectContaining({
               status: outcome === "success" ? "ok" : outcome === "failure" ? "error" : "timeout",
+              ...(outcome === "restart" ? { stopReason: "restart" } : {}),
             }),
             outcome === "failure" ? expect.any(Object) : undefined,
           ],
@@ -332,6 +346,7 @@ describe("Gateway dispatch run ownership", () => {
         resume.resolve();
         finishCleanup.resolve();
         await completion;
+        resetGatewayWorkAdmission();
       }
     },
   );

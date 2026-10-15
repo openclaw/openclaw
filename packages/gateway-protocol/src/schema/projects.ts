@@ -83,6 +83,18 @@ export const ProjectSummarySchema = closedObject({
   lastUsedAt: Type.Number({ minimum: 0 }),
 });
 
+export const ProjectsCheckoutOptionsParamsSchema = closedObject({
+  projectId: NonEmptyString,
+  agentId: NonEmptyString,
+});
+
+/** Advisory selection facts; sessions.create revalidates authority and the checkout. */
+export const ProjectsCheckoutOptionsResultSchema = closedObject({
+  current: Type.Boolean(),
+  worktree: Type.Boolean(),
+});
+export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
+
 export const ProjectsListParamsSchema = closedObject({
   includeObserved: Type.Optional(
     Type.Boolean({
@@ -134,6 +146,7 @@ export const ProjectsSearchRemoteParamsSchema = closedObject({
   query: Type.String({ minLength: 1, maxLength: 200 }),
 });
 export const ProjectsSearchRemoteResultSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   credential: Type.Union([Type.Literal("configured"), Type.Literal("missing")]),
   projects: Type.Array(RemoteProjectSchema, { maxItems: 10 }),
 });

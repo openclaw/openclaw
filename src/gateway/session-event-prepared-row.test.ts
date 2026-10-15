@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
@@ -11,7 +12,7 @@ import {
   withPreparedSessionEventRow,
 } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
@@ -36,7 +37,7 @@ it.each([0, 7])(
       if (queries(cfg)[0]?.key === keys[0]) {
         await held.promise;
       }
-      return withPreparedSessionRows(projection, () => true, queries, consume);
+      return readPreparedSessionRows(projection, () => true, queries, consume);
     };
     const published: string[] = [];
     const labels = new Map<string, string | undefined>();
@@ -131,37 +132,66 @@ it.each(["replacement", "reset"])(
   },
 );
 
-it("retains canonical deferral and rejects asynchronous prepared consumers", async () => {
-  const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
-  projection.withPreparedExactRows = (queries, consume) =>
-    withPreparedSessionRows(projection, () => true, queries, consume);
-  const database = {
-    agentId: "main",
-    path: "/synthetic/pending.sqlite",
-    initializeCanonicalValidation: true,
-    assertStateCurrent: () => {},
-    source: {
-      key: "file:synthetic",
-      canonicalPath: "/synthetic/pending.sqlite",
-      incarnation: "test",
-    },
-  };
-  vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-    kind: "pending",
-    database,
+it("publishes lifecycle rows after their producer drains and before publication shutdown", async () => {
+  const cfg = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:lifecycle-publication";
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: { [sessionKey]: { sessionId: "lifecycle-session", updatedAt: 1, label: "Collector A" } },
   });
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  projection.withPreparedExactRows = async (queries, consume) => {
+    entered.resolve();
+    await release.promise;
+    return readPreparedSessionRows(projection, () => true, queries, consume);
+  };
+  const order: string[] = [];
+  const broadcastToConnIds = vi.fn(() => order.push("publication"));
+  const handler = createLifecycleEventBroadcastHandler({
+    broadcastToConnIds,
+    sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
+    chatAbortControllers: new Map(),
+    getSessionRowProjection: () => projection,
+  });
+  const producer = new AsyncWorkScope();
+  const publication = producer.run(() => handler({ sessionKey, reason: "rename" }));
+  onTestFinished(async () => {
+    release.resolve();
+    await Promise.allSettled([publication]);
+    await producer.drain();
+    await drainSessionEventPublications(projection);
+    projection.dispose();
+  });
+  await entered.promise;
+  const drain = drainSessionEventPublications(projection).then(() => order.push("drained"));
+  await producer.drain();
+  release.resolve();
+  await Promise.all([publication, drain]);
+  expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+    "sessions.changed",
+    expect.objectContaining({
+      sessionKey,
+      reason: "rename",
+      session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
+    }),
+    new Set(["viewer"]),
+    { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+  );
+  expect(order).toEqual(["publication", "drained"]);
+});
+
+it("rejects asynchronous prepared consumers", async () => {
+  const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
+  projection.withPreparedExactRows = async (queries, consume) =>
+    readPreparedSessionRows(projection, () => true, queries, consume);
   onTestFinished(async () => {
     await drainSessionEventPublications(projection);
     projection.dispose();
     vi.restoreAllMocks();
   });
   const rows = sessionEventPublicationRows(projection);
-  const publish = vi.fn();
-  await expect(rows.withPreparedExactRows(() => [], publish)).resolves.toEqual({
-    kind: "pending",
-    database,
-  });
-  expect(publish).not.toHaveBeenCalled();
   await expect(
     rows.withPreparedExactRows(
       () => [],

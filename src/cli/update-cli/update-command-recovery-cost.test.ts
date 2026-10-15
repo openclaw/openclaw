@@ -9,6 +9,7 @@ import { waitForUpdateCandidateReadiness } from "../../infra/update-candidate-ca
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
+import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -58,7 +59,7 @@ async function fixture() {
       env,
       stateDir: root,
     });
-  return { root, env, run, database, readiness };
+  return { root, env, run, database, guard, readiness };
 }
 
 it("avoids redundant recovery snapshots while readiness waits without warnings", async () => {
@@ -75,11 +76,15 @@ it("avoids redundant recovery snapshots while readiness waits without warnings",
   });
   vi.stubGlobal("fetch", fetch);
   const snapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+  f.guard.assertCurrent();
+  expect(snapshot).not.toHaveBeenCalled();
   expect(await f.readiness()).toBeUndefined();
   expect(digest()).toBe(before);
   expect(fetch).toHaveBeenCalledTimes(4);
-  // Fresh checks still bracket each probe; an absent warning adds no I/O.
-  expect(snapshot.mock.calls.length).toBeLessThanOrEqual(8);
+  expect(snapshot).not.toHaveBeenCalled();
+  withArtifactPreservingStateReads(() => f.guard.assertCurrent());
+  expect(snapshot).toHaveBeenCalledOnce();
+  expect(digest()).toBe(before);
 });
 
 it("refuses recovery committed while the readiness probe is awaiting its reply", async () => {

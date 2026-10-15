@@ -15,7 +15,11 @@ export type GatewayRestartDeadline = ReturnType<typeof createGatewayRestartDeadl
 export type GatewayRestartCleanup = "pending" | "confirmed" | "unknown";
 
 /** One monotonic deadline covers setup, health, and reconciliation reads. */
-export function createGatewayRestartDeadline(params: { timeoutMs: number; signal?: AbortSignal }) {
+export function createGatewayRestartDeadline(params: {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  timeoutError?: Error;
+}) {
   const startedAtMs = performance.now();
   const deadlineMs = startedAtMs + params.timeoutMs;
   const controller = new AbortController();
@@ -29,7 +33,7 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
     if (!controller.signal.aborted) {
       expiredPhase = activePhase ?? lastPhase;
       expiredElapsedMs = Math.round(Math.max(0, performance.now() - startedAtMs));
-      controller.abort(new GatewayRestartDeadlineError(expiredPhase));
+      controller.abort(params.timeoutError ?? new GatewayRestartDeadlineError(expiredPhase));
     }
   };
   const cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
@@ -59,7 +63,12 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
       return cleanup;
     },
     elapsedMs: () => Math.max(0, performance.now() - startedAtMs),
-    remainingMs: () => Math.max(0, deadlineMs - performance.now()),
+    remainingMs: () => {
+      if (performance.now() >= deadlineMs) {
+        expire();
+      }
+      return Math.max(0, deadlineMs - performance.now());
+    },
     async run<T>(operation: () => Promise<T>): Promise<T> {
       return await this.read("settlement", () => {
         cleanupStatus = "pending";

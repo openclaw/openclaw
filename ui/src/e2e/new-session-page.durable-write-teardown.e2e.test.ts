@@ -120,7 +120,15 @@ suite.define(() => {
       });
 
       const message = page.locator(".new-session-page__message");
-      await message.pressSequentially("burst", { delay: 20 });
+      // Keep this burst in one browser task, independent of protocol or runner delays.
+      await message.evaluate((element: HTMLTextAreaElement) => {
+        for (const character of "burst") {
+          element.value += character;
+          element.dispatchEvent(
+            new InputEvent("input", { data: character, inputType: "insertText", bubbles: true }),
+          );
+        }
+      });
       await expect.poll(() => rawDraftMatches(page, "burst", 1)).toBe(true);
       const transactionCount = await page.evaluate(
         () =>
@@ -210,19 +218,30 @@ suite.define(() => {
         )
         .toBe(true);
 
+      await firstPage.evaluate((previewLabel) => {
+        const host = document.querySelector("openclaw-new-session-page")!;
+        const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
+        // Remove in the ready-preview turn, before protocol latency can expire the debounce.
+        const observer = new MutationObserver(() => {
+          if (
+            host.querySelector(".chat-attachment-image-button")?.getAttribute("aria-label") !==
+            previewLabel
+          ) {
+            return;
+          }
+          observer.disconnect();
+          state.teardownActive = true;
+          // The next task closes this window before the 200 ms debounce can start a write.
+          globalThis.setTimeout(() => {
+            state.teardownActive = false;
+          }, 0);
+          host.remove();
+        });
+        observer.observe(host, { childList: true, subtree: true, attributes: true });
+      }, `Open image ${fileName}`);
       await firstPage
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
-      await firstPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
-      await firstPage.evaluate(() => {
-        const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
-        state.teardownActive = true;
-        // The next task closes this window before the 200 ms debounce can start a write.
-        globalThis.setTimeout(() => {
-          state.teardownActive = false;
-        }, 0);
-        document.querySelector("openclaw-new-session-page")?.remove();
-      });
       await expect
         .poll(() =>
           firstPage.evaluate(

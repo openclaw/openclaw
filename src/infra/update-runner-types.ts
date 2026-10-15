@@ -38,6 +38,7 @@ type GitUpdateTarget = {
   sha?: string;
   version?: string;
   schemaVersions?: OpenClawSchemaVersions;
+  databaseEngines?: unknown;
   metadataUnreadable?: string;
 };
 
@@ -53,7 +54,8 @@ export type UpdateRunnerOptions = {
   inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
   beforeGitStaging?: () => Promise<{ step: UpdateStepResult; failureReason: string }>;
-  validateCandidate: (root: string) => Promise<void>;
+  /** Accepted candidate checks join the update's step results. */
+  validateCandidate: (root: string) => Promise<readonly UpdateStepResult[] | void>;
   beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;

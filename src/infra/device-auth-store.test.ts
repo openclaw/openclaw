@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearOpenClawStateDatabaseOpenFailure } from "../state/openclaw-state-db-cache.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -18,10 +19,8 @@ import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
   loadDeviceAuthToken,
-  loadDeviceAuthTokenReadOnly,
   loadDeviceAuthTokens,
   loadOriginDeviceToken,
-  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "./device-auth-store.js";
@@ -31,6 +30,7 @@ import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.j
 import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const deviceTarget = { deviceId: "device-1", role: "operator" };
 
@@ -47,44 +47,6 @@ afterEach(async () => {
 });
 
 describe("infra/device-auth-store", () => {
-  it("reads existing device auth without opening writable shared state", async () => {
-    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "local-token",
-        env,
-      });
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        deviceId: "device-1",
-        role: "operator",
-        token: "origin-token",
-        env,
-      });
-      await closeOpenClawStateDatabaseAsync();
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const bytesBeforeRead = fs.readFileSync(databasePath);
-
-      expect(
-        (await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }))?.token,
-      ).toBe("local-token");
-      expect(
-        (
-          await loadOriginDeviceTokenReadOnly({
-            gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          })
-        )?.token,
-      ).toBe("origin-token");
-      expect(fs.readFileSync(databasePath)).toEqual(bytesBeforeRead);
-      expect(fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
-    });
-  });
-
   it("upserts and clears only the exact origin, device, and normalized role", async () => {
     await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);
@@ -98,8 +60,7 @@ describe("infra/device-auth-store", () => {
       });
       const replacement = await storeOriginDeviceToken({
         gatewayScope: "wss://one.example",
-        deviceId: "device-1",
-        role: "operator",
+        ...deviceTarget,
         token: "new-token",
         scopes: ["operator.pairing"],
         env,
@@ -126,8 +87,7 @@ describe("infra/device-auth-store", () => {
       expect(
         await loadOriginDeviceToken({
           gatewayScope: "wss://one.example",
-          deviceId: "device-1",
-          role: "operator",
+          ...deviceTarget,
           env,
         }),
       ).toBeNull();
@@ -135,8 +95,7 @@ describe("infra/device-auth-store", () => {
         (
           await loadOriginDeviceToken({
             gatewayScope: "wss://two.example",
-            deviceId: "device-1",
-            role: "operator",
+            ...deviceTarget,
             env,
           })
         )?.token,
@@ -173,15 +132,7 @@ describe("infra/device-auth-store", () => {
       const { db } = openOpenClawStateDatabase({ env });
       executeSqliteQuerySync(
         db,
-        getNodeSqliteKysely<{
-          device_auth_tokens: {
-            device_id: string;
-            role: string;
-            token: string;
-            scopes_json: string;
-            updated_at_ms: number;
-          };
-        }>(db)
+        getNodeSqliteKysely<Pick<DB, "device_auth_tokens">>(db)
           .insertInto("device_auth_tokens")
           .values({
             device_id: "device-1",
@@ -216,8 +167,7 @@ describe("infra/device-auth-store", () => {
       await expect(
         async () =>
           await storeDeviceAuthToken({
-            deviceId: "device-1",
-            role: "operator",
+            ...deviceTarget,
             token: "replacement",
             env,
           }),
@@ -226,8 +176,7 @@ describe("infra/device-auth-store", () => {
         async () =>
           await loadOriginDeviceToken({
             gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
+            ...deviceTarget,
             env,
           }),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -235,8 +184,7 @@ describe("infra/device-auth-store", () => {
         async () =>
           await storeOriginDeviceToken({
             gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
+            ...deviceTarget,
             token: "origin-token",
             env,
           }),
@@ -245,8 +193,7 @@ describe("infra/device-auth-store", () => {
         async () =>
           await clearOriginDeviceToken({
             gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
+            ...deviceTarget,
             env,
           }),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -262,8 +209,7 @@ describe("infra/device-auth-store", () => {
     await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
       await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
+        ...deviceTarget,
         token: "operator",
         env,
       });
@@ -292,8 +238,7 @@ describe("infra/device-auth-store", () => {
             await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
           store: async (token: string, expectedToken?: string | null) =>
             await storeDeviceAuthToken({
-              deviceId: "device-1",
-              role: "operator",
+              ...deviceTarget,
               token,
               scopes: ["operator.read"],
               env,
@@ -301,8 +246,7 @@ describe("infra/device-auth-store", () => {
             }),
           clear: async (expectedToken: string) =>
             await clearDeviceAuthToken({
-              deviceId: "device-1",
-              role: "operator",
+              ...deviceTarget,
               env,
               expectedToken,
             }),
@@ -312,15 +256,13 @@ describe("infra/device-auth-store", () => {
           load: async () =>
             await loadOriginDeviceToken({
               gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
+              ...deviceTarget,
               env,
             }),
           store: async (token: string, expectedToken?: string | null) =>
             await storeOriginDeviceToken({
               gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
+              ...deviceTarget,
               token,
               scopes: ["operator.read"],
               env,
@@ -329,8 +271,7 @@ describe("infra/device-auth-store", () => {
           clear: async (expectedToken: string) =>
             await clearOriginDeviceToken({
               gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
+              ...deviceTarget,
               env,
               expectedToken,
             }),
@@ -520,27 +461,23 @@ describe("infra/device-auth-store", () => {
     await withOpenClawTestState({ label: "device-token-native-writer" }, async (state) => {
       const lookup = { deviceId: "synthetic-device", role: "operator", env: state.env };
       await tokens.storeDeviceAuthToken({ ...lookup, token: "synthetic-before" });
-      const originalAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
       let nativeWriteStarted = false;
-      vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          originalAdmission((request, grant) => {
-            admit(request, grant);
-            if (request.stage === "transaction" && !nativeWriteStarted) {
-              nativeWriteStarted = true;
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  storeDeviceAuthTokenInDatabase(db, {
-                    deviceId: "synthetic-native-device",
-                    role: "operator",
-                    token: "synthetic-native-token",
-                  });
-                },
-                { env: state.env },
-              );
-            }
-          }, attachment),
-      );
+      probe.admission(mutationAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        if (request.stage === "transaction" && !nativeWriteStarted) {
+          nativeWriteStarted = true;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              storeDeviceAuthTokenInDatabase(db, {
+                deviceId: "synthetic-native-device",
+                role: "operator",
+                token: "synthetic-native-token",
+              });
+            },
+            { env: state.env },
+          );
+        }
+      });
       await expect(
         tokens.storeDeviceAuthToken({
           ...lookup,

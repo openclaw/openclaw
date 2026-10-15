@@ -2,15 +2,15 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { createExternalAuthRuntime, ExternalCliOverlayOptions } from "./external-auth.js";
-import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
-import { resolveSharedAuthStorePath as resolveSharedAuthPath } from "./path-resolve.js";
+import { resolveNativeSharedAuthStorePath } from "./path-resolve.native.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { materializePersonalAuthProfile } from "./personal-profiles.js";
 import { mergeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
@@ -18,6 +18,7 @@ import {
   resolveExternalCliOverlayOptions,
   type createAuthProfileStoreRuntimeReader,
   type LoadAuthProfileStoreOptions,
+  type PreparedAuthProfileStoreReads,
 } from "./runtime-read.js";
 import {
   createEmptyAuthProfileStore,
@@ -39,6 +40,19 @@ import {
 import type { AuthProfileStore } from "./types.js";
 
 type RuntimeReadHost = Parameters<typeof createAuthProfileStoreRuntimeReader>[0];
+type EnsureAuthProfileStoreOptions = Pick<
+  LoadAuthProfileStoreOptions,
+  | "migrationProvider"
+  | "profileId"
+  | "allowKeychainPrompt"
+  | "config"
+  | "externalCli"
+  | "externalCliProviderIds"
+  | "externalCliProfileIds"
+  | "inheritedAuthDir"
+  | "readOnly"
+  | "syncExternalCli"
+>;
 type StoreReadHost = Pick<
   RuntimeReadHost,
   | "isEnvOnlyAuthProfileRuntime"
@@ -137,7 +151,10 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
           ok: true,
           value:
             step.value.kind === "shared-path"
-              ? { kind: "shared-path", path: resolveSharedAuthPath(getScopedAuthProfileEnv()) }
+              ? {
+                  kind: "shared-path",
+                  path: resolveNativeSharedAuthStorePath(getScopedAuthProfileEnv()),
+                }
               : {
                   kind: "store",
                   store: loadAuthProfileStoreForAgent(step.value.agentDir, step.value.options),
@@ -151,6 +168,66 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return profileId && !captureScope().isolated
       ? materializePersonalAuthProfile(step.value, profileId)
       : step.value;
+  }
+
+  async function readAuthProfileStoreAsynchronously<T>(
+    prepared: PreparedAuthProfileStoreReads,
+    createReads: (
+      preparedAgentDir: string | undefined,
+      preparedOptions: LoadAuthProfileStoreOptions,
+      env: NodeJS.ProcessEnv,
+    ) => AuthProfileStoreReadSequence<T>,
+    assertCurrent?: () => void,
+  ): Promise<T> {
+    const reads = createReads(prepared.effectiveAgentDir, prepared.options, prepared.env);
+    const advance = (result?: Result<AuthProfileStoreReadValue, unknown>) => {
+      assertCurrent?.();
+      return prepared.runInCapturedScope(() =>
+        result === undefined ? reads.next() : reads.next(result),
+      );
+    };
+    let step = advance();
+    while (!step.done) {
+      let result: Result<AuthProfileStoreReadValue, unknown>;
+      try {
+        result = {
+          ok: true,
+          value:
+            step.value.kind === "shared-path"
+              ? { kind: "shared-path", path: await prepared.sharedPath() }
+              : {
+                  kind: "store",
+                  store: await prepared.readStore(step.value.agentDir, step.value.options ?? {}),
+                },
+        };
+      } catch (error) {
+        result = { ok: false, error };
+      }
+      step = advance(result);
+    }
+    return step.value;
+  }
+
+  function readPreparedAuthProfileStore(
+    createReads: (
+      agentDir: string | undefined,
+      options: LoadAuthProfileStoreOptions,
+      env: NodeJS.ProcessEnv,
+    ) => AuthProfileStoreReadSequence,
+    agentDir?: string,
+    options?: EnsureAuthProfileStoreOptions,
+  ): Promise<AuthProfileStore> {
+    if (isEnvOnlyAuthProfileRuntime()) {
+      return Promise.resolve(createEmptyAuthProfileStore());
+    }
+    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
+      const store = await readAuthProfileStoreAsynchronously(
+        prepared,
+        (directory, preparedOptions, env) =>
+          createReads(directory, { ...preparedOptions, profileId: undefined }, env),
+      );
+      return prepared.materializePersonalProfile(store);
+    });
   }
 
   function* readInheritedAuthProfileStore(
@@ -240,7 +317,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
   }
 
-  /** Load auth profiles with runtime external profiles removed from the result. */
+  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
   function loadAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     loadOptions?: Pick<
@@ -248,9 +325,26 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
       "allowKeychainPrompt" | "inheritedAuthDir" | "profileId"
     >,
   ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "loadAuthProfileStoreWithoutExternalProfiles",
+      replacement: "loadAuthProfileStoreWithoutExternalProfilesAsync",
+    });
     return readAuthProfileStoreSynchronously(
       (options) => loadAuthProfileStoreWithoutExternalProfilesReads(agentDir, options),
       loadOptions,
+    );
+  }
+
+  /** Read persisted auth profiles off-thread without runtime external profiles. */
+  async function loadAuthProfileStoreWithoutExternalProfilesAsync(
+    agentDir?: string,
+    options?: Parameters<typeof loadAuthProfileStoreWithoutExternalProfiles>[1],
+  ): Promise<AuthProfileStore> {
+    return readPreparedAuthProfileStore(
+      loadAuthProfileStoreWithoutExternalProfilesReads,
+      agentDir,
+      options,
     );
   }
 
@@ -271,26 +365,28 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return yield* readAuthProfileStoreFromSources(effectiveAgentDir, options, env, true);
   }
 
-  /** Ensure an auth store is available, including runtime/external profile overlays. */
+  /** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. */
   function ensureAuthProfileStore(
     agentDir?: string,
-    options?: {
-      migrationProvider?: string;
-      profileId?: string;
-      allowKeychainPrompt?: boolean;
-      config?: OpenClawConfig;
-      externalCli?: ExternalCliAuthDiscovery;
-      externalCliProviderIds?: Iterable<string>;
-      externalCliProfileIds?: Iterable<string>;
-      inheritedAuthDir?: string;
-      readOnly?: boolean;
-      syncExternalCli?: boolean;
-    },
+    options?: EnsureAuthProfileStoreOptions,
   ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "ensureAuthProfileStore",
+      replacement: "ensureAuthProfileStoreAsync",
+    });
     return readAuthProfileStoreSynchronously(
       (readOptions) => ensureAuthProfileStoreReads(agentDir, readOptions),
       options,
     );
+  }
+
+  /** Read canonical auth facts off-thread, including runtime and external profile overlays. */
+  async function ensureAuthProfileStoreAsync(
+    agentDir?: string,
+    options?: Parameters<typeof ensureAuthProfileStore>[1],
+  ): Promise<AuthProfileStore> {
+    return readPreparedAuthProfileStore(ensureAuthProfileStoreReads, agentDir, options);
   }
 
   function* ensureAuthProfileStoreReads(
@@ -348,21 +444,33 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return materialized;
   }
 
-  /** Ensure an auth store is available without external profile overlays. */
+  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
   function ensureAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
-    options?: {
-      migrationProvider?: string;
-      config?: OpenClawConfig;
-      profileId?: string;
-      allowKeychainPrompt?: boolean;
-      inheritedAuthDir?: string;
-      readOnly?: boolean;
-      syncExternalCli?: boolean;
-    },
+    options?: Omit<
+      EnsureAuthProfileStoreOptions,
+      "externalCli" | "externalCliProviderIds" | "externalCliProfileIds"
+    >,
   ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "ensureAuthProfileStoreWithoutExternalProfiles",
+      replacement: "ensureAuthProfileStoreWithoutExternalProfilesAsync",
+    });
     return readAuthProfileStoreSynchronously(
       (readOptions) => ensureAuthProfileStoreWithoutExternalProfilesReads(agentDir, readOptions),
+      options,
+    );
+  }
+
+  /** Read canonical auth facts off-thread without external profile overlays. */
+  async function ensureAuthProfileStoreWithoutExternalProfilesAsync(
+    agentDir?: string,
+    options?: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfiles>[1],
+  ): Promise<AuthProfileStore> {
+    return readPreparedAuthProfileStore(
+      ensureAuthProfileStoreWithoutExternalProfilesReads,
+      agentDir,
       options,
     );
   }
@@ -483,51 +591,28 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
         readOnly: true,
         allowKeychainPrompt: false,
       },
-      async (prepared) => {
-        const reads = readAuthProfileStoreForModelRuntime(
-          prepared.effectiveAgentDir ?? agentDir,
-          { ...options, inheritedAuthDir: prepared.options.inheritedAuthDir },
-          prepared.env,
-        );
-        const advance = (result?: Result<AuthProfileStoreReadValue, unknown>) => {
-          assertCurrent();
-          prepared.assertCurrent();
-          return prepared.runInCapturedScope(() =>
-            result === undefined ? reads.next() : reads.next(result),
-          );
-        };
-        let step = advance();
-        while (!step.done) {
-          let result: Result<AuthProfileStoreReadValue, unknown>;
-          try {
-            result = {
-              ok: true,
-              value:
-                step.value.kind === "shared-path"
-                  ? { kind: "shared-path", path: await prepared.sharedPath() }
-                  : {
-                      kind: "store",
-                      store: await prepared.readStore(
-                        step.value.agentDir,
-                        step.value.options ?? {},
-                      ),
-                    },
-            };
-          } catch (error) {
-            result = { ok: false, error };
-          }
-          step = advance(result);
-        }
-        return step.value;
-      },
+      (prepared) =>
+        readAuthProfileStoreAsynchronously(
+          prepared,
+          (directory, preparedOptions, preparedEnv) =>
+            readAuthProfileStoreForModelRuntime(
+              directory ?? agentDir,
+              { ...options, inheritedAuthDir: preparedOptions.inheritedAuthDir },
+              preparedEnv,
+            ),
+          assertCurrent,
+        ),
       env,
     );
   }
 
   return {
     loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync,
     prepareAuthProfileStoreForModelRuntime,
   };
 }

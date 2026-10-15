@@ -34,6 +34,7 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
     - Authorize your sender identity (pairing and/or numeric `allowFrom`); command authorization still applies even when group policy is `open`.
     - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` means the native menu has too many entries; reduce plugin/skill/custom commands or disable native menus.
+    - If logs say a session is archived, restore that session before sending a native command such as `/status`. Native commands do not restore archived sessions; their archive rejection is recorded as a failed inbound event rather than retried.
     - `deleteMyCommands` / `setMyCommands` startup calls and `sendChatAction` typing calls are bounded and retry once through Telegram's transport fallback on request timeout. Persistent network/fetch errors usually mean DNS/HTTPS to `api.telegram.org` is unreachable.
 
   </Accordion>
@@ -42,6 +43,25 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
     - `getMe returned 401` is a Telegram auth failure for the configured bot token. Re-copy or regenerate the token in BotFather, then update `channels.telegram.botToken`, `tokenFile`, `accounts.<id>.botToken`, or `TELEGRAM_BOT_TOKEN` (default account).
     - `deleteWebhook 401 Unauthorized` during startup is also an auth failure; treating it as "no webhook exists" would only defer the same bad-token failure to a later API call.
+
+  </Accordion>
+
+  <Accordion title="A final reply fails during a network interruption">
+
+    OpenClaw retries an ordinary text or rich-text final reply once after an
+    ambiguous network failure. Recovery sends the saved reply; it does not run
+    the model or repeat completed tools. A delivery notice appears only if
+    recovery also fails.
+
+    Telegram does not provide an idempotency key or chat-history lookup for
+    these sends. If the original reply arrived but its acknowledgment was lost,
+    the retry can produce a duplicate. This tradeoff applies only to final text
+    without known accepted chunks. Media, interactive payloads, and
+    tool-initiated message actions are not blindly replayed.
+
+    Gateway logs include available transport error codes and system calls.
+    A generic `Network request ... failed` message alone does not show whether
+    Telegram received the request.
 
   </Accordion>
 
@@ -68,7 +88,8 @@ channels:
     proxy: socks5://<user>:<password>@proxy-host:1080
 ```
 
-    - Node 22+ defaults to `autoSelectFamily=true` (except WSL2). Telegram DNS result order honors `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER`, then `channels.telegram.network.dnsResultOrder`, then the process default (for example `NODE_OPTIONS=--dns-result-order=ipv4first`), falling back to `ipv4first` on Node 22+ if none applies.
+    - Telegram DNS result order honors `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER`, then `channels.telegram.network.dnsResultOrder`, then the process default, falling back to `ipv4first` if none applies. With `ipv4first`, Telegram disables address-family racing by default so an unreachable IPv6 route cannot interfere with the preferred IPv4 connection. `verbatim` keeps address-family selection enabled with a 300 ms attempt timeout, except on WSL2. Explicit `network.autoSelectFamily` or its environment overrides take precedence.
+    - On dual-stack hosts with broken IPv6, set `channels.telegram.network.dnsResultOrder: "ipv4first"`; no `NODE_OPTIONS` change is needed. Connection failures proven to occur before sending remain retryable; timeouts after sending remain ambiguous to avoid duplicate replies.
     - On WSL2, or when IPv4-only behavior works better, force family selection:
 
 ```yaml

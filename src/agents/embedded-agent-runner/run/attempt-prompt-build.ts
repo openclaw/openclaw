@@ -65,7 +65,6 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
-import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -159,8 +158,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     modelId: attempt.model.id,
     inputProvenance: attempt.inputProvenance,
   };
-  const promptBuildMessages =
-    pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
+  const promptBuildMessages = input.activeSession.messages;
   const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
   const hookResult = preserveExactPrompt
     ? undefined
@@ -193,10 +191,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     activeAbortSignal,
   );
+  const assertHostActive = attempt.authProfileBinding
+    ? () => {
+        assertAdmittedActive?.();
+        attempt.authProfileBinding?.assertCurrent();
+      }
+    : assertAdmittedActive;
   assertHostActive?.();
   const hasPendingActionInstructions = Boolean(
     // Authorized enrichment runs after policy; do not pre-empt its required actions.
@@ -428,9 +432,10 @@ type PromptContextAttempt = Pick<
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
+  | "sessionTarget"
   | "suppressNextUserMessagePersistence"
   | "operation"
->;
+> & { runId?: string };
 
 type PromptAssemblyContext = {
   effectivePrompt: string;
@@ -563,6 +568,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           cfg: attempt.config ?? {},
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
+          sessionTarget: attempt.sessionTarget,
+          runId: attempt.runId,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });

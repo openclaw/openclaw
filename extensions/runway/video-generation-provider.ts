@@ -2,7 +2,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -20,12 +20,13 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationResult,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationResult,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_RUNWAY_BASE_URL = "https://api.dev.runwayml.com";
@@ -117,10 +118,11 @@ function resolveSourceUri(
 }
 
 function resolveDurationSeconds(value: number | undefined): number {
-  if (value === undefined || !Number.isSafeInteger(value)) {
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
+  if (duration === undefined || !Number.isSafeInteger(value)) {
     return 5;
   }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
+  return Math.max(2, Math.min(MAX_DURATION_SECONDS, duration));
 }
 
 const RUNWAY_RATIO_SIZES = new Map([
@@ -218,7 +220,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

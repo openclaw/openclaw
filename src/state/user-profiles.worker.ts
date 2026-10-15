@@ -11,8 +11,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
+  enrollPersonalAuthProfileAuthorizationInDatabase,
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
@@ -21,6 +23,7 @@ import {
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
+  selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
@@ -64,19 +67,25 @@ function accountWrite<Input extends { profileId: string }, Output>(
   ) => {
     const database = open();
     const facts = { kind: "model-account-links", profileId: input.profileId };
-    return write(input, { ...stateOptions(), database }, (stage) => {
-      const roles = (input.authorityProfileIds ?? []).map((profileId) => {
-        const profile = selectResolvedUserProfileById(database.db, profileId);
-        if (!profile || profile.id !== profileId || profile.merged_into) {
-          throw new ModelAccountConnectAuthorityError();
+    return personalCredentialPublication.capture(database.db, () =>
+      write(input, { ...stateOptions(), database }, (stage) => {
+        const roles = (input.authorityProfileIds ?? []).map((profileId) => {
+          const profile = selectResolvedUserProfileById(database.db, profileId);
+          if (!profile || profile.id !== profileId || profile.merged_into) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+          return { profileId, role: profile.role ?? null };
+        });
+        requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
+        if (stage === "commit") {
+          deferSqliteWorkerCommitReceipt(database.db, {
+            ...facts,
+            personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+              .receipt,
+          });
         }
-        return { profileId, role: profile.role ?? null };
-      });
-      requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
-      if (stage === "commit") {
-        deferSqliteWorkerCommitReceipt(database.db, facts);
-      }
-    });
+      }),
+    ).result;
   };
 }
 
@@ -148,6 +157,8 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
+  "userProfiles.roleAuthority.resolve": ({ profileId }: { profileId: string }, { open }) =>
+    selectUserProfileRoleAuthority(open().db, profileId),
   "userProfiles.modelAccount.connect": accountWrite(
     (
       input: Omit<
@@ -160,6 +171,23 @@ export const userProfileOperations = {
       connectUserModelAccount(
         { ...input, ownerProfileId: input.profileId, assertCurrent },
         options,
+      ),
+  ),
+  "userProfiles.modelAccount.enrollAuthorization": accountWrite(
+    (
+      input: Parameters<typeof enrollPersonalAuthProfileAuthorizationInDatabase>[1],
+      options,
+      assertCurrent,
+    ) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          assertCurrent("transaction");
+          const result = enrollPersonalAuthProfileAuthorizationInDatabase(db, input);
+          assertCurrent("commit");
+          return result;
+        },
+        options,
+        { operationLabel: "users.model-accounts.enroll-authorization" },
       ),
   ),
   "userProfiles.modelAccount.link": accountWrite(
@@ -261,6 +289,7 @@ export const userProfileOperations = {
             .where("id", "=", profile.id),
         );
         const committed = selectProfileAccessEntries(db, [profile.id])[0]![1];
+        deferSqliteWorkerCommitReceipt(db, committed);
         return {
           profile: toUserProfile({ ...profile, avatar_mime: input.mime, updated_at: input.now }),
           committed,

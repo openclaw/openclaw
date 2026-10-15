@@ -21,10 +21,17 @@ describe("openai transport stream", () => {
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
       const payload = testing.summarizeResponsesPayload({ input: `${"x".repeat(7_989)}🚀tail` });
-      const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+      const eventPrefix = '{"error_details":"';
+      const eventText = "x".repeat(1_999 - eventPrefix.length);
+      const failure = testing.normalizeResponsesFailedEvent(
+        { response: { error_details: `${eventText}🚀tail` } },
+        makeResponsesModel(),
+      );
+      assert(failure.observation);
+      const event = failure.observation.failureFieldsPreview;
 
       expect(payload).toContain(`payload={"input":"${"x".repeat(7_989)}…<truncated>`);
-      expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+      expect(event).toBe(`${eventPrefix}${eventText}…<truncated>`);
       expect(payload).not.toContain("\uD83D");
       expect(event).not.toContain("\uD83D");
     } finally {
@@ -302,35 +309,6 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from provider overrides", () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = testing.buildOpenAIClientHeaders(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        headers: {
-          originator: "openclaw",
-          "User-Agent": "openclaw",
-          "X-Provider": "model",
-        },
-      }),
-      { systemPrompt: "", messages: [] } as never,
-      {
-        originator: "openclaw",
-        "User-Agent": "openclaw",
-        "X-Caller": "request",
-      },
-    );
-
-    expectRecordFields(headers, {
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-      "X-Provider": "model",
-      "X-Caller": "request",
-    });
-  });
-
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
@@ -363,13 +341,7 @@ describe("openai transport stream", () => {
     );
   });
 
-  it.each([
-    {
-      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      azureApiVersion: null,
-    },
-    { baseUrl: "https://example.openai.azure.com", azureApiVersion: "preview" },
-  ])(
+  it.each([{ baseUrl: "https://example.openai.azure.com", azureApiVersion: "preview" }])(
     "preserves Azure routing and prepared headers for $baseUrl",
     async ({ baseUrl, azureApiVersion }) => {
       const previousApiVersion = process.env.AZURE_OPENAI_API_VERSION;

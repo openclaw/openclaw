@@ -6,7 +6,11 @@ import {
   prepareDiscoveredContextTokenCache,
   type ContextWindowCatalog,
 } from "./context-cache-projection.js";
-import { getContextWindowCaches, replaceDiscoveredContextTokenCache } from "./context-cache.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "./context-cache.js";
 import { resolveContextTokensForModel, resolveModelContextTokenProjection } from "./context.js";
 import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
@@ -87,6 +91,35 @@ describe("context cache projection", () => {
 });
 
 describe("context token resolution", () => {
+  it.each(["configuredTokenCache"] as const)(
+    "keeps captured reporting independent of a stale %s without changing execution lookup",
+    (cacheName) => {
+      const caches = getContextWindowCaches();
+      const key = providerContextTokenCacheKey("custom", "large");
+      caches[cacheName].set(key, 128_000);
+      const selected = {
+        cfg: {},
+        provider: "custom",
+        model: "large",
+        modelContextTokens: 922_000,
+        modelContextWindow: 1_050_000,
+      };
+      expect(resolve(selected)).toBe(128_000);
+      expect(resolve({ ...selected, allowCacheLookup: false })).toBe(922_000);
+      expect(caches[cacheName].get(key)).toBe(128_000);
+    },
+  );
+
+  it("does not replace unknown captured capacity with a sibling's bare cache", async () => {
+    await discover([{ provider: "other", id: "shared-model", contextTokens: 128_000 }]);
+    const selected = { cfg: {}, provider: "custom", model: "shared-model" };
+    expect(resolve(selected)).toBe(128_000);
+    expect(resolve({ ...selected, allowCacheLookup: false })).toBeUndefined();
+    expect(resolve({ ...selected, allowCacheLookup: false, fallbackContextTokens: 32_000 })).toBe(
+      32_000,
+    );
+  });
+
   it("can exclude unscoped discovery from provider-owned lookup", async () => {
     await discover([{ id: "large", contextTokens: 32_000 }]);
     const params = { provider: "claude-cli", model: "large" };

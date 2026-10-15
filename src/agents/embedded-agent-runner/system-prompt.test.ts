@@ -28,8 +28,6 @@ function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt
     },
     tools: [],
     modelAliasLines: [],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   };
 }
 
@@ -49,8 +47,6 @@ function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSyst
     },
     tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
     capabilityToolNames: ["tool_search", "web_search"],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
     ownerNumbers: ["fixture-owner"],
     modelAliasLines: ["- direct-alias: fixture/direct"],
     ttsHint: "Fixture direct TTS hint.",
@@ -128,6 +124,25 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).toContain("Global compaction fact");
     expect(prompt).not.toContain("Beta compaction fact");
   });
+
+  it.each(["create", "rename-only", "absent"] as const)(
+    "routes explicit task creation from the native %s tool surface in default suggest mode",
+    (surface) => {
+      const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
+      const prompt = buildConfiguredAgentSystemPrompt({
+        ...basicPromptInputs(),
+        tools: surface === "absent" ? [] : [sessions],
+      });
+
+      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
+      if (surface === "create") {
+        expect(prompt).toContain("omit it to create an idle session");
+        expect(prompt).toContain("no completion event or yield expectation");
+      }
+      expect(prompt).not.toContain("## Delegation");
+    },
+  );
 
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildConfiguredAgentSystemPrompt({

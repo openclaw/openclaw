@@ -6,6 +6,7 @@ import type {
   ChannelStatusIssue,
 } from "../../channels/plugins/types.public.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -278,3 +279,16 @@ export const RECORDED_CHANNEL_HEALTH_CASES = [
     healthState: "stale-socket",
   },
 ];
+
+export function createDegradedEventLoopHealth(): GatewayEventLoopHealth {
+  return {
+    degraded: true,
+    degradedSinceMs: 61_000,
+    reasons: ["event_loop_delay"],
+    intervalMs: 62_000,
+    delayP99Ms: 62_000,
+    delayMaxMs: 62_000,
+    utilization: 1,
+    cpuCoreRatio: 1,
+  };
+}

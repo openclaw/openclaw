@@ -12,6 +12,7 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -47,6 +48,7 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
+  getChildSessionCandidates: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -97,11 +99,10 @@ export abstract class SubagentWaitManager {
     runId: string,
     expectedEntry: SubagentRunRecord,
     waitTimeoutMs: number,
+    stateContext: OpenClawStateWorkerContext,
+    lifecycleGeneration: string,
     capWaitToStoredDeadline = false,
   ): Promise<void> => {
-    // A current Gateway may observe historical execution; the wait itself owns this generation.
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const stateContext = captureOpenClawStateWorkerContext();
     let waitedEntry: SubagentRunRecord | undefined;
     let completionAttempted = false;
     let releaseCompletionWork: (() => void) | null = null;
@@ -374,7 +375,7 @@ export abstract class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      let current = this.options.runs.get(runId);
+      const current = this.options.runs.get(runId);
       if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
@@ -384,13 +385,6 @@ export abstract class SubagentWaitManager {
         childSessionKey: current.childSessionKey,
         error,
       });
-      if (
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
-      ) {
-        return;
-      }
-      current = currentEntry();
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&
@@ -444,8 +438,43 @@ export abstract class SubagentWaitManager {
       expectedEntry.runTimeoutSeconds,
     ),
     capWaitToStoredDeadline = false,
-  ): Promise<void> =>
-    runWithoutOwnedSessionTranscriptWrites(() =>
-      this.runSubagentCompletionWait(runId, expectedEntry, waitTimeoutMs, capWaitToStoredDeadline),
-    );
+  ): Promise<void> => {
+    const waiting = runWithoutOwnedSessionTranscriptWrites(async () => {
+      // A current Gateway may observe historical execution; the wait owns this generation.
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const stateContext = captureOpenClawStateWorkerContext();
+      try {
+        await this.runSubagentCompletionWait(
+          runId,
+          expectedEntry,
+          waitTimeoutMs,
+          stateContext,
+          lifecycleGeneration,
+          capWaitToStoredDeadline,
+        );
+      } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
+        // Recovery also awaits writes, so its original owner can retire after the first failure.
+        if (
+          !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+          !isSameSubagentRunOwner(this.options.runs.get(runId), expectedEntry)
+        ) {
+          return;
+        }
+        try {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+        } catch {
+          return;
+        }
+        throw error;
+      }
+    });
+    // Detached launches report failures; awaited callers still receive the original rejection.
+    void waiting.catch((error: unknown) => {
+      log.warn("subagent completion wait recovery failed", { runId, error });
+    });
+    return waiting;
+  };
 }

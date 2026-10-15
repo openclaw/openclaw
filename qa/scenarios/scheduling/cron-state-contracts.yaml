@@ -27,7 +27,7 @@ scenario:
     - src/cron/service.ts
     - src/cron/service/ops-lifecycle.ts
     - src/cron/service/ops-mutations.ts
-    - src/cron/service/timer.ts
+    - src/cron/service/scheduler-actor.ts
     - src/cron/run-history.ts
     - src/cron/store/run-history.ts
     - src/cron/cron-state-contracts.e2e.test.ts

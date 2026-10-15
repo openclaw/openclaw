@@ -16,6 +16,7 @@ import {
   type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
 import {
@@ -385,13 +386,13 @@ export const createDoctorHandlers = (
     }
 
     try {
-      let status = manager.status();
+      let status = await readMemorySearchManagerStatus(manager);
       const shouldProbe = params.probe === true || params.deep === true;
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
       if (shouldProbe) {
-        status = manager.status();
+        status = await readMemorySearchManagerStatus(manager);
       }
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };

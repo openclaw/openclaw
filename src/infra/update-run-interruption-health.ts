@@ -78,7 +78,8 @@ export async function observeInterruptedUpdateGateway(
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
     };
-    const inspect = (phase: string) => inspectGatewayRestart({ ...probe, phase });
+    const inspect = (phase: string) =>
+      deadline.read(phase, () => inspectGatewayRestart({ ...probe, phase }));
     const servingMatches = (health: Awaited<ReturnType<typeof inspect>>) =>
       health.healthy &&
       health.runtime.status === "running" &&
@@ -107,12 +108,8 @@ export async function observeInterruptedUpdateGateway(
         signal: deadline.signal,
       }),
     );
-    const inspected = await deadline.read("reconciliation:inspect-before", () =>
-      inspect("reconciliation:inspect-before"),
-    );
-    const after = await deadline.read("reconciliation:inspect-after", () =>
-      inspect("reconciliation:inspect-after"),
-    );
+    const inspected = await inspect("reconciliation:inspect-before");
+    const after = await inspect("reconciliation:inspect-after");
     if (
       http.healthz !== 200 ||
       http.readyz !== 200 ||

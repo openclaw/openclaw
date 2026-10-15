@@ -1,6 +1,5 @@
 // Exercises the automatic sender with real native completion/session stores and recording transport.
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
@@ -18,9 +17,11 @@ import {
   appendTranscriptMessage,
   loadExactSessionEntry,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import * as replacementWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -33,14 +34,15 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
 import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
+import { capturePendingFinalRecoverySource } from "../pending-final-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
@@ -111,6 +113,7 @@ function persistMarker(
 ) {
   return persistPendingFinalDeliveryMarker({
     ...target,
+    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
     deliver: true,
     sessionStore: { [target.sessionKey]: entry },
     sessionEntry: entry,
@@ -140,7 +143,7 @@ describe("native completion final-send custody", () => {
       ["owner-bound-unchanged", "owner-bound-source-interleaved"],
     ],
     ["source read onPlatformSendDispatch", ["source-interleaved"]],
-    ["source read assertDirectAdapterHandoff", ["owner-bound-source-interleaved"]],
+    ["source read owner-bound onPlatformSendDispatch", ["owner-bound-source-interleaved"]],
   ] as const) {
     const restart = boundary.startsWith("restart");
     const readFailure = boundary.startsWith("source read");
@@ -170,7 +173,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const { opts } = await bindCommandHarnessCompletionAssertion({
+          const { opts } = bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,
@@ -191,7 +194,7 @@ describe("native completion final-send custody", () => {
             commandOwnerReference: assertCurrent.recoveryReference,
           });
           expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
-          assertCurrent();
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent());
           const entered = createDeferred();
           const release = createDeferred();
           const writes: string[] = [];
@@ -281,10 +284,13 @@ describe("native completion final-send custody", () => {
             sessionEntry: marker.sessionEntry,
             result: { meta: { durationMs: 1 } },
             payloads,
-            assertDeliveryCurrent: () => {
-              assertCurrent();
-              controller.signal.throwIfAborted();
-            },
+            assertDeliveryCurrent: composeSessionSourceAssertion(
+              [assertCurrent],
+              (assertSource) => {
+                assertSource();
+                controller.signal.throwIfAborted();
+              },
+            ),
           }).then(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
@@ -303,14 +309,25 @@ describe("native completion final-send custody", () => {
           expect(writes).toEqual([]);
           if (readFailure) {
             expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
+            const retain = historyWorker.retainSessionHistoryWorkerDatabase;
             const sourceRead = vi
-              .spyOn(transcriptReads, "everySessionTranscriptUserInputFrom")
-              .mockImplementationOnce(() => {
-                throw new Error("Source transcript read unavailable");
+              .spyOn(historyWorker, "retainSessionHistoryWorkerDatabase")
+              .mockImplementationOnce((...args) => {
+                const retained = retain(...args);
+                vi.spyOn(retained.owner, "readHarnessCompletionSource").mockRejectedValueOnce(
+                  new Error("Source transcript read unavailable"),
+                );
+                return retained;
               });
             release.resolve();
             try {
-              expect((await delivery).ok).toBe(false);
+              const settled = await delivery;
+              expect(settled.ok).toBe(false);
+              if (!settled.ok) {
+                expect(settled.error).toMatchObject({
+                  message: "Source transcript read unavailable",
+                });
+              }
             } finally {
               sourceRead.mockRestore();
             }
@@ -320,7 +337,9 @@ describe("native completion final-send custody", () => {
               { ...target, sessionId: entry.sessionId },
               { message: { role: "user", content: "A new request", timestamp: Date.now() } },
             );
-            expect(assertCurrent).toThrow(SessionWorkStartChangedError);
+            await expect(
+              runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
+            ).rejects.toThrow(SessionWorkStartChangedError);
           }
           if (boundary === "queued after cleanup") {
             await appendTranscriptMessage(
@@ -372,7 +391,9 @@ describe("native completion final-send custody", () => {
                 ? { sessionId: "replacement-parent" }
                 : { lifecycleRevision: "replacement-revision" }),
             });
-            expect(assertCurrent).toThrow();
+            await expect(
+              runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
+            ).rejects.toThrow();
           }
           if (handoff) {
             if (restart) {
@@ -536,7 +557,7 @@ describe("native completion marker commit", () => {
     "keeps a newer %s when marker planning yields before its worker commit",
     async (changed) => {
       await withAdminIngress(async ({ state }) => {
-        const { key, target, entry, claim } = await admitCompletion(state, "marker-race");
+        const { target, entry, claim } = await admitCompletion(state, "marker-race");
         await replaceSessionEntry(target, entry);
         const entered = createDeferred();
         const released = createDeferred();
@@ -587,17 +608,8 @@ describe("native completion marker commit", () => {
             current = false;
           }
           if (changed !== "authority") {
-            // A foreign writer can commit while planning holds no SQLite transaction.
-            const database = new DatabaseSync(
-              resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            );
-            try {
-              database
-                .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-                .run(JSON.stringify(replacement), key);
-            } finally {
-              database.close();
-            }
+            // Publish the native write without queueing behind the paused marker.
+            replaceSessionEntrySync(target, replacement);
           }
           released.resolve();
           await expect(pending).rejects.toThrow(

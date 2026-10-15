@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
@@ -18,6 +19,7 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
@@ -40,6 +42,7 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
@@ -206,8 +209,12 @@ async function runCronIsolatedAgentTurnInTrace(
 
           let outcome: "completed" | "error" = "completed";
           let outcomeError: string | undefined;
+          let finalModelResponse: string | undefined;
           let cronRunSessionCleanupHandled = false;
           let completedPromptRuns: readonly CronCompletedPromptRun[] = [];
+          let promptAdmission:
+            | Parameters<CronRunExecutionParams["onPromptAdmission"]>[0]
+            | undefined;
           let usage: RunCronAgentTurnResult["usage"];
           let usageSettlement: Promise<void> | undefined;
           const settleUsage = async (contextTokens?: number) => {
@@ -258,14 +265,17 @@ async function runCronIsolatedAgentTurnInTrace(
               runId,
               cfg: params.cfg,
               job: params.job,
+              trigger: params.trigger,
               deliveryAttemptFence: params.deliveryAttemptFence,
               lane: params.lane,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
-              setRunContinuationCliExecutionProvider:
-                prepared.context.runContinuationSession?.setCliExecutionProvider,
               abortSignal,
               lifecycle,
+              onPromptAdmission: (admission) => {
+                promptAdmission?.close();
+                promptAdmission = admission;
+              },
               onExecutionStarted: notifyExecutionStarted,
               onExecutionPhase: notifyExecutionPhase,
               onLaneWait: params.onLaneWait,
@@ -288,6 +298,11 @@ async function runCronIsolatedAgentTurnInTrace(
             // Publish the execution fact captured before bookkeeping; cron persistence
             // and delivery retain their separate workflow outcome.
             lifecycle.emit("end", execution.runResult);
+            finalModelResponse = resolveDiagnosticModelContentCapturePolicy(params.cfg)
+              .outputMessages
+              ? resolveDiagnosticModelResponse(execution.runResult)
+              : undefined;
+            await promptAdmission?.finish();
             const finalized = await finalizeCronRun({
               prepared: prepared.context,
               execution,
@@ -311,6 +326,7 @@ async function runCronIsolatedAgentTurnInTrace(
               : { ...finalized, nextCheck: { delayMs } };
           } catch (err) {
             lifecycle.emit("error", err);
+            await promptAdmission?.finish();
             consumeCronNextCheckProposal(runId, params.job.id);
             const isCronLaneTimeout =
               isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -363,6 +379,8 @@ async function runCronIsolatedAgentTurnInTrace(
               ),
             });
           } finally {
+            // Terminal persistence must settle before the continuation rejects late events.
+            await promptAdmission?.finish();
             try {
               await prepared.context.runContinuationSession?.seal();
             } catch (sealError) {
@@ -390,6 +408,8 @@ async function runCronIsolatedAgentTurnInTrace(
               messageLifecycle.markProcessed(outcome, {
                 ...finalSessionRef,
                 error: outcomeError,
+                userPrompt: prepared.context.commandBody || undefined,
+                finalResponse: finalModelResponse,
               });
             } finally {
               try {

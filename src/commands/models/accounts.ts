@@ -133,6 +133,8 @@ async function connectAccount(
     start,
   );
   const params = { profileId: start.profileId, connectId: started.connectId };
+  const readStatus = () =>
+    client.request<UsersAuthConnectStatusResult>("users.authConnect.status", params, { signal });
   let active:
     | {
         id: string;
@@ -149,11 +151,7 @@ async function connectAccount(
   };
   try {
     signal.throwIfAborted();
-    let result = await client.request<UsersAuthConnectStatusResult>(
-      "users.authConnect.status",
-      params,
-      { signal },
-    );
+    let result = await readStatus();
     while (result.status === "pending") {
       const step = result.step;
       if (active?.id !== step?.id) {
@@ -210,11 +208,7 @@ async function connectAccount(
           runtime.error(sanitizeTerminalText(result.error));
         }
       } else {
-        result = await client.request<UsersAuthConnectStatusResult>(
-          "users.authConnect.status",
-          params,
-          { signal },
-        );
+        result = await readStatus();
       }
     }
     return result;

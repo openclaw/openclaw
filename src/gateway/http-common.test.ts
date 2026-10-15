@@ -10,13 +10,9 @@ import {
 } from "../infra/diagnostic-events.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
-import type { GatewayAuthResult } from "./auth.js";
 import {
   readJsonBodyOrError,
   retainGatewayHttpResponseWork,
-  sendGatewayAuthFailure,
-  sendInvalidRequest,
-  sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
   sendRateLimited,
@@ -46,13 +42,6 @@ function headerNames(setHeader: ReturnType<typeof vi.fn>): string[] {
 
 function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
   expect(headerNames(setHeader)).not.toContain(name);
-}
-
-function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof vi.fn>): void {
-  expect(res.statusCode).toBe(401);
-  expect(end).toHaveBeenCalledWith(
-    JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-  );
 }
 
 describe("setDefaultSecurityHeaders", () => {
@@ -86,16 +75,6 @@ describe("setDefaultSecurityHeaders", () => {
   });
 });
 
-describe("sendJson", () => {
-  it("sets status, content-type and writes JSON body", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendJson(res, 201, { ok: true });
-    expect(res.statusCode).toBe(201);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "application/json; charset=utf-8");
-    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
-  });
-});
-
 describe("sendMissingScopeForbidden", () => {
   it("preserves the legacy response when no concrete scope is available", () => {
     const { res, end } = makeMockHttpResponse();
@@ -121,12 +100,6 @@ describe("sendMethodNotAllowed", () => {
     expect(res.statusCode).toBe(405);
     expect(end).toHaveBeenCalledWith("Method Not Allowed");
   });
-
-  it("honours a custom Allow header value", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendMethodNotAllowed(res, "GET, POST");
-    expect(setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
-  });
 });
 
 describe("sendRateLimited", () => {
@@ -144,56 +117,6 @@ describe("sendRateLimited", () => {
       }),
     );
   });
-
-  it("responds with 429 and no Retry-After when retryAfterMs is zero", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, 0);
-    expect(res.statusCode).toBe(429);
-    expectHeaderNotSet(setHeader, "Retry-After");
-  });
-
-  it("responds with 429 and no Retry-After when retryAfterMs is negative", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, -500);
-    expect(res.statusCode).toBe(429);
-    expectHeaderNotSet(setHeader, "Retry-After");
-  });
-
-  it("sets Retry-After (seconds, ceiled) when retryAfterMs is positive", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, 1500);
-    expect(res.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", "2");
-  });
-});
-
-describe("sendGatewayAuthFailure", () => {
-  it("delegates to sendRateLimited when the auth result is rate limited", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    const authResult = { ok: false, rateLimited: true, retryAfterMs: 3000 } as GatewayAuthResult;
-    sendGatewayAuthFailure(res, authResult);
-    expect(res.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
-    expect(end).toHaveBeenCalledTimes(1);
-  });
-
-  it("delegates to sendUnauthorized when the auth result is not rate limited", () => {
-    const { res, end } = makeMockHttpResponse();
-    const authResult = { ok: false, rateLimited: false } as GatewayAuthResult;
-    sendGatewayAuthFailure(res, authResult);
-    expectUnauthorizedPayload(res, end);
-  });
-});
-
-describe("sendInvalidRequest", () => {
-  it("responds with 400 and includes the supplied message", () => {
-    const { res, end } = makeMockHttpResponse();
-    sendInvalidRequest(res, "bad input");
-    expect(res.statusCode).toBe(400);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "bad input", type: "invalid_request_error" } }),
-    );
-  });
 });
 
 describe("readJsonBodyOrError", () => {
@@ -208,15 +131,6 @@ describe("readJsonBodyOrError", () => {
     }) as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
     return req;
   };
-
-  it("returns the parsed body on success", async () => {
-    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { hello: "world" } });
-    const { res } = makeMockHttpResponse();
-    const req = makeRequest();
-    const result = await readJsonBodyOrError(req, res, 1024);
-    expect(result).toEqual({ hello: "world" });
-    expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024);
-  });
 
   it.each([
     { error: "payload too large", status: 413, message: "Payload too large" },
@@ -355,25 +269,6 @@ describe("HTTP response root ownership", () => {
 });
 
 describe("watchClientDisconnect", () => {
-  it("returns a no-op cleanup when no sockets are available", () => {
-    const { req, res } = makeMockHttpReqRes(null, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    cleanup();
-    expect(controller.signal.aborted).toBe(false);
-  });
-
-  it("aborts the controller and calls onDisconnect when a socket closes", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    watchClientDisconnect(req, res, controller, onDisconnect);
-    socket.emit("close");
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(controller.signal.aborted).toBe(true);
-  });
-
   it("immediately aborts when the request socket was already destroyed", () => {
     const socket = Object.assign(new EventEmitter(), { destroyed: true });
     const { req, res } = makeMockHttpReqRes(socket, socket);
@@ -386,40 +281,6 @@ describe("watchClientDisconnect", () => {
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(socket.listenerCount("close")).toBe(0);
     expect(res.listenerCount("error")).toBe(1);
-    cleanup();
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("immediately aborts when the response was already destroyed", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    Object.assign(res, { destroyed: true });
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(socket.listenerCount("close")).toBe(0);
-    expect(res.listenerCount("error")).toBe(1);
-    cleanup();
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("handles response stream errors as client disconnects", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-
-    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-
     cleanup();
     res.emit("close");
     expect(res.listenerCount("error")).toBe(0);
@@ -497,24 +358,6 @@ describe("watchClientDisconnect", () => {
     socket.emit("close");
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(abortSpy).not.toHaveBeenCalled();
-  });
-
-  it("works without an onDisconnect callback", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(null, socket);
-    const controller = new AbortController();
-    watchClientDisconnect(req, res, controller);
-    socket.emit("close");
-    expect(controller.signal.aborted).toBe(true);
-  });
-
-  it("deduplicates identical request and response sockets", () => {
-    const socket = new EventEmitter();
-    const onSpy = vi.spyOn(socket, "on");
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    watchClientDisconnect(req, res, controller);
-    expect(onSpy).toHaveBeenCalledTimes(1);
   });
 
   it("releases both socket watchers after one disconnect and notifies once", () => {

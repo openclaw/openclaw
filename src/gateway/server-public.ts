@@ -9,11 +9,13 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
 export type GatewayCloseOptions = {
+  /** Run-loop host retains the writer until its final boot outcome is durable. */
+  retainSharedState?: boolean;
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
-  /** Process-owning host only: exit after accepted writes and database close settle. */
-  onProcessExitReady?: () => Promise<void>;
+  /** Process-owning host only: the process exits after close, releasing native watchers. */
+  exitAfterClose?: boolean;
 };
 
 type GatewayShutdownBudget = {
@@ -61,7 +63,7 @@ export type GatewayServerOptions = {
   /** Retained run-loop ownership; direct servers acquire and release their own owner. */
   gatewayStateOwner?: Pick<
     import("../infra/gateway-lock.js").GatewayLockHandle,
-    "assertDatabaseAccess"
+    "assertDatabaseAccess" | "markListening"
   >;
   /** Internal native-host operation; direct readers retain their own execution owner. */
   prepareConfigSnapshot?: ConfigSnapshotPreparation;

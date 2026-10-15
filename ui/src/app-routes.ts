@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -22,6 +23,7 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
+import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
@@ -69,10 +71,19 @@ import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+type AppRouteModule = (
+  | {
+      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+      renderSolid?: never;
+    }
+  | {
+      render?: never;
+      /** Mounted once per route renderer; props follow the current loader and presentation. */
+      renderSolid: (props: SolidRouteProps) => JSX.Element;
+    }
+) & {
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
-  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,

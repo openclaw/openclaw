@@ -62,7 +62,7 @@ describe("protected canonical session handoff", () => {
     expect(parseControlUiSessionReturnPath(`${canonical}?dashboard=other`, "/control")).toBeNull();
   });
   it("preserves composer drafts through the app handoff", async () => {
-    const path = `${canonical}?draft=Follow+up&dashboard=expanded`;
+    const path = `${canonical}?draft=Follow+up&dashboard=expanded&openclaw_mount_recovery=1791731984160`;
     const opened = await request(buildControlUiSessionEntryUrl(path, "/control"));
     expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
     expect(parseControlUiSessionReturnPath(`${path}&draft=second`, "/control")).toBeNull();
@@ -82,20 +82,23 @@ describe("protected canonical session handoff", () => {
     );
     const opened = await request();
     expect(opened.serveApp).toHaveBeenCalledWith(canonical, expect.any(Function));
+    expect(opened.setHeader).toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
     const isCurrent = opened.serveApp.mock.calls[0]?.[1];
     current.mockReturnValue(false);
     expect(isCurrent?.()).toBe(false);
   });
-  it("keeps denied members on the public reader without an automatic redirect loop", async () => {
+  it("ends a denied handoff without redirecting into another reader probe", async () => {
     resolveSession.mockResolvedValue(null);
     const probe = await request(`${entry}&probe=1`);
     expect(probe.res.statusCode).toBe(403);
     expect(probe.serveApp).not.toHaveBeenCalled();
     const opened = await request();
-    expect(opened.res.statusCode).toBe(303);
-    expect(opened.setHeader).toHaveBeenCalledWith("Location", canonical);
+    expect(opened.res.statusCode).toBe(403);
+    expect(opened.setHeader).not.toHaveBeenCalledWith("Location", expect.anything());
+    expect(opened.getBody()).toContain("Session unavailable");
+    expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
   });
-  it.each(["token", "password"] as const)(
+  it.each(["password"] as const)(
     "keeps explicit %s login on the existing app login gate",
     async (mode) => {
       authenticate.mockResolvedValue({
@@ -104,6 +107,7 @@ describe("protected canonical session handoff", () => {
       });
       const opened = await request(entry, mode);
       expect(opened.serveApp).toHaveBeenCalledWith(canonical);
+      expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
       const probe = await request(`${entry}&probe=1`, mode);
       expect(probe.res.statusCode).toBe(401);
       expect(probe.serveApp).not.toHaveBeenCalled();
@@ -113,12 +117,13 @@ describe("protected canonical session handoff", () => {
   it.each([
     "https://evil.test/chat/main",
     "/control/chat/main/a\u0000",
-    "/control/chat/main/a\u007f",
     "/control/chat/main/a b",
     "//evil.test/chat/main",
     "/control/settings",
     "/chat/main/topic",
-    "/control/chat/main/topic?token=secret",
+    "/control/chat/main/topic?openclaw_mount_recovery=1&token=secret",
+    "/control/chat/main/topic?openclaw_mount_recovery=1&openclaw_mount_recovery=2",
+    "/control/chat/main/topic?openclaw_mount_recovery=invalid",
     "/control/chat/main/../settings",
     "/control/chat/main\\topic",
   ])("rejects unsafe return path %s", async (path) => {

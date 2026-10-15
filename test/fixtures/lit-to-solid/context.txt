@@ -1,0 +1,32 @@
+import type { JSX } from "@solidjs/web";
+declare function t(key: string, params?: Record<string, string>): string;
+declare const props: {
+  buildInfo: { version: string; builtAt: string };
+  gatewayVersion: string;
+  callMethod: string;
+  callParams: string;
+  methods: string[];
+  connected: boolean;
+  loading: boolean;
+  onCall(): void;
+  onRefresh(): void;
+  onCallMethodChange(value: string): void;
+  onCallParamsChange(value: string): void;
+};
+declare const commitAt: string, exact: string, buildDate: string, m: string;
+declare const timestamp: number, lastActivityAt: number, gap: number;
+declare function formatRelativeTimestamp(timestamp: number, options: { fallback: string }): string;
+declare function renderThemeBrandIcon(): JSX.Element;
+declare function elapsed(timestamp: number, display?: string): JSX.Element;
+declare const snapshotsSection: JSX.Element, lanesSection: JSX.Element, rpcSection: JSX.Element,
+  modelsSection: JSX.Element, eventLogSection: JSX.Element;
+declare const refreshPending: boolean;
+declare const agentId: string, displayName: string, description: string, zone: string,
+  activity: string, column: string, group: string;
+declare const date: Date;
+declare const display: "compact" | "minute-compact" | "single-unit";
+declare const i18n: { getLocale(): string };
+declare const row: { updatedAt: number };
+declare const where: string[], zones: string[];
+declare const option: { badge: string };
+declare const icons: { check: JSX.Element };

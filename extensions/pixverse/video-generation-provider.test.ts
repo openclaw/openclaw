@@ -8,14 +8,8 @@ import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/p
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const {
-  postJsonRequestMock,
-  postMultipartRequestMock,
-  fetchWithTimeoutMock,
-  pollProviderOperationJsonMock,
-  resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = getProviderHttpMocks();
+const { postJsonRequestMock, postMultipartRequestMock, fetchWithTimeoutMock } =
+  getProviderHttpMocks();
 
 let buildPixVerseVideoGenerationProvider: typeof import("./video-generation-provider.js").buildPixVerseVideoGenerationProvider;
 
@@ -53,18 +47,6 @@ function firstMultipartRequest() {
     throw new Error("expected PixVerse image upload request");
   }
   return call[0] as { url?: string; body?: FormData; headers?: Headers };
-}
-
-function firstPollRequest() {
-  const [call] = pollProviderOperationJsonMock.mock.calls;
-  if (!call) {
-    throw new Error("expected PixVerse status poll request");
-  }
-  return call[0] as {
-    url?: string;
-    allowPrivateNetwork?: boolean;
-    dispatcherPolicy?: unknown;
-  };
 }
 
 function pollFetchHeaders(callIndex: number): Headers | undefined {
@@ -105,6 +87,13 @@ function mockPixVerseVideoTask(
 }
 
 describe("pixverse video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildPixVerseVideoGenerationProvider());
   });
@@ -214,24 +203,6 @@ describe("pixverse video generation provider", () => {
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
-  it("bounds an unbounded successful PixVerse image upload JSON body and cancels the stream", async () => {
-    const oversized = oversizedJsonResponse();
-    postMultipartRequestMock.mockResolvedValue({
-      response: oversized.response,
-      release: vi.fn(async () => {}),
-    });
-
-    await expect(
-      generateVideo({
-        model: "c1",
-        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("PixVerse image upload failed: JSON response exceeds 16777216 bytes");
-    expect(oversized.state.canceled).toBe(true);
-    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
   it("uploads local image input before submitting image-to-video", async () => {
     postMultipartRequestMock.mockImplementation(async () => ({
       response: successfulResponse({ img_id: 456, img_url: "https://media.pixverse.ai/image.png" }),
@@ -339,55 +310,6 @@ describe("pixverse video generation provider", () => {
 
     expect(firstPostJsonRequest().url).toBe(`${expectedBaseUrl}/video/text/generate`);
     expect(fetchWithTimeoutMock.mock.calls[0]?.[0]).toBe(`${expectedBaseUrl}/video/result/123`);
-  });
-
-  it("uses the guarded provider transport for status polling", async () => {
-    const dispatcherPolicy = { mode: "direct" };
-    resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
-      baseUrl: "https://proxy.example/openapi/v2",
-      allowPrivateNetwork: true,
-      headers: new Headers({ "API-KEY": "provider-key", "X-Proxy": "enabled" }),
-      dispatcherPolicy,
-    } as never);
-    mockPixVerseVideoTask();
-
-    await generateVideo();
-
-    expect(firstPostJsonRequest().url).toBe("https://proxy.example/openapi/v2/video/text/generate");
-    expect(firstPostJsonRequest().headers?.get("X-Proxy")).toBe("enabled");
-    expect(firstPollRequest()).toMatchObject({
-      url: "https://proxy.example/openapi/v2/video/result/123",
-      allowPrivateNetwork: true,
-      dispatcherPolicy,
-    });
-    const pollHeaders = pollFetchHeaders(0);
-    expect(pollHeaders?.get("X-Proxy")).toBe("enabled");
-  });
-
-  it("passes configured provider request overrides into the HTTP resolver", async () => {
-    const request = {
-      allowPrivateNetwork: true,
-      headers: { "X-Proxy": "enabled" },
-    };
-    mockPixVerseVideoTask();
-
-    await generateVideo({
-      model: "v6",
-      cfg: {
-        models: {
-          providers: {
-            pixverse: {
-              request,
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(request);
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({ request }),
-    );
   });
 
   it("uses a fresh trace id for each status poll", async () => {

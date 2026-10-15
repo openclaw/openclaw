@@ -2,11 +2,13 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -57,26 +59,38 @@ async function mount(
     setFileDraft(file, { content: retained, expectedHash: retainedHash });
   }
   const panel = document.createElement("openclaw-chat-detail-panel") as Panel;
-  panel.style.cssText = "width:100%;height:600px";
-  panel.content = file;
-  document.body.append(panel);
-  await panel.updateComplete;
-  await customElements.whenDefined("openclaw-chat-html-preview");
-  await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-  const preview = panel.querySelector("openclaw-chat-html-preview")!;
-  preview.embedSandboxMode = "strict";
   const request = vi.fn(async (_method: string, params: { html: string }) => ({
     html: params.html,
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort: 8444,
   }));
-  Reflect.set(preview, "context", {
+  const previewContext = {
     gateway: {
       snapshot: { client: { request }, phase: "connected" },
       connection: { gatewayUrl: "ws://gateway.example:8443" },
       subscribe: () => () => {},
     },
+  } as unknown as ApplicationContext;
+  // Only the preview consumes this Gateway-only fixture; sibling catalogs need a full app.
+  panel.addEventListener("context-request", (event) => {
+    if (
+      event.context === applicationContext &&
+      event.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      event.callback(previewContext);
+    }
   });
+  panel.style.cssText = "width:100%;height:600px";
+  panel.content = file;
+  const container = createChatSidebarContainer();
+  container.append(panel);
+  document.body.append(container);
+  await panel.updateComplete;
+  await customElements.whenDefined("openclaw-chat-html-preview");
+  await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
+  const preview = panel.querySelector("openclaw-chat-html-preview")!;
+  preview.embedSandboxMode = "strict";
   await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
   return { panel, file, request };
 }

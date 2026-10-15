@@ -24,6 +24,7 @@ const commandTransport = vi.hoisted(() => ({
   hostCwd: process.cwd(),
   npmPrefix: "",
 }));
+export const sqliteHostPlatform = commandTransport.hostPlatform;
 
 const isMacosAclInspection = vi.hoisted(
   () => (command: string, args: readonly string[]) =>
@@ -44,7 +45,6 @@ const isPlistStdinConversion = vi.hoisted(
     args[5] === "-",
 );
 
-const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 
@@ -88,7 +88,8 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
 }));
 
@@ -446,8 +447,8 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
-    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
-    runCommandBuffered: transport.runUpdateStateSnapshotFixture,
+    ...actual,
+    runCommandBuffered: transport.runUpdateBufferedCommandFixture,
     runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
       get npmPrefix() {
@@ -748,7 +749,6 @@ export {
   serviceStop,
   sourceRuntimeCompletion,
   spawn,
-  sqliteHostPlatform,
   stateSchemaVersions,
   suspendScheduledTaskAutoStartForUpdate,
   syncPluginsForUpdateChannel,

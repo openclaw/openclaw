@@ -8,6 +8,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -25,7 +26,7 @@ const panels: OpenClawTerminalPanel[] = [];
 const releaseResponses: Array<() => void> = [];
 
 function mountTerminalPanel(client: TerminalGatewayClient): OpenClawTerminalPanel {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
   panel.client = client;
   panel.available = true;
   panels.push(panel);
@@ -45,6 +46,7 @@ describe("terminal panel pending cancellation", () => {
       panel.closeTerminalPanel();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     for (const release of releaseResponses) {
       release();
     }
@@ -92,13 +94,15 @@ describe("terminal panel pending cancellation", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       panel.page = panel.fullscreen = panel.embedded = page;
       panel.routeTarget = kind === "attach" ? { sessionId: "pending-session" } : null;
       panels.push(panel);
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       if (!page) {
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {

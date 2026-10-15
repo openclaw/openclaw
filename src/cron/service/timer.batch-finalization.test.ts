@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -7,6 +6,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -20,14 +20,14 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronRunErrorClassification } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
-import * as runtimeMutation from "./runtime-mutation.js";
+import * as scheduleMaintenance from "./schedule-maintenance.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion, runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-service-batch-finalization-" });
 const DUE_AT = Date.parse("2026-02-06T10:05:00.250Z");
@@ -77,7 +77,6 @@ async function finishBatch(
 ) {
   runner.release.resolve({ status: "ok", summary: "completed" });
   await batch;
-  state.timer?.cancel();
 }
 
 function findCronTask(jobId: string) {
@@ -89,6 +88,7 @@ function finalizeError(
   job: CronJob,
   error: string,
   options?: Parameters<typeof finalizeCompletedCronRunOutcomes>[2],
+  errorClassification?: CronRunErrorClassification,
 ) {
   const outcome = authorCronRunCompletion(job, {
     jobId: job.id,
@@ -96,6 +96,7 @@ function finalizeError(
     activeJobMarker: markCronJobActive(job.id),
     status: "error",
     error,
+    ...(errorClassification ? { errorClassification } : {}),
     startedAt: DUE_AT,
     endedAt: DUE_AT + 10,
   });
@@ -116,17 +117,19 @@ function rejectWrite(
 }
 
 function observeFinalizationRejection(onRejected: () => void) {
-  const execute = runtimeMutation.runCronRuntimeMutation;
-  return vi.spyOn(runtimeMutation, "runCronRuntimeMutation").mockImplementation(async (params) => {
-    try {
-      return await execute(params);
-    } catch (error) {
-      if (params.type === "cron.finalizeRuns") {
-        onRejected();
+  const execute = workerStore.executeOpenClawStateWorker;
+  return vi
+    .spyOn(workerStore, "executeOpenClawStateWorker")
+    .mockImplementation(async (context, command) => {
+      try {
+        return await execute(context, command);
+      } catch (error) {
+        if (command.type === "cron.finalizeRuns") {
+          onRejected();
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    });
 }
 
 function observeInactiveJobs(jobIds: string[]) {
@@ -148,12 +151,57 @@ function observeInactiveJobs(jobIds: string[]) {
 }
 
 describe("cron batch outcome finalization", () => {
-  it.each([
-    { trigger: "scheduled", installSuccessor: false },
-    { trigger: "startup", installSuccessor: true },
-  ] as const)(
-    "supersedes a stale $trigger outcome (successor=$installSuccessor)",
-    async ({ trigger, installSuccessor }) => {
+  it.each([false, true])(
+    "persists a completed schedule without redundant maintenance (stale sibling: %s)",
+    async (staleSibling) => {
+      const jobs = [
+        dueJob("due", {
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: DUE_AT - 120_000 },
+        }),
+      ];
+      if (staleSibling) {
+        jobs.push(
+          dueJob("stale-sibling", {
+            schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+            state: { nextRunAtMs: DUE_AT + 7 * 24 * 60 * 60_000 + 30_000 },
+            payload: { kind: "systemEvent", text: "repair stale future slot" },
+          }),
+        );
+      }
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const { state, storePath } = await fixture(jobs, { runIsolatedAgentJob });
+      const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
+      try {
+        await onTimer(state);
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        // The actor repairs stale siblings before launch; completion needs no second sweep.
+        expect(maintenance).not.toHaveBeenCalled();
+        const persistedJobs = (await loadCronStore(storePath)).jobs;
+        expect(persistedJobs).toEqual([
+          expect.objectContaining({
+            id: "due",
+            state: expect.objectContaining({ lastRunStatus: "ok", nextRunAtMs: DUE_AT + 60_000 }),
+          }),
+          ...(staleSibling
+            ? [
+                expect.objectContaining({
+                  id: "stale-sibling",
+                  state: expect.objectContaining({
+                    nextRunAtMs: Math.ceil(DUE_AT / 60_000) * 60_000,
+                  }),
+                }),
+              ]
+            : []),
+        ]);
+      } finally {
+        maintenance.mockRestore();
+      }
+    },
+  );
+
+  it.each(["scheduled", "startup"] as const)(
+    "records a completed %s outcome after its owner becomes unavailable",
+    async (trigger) => {
       const job = dueJob(`${trigger}-superseded`);
       const runner = blockedRunner();
       let ownerAvailable = true;
@@ -164,23 +212,20 @@ describe("cron batch outcome finalization", () => {
       const batch = startBatch(trigger, state);
       try {
         await runner.started.promise;
-        if (installSuccessor) {
-          const stored = await loadCronStore(storePath);
-          stored.jobs[0]!.state.runningAtMs = DUE_AT + 1;
-          await saveCronStore(storePath, stored);
-        }
         ownerAvailable = false;
         runner.release.resolve({ status: "ok", summary: "stale completion" });
         await batch;
-        expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
-          installSuccessor ? DUE_AT + 1 : undefined,
-        );
+        expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
         const receipt = openOpenClawStateDatabase()
           .db.prepare(
             "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
           )
           .get(cronStoreKey(storePath), job.id);
-        expect(receipt).toMatchObject({ status: "superseded" });
+        expect(receipt).toMatchObject({ status: "ok" });
+        expect(findCronTask(job.id)).toMatchObject({
+          status: "succeeded",
+          summary: "stale completion",
+        });
       } finally {
         ownerAvailable = false;
         await finishBatch(state, batch, runner);
@@ -188,17 +233,17 @@ describe("cron batch outcome finalization", () => {
     },
   );
 
-  it("recovers one finalized scheduled run when admission advances its execution clock", async () => {
+  it("records an interrupted run without replay when terminal accounting fails after the execution clock advances", async () => {
     const job = dueJob("recover-advanced-clock");
     job.state.lastError = "previous failure";
     const startedAt = DUE_AT + 7;
-    let now = DUE_AT;
-    let reservationPersisted = false;
+    let now = startedAt;
     const events: CronEvent[] = [];
     const runIsolatedAgentJob = vi.fn(async () => {
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(startedAt);
       expect(state.store?.jobs[0]?.state.runningAtMs).toBe(startedAt);
-      expect(state.store?.jobs[0]?.state.lastError).toBeUndefined();
+      expect(state.store?.jobs[0]?.state.lastError).toBe("previous failure");
+      now = startedAt + 7;
       return { status: "ok" as const, summary: "finished before terminal store failure" };
     });
     const { state, storePath } = await fixture([job], {
@@ -206,31 +251,13 @@ describe("cron batch outcome finalization", () => {
       runIsolatedAgentJob,
       onEvent: (event) => events.push(event),
     });
-    const database = openOpenClawStateDatabase().db;
-    const stopObserving = observeCronStoreCommits(storePath, () => {
-      const queued = database
-        .prepare(
-          "SELECT 1 FROM cron_jobs WHERE store_key = ? AND job_id = ? AND json_extract(state_json, '$.queuedAtMs') = ?",
-        )
-        .get(cronStoreKey(storePath), job.id, DUE_AT);
-      if (!reservationPersisted && queued) {
-        reservationPersisted = true;
-        now = startedAt;
-      }
-    });
     const allowWrites = rejectWrite(job.id);
     let recoveryState: CronServiceState | undefined;
     try {
       await expect(onTimer(state)).rejects.toThrow("terminal write failed");
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(startedAt);
-      const task = findCronTask(job.id);
-      expect(task).toMatchObject({
-        runId: expect.stringMatching(new RegExp(`^${createCronExecutionId(job.id, startedAt)}:`)),
-        startedAt,
-        status: "succeeded",
-        summary: "finished before terminal store failure",
-      });
+      expect(findCronTask(job.id)).toBeUndefined();
       expect(events.filter((event) => event.action === "started")).toEqual([
         expect.objectContaining({ runAtMs: startedAt }),
       ]);
@@ -245,7 +272,12 @@ describe("cron batch outcome finalization", () => {
       await start(recoveryState);
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       expect(readCronRunRecordsForTests().filter((record) => record.jobId === job.id)).toEqual([
-        expect.objectContaining({ runId: task?.runId, status: "succeeded" }),
+        expect.objectContaining({
+          runId: expect.stringMatching(new RegExp(`^${createCronExecutionId(job.id, startedAt)}:`)),
+          startedAt,
+          status: "failed",
+          error: "cron: job interrupted by gateway restart",
+        }),
       ]);
       expect(
         readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
@@ -254,17 +286,16 @@ describe("cron batch outcome finalization", () => {
         expect.objectContaining({
           jobId: job.id,
           runAtMs: startedAt,
-          status: "ok",
-          summary: "finished before terminal store failure",
+          status: "error",
+          error: "cron: job interrupted by gateway restart",
         }),
       ]);
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
         enabled: false,
-        state: { lastRunAtMs: startedAt, lastRunStatus: "ok", lastStatus: "ok" },
+        state: { lastRunAtMs: startedAt, lastRunStatus: "error", lastStatus: "error" },
       });
-      expect(events.filter((event) => event.action === "finished")).toHaveLength(0);
+      expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
     } finally {
-      stopObserving();
       allowWrites();
       stop(state);
       if (recoveryState) {
@@ -341,7 +372,7 @@ describe("cron batch outcome finalization", () => {
     });
     const order: string[] = [];
     const deliveryContext = { channel: "discord", to: "channel-1", accountId: "default" };
-    const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
+    const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
     const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>(() => {
       const persisted = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
@@ -359,7 +390,13 @@ describe("cron batch outcome finalization", () => {
       resolveOriginDeliveryContext,
       requestHeartbeat,
     });
-    await finalizeError(state, job, "cron: job execution timed out at /private/agent/work");
+    await finalizeError(
+      state,
+      job,
+      "cron: job execution timed out at /private/agent/work",
+      undefined,
+      { kind: "reason", reason: "timeout" },
+    );
     expect(order).toEqual(["notify", "heartbeat"]);
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(`openclaw automations enable ${job.id}`),
@@ -398,7 +435,7 @@ describe("cron batch outcome finalization", () => {
     });
   });
 
-  it("clears retired setup-timeout markers without rewriting stopped-service state", async () => {
+  it("records a completed setup timeout and clears its active marker while the service is stopped", async () => {
     const job = dueJob("stopped-setup-timeout-marker", {
       state: { nextRunAtMs: DUE_AT, runningAtMs: DUE_AT },
     });
@@ -411,7 +448,9 @@ describe("cron batch outcome finalization", () => {
       }),
     ).toEqual([]);
     expect(isCronJobActive(job.id)).toBe(false);
-    expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(DUE_AT);
+    const persisted = (await loadCronStore(storePath)).jobs[0]?.state;
+    expect(persisted?.runningAtMs).toBeUndefined();
+    expect(persisted?.lastRunStatus).toBe("error");
   });
 
   it("persists a completed scheduled run when its service stops during execution", async () => {
@@ -428,7 +467,6 @@ describe("cron batch outcome finalization", () => {
       expect(persisted?.state.lastRunStatus).toBe("ok");
       expect(persisted?.state.runningAtMs).toBeUndefined();
       expect(findCronTask(job.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(isCronJobActive(job.id)).toBe(false);
     } finally {
       await finishBatch(state, batch, runner);
@@ -457,7 +495,6 @@ describe("cron batch outcome finalization", () => {
       const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === second.id);
       expect(persisted?.state.lastRunStatus).toBe("ok");
       expect(persisted?.state.runningAtMs).toBeUndefined();
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(false);
     } finally {
@@ -467,14 +504,17 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it("releases unstarted startup reservations when terminal finalization fails", async () => {
+  it("keeps a deferred startup job unrequested when immediate finalization fails", async () => {
     const first = dueJob("startup-failed-write-before-stop");
     const unstarted = dueJob("startup-unstarted-after-failed-write");
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "completed before service stop",
     }));
-    const { state, storePath } = await fixture([first, unstarted], { runIsolatedAgentJob });
+    const { state, storePath } = await fixture([first, unstarted], {
+      maxMissedJobsPerRestart: 1,
+      runIsolatedAgentJob,
+    });
     const allowWrites = rejectWrite(first.id);
     const observer = observeFinalizationRejection(() => stop(state));
     try {
@@ -485,26 +525,24 @@ describe("cron batch outcome finalization", () => {
       );
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
+      expect(persisted?.state.nextRunAtMs).toBe(DUE_AT + 5_000);
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(unstarted.id)).toBe(false);
     } finally {
       observer.mockRestore();
       allowWrites();
-      state.timer?.cancel();
     }
   });
 
-  it.each([{ trigger: "startup", concurrency: 1, deleteAfterRun: false }] as const)(
+  it.each([{ trigger: "startup", deleteAfterRun: false }] as const)(
     "persists a completed $trigger job before its sibling drains",
-    async ({ trigger, concurrency, deleteAfterRun }) => {
+    async ({ trigger, deleteAfterRun }) => {
       const first = dueJob(`${trigger}-finished`, { deleteAfterRun });
       const second = dueJob(`${trigger}-blocked`);
       const runner = blockedRunner(second.id);
       const events: CronEvent[] = [];
       const { state, storePath } = await fixture([first, second], {
         runIsolatedAgentJob: runner.run,
-        testAdmissionLimit: concurrency,
         onEvent: (event) => events.push(event),
       });
 
@@ -539,7 +577,6 @@ describe("cron batch outcome finalization", () => {
         await finishBatch(state, batch, runner);
       }
       expect(findCronTask(second.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
     },
   );
 
@@ -620,7 +657,6 @@ describe("cron batch outcome finalization", () => {
       }
 
       expect(findCronTask(lastJob.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
     },
   );
 });

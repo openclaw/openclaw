@@ -19,6 +19,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "textToolCallAttempt"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
@@ -66,6 +67,19 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
     (message) => message.role === "user",
   );
   const currentMessages = params.messagesSnapshot.slice(latestUserIndex + 1);
+  const hasMediaOutput = (text: string): boolean => {
+    const parsed = parseReplyDirectives(text);
+    return Boolean(parsed.mediaUrls?.length || parsed.audioAsVoice);
+  };
+  if (
+    params.assistantTexts.some(hasMediaOutput) ||
+    currentMessages.some(
+      (message) =>
+        message.role === "assistant" && hasMediaOutput(resolveRawAssistantAnswerText(message)),
+    )
+  ) {
+    return true;
+  }
   const lastToolResultIndex = currentMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );
@@ -216,7 +230,10 @@ export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
+    | "assistantTexts"
+    | "textToolCallAttempt"
+    | "currentAttemptAssistant"
+    | "currentAttemptCompletedAssistant"
   >;
 }) {
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
@@ -230,6 +247,7 @@ export function classifyAssistantTurn(params: {
     assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
   );
   const nonVisibleEligibleForSilentReply =
+    !params.attempt.textToolCallAttempt &&
     params.payloadCount === 0 &&
     visibleText.length === 0 &&
     assistant?.stopReason !== "error" &&

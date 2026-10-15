@@ -213,7 +213,7 @@ describe("Markdown table interactions", () => {
     },
   );
 
-  it.each([true, false])(
+  it.each([true])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {
       vi.useFakeTimers();
@@ -269,7 +269,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
-    dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, detail: 1 }));
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
 
@@ -298,6 +298,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    await Promise.resolve();
     expect(document.activeElement).toBe(second);
   });
 

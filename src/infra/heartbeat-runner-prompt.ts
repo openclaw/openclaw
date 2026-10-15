@@ -8,7 +8,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { channelRouteTargetsMatchExact } from "../plugin-sdk/channel-route.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -130,10 +130,13 @@ export async function resolveHeartbeatPreflight(params: {
 }): Promise<HeartbeatPreflight> {
   let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
   try {
-    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
-      kind: "heartbeat",
-      agentId: params.agentId,
-    });
+    monitorScratch = await readCronScratchSnapshot(
+      await resolveCronJobsStorePathFromConfigAsync(params.cfg),
+      {
+        kind: "heartbeat",
+        agentId: params.agentId,
+      },
+    );
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
@@ -155,7 +158,7 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isExecEventWake && !authoritativeScheduledTick && !params.scheduledTasks?.length
       ? resolveConversationCompletionRoute(pendingEventEntries, queue.entry)
       : undefined;
-  const heartbeatSession = resolveHeartbeatSessionSelection(
+  const heartbeatSession = await resolveHeartbeatSessionSelection(
     params.cfg,
     params.agentId,
     params.heartbeat,
@@ -164,7 +167,13 @@ export async function resolveHeartbeatPreflight(params: {
   );
   // Isolation saves periodic-poll history cost; a conversation's continuation needs its history.
   const session = conversationRoute
-    ? resolveHeartbeatSessionSelection(params.cfg, params.agentId, params.heartbeat, queue, false)
+    ? await resolveHeartbeatSessionSelection(
+        params.cfg,
+        params.agentId,
+        params.heartbeat,
+        queue,
+        false,
+      )
     : heartbeatSession;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -325,63 +334,56 @@ export function resolveHeartbeatRunPrompt(params: {
       genericEvents.push(event);
     }
   }
-  const hasExecCompletion = execEvents.length > 0;
+  const hasScheduledTasks = params.scheduledTasks.length > 0;
+  const hasExecCompletion = !hasScheduledTasks && execEvents.length > 0;
   const hasRelayableExecCompletion =
-    params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
-  const hasCronEvents = cronEvents.length > 0;
+    !hasScheduledTasks &&
+    params.canRelayToUser &&
+    execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
+  const hasCronEvents = !hasScheduledTasks && cronEvents.length > 0;
   const hasBackgroundTaskEvent =
     params.preflight.session.inspectsRunQueue &&
     genericEvents.some((event) => event.contextKey?.startsWith("task:"));
-  if (params.scheduledTasks.length > 0) {
+  let basePrompt: string;
+  if (hasScheduledTasks) {
     const taskList = params.scheduledTasks
       .map((task) => `- ${task.name}: ${task.prompt}`)
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
       : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
-    const taskPrompt = `Run the following periodic tasks (only those due based on their intervals):
+    basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}
 
 ${completionInstruction}`;
-    return {
-      prompt: appendHeartbeatScratch(taskPrompt, params.preflight.heartbeatScratchContent),
-      hasTaskContinuation: hasBackgroundTaskEvent,
-      hasExecCompletion: false,
-      hasRelayableExecCompletion: false,
-      hasCronEvents: false,
-      usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
-      genericEvents,
-      inspectedSystemEventsToConsume: cronNoise,
-    };
+  } else {
+    basePrompt =
+      hasExecCompletion || hasCronEvents
+        ? (hasExecCompletion ? buildExecEventPrompt : buildCronEventPrompt)(
+            (hasExecCompletion ? execEvents : cronEvents).map((event) => event.text),
+            {
+              deliverToUser: params.canRelayToUser,
+              useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+            },
+          )
+        : params.useHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
   }
-
-  const basePrompt =
-    hasExecCompletion || hasCronEvents
-      ? (hasExecCompletion ? buildExecEventPrompt : buildCronEventPrompt)(
-          (hasExecCompletion ? execEvents : cronEvents).map((event) => event.text),
-          {
-            deliverToUser: params.canRelayToUser,
-            useHeartbeatResponseTool: params.useHeartbeatResponseTool,
-          },
-        )
-      : params.useHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
   return {
     prompt: appendHeartbeatScratch(basePrompt, params.preflight.heartbeatScratchContent),
     hasTaskContinuation:
       hasExecCompletion ||
       hasBackgroundTaskEvent ||
-      cronEvents.some((event) => event.contextKey?.startsWith("task:")),
+      (!hasScheduledTasks && cronEvents.some((event) => event.contextKey?.startsWith("task:"))),
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
     usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
     genericEvents,
-    inspectedSystemEventsToConsume: [
-      ...cronNoise,
-      ...(hasExecCompletion ? execEvents : cronEvents),
-    ],
+    inspectedSystemEventsToConsume: hasScheduledTasks
+      ? cronNoise
+      : [...cronNoise, ...(hasExecCompletion ? execEvents : cronEvents)],
   };
 }

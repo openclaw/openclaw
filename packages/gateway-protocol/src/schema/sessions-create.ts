@@ -3,7 +3,9 @@ import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
   SessionToolOverridesSchema,
@@ -49,6 +51,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),
   permissionMode: Type.Optional(SessionPermissionModeSchema),
+  communication: Type.Optional(SessionCommunicationPolicySchema),
   toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
@@ -98,6 +101,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   /** Remote-owned source; create, dispatch, then send the initial turn. */
   repository: Type.Optional(SessionRepositorySourceSchema),
+  deviceFolder: Type.Optional(SessionDeviceFolderSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeSource: Type.Optional(
     Type.Literal("empty", {

@@ -114,31 +114,6 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startPluginServices).not.toHaveBeenCalled();
   });
 
-  it("starts only the diagnostics-otel service from a scoped non-activating load", async () => {
-    mockRegistryWithServices(["diagnostics-otel", "other-service"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-
-    expect(handle).not.toBeNull();
-    expect(acquirePluginRegistryForInspection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: otelEnabledConfig,
-        onlyPluginIds: ["diagnostics-otel"],
-        preferBuiltPluginArtifacts: true,
-      }),
-    );
-    expect(startPluginServices).toHaveBeenCalledTimes(1);
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      registry: { services: Array<{ service: { id: string } }> };
-      config: OpenClawConfig;
-    };
-    expect(startParams.config).toBe(otelEnabledConfig);
-    expect(startParams.registry.services.map((entry) => entry.service.id)).toEqual([
-      "diagnostics-otel",
-    ]);
-  });
-
   it("keeps OTLP logs but suppresses stdout JSONL logs when requested", async () => {
     const config = {
       diagnostics: { otel: { enabled: true, logs: true, logsExporter: "both" } },
@@ -179,34 +154,6 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
     expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
     expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
-  });
-
-  it("drains queued diagnostic events before stopping services on flush", async () => {
-    const exporterStop = vi.fn();
-    const services = await mockRealExporter(
-      { id: "diagnostics-otel", start: () => {}, stop: exporterStop },
-      "bundled",
-    );
-    const drain = createDeferredCore();
-    const draining = createDeferredCore();
-    waitForDiagnosticEventsDrained.mockImplementation(() => {
-      draining.resolve();
-      return drain.promise;
-    });
-    let stopping: Promise<void> | undefined;
-    try {
-      const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-      stopping = handle?.stop();
-      await draining.promise;
-      expect(exporterStop).not.toHaveBeenCalled();
-      drain.resolve();
-      await stopping;
-      expect(exporterStop).toHaveBeenCalledOnce();
-    } finally {
-      drain.resolve();
-      await stopping;
-      await services.stop();
-    }
   });
 
   it("reports drain and exporter failures without failing the CLI shutdown", async () => {

@@ -13,10 +13,11 @@ import { maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { hasExplicitSessionName } from "../session-title-state.js";
+import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -37,11 +38,15 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     );
   try {
     const cfg = params.context.getRuntimeConfig();
-    const resolved = loadAccessorSessionEntryForGatewayTarget({
-      cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-    });
+    const resolved = await withGatewaySessionStoreTarget(
+      { cfg, key: params.sessionKey, agentId: params.agentId },
+      (target) => ({
+        target,
+        entry: resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
+        canonicalKey: target.canonicalKey,
+        storePath: target.storePath,
+      }),
+    );
     const { entry } = resolved;
     const sessionId = entry?.sessionId;
     if (!entry || !sessionId || hasExplicitSessionName(entry)) {

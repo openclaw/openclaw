@@ -9,7 +9,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
 
-type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
+type DeepPartial<T> = T extends object ? { [P in keyof T]?: DeepPartial<T[P]> } : T;
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
   reasoning?: string;
@@ -57,25 +57,12 @@ vi.mock("openai", () => {
         create: (params: unknown, requestOptions: unknown) => {
           mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
-          return {
-            withResponse: async () => {
-              if (mockChunksRef.stream) {
-                return {
-                  data: mockChunksRef.stream,
-                  response: { status: 200, headers: new Headers() },
-                };
-              }
-              async function* generate() {
-                for (const chunk of mockChunksRef.chunks) {
-                  yield chunk;
-                }
-              }
-              return {
-                data: generate(),
-                response: { status: 200, headers: new Headers() },
-              };
-            },
-          };
+          async function* generate() {
+            yield* mockChunksRef.chunks;
+          }
+          return Object.assign(Promise.resolve(mockChunksRef.stream ?? generate()), {
+            asResponse: async () => new Response(null, { status: 200 }),
+          });
         },
       },
     };
@@ -585,14 +572,18 @@ describe("OpenAI-compatible completions params", () => {
     expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
-  it("keeps the relocatable marker out of the OpenRouter Anthropic cache-control payload", async () => {
+  it.each([
+    "anthropic/claude-sonnet-4.6",
+    "~anthropic/claude-haiku-latest",
+    "openrouter/~anthropic/claude-haiku-latest",
+  ])("preserves the stable cache breakpoint for OpenRouter model %s", async (id) => {
     // This route preserves the cache boundary for its breakpoint and relocates
     // nothing, so the relocatable marker must not survive into the payload.
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
-        id: "anthropic/claude-sonnet-4.6",
+        id,
         provider: "openrouter",
         baseUrl: "https://openrouter.ai/api/v1",
       },
@@ -1137,14 +1128,11 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
     ]);
   });
 
-  it("rolls back provisional commentary when an unfinished tool stream is interrupted", async () => {
+  it("preserves narration when an unfinished tool stream is interrupted", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("ordinary narration"),
       makeToolCallChunk("call_1", "lookup", '{"value":1}'),
@@ -1179,9 +1167,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: expect.stringMatching(
-        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

@@ -1,9 +1,11 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { scopeLegacySessionKeyToAgent } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
@@ -29,7 +31,6 @@ export async function completeTerminalEffects(
     mutated: boolean;
     sessionSuperseded: boolean;
     suppressSessionEffects: boolean;
-    terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
     loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
@@ -39,11 +40,17 @@ export async function completeTerminalEffects(
 ): Promise<void> {
   const params = context.options;
   const { completeParams, completionReason, mutated } = args;
-  let terminalGeneration = args.terminalGeneration;
   let entry = args.entry;
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
+    return;
+  }
   let { sessionSuperseded, suppressSessionEffects } = args;
+  const sessionEffects = context.getSessionEffects(entry);
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
+    if (
+      !context.isTerminalExecutionCurrent(entry) ||
+      context.getSessionEffects(entry) !== sessionEffects
+    ) {
       return false;
     }
     args.assertCurrent();
@@ -67,7 +74,6 @@ export async function completeTerminalEffects(
         draft.execution = { ...draft.execution, suppressSessionEffects: true };
       },
     });
-    terminalGeneration = context.bumpTerminalGeneration(entry);
   };
   const refreshSessionEffectsSuppression = async () => {
     const suppressed = await context.shouldSuppressSessionEffects(entry);
@@ -223,7 +229,6 @@ export async function completeTerminalEffects(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
-
   await refreshCleanupSuppression();
   if (!isCurrentTerminalCallback()) {
     return;
@@ -307,7 +312,12 @@ export async function completeTerminalEffects(
           }
           try {
             await cleanupBrowserSessions({
-              sessionKeys: [entry.childSessionKey],
+              sessionKeys: [
+                scopeLegacySessionKeyToAgent({
+                  agentId: entry.childAgentId,
+                  sessionKey: entry.childSessionKey,
+                }) ?? "",
+              ],
               isCurrent: isCurrentSessionEffectsOwner,
               prepareCurrent: async () =>
                 !(await context.shouldSuppressSessionEffects(entry)) &&
@@ -347,8 +357,8 @@ export async function completeTerminalEffects(
     try {
       if (entry.spawnMode !== "session") {
         const cleanupEntry = entry;
-        await retireSessionMcpRuntimeForSessionKey({
-          sessionKey: cleanupEntry.childSessionKey,
+        await retireSessionMcpRuntime({
+          sessionId: cleanupEntry.childSessionIdentity?.sessionId,
           reason: "subagent-run-complete",
           preserveActiveLeases: true,
           onError: (error, sessionId) => {

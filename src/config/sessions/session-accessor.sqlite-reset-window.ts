@@ -2,13 +2,14 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   iterateUnindexedActiveTranscriptNavigation,
   iterateUnindexedTranscriptNavigation,
@@ -35,6 +36,7 @@ import {
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 type VisibleMessagePositions = {
   boundaryActivePosition?: number;
@@ -71,6 +73,7 @@ function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boole
 }
 
 const resetMessageWindowCache = new Map<string, ResetMessageWindowCacheEntry>();
+const resetMessageWindowOwners = new WeakSet<ResetMessageWindowCacheEntry["database"]>();
 const MAX_RESET_MESSAGE_WINDOW_CACHE = 64;
 const MAX_CACHED_UNINDEXED_CONTROLS = 4096;
 
@@ -79,6 +82,18 @@ type VisibleMessageRange = MessageRangeSelection & {
 };
 
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
+  const { database } = entry;
+  if (!resetMessageWindowOwners.has(database)) {
+    registerNodeSqliteDisposeCallback(database, () => {
+      // Path-keyed windows must not retain closed handles or replaced database contents.
+      for (const [cachedKey, cached] of resetMessageWindowCache) {
+        if (cached.database === database) {
+          resetMessageWindowCache.delete(cachedKey);
+        }
+      }
+    });
+    resetMessageWindowOwners.add(database);
+  }
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
@@ -100,7 +115,7 @@ export function readUnindexedHistoryControls(
       : snapshot.rows.filter((row) => row.event_seq <= coveredThrough);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0unindexed-controls`;
-  const cacheable = !hasSqlitePostCommitScope(projection.database.db);
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
   const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
   const reusable =
     cached?.database === projection.database.db &&
@@ -249,7 +264,7 @@ function readBoundaryWindowFacts(
     getActiveTranscriptKysely(projection.database)
       .selectFrom("transcript_events")
       .select([
-        transcriptEventResetNavigationSql().as("event_json"),
+        transcriptEventResetNavigationSql(projection.database.db).as("event_json"),
         /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
         sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
@@ -334,9 +349,11 @@ function findLatestResetMessageWindow(
           .select([
             "active.message_position",
             /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql("event")})
-              THEN ${transcriptEventModelNavigationSql("event")}
-              ELSE ${transcriptEventNavigationSql("event")} END`.as("event_json"),
+            sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql(projection.database.db, "event")})
+              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
+              "event_json",
+            ),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
@@ -398,7 +415,7 @@ export function resolveTranscriptBoundaryWindow(
   beforeRawSeq?: number,
 ): ResetMessageWindow | null {
   // Current-turn bounds and uncommitted writes need their own window.
-  if (beforeRawSeq !== undefined || hasSqlitePostCommitScope(projection.database.db)) {
+  if (beforeRawSeq !== undefined || hasUncommittedSqliteWrites(projection.database.db)) {
     return findLatestResetMessageWindow(projection, scope, beforeRawSeq);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0${scope}`;
@@ -612,26 +629,20 @@ export function hasOversizedVisibleMessages(
   maxBytes: number,
   roles: readonly string[],
 ): boolean {
-  return selectVisibleMessageRanges(projection, start, endExclusive).some(
-    (range) =>
-      executeSqliteQueryTakeFirstSync(
-        projection.database.db,
-        selectMessageRows(projection.database, projection.resolved.sessionId, range)
-          .select("active.event_seq")
-          .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
-          .where((eb) =>
-            eb(
-              eb.fn<string>("json_extract", [
-                transcriptEventNavigationSql("event"),
-                eb.val("$.message.role"),
-              ]),
-              "in",
-              roles,
-            ),
-          )
-          .limit(1),
-      ) !== undefined,
-  );
+  return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      selectMessageRows(projection.database, projection.resolved.sessionId, range)
+        .select(["active.event_seq", "event.navigation_valid"])
+        .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
+        .where((eb) =>
+          eb.or([eb("event.message_role", "in", roles), eb("event.navigation_valid", "=", 0)]),
+        )
+        .limit(1),
+    );
+    assertTranscriptNavigationValid(row?.navigation_valid);
+    return row !== undefined;
+  });
 }
 
 /** Byte-bounded tails can stop sizing at their first excluded predecessor. */
@@ -682,6 +693,10 @@ export function readVisibleTranscriptStats(projection: CurrentTranscriptProjecti
   eventCount: number;
   sizeBytes: number;
 } {
+  if (projection.contextMetadata) {
+    const { eventCount, sizeBytes } = projection.contextMetadata;
+    return { eventCount, sizeBytes };
+  }
   const window = resolveTranscriptBoundaryWindow(projection, "context");
   const db = getActiveTranscriptKysely(projection.database);
   const base = db

@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -28,8 +32,10 @@ const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
 const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
+// mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: ensureAuthProfileStore,
   resolveAuthProfileOrder,
   resolveModelAuthMode,
 }));
@@ -332,6 +338,8 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
 
 describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("reads and mirrors the dispatched turn in the selected custom SQLite store", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const dir = tempDirs.make();
     const sessionTarget = {
       agentId: "main",

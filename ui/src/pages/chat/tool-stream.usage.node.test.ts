@@ -57,6 +57,22 @@ describe("app-tool-stream run usage", () => {
     handleAgentEvent(host, agentEvent("client-run", 7, "lifecycle", { phase: "start" }, "main"));
     handleAgentEvent(host, agentEvent("client-run", 7, "usage", { outputTokens: 150 }, "main"));
     expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(115);
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        10,
+        "usage",
+        {
+          outputTokens: 115,
+          usageReport: { state: "unavailable" },
+        },
+        "main",
+      ),
+    );
+    resetToolStream(host);
+    handleAgentEvent(host, agentEvent("client-run", 9, "usage", { outputTokens: 115 }, "main"));
+    expect(host.chatRunUsageById?.get("client-run")).toEqual({ outputTokens: null, seq: 10 });
   });
 
   it("projects provider-independent system warnings into the visible session transcript", () => {
@@ -241,7 +257,7 @@ describe("app-tool-stream startup status", () => {
       handleAgentEvent(host, { ...retry, runId: "run-other", seq: 4 });
       handleAgentEvent(host, { ...toolStart("run-1", "tool-old"), seq: 2 });
       expect(host.chatRunId).toBe("run-1");
-      expect(retryLabel()).toBe(retry.data.message);
+      expect(retryLabel()).toBe("Retrying…");
 
       handleAgentEvent(host, {
         ...retry,
@@ -259,7 +275,7 @@ describe("app-tool-stream startup status", () => {
       expect(host.chatRunId).toBe("run-1");
 
       handleAgentEvent(host, { ...retry, seq: 5 });
-      expect(retryLabel()).toBe(retry.data.message);
+      expect(retryLabel()).toBe("Retrying…");
     },
   );
 });

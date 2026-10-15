@@ -120,45 +120,34 @@ function addLegacyWorkspaceSources(params: {
     env: params.env,
     homedir: params.homedir,
   });
-  for (const [kind, sourcePaths] of [
-    ["setup", paths.setupStatePaths],
-    ["attestation", paths.stateDirAttestationPaths],
+  for (const [kind, sourcePaths, sibling] of [
+    ["setup", paths.setupStatePaths, false],
+    ["attestation", paths.stateDirAttestationPaths, false],
+    ["attestation", paths.siblingAttestationPaths, true],
   ] as const) {
-    for (const [priority, sourcePath] of sourcePaths.entries()) {
-      if (sourceOrClaimMayExist(sourcePath)) {
-        params.add(
-          createLegacySource({
-            kind,
-            rootDir:
-              kind === "setup" ? path.dirname(sourcePath) : path.dirname(path.dirname(sourcePath)),
-            sourcePath,
-            workspaceKey: identity.workspaceKey,
-            workspaceDir: identity.workspacePath,
-            workspaceAliasPath: paths.workspacePath,
-            priority,
-          }),
-        );
+    for (const [index, sourcePath] of sourcePaths.entries()) {
+      const present = sibling
+        ? pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) ||
+          legacyWorkspaceSiblingAttestationMayExist(sourcePath)
+        : sourceOrClaimMayExist(sourcePath);
+      if (!present) {
+        continue;
       }
+      params.add(
+        createLegacySource({
+          kind,
+          rootDir:
+            kind === "setup" || sibling
+              ? path.dirname(sourcePath)
+              : path.dirname(path.dirname(sourcePath)),
+          sourcePath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+          workspaceAliasPath: paths.workspacePath,
+          priority: sibling ? paths.stateDirAttestationPaths.length + index : index,
+        }),
+      );
     }
-  }
-  for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
-    if (
-      !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
-      !legacyWorkspaceSiblingAttestationMayExist(sourcePath)
-    ) {
-      continue;
-    }
-    params.add(
-      createLegacySource({
-        kind: "attestation",
-        rootDir: path.dirname(sourcePath),
-        sourcePath,
-        workspaceKey: identity.workspaceKey,
-        workspaceDir: identity.workspacePath,
-        workspaceAliasPath: paths.workspacePath,
-        priority: paths.stateDirAttestationPaths.length + index,
-      }),
-    );
   }
 }
 

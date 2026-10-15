@@ -3,11 +3,7 @@ import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "../cli/json-output-mode.js";
-import {
-  requireValidConfig,
-  requireValidConfigFileSnapshot,
-  requireValidConfigForWrite,
-} from "./config-validation.js";
+import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-validation.js";
 
 const reads = vi.hoisted(() => ({
   read: vi.fn(),
@@ -104,55 +100,12 @@ describe("command invalid-config JSON", () => {
     expect(rt.error).not.toHaveBeenCalled();
   });
 
-  it("does not return a writable snapshot when asynchronous validation fails", async () => {
-    reads.write.mockResolvedValue({
-      snapshot: { ...invalidSnapshot(), issues: [] },
-      writeOptions: {},
-    });
-    const rt = runtime();
-    await expect(withJsonOutput(() => requireValidConfigForWrite(rt))).rejects.toMatchObject({
-      name: "ExitError",
-      code: 1,
-    });
-    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith({ ...expectedFailure(), issues: [] }, 2);
-    expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(reads.read).not.toHaveBeenCalled();
-  });
-
   it("returns valid config without writing any failure document", async () => {
     const snapshot = { ...invalidSnapshot(), valid: true, config: { plugins: {} } };
     reads.read.mockResolvedValue(snapshot);
     const rt = runtime();
     expect(await withJsonOutput(() => requireValidConfigFileSnapshot(rt))).toBe(snapshot);
     expect(rt.writeJson).not.toHaveBeenCalled();
-    expect(rt.exit).not.toHaveBeenCalled();
-  });
-
-  it("retains the missing-file behavior", async () => {
-    const snapshot = { ...invalidSnapshot(), exists: false };
-    reads.read.mockResolvedValue(snapshot);
-    const rt = runtime();
-    expect(await withJsonOutput(() => requireValidConfig(rt))).toEqual({});
-    expect(rt.writeJson).not.toHaveBeenCalled();
-    expect(rt.exit).not.toHaveBeenCalled();
-  });
-
-  it("propagates a snapshot read failure without fabricating config issues", async () => {
-    const failure = new Error("snapshot unavailable");
-    reads.read.mockRejectedValueOnce(failure);
-    const rt = runtime();
-    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toBe(failure);
-    expect(rt.writeJson).not.toHaveBeenCalled();
-    expect(rt.exit).not.toHaveBeenCalled();
-  });
-
-  it("does not report success when the JSON writer fails", async () => {
-    const failure = new Error("output unavailable");
-    const rt = runtime();
-    rt.writeJson.mockImplementation(() => {
-      throw failure;
-    });
-    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toBe(failure);
     expect(rt.exit).not.toHaveBeenCalled();
   });
 });

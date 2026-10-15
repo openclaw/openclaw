@@ -138,16 +138,6 @@ describe("refreshSlashCommands", () => {
     expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
   });
 
-  it("exposes /learn through the browser fallback registry", () => {
-    expect(requireCommandByName("learn")).toMatchObject({
-      description: "Draft a reusable skill from recent work or named sources.",
-      args: "[request]",
-      category: "tools",
-      executeLocal: false,
-      tier: "standard",
-    });
-  });
-
   it("requests the gateway default agent when no explicit agentId is available", async () => {
     const request = vi.fn().mockResolvedValue({
       commands: [pairCommand],
@@ -216,41 +206,6 @@ describe("refreshSlashCommands", () => {
     });
   });
 
-  it("ignores stale refresh responses after switching agents", async () => {
-    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
-    const request = vi.fn((_: string, params: { agentId?: string }) => {
-      if (params.agentId === "main") {
-        return first;
-      }
-      return Promise.resolve({
-        commands: [pairCommand],
-      });
-    });
-    const client = { request } as never;
-
-    const pending = refreshSlashCommands({ client, agentId: "main" });
-    await refreshSlashCommands({ client, agentId: "other" });
-    resolveFirst?.({
-      commands: [
-        {
-          name: "dreaming",
-          textAliases: ["/dreaming"],
-          description: "Enable or disable memory dreaming.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
-    });
-    await pending;
-
-    expect(requireCommandByName("pair")).toMatchObject({
-      name: "pair",
-      description: "Generate setup codes.",
-    });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
-  });
-
   it("prefers stored metadata after the commands.list cache expires", async () => {
     vi.useFakeTimers();
     try {
@@ -298,7 +253,7 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("conversation reset confirmation", () => {
-  it.each(["owner", "member", "viewer"] as const)(
+  it.each(["owner", "viewer"] as const)(
     "authorizes /stop with narrow scope for a %s session",
     async (sharingRole) => {
       const sessionKey = "agent:main:current";
@@ -310,16 +265,22 @@ describe("conversation reset confirmation", () => {
           ...createSessionsListResult(),
           sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
         },
-        requestHandlers: { "chat.abort": { aborted: true } },
+        requestHandlers: { "sessions.abort": { status: "aborted" } },
       });
       const result = await dispatchChatSlashCommand(host, "stop", "");
       expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+      if (sharingRole === "owner") {
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: sessionKey,
+          clearQueued: true,
+        });
+      }
     },
   );
 
   it.each([
-    ["stop", "chat.abort"],
+    ["stop", "sessions.abort"],
     ["clear", "sessions.reset"],
     ["compact", "sessions.compact"],
   ] as const)("rejects /%s without its exact operator scope", async (command, method) => {

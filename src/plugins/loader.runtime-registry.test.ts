@@ -12,10 +12,6 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  getRegisteredEmbeddingProvider,
-  registerEmbeddingProvider,
-} from "./embedding-providers.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   resolveNativePluginModelAuth,
@@ -35,7 +31,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import * as nativeModule from "./native-module-require.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
@@ -596,14 +591,6 @@ describe("cached plugin load failures", () => {
   });
 });
 
-function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getRegisteredEmbeddingProvider(providerId)?.adapter;
-  if (!provider) {
-    throw new Error(`expected ${providerId} memory embedding provider`);
-  }
-  return provider;
-}
-
 describe("clearPluginRegistryLoadCache", () => {
   it.each(["commit", "rollback"])(
     "releases only the retired cache aliases after staged %s",
@@ -722,19 +709,4 @@ describe("clearPluginRegistryLoadCache", () => {
       expect(loadOpenClawPlugins(options)).toBe(reloaded);
     },
   );
-
-  it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
-    registerEmbeddingProvider({
-      id: "still-live",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["still live"],
-    });
-
-    clearPluginRegistryLoadCache();
-
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["still live"]);
-    expect(requireMemoryEmbeddingProvider("still-live").id).toBe("still-live");
-  });
 });

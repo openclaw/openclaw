@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -26,7 +27,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseWriteAdmission,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -128,7 +128,7 @@ describe("agent database lease acquisition owner", () => {
     `);
     expect(closeOpenClawAgentDatabaseByPath(original.path)).toBe(true);
     closeOpenClawAgentDatabasesForTest(owner.stateDir);
-    clearOpenClawAgentIntegrityVerification(original.path, owner.env);
+    revokeSqliteDatabaseAdmissionsForPath(original.path);
     const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
     let opened: DatabaseSync | undefined;
     const open = vi
@@ -215,6 +215,7 @@ describe("agent database lease acquisition owner", () => {
     );
 
     now.mockReturnValue(2_000);
+    revokeSqliteDatabaseAdmissionsForPath(closed.path);
     openOpenClawAgentDatabase({ agentId: closed.agentId, env });
     expect(
       listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === closed.path),
@@ -478,7 +479,7 @@ describe("openclaw agent database handle cache", () => {
     }
   });
 
-  it("reopens an evicted database, revalidates schema, and preserves durable rows and discovery", () => {
+  it("reuses an evicted database and repairs a replacement while preserving rows and discovery", () => {
     const options = { agentId: "durability", env };
     const evicted = openOpenClawAgentDatabase(options);
     evicted.db
@@ -499,6 +500,8 @@ describe("openclaw agent database handle cache", () => {
     ).toEqual(registration);
     vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(cachedReopen.db.isOpen).toBe(false);
+    fs.copyFileSync(evicted.path, `${evicted.path}.replacement`);
+    fs.renameSync(`${evicted.path}.replacement`, evicted.path);
     const divergent = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(evicted.path);
     try {
       divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");

@@ -571,7 +571,11 @@ linuxIt.for([
     fixtureGit(origin, ["init", "--quiet"]);
     const script = "scripts/ci-additional-checks.sh";
     const trustedScript = readFileSync(script, "utf8");
-    for (const file of [".github/actions/setup-node-env/action.yml", script]) {
+    for (const file of [
+      ".github/actions/setup-node-env/action.yml",
+      script,
+      "scripts/ci-collect-checks.sh",
+    ]) {
       mkdirSync(dirname(join(origin, file)), { recursive: true });
       writeFileSync(join(origin, file), readFileSync(file));
     }
@@ -1572,6 +1576,7 @@ posixIt.for(
   { timeout: 55_000 },
   async ({ operation, code }, { signal }) => {
     const report = await publisherRun(signal, { gitFault: { match: `^${operation} `, code } });
+    expect(report.readyAttempts).toHaveLength(1);
     expect(report.code, report.output).toBe(code === "cancel" ? 143 : 125);
     expect(report.commands.at(-1)?.args[0]).toBe(operation);
     expect(report.githubSummary).toBe("");
@@ -1975,6 +1980,7 @@ posixIt(
   "generated publisher reconciliation accepts a tree merged after PR mutation",
   async ({ signal }) => {
     const report = await publisherRun(signal, { publisher: { reconciliation: "merged" } });
+    expect(report.readyAttempts).toEqual([]);
     expect(report.code, report.output).toBe(0);
     expect(report.fetches).toHaveLength(2);
     expect(report.pushes).toHaveLength(1);

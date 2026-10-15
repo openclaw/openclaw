@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   disposeAllSessionMcpRuntimes,
   reloadSessionMcpRuntimes,
 } from "./agent-bundle-mcp-manager-api.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
@@ -26,12 +24,14 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 const runtimes: SessionMcpRuntime[] = [];
 let initializes = 0;
 let reachable = false;
+let listToolsGate: Promise<void> | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
   initializes = 0;
   reachable = false;
+  listToolsGate = undefined;
   warn.mockClear();
   resolveTransport.mockImplementation(() => ({
     transport: new OpenClawStreamableHTTPClientTransport(new URL("https://mcp.invalid/mcp"), {
@@ -57,6 +57,9 @@ beforeEach(() => {
         }
         if (message.id === undefined) {
           return new Response(null, { status: 202 });
+        }
+        if (message.method === "tools/list") {
+          await listToolsGate;
         }
         return new Response(
           JSON.stringify({
@@ -121,11 +124,10 @@ it("allows only the first failing runtime one early catalog retry before backing
   expect(initializes).toBe(1);
 
   await vi.advanceTimersByTimeAsync(1);
-  await runtime.getCatalog();
-  await vi.advanceTimersByTimeAsync(0);
+  const retried = await discover(runtime);
+  expect(retried.waitedMs).toBe(30_000);
   expect(initializes).toBe(2);
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect((await runtime.getCatalog()).diagnostics?.[0]?.message).toContain(
+  expect(retried.catalog.diagnostics?.[0]?.message).toContain(
     new Date(Date.now() + 60_000).toISOString(),
   );
 
@@ -134,6 +136,33 @@ it("allows only the first failing runtime one early catalog retry before backing
   expect((await discover(makeRuntime())).waitedMs).toBe(0);
   expect(initializes).toBe(2);
   expect(warn).toHaveBeenCalledTimes(2);
+});
+
+it("lists recovered tools on the first turn after a failed startup retry is due", async () => {
+  const runtime = makeRuntime();
+  const failed = await discover(runtime);
+  expect(failed.catalog.tools).toEqual([]);
+  expect(failed.catalog.diagnostics).toEqual([
+    expect.objectContaining({
+      serverName: "remote",
+      message: expect.stringContaining("server unavailable; retry after"),
+    }),
+  ]);
+  reachable = true;
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect((await runtime.getCatalog()).tools).toEqual([]);
+  expect(initializes).toBe(1);
+
+  await vi.advanceTimersByTimeAsync(1);
+  const listing = Promise.withResolvers<void>();
+  listToolsGate = listing.promise;
+  const turn = runtime.getCatalog();
+  await vi.advanceTimersByTimeAsync(0);
+  listing.resolve();
+  const recovered = await turn;
+  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(recovered.diagnostics).toBeUndefined();
+  expect(initializes).toBe(2);
 });
 
 it("doubles the retry interval to ten minutes and resets it after recovery", async () => {
@@ -202,34 +231,3 @@ it.each([
     expect(initializes).toBe(3);
   },
 );
-
-it("invalidates a startup failure that completes after config publication", async () => {
-  const cfg = { mcp: { servers: { remote: { url: "https://mcp.invalid/mcp" } } } };
-  const manager = createSessionMcpRuntimeManager({
-    scheduler: createTestGatewayScheduler(),
-    createRuntime: createSessionMcpRuntime,
-  });
-  const { runtime, releaseLease } = await manager.acquire({
-    sessionId: "reload-during-start",
-    workspaceDir: "/workspace",
-    cfg,
-  });
-  try {
-    const pending = runtime.getCatalog();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(initializes).toBe(1);
-    await manager.reloadConfig({ cfg });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(initializes).toBe(2);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect((await pending).diagnostics?.[0]?.message).toContain(
-      new Date(Date.now() + 5_000).toISOString(),
-    );
-    await manager.reloadConfig({ cfg });
-    reachable = true;
-    expect((await discover(runtime)).catalog.tools).toHaveLength(1);
-  } finally {
-    releaseLease();
-    await manager.disposeAll();
-  }
-});

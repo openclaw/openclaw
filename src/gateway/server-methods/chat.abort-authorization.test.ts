@@ -20,7 +20,7 @@ import {
 
 vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: "main-session" } }),
 }));
 
 function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
@@ -283,7 +283,7 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
-  it("cancels queued turns before session cleanup and the active run", async () => {
+  it("fences queued turns before active cancellation and secondary session cleanup", async () => {
     const order: string[] = [];
     const queuedController = new AbortController();
     queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
@@ -298,6 +298,10 @@ describe("chat.abort queued-turn contract", () => {
 
     const respond = await abortAsOwner({
       context,
+      onAuthorizedBeforeEmbeddedAbort: () => {
+        order.push("queue-cleanup");
+        return true;
+      },
       onAuthorizedAfterQueuedAbort: () => {
         order.push("session-cleanup");
         return true;
@@ -305,7 +309,7 @@ describe("chat.abort queued-turn contract", () => {
     });
 
     expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expect(order).toEqual(["queued-abort", "session-cleanup", "active-abort"]);
+    expect(order).toEqual(["queued-abort", "queue-cleanup", "active-abort", "session-cleanup"]);
   });
 
   it("allows operator.write session cleanup when no chat run is registered", async () => {
@@ -697,6 +701,7 @@ describe("chat.abort original authority and registration", () => {
     const descendants = vi
       .spyOn(abortDescendants, "abortControlledSubagents")
       .mockImplementationOnce(async (params) => {
+        await params.prepareSelection?.prepare();
         await params.beforeKill?.(() => {});
         throw descendantFailure;
       });
@@ -836,7 +841,7 @@ describe("chat.abort original authority and registration", () => {
                   ...options,
                   hasCurrentClientAuthority: () => current,
                 },
-                { onAuthorizedAfterQueuedAbort: lifecycle },
+                { onAuthorizedBeforeEmbeddedAbort: lifecycle },
               ),
             context,
             request: { sessionKey: "main" },

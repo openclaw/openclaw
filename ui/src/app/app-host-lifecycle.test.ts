@@ -6,46 +6,42 @@ import {
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
-import "./app-host.ts";
-import type { ShellChromeHost } from "./app-shell-chrome.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
-
-type ShellLifecycle = {
-  connectedCallback(): void;
-  disconnectedCallback(): void;
-};
 
 afterEach(resetAppHostTestGlobals);
 
 describe("OpenClaw shell event lifecycle", () => {
   it("refreshes the existing connection indicator for recovery and removed panes only while mounted", () => {
-    const shell = document.createElement("openclaw-app-shell") as ShellChromeHost & ShellLifecycle;
-    shell.connectedCallback();
-    const update = vi.spyOn(shell, "requestUpdate");
+    const shell = createShellOwner();
+    shell.connect();
+    const update = vi.spyOn(shell, "invalidate");
     try {
       for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
         update.mockClear();
-        shell.dispatchEvent(new Event(type));
+        shell.element.dispatchEvent(new Event(type));
         expect(update).toHaveBeenCalledOnce();
       }
-      shell.disconnectedCallback();
+      shell.disconnect();
       update.mockClear();
-      shell.dispatchEvent(new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT));
+      shell.element.dispatchEvent(new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT));
       expect(update).not.toHaveBeenCalled();
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       update.mockRestore();
     }
   });
   it("retires host, window, and document actions on disconnect and reconnects once", () => {
-    const shell = document.createElement("openclaw-app-shell") as ShellChromeHost & ShellLifecycle;
+    const shell = createShellOwner();
     const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});
     const onSlashCommand = vi.fn();
-    const target = { owner: shell, onSlashCommand };
+    const target = { owner: shell.element, onSlashCommand };
     const history = { canGoBack: true, canGoForward: false };
     const dispatchActions = () => {
-      shell.dispatchEvent(new CustomEvent(COMMAND_PALETTE_TARGET_EVENT, { detail: target }));
+      shell.element.dispatchEvent(
+        new CustomEvent(COMMAND_PALETTE_TARGET_EVENT, { detail: target }),
+      );
       window.dispatchEvent(new CustomEvent(NATIVE_HISTORY_STATE_EVENT, { detail: history }));
       document.dispatchEvent(
         new KeyboardEvent("keydown", { code: "Comma", key: ",", ctrlKey: true, shiftKey: true }),
@@ -54,14 +50,14 @@ describe("OpenClaw shell event lifecycle", () => {
 
     try {
       for (let connection = 1; connection <= 2; connection += 1) {
-        shell.connectedCallback();
+        shell.connect();
         dispatchActions();
         expect(shell.commandPaletteTarget).toBe(target);
         expect(shell.nativeHistoryState).toBe(history);
         expect(navigate).toHaveBeenCalledTimes(connection);
         expect(navigate).toHaveBeenLastCalledWith("appearance");
 
-        shell.disconnectedCallback();
+        shell.disconnect();
         shell.commandPaletteTarget = undefined;
         shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
         dispatchActions();
@@ -70,7 +66,7 @@ describe("OpenClaw shell event lifecycle", () => {
         expect(navigate).toHaveBeenCalledTimes(connection);
       }
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       navigate.mockRestore();
     }
   });

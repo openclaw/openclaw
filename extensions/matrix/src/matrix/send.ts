@@ -159,10 +159,18 @@ export async function sendMessageMatrix(
         let textRelation = relation;
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
-        const prepareContent = (
+        const prepareContent = async (
           content: MatrixOutboundContent,
           receiptKind: MessageReceiptPartKind,
+          markdown: string,
         ) => {
+          await enrichMatrixFormattedContent({
+            client,
+            content,
+            markdown,
+            preparedBody: markdown === convertedText ? singleEventBody : undefined,
+            tableMode,
+          });
           events.push({
             content: withMatrixExtraContentFields(content, pendingExtraContent),
             receiptKind,
@@ -215,14 +223,7 @@ export async function sendMessageMatrix(
             isVoice: useVoice,
             imageInfo,
           });
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: captionMarkdown,
-            preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, receiptKind);
+          await prepareContent(content, receiptKind, captionMarkdown);
           textChunks = useVoice ? chunks : rest;
           textRelation = useVoice || threadId ? relation : undefined;
         }
@@ -230,15 +231,7 @@ export async function sendMessageMatrix(
           if (!chunk.trim()) {
             continue;
           }
-          const content = buildTextContent(chunk, textRelation);
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: chunk,
-            preparedBody: chunk === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, "text");
+          await prepareContent(buildTextContent(chunk, textRelation), "text", chunk);
         }
         plannedEvents = durableIdentity
           ? createMatrixPlannedEvents({ identity: durableIdentity, events })

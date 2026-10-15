@@ -12,6 +12,13 @@ import {
 } from "./update-command-executor-state.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
+function requireCapability<T>(capability: T | undefined, message: string): T {
+  if (!capability) {
+    throw new UpdateCommandRecoveryPendingError(message);
+  }
+  return capability;
+}
+
 export function requireUpdateCommandAcquisition(
   acquired: ReturnType<ReturnType<typeof createManagedHandoffLeaseStore>["acquire"]>,
   message: string,
@@ -29,13 +36,10 @@ export function requestUpdateCommandExecutorCancellation(
   runId: string,
   cause: Error,
 ): void {
-  const cancel = originalCancellations.get(fence);
-  if (!cancel) {
-    throw new UpdateCommandRecoveryPendingError(
-      "Cancellation requires its direct original executor.",
-    );
-  }
-  cancel(runId, cause);
+  requireCapability(
+    originalCancellations.get(fence),
+    "Cancellation requires its direct original executor.",
+  )(runId, cause);
 }
 
 export function captureUpdateCommandExecutorAuthority(
@@ -82,20 +86,15 @@ export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root
 // Only a direct preflight owner can release before a supervised handoff. Neither
 // a saved fence nor a borrowed helper lease grants this one-way transition.
 export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFence): void {
-  const release = preflightReleases.get(fence);
-  if (!release) {
-    throw new UpdateCommandRecoveryPendingError("Update preflight handoff is not current.");
-  }
-  release();
+  requireCapability(preflightReleases.get(fence), "Update preflight handoff is not current.")();
 }
 
 /** Reserve a prospective package slot without replacing the original domain. */
 export function reserveUpdateCommandExecutorSlot(fence: UpdateRecoveryFence, root: string): void {
-  const reserve = slotReservations.get(fence);
-  if (!reserve) {
-    throw new UpdateCommandRecoveryPendingError("Slot reservation requires its live executor.");
-  }
-  reserve(root);
+  requireCapability(
+    slotReservations.get(fence),
+    "Slot reservation requires its live executor.",
+  )(root);
 }
 
 export async function withUpdateCommandExecutorChild<T>(
@@ -104,9 +103,8 @@ export async function withUpdateCommandExecutorChild<T>(
   operation: ChildOperation<T>,
   purpose?: ChildPurpose,
 ): Promise<T> {
-  const owner = childOwners.get(fence);
-  if (!owner) {
-    throw new UpdateCommandRecoveryPendingError("Child continuation requires its live executor.");
-  }
-  return await owner(root, operation, purpose);
+  return await requireCapability(
+    childOwners.get(fence),
+    "Child continuation requires its live executor.",
+  )(root, operation, purpose);
 }

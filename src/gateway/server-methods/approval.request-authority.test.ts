@@ -14,6 +14,7 @@ import {
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   openOpenClawStateDatabase,
@@ -147,8 +148,6 @@ it.each([
     client.connectionSignal = connection.signal;
     let nativeRevoked = false;
     const nativeGuard = vi.fn(() => {
-      // This enters the existing native write transaction even for a pending-row read.
-      getOperatorApproval({ id: record.id, databaseOptions });
       if (nativeRevoked) {
         throw new Error("synthetic native guard revoked");
       }
@@ -190,113 +189,109 @@ it.each([
     const lookup = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
     const stages: string[] = [];
     let transaction = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transaction += 1;
-            if (transaction === 1) {
-              connection.abort();
-              stages.push("transport-retired");
-            }
-          } else if (request.stage === "commit") {
-            if (transaction === 1) {
-              stages.push("lookup-completed");
-              switch (revocation) {
-                case "lookup":
-                case "native-refused":
-                case "native-config-unrelated":
-                case "native-config-unrelated-agent":
-                case "native-config-role-aba":
-                case "native-config-routing-aba":
-                case "verdict":
-                case "verdict-reviewer":
-                case "verdict-source":
-                  break;
-                case "access":
-                  bumpGatewayAccessRevision();
-                  break;
-                case "transport-reviewer":
-                case "reviewer":
-                  record.approvalReviewerDeviceIds = ["other-reviewer"];
-                  break;
-                case "transport-source":
-                case "source":
-                  record.request.sessionKey = "agent:main:other";
-                  break;
-                case "binding":
-                  exec.retire();
-                  break;
-                case "profile":
-                  client.authenticatedUserId = "other-user";
-                  break;
-                case "config":
-                  invocation.context.getRuntimeConfig = () => ({});
-                  break;
-                case "config-unrelated":
-                  publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
-                  break;
-                case "config-unrelated-agent":
-                case "transport-unrelated-agent":
-                  publishConfig(unrelatedAgentConfig);
-                  break;
-                case "config-target-routing-aba":
-                  publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-                  publishConfig(initialConfig);
-                  break;
-                case "config-target-store-aba":
-                  publishConfig({
-                    ...initialConfig,
-                    session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
-                  });
-                  publishConfig(initialConfig);
-                  break;
-                case "config-other-identity":
-                case "config-own-identity-aba":
-                  publishConfig({
-                    gateway: {
-                      auth: {
-                        identityScopes: {
-                          [revocation === "config-other-identity"
-                            ? "other@example.test"
-                            : "reviewer@example.test"]: ["operator.approvals"],
-                        },
-                      },
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transaction += 1;
+        if (transaction === 1) {
+          connection.abort();
+          stages.push("transport-retired");
+        }
+      } else if (request.stage === "commit") {
+        if (transaction === 1) {
+          stages.push("lookup-completed");
+          switch (revocation) {
+            case "lookup":
+            case "native-refused":
+            case "native-config-unrelated":
+            case "native-config-unrelated-agent":
+            case "native-config-role-aba":
+            case "native-config-routing-aba":
+            case "verdict":
+            case "verdict-reviewer":
+            case "verdict-source":
+              break;
+            case "access":
+              bumpGatewayAccessRevision();
+              break;
+            case "transport-reviewer":
+            case "reviewer":
+              record.approvalReviewerDeviceIds = ["other-reviewer"];
+              break;
+            case "transport-source":
+            case "source":
+              record.request.sessionKey = "agent:main:other";
+              break;
+            case "binding":
+              exec.retire();
+              break;
+            case "profile":
+              client.authenticatedUserId = "other-user";
+              break;
+            case "config":
+              invocation.context.getRuntimeConfig = () => ({});
+              break;
+            case "config-unrelated":
+              publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+              break;
+            case "config-unrelated-agent":
+            case "transport-unrelated-agent":
+              publishConfig(unrelatedAgentConfig);
+              break;
+            case "config-target-routing-aba":
+              publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+              publishConfig(initialConfig);
+              break;
+            case "config-target-store-aba":
+              publishConfig({
+                ...initialConfig,
+                session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
+              });
+              publishConfig(initialConfig);
+              break;
+            case "config-other-identity":
+            case "config-own-identity-aba":
+              publishConfig({
+                gateway: {
+                  auth: {
+                    identityScopes: {
+                      [revocation === "config-other-identity"
+                        ? "other@example.test"
+                        : "reviewer@example.test"]: ["operator.approvals"],
                     },
-                  });
-                  publishConfig(initialConfig);
-                  break;
-                case "config-role-aba":
-                  publishConfig(rolePolicyConfig());
-                  publishConfig(initialConfig);
-                  break;
-                case "config-routing-aba":
-                  publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-                  publishConfig(initialConfig);
-                  break;
-              }
-            }
-            if (transaction === 2 && verdictChange) {
-              stages.push("verdict-precommit");
-              if (revocation === "verdict-reviewer") {
-                record.approvalReviewerDeviceIds = ["other-reviewer"];
-              }
-              if (revocation === "verdict-source") {
-                record.request.sessionKey = "agent:main:other";
-              }
-            }
-            if (
-              (transaction === 1 && revocation === "lookup") ||
-              (transaction === 2 && revocation === "verdict")
-            ) {
-              invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-              stages.push("device-revoked");
-            }
+                  },
+                },
+              });
+              publishConfig(initialConfig);
+              break;
+            case "config-role-aba":
+              publishConfig(rolePolicyConfig());
+              publishConfig(initialConfig);
+              break;
+            case "config-routing-aba":
+              publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+              publishConfig(initialConfig);
+              break;
           }
-          admit(request, grant);
-        }, attachment),
-    );
+        }
+        if (transaction === 2 && verdictChange) {
+          stages.push("verdict-precommit");
+          if (revocation === "verdict-reviewer") {
+            record.approvalReviewerDeviceIds = ["other-reviewer"];
+          }
+          if (revocation === "verdict-source") {
+            record.request.sessionKey = "agent:main:other";
+          }
+        }
+        if (
+          (transaction === 1 && revocation === "lookup") ||
+          (transaction === 2 && revocation === "verdict")
+        ) {
+          invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
+          stages.push("device-revoked");
+        }
+      }
+      admit(request, grant);
+    });
     try {
       const pending = invocation.invoke();
       if (revocation === "native-refused") {
@@ -315,7 +310,7 @@ it.each([
       }
       const response = await pending;
       expect(stages).toEqual(
-        native
+        native && revoke
           ? []
           : [
               "transport-retired",
@@ -326,10 +321,13 @@ it.each([
       );
       if (native) {
         expect(nativeGuard).toHaveBeenCalled();
+      }
+      if (native && revoke) {
+        expect(lookup).not.toHaveBeenCalled();
       } else {
         expect(client.connectionSignal.aborted).toBe(true);
+        expect(lookup).toHaveBeenCalledOnce();
       }
-      expect(lookup).toHaveBeenCalledOnce();
       if (revoke) {
         expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });
         expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);

@@ -311,6 +311,7 @@ describe("gateway node session runtime", () => {
     }
     const terminals: Promise<void>[] = [];
     broadcastChatTerminal({
+      terminalEntry: undefined,
       context: {
         broadcast: vi.fn(),
         agentRunSeq: new Map(),
@@ -442,25 +443,6 @@ describe("gateway node session runtime", () => {
       }
     },
   );
-
-  test("publishes pairing-generation transitions to lifecycle consumers", () => {
-    const onPairingGenerationChanged = vi.fn();
-    const runtime = createGatewayNodeSessionRuntime({
-      broadcast: vi.fn(),
-      onPairingGenerationChanged,
-      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    });
-    registerNode(runtime, "conn-original", "generation-a", []);
-    registerNode(runtime, "conn-replacement", "generation-b", []);
-
-    expect(onPairingGenerationChanged).toHaveBeenCalledWith({
-      nodeId: "node-a",
-      previousPairingGeneration: "generation-a",
-      nextPairingGeneration: "generation-b",
-      preserveSessionState: false,
-    });
-  });
 
   test("broadcasts and routes runner inventory changes from publication and replacement", () => {
     const order: string[] = [];

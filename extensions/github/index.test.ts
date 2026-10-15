@@ -23,7 +23,10 @@ function registered() {
     ...fixture,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: manifest.contracts.tools,
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
     register: plugin.register,
   });
   return fixture.registry;
@@ -95,6 +98,10 @@ describe("GitHub plugin ownership and RPC migration", () => {
   it("registers read-scoped methods lazily and removes surfaces on deactivation", () => {
     const registry = registered();
     expect(manifest.activation.onStartup).toBe(true);
+    expect(registry.registry.tools.flatMap((tool) => tool.names)).toEqual([
+      "github_read",
+      "github_search",
+    ]);
     expect(manifest.contracts.gatewayMethodDispatch).toEqual(["authenticated-request"]);
     expect(registry.registry.gatewayMethodDescriptors).toEqual(
       expect.arrayContaining(
@@ -136,6 +143,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
     registry.rollbackPluginGlobalSideEffects("github", registry.registry.plugins[0]!);
     expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.tools).toEqual([]);
     expect(registry.registry.gatewayHandlers).toEqual({});
     expect(registry.registry.gatewayMethodDescriptors).toEqual([]);
   });
@@ -306,7 +314,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
       const meta = { source: "host-preview" };
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
         ok: true,
-        payload: preview({ ...fields, additions: 3, deletions: 1, changedFiles: 2 }),
+        payload: preview({ ...fields, stale: true, additions: 3, deletions: 1, changedFiles: 2 }),
         meta,
       });
       const respond = await request("github.preview", { url: pullUrl });
@@ -314,6 +322,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
         respond,
         expect.objectContaining({
           badge,
+          stale: true,
           author: "octocat",
           authorUrl: "https://github.com/octocat",
           metadata: [

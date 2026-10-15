@@ -51,69 +51,59 @@ describe("OpenAI API-key catalog", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("admits account chat models missing from the manifest with conservative metadata", async () => {
+  it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
+    const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-6.2"];
     const unadmittedIds = [
-      "gpt-5.6",
+      // Pre-GPT-5 families fail on the default runtime.
+      "gpt-4-0613",
+      "gpt-4.1-mini",
+      "o3",
+      "ft:gpt-4.1-mini:acme::abc123",
       "gpt-5.3-codex-spark",
-      "gpt-5.5-2026-04-23",
-      "gpt-5.2-chat-latest",
-      "gpt-5.1-codex-max",
       "gpt-5.6-cyber",
-      "gpt-6-preview",
       "gpt-7-alpha",
-      "o5-beta",
+      "kepler-alpha",
       "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment",
       "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment",
       "gpt-4o-mini-search-preview",
+      "gpt-5-search-api",
+      "gpt-live-1",
       "gpt-4o-transcribe-diarize",
       "gpt-image-2",
       "gpt-realtime-2.1-mini",
       "gpt-audio-mini",
-      "gpt-live-1",
-      "o3-deep-research",
       "gpt-3.5-turbo-instruct",
-      "gpt-4-0613",
+      "babbage-002",
       "text-embedding-3-small",
       "omni-moderation-latest",
       "tts-1-hd",
       "whisper-1",
       "sora-2",
-      "ft:gpt-4.1-mini:acme::abc123",
-      "kepler-alpha",
     ];
     const { provider } = await runCatalog(
       Response.json({
-        data: ["gpt-5.5", "gpt-6.2", "gpt-4.1-mini", "o3", ...unadmittedIds].map((id) => ({
-          id,
-          object: "model",
-        })),
+        data: [
+          ...["gpt-5.5", ...admittedIds, ...unadmittedIds].map((id) => ({ id, object: "model" })),
+          // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
+          { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
+        ],
       }),
     );
 
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "gpt-5.5",
-      "gpt-4.1-mini",
-      "gpt-6.2",
-      "o3",
-    ]);
-    const unknownModel = {
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 16_384,
-    };
-    for (const [id, reasoning] of [
-      ["gpt-4.1-mini", false],
-      ["gpt-6.2", true],
-      ["o3", true],
-    ] as const) {
+    expect(provider.models.map((model) => model.id).toSorted()).toEqual(
+      ["gpt-5.5", ...admittedIds].toSorted(),
+    );
+    for (const id of ["gpt-5.3-codex", "gpt-6.2"]) {
       expect(provider.models.find((model) => model.id === id)).toEqual({
         id,
         name: id,
-        reasoning,
-        ...unknownModel,
+        reasoning: true,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
       });
     }
     expect(provider.models.find((model) => model.id === "gpt-5.5")).toMatchObject({
@@ -130,7 +120,10 @@ describe("OpenAI API-key catalog", () => {
     ["a temporary failure", 503, "sk-openai", "unavailable"],
   ] as const)("scopes the selected profile for %s", async (_label, httpStatus, apiKey, status) => {
     const { provider, outcomes, requests } = await runCatalog(
-      Response.json({ data: [{ id: "not-in-manifest", object: "model" }] }, { status: httpStatus }),
+      Response.json(
+        { data: [{ id: "text-embedding-3-small", object: "model" }] },
+        { status: httpStatus },
+      ),
       { apiKey, profileId: "openai:api-key" },
     );
     expect(provider.models.map((model) => model.id)).toEqual(

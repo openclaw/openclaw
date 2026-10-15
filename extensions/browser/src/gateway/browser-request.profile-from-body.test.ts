@@ -48,7 +48,7 @@ vi.mock("../browser-proxy-upload.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: m.config,
+  readRuntimeConfig: m.config,
   loadConfig: m.config,
 }));
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
@@ -877,6 +877,7 @@ describe("session tab scope", () => {
   });
 
   it.each([
+    { tabScope: { sessionKey: "global" } },
     {
       tabScope: {
         sessionKey,

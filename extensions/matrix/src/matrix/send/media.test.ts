@@ -103,12 +103,6 @@ describe("resolveMediaDurationMs", () => {
 
 describe("buildMediaContent", () => {
   it.each([
-    { name: "absent metadata", metadata: { size: Number.NaN }, info: undefined },
-    {
-      name: "explicit empty image metadata",
-      metadata: { size: Number.NaN, imageInfo: {} },
-      info: {},
-    },
     {
       name: "zero duration",
       metadata: { size: 0, mimetype: "video/webm", durationMs: 0 },

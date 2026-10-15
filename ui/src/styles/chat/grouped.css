@@ -239,7 +239,7 @@
 
 .chat-group.user.chat-group--peer
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):focus-visible {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):focus-visible {
   opacity: 1;
 }
 
@@ -286,7 +286,8 @@
   line-height: 1;
 }
 
-.chat-reaction-chip[aria-pressed="true"] {
+.chat-reaction-chip[aria-pressed="true"],
+.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent);
@@ -296,12 +297,6 @@
   border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 .chat-reaction-chip:focus-visible {
@@ -361,10 +356,20 @@
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
+/* Rest at the sibling footer actions' revealed opacity so the row reads as one
+   color; the trigger itself owns the accent hover color. */
 .chat-group:hover .chat-reaction-action,
 .chat-group:focus-within .chat-reaction-action {
-  opacity: 1;
+  opacity: 0.6;
   pointer-events: auto;
+}
+
+.chat-group .chat-reaction-action:hover {
+  opacity: 1;
+}
+
+.chat-group .chat-reaction-action:has(.trigger[aria-expanded="true"]) {
+  opacity: 1;
 }
 
 /* Keep long configurable sender names compact while footer actions retain
@@ -437,6 +442,7 @@
   vertical-align: middle;
 }
 
+.chat-author-avatar .channel-avatar,
 .chat-author-avatar__image,
 .chat-author-avatar__initials {
   width: 100%;
@@ -444,6 +450,7 @@
   border-radius: inherit;
 }
 
+.chat-author-avatar .channel-avatar,
 .chat-author-avatar__image {
   display: block;
   object-fit: cover;
@@ -479,9 +486,9 @@
   white-space: nowrap;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
 .chat-comment-preview__actions button {
   background: none;
   border: none;
@@ -499,7 +506,8 @@
   justify-content: center;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+.chat-group-footer-actions
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action {
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
@@ -507,28 +515,23 @@
 
 /* Inline rows belong to earlier messages in a group, so the latest footer's
    resting disclosure must not reveal them before hover or touch. */
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+.chat-message-actions-row
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   min-height: var(--chat-message-action-size);
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-group:hover
-  .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group:hover
-  .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
 
 .chat-group.user.chat-group--peer
-  .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group.user.chat-group--peer
-  .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-message-actions-row, .chat-group-footer-actions)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0;
   pointer-events: none;
 }
@@ -538,21 +541,21 @@
 .chat-group.user.chat-group--peer
   :is(.chat-bubble, .chat-message--reply):hover
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message-actions-row:hover
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   :is(.chat-bubble, .chat-message--reply):is(:focus-within, .chat-bubble--actions-revealed)
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message-actions-row:focus-within
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -584,7 +587,7 @@
 .chat-group.user.chat-group--peer
   > .chat-group-footer
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: var(--chat-peer-final-action-opacity, 0);
   pointer-events: var(--chat-peer-final-action-pointer-events, none);
 }
@@ -592,22 +595,19 @@
 .chat-group.user.chat-group--peer
   .chat-group-footer:hover
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-group-footer:focus-within
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
 
 @media (hover: hover) {
   .chat-group:focus-within
-    .chat-group-footer-actions
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-  .chat-group:focus-within
-    .chat-message-actions-row
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     opacity: 0.6;
     pointer-events: auto;
   }
@@ -622,23 +622,24 @@
 
 .chat-group:hover
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):disabled,
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):disabled,
 .chat-reply-context-menu button:disabled,
 .chat-comment-preview__actions button:disabled {
   opacity: 0.3;
   pointer-events: none;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):hover,
 .chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
   color: var(--accent);
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)
+  svg,
 .chat-comment-preview__actions button svg {
   width: 14px;
   height: 14px;
@@ -819,6 +820,11 @@
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.chat-avatar .channel-avatar {
+  width: 100%;
+  height: 100%;
 }
 
 /* Attributed sender initials carry their stable identity color inline. */
@@ -1210,7 +1216,7 @@ button.chat-reply-attribution__target:disabled {
   }
 
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     position: relative;
     margin-inline: 10px;
   }
@@ -1220,7 +1226,7 @@ button.chat-reply-attribution__target:disabled {
      into the turn gap; inline margins keep neighboring targets apart. It
      inherits the button’s pointer policy during disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
     inset-block-end: 0;
@@ -1271,7 +1277,12 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-group
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)[data-copy-state="copied"] {
+  :is(
+    .chat-copy-btn,
+    .chat-reply-btn,
+    .chat-read-aloud-btn,
+    .chat-group-rewind
+  )[data-copy-state="copied"] {
   opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
@@ -1303,6 +1314,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group.user .chat-bubble {
   --chat-bubble-background: var(--accent-subtle);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   border-color: transparent;
 }
 
@@ -1323,6 +1340,12 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   color: var(--text-strong);
   box-shadow: none;
 }
@@ -1344,6 +1367,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
   --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
@@ -1500,17 +1529,26 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .agent-chat__typing-preview-text::after {
+  /* Preserve the final blank line even when the caret moves elsewhere. */
+  content: "\200b";
+}
+
+.agent-chat__typing-caret {
+  position: relative;
+}
+
+.agent-chat__typing-caret::after {
   content: "";
-  display: inline-block;
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: -0.12em;
   width: 2px;
   height: 1em;
-  margin-inline-start: 2px;
   background: currentColor;
-  vertical-align: -0.12em;
   animation: chat-typing-pulse 1s step-end infinite;
 }
 
-.agent-chat__typing-preview-text[data-paused]::after {
+.agent-chat__typing-preview-text[data-paused] .agent-chat__typing-caret::after {
   animation: none;
   opacity: 0;
 }
@@ -1556,7 +1594,7 @@ button.chat-reply-attribution__target:disabled {
     opacity: 1;
   }
 
-  .agent-chat__typing-preview-text::after,
+  .agent-chat__typing-caret::after,
   .agent-chat__typing-bubble > span {
     animation: none;
   }
@@ -1586,9 +1624,7 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-group.user.chat-group--peer
   .chat-bubble--with-images
-  > .chat-message-avatar-anchor:not(
-    :has(.chat-text, .chat-message-disclosure, .chat-json-collapse)
-  ) {
+  > .chat-message-avatar-anchor:not(:has(.chat-text, .chat-message-disclosure)) {
   display: contents;
 }
 
@@ -1612,6 +1648,12 @@ button.chat-reply-attribution__target:disabled {
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 :where(:root[data-theme-mode="light"])
@@ -1825,7 +1867,7 @@ button.chat-reply-attribution__target:disabled {
   .chat-group.user.chat-group--peer
     .chat-message-footer
     .chat-group-footer-actions
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     opacity: var(--chat-footer-action-opacity);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
   }
@@ -1902,5 +1944,158 @@ button.chat-reply-attribution__target:disabled {
   /* Peer names carry identity when narrow rows have no avatar column. */
   .chat-group.user.chat-group--peer {
     --chat-persistent-footer-opacity: 1;
+  }
+}
+
+/* Optional two-sided conversation skin. Keep activity/tool surfaces and
+   forwarded identities with their existing owners rather than nesting cards. */
+.chat--bubbles .chat-group:is(.user, .assistant) {
+  --chat-message-column-max: 88%;
+}
+
+.chat--bubbles .chat-group-messages {
+  --chat-message-gap: 8px;
+}
+
+/* The renderer marks the first visible message across native and interop ranges.
+   Activity and reasoning-only rows never own the avatar-facing corner. */
+.chat--bubbles .chat-bubble {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 18px;
+}
+
+.chat--bubbles .chat-bubble--first {
+  --chat-bubble-top-left: 4px;
+}
+
+.chat--bubbles .chat-group.user:not(.chat-group--peer) .chat-bubble--first {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 4px;
+}
+
+.chat--bubbles .chat-group:is(.user, .chat-group--forwarded) .chat-bubble,
+.chat--bubbles .chat-group.user .chat-bubble--with-images .chat-text {
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
+}
+
+.chat.chat--bubbles
+  .chat-group.assistant:not(.chat-group--forwarded)
+  .chat-bubble:not(.chat-bubble--tool-shell) {
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
+  background: var(--bg-elevated);
+  box-shadow: none;
+}
+
+@media (max-width: 768px) {
+  .chat--bubbles .chat-group:is(.user, .assistant) {
+    --chat-message-column-max: 94%;
+  }
+
+  .chat.chat--bubbles
+    .chat-group.assistant:not(.chat-group--forwarded)
+    .chat-bubble:not(.chat-bubble--tool-shell) {
+    padding: 12px 14px;
+  }
+}
+
+/* Activity is quiet by default in bubble mode; disclosure keeps the complete
+   tool/status view available without changing the streamed answer subtree. */
+.chat-bubble-activity {
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-bubble-activity__summary,
+.chat-activity-group--bubble > .chat-activity-group__summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  list-style: none;
+  cursor: var(--cursor-action);
+}
+
+.chat-bubble-activity--working > .chat-bubble-activity__summary {
+  min-width: 60px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+}
+
+.chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-bubble-activity__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-bubble-activity__summary:focus-visible,
+.chat-activity-group--bubble > .chat-activity-group__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-bubble-activity__details {
+  margin-block-start: 8px;
+}
+
+.chat-activity-group--bubble > .chat-work-group__separator {
+  display: none;
+}
+
+.chat-bubble-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 12px;
+}
+
+.chat-bubble-dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@keyframes chat-bubble-dot-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.45;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-bubble-dots--working > span {
+    animation: chat-bubble-dot-pulse 1.2s ease-in-out infinite;
+  }
+  .chat-bubble-dots--working > span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .chat-bubble-dots--working > span:nth-child(3) {
+    animation-delay: 0.3s;
   }
 }
