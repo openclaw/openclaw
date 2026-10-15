@@ -624,6 +624,37 @@ describe("video-generation runtime", () => {
     ).rejects.toThrow(/neither buffer nor url is set/);
   });
 
+  it.each([0, -5, 0.4, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid duration %s without calling the video provider",
+    async (durationSeconds) => {
+      const requests = useCapturingProvider({
+        capabilities: { generate: { supportedDurationSeconds: [4, 6, 8] } },
+      });
+      await expect(
+        runGenerateVideo({
+          cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
+          prompt: "animate a cat",
+          durationSeconds,
+        }),
+      ).rejects.toThrow("durationSeconds must be a positive duration");
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it.each([
+    [undefined, undefined],
+    [0.5, 1],
+    [2.5, 3],
+  ])("preserves duration %s rounding and omission", async (durationSeconds, expected) => {
+    const requests = useCapturingProvider();
+    await runGenerateVideo({
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
+      prompt: "animate a cat",
+      durationSeconds,
+    });
+    expect(requests[0]?.durationSeconds).toBe(expected);
+  });
+
   it("normalizes requested durations to supported provider values", async () => {
     const requests = useCapturingProvider({
       capabilities: { generate: { supportedDurationSeconds: [4, 6, 8] } },

@@ -3,12 +3,12 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
-import { settleWebAwesome } from "../../../test-helpers/web-awesome.ts";
 import {
   afterModalHidden,
   getRenderedModalDialog,
   installDialogPolyfill,
 } from "../../../test-helpers/modal-dialog.ts";
+import { settleWebAwesome } from "../../../test-helpers/web-awesome.ts";
 import "../../../components/modal-dialog.ts";
 import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
