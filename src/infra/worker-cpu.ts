@@ -12,6 +12,7 @@ import {
   MAX_DIAGNOSTIC_WORKER_SLOTS,
   normalizeDiagnosticWorkerScript,
 } from "./worker-diagnostic-script.js";
+import type { WorkerGcStorm } from "./worker-memory.js";
 import {
   recordWorkerMessage,
   observeWorkerMessage,
@@ -369,30 +370,47 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryUnavailable = true;
     port.close();
   };
-  port.on("message", (record: WorkerMemorySample | { gc: GcSample[] }) => {
-    // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
-    recordWorkerMessage(
-      "memory",
-      "from_worker",
-      ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
-        (record.gc?.length ?? 0) * 8,
-    );
-    // This private port is handed off by our isolate telemetry owner, not task input.
-    if (record.gc) {
-      trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
-    }
-    if (!("heapUsed" in record)) {
-      return;
-    }
-    // The private producer supplies native counters; retain the cloned sample as-is.
-    delete record.gc;
-    source.heap = {
-      value: record,
-      sampledAt: performance.now(),
-    };
-    source.memoryPending = false;
-    source.memoryUnavailable = false;
-  });
+  port.on(
+    "message",
+    (record: WorkerMemorySample | { gc: GcSample[] } | { gcStorm: WorkerGcStorm }) => {
+      if ("gcStorm" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        // Capture registry-owned identity before a native exit can free this slot.
+        const workerThreadId = worker.threadId;
+        const workerSlot = source.workerSlot;
+        void import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
+          createSubsystemLogger("agents/code-mode").warn("Code Mode worker GC storm", {
+            ...record.gcStorm,
+            workerThreadId,
+            workerSlot,
+          }),
+        );
+        return;
+      }
+      // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+      recordWorkerMessage(
+        "memory",
+        "from_worker",
+        ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          (record.gc?.length ?? 0) * 8,
+      );
+      // This private port is handed off by our isolate telemetry owner, not task input.
+      if (record.gc) {
+        trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
+      }
+      if (!("heapUsed" in record)) {
+        return;
+      }
+      // The private producer supplies native counters; retain the cloned sample as-is.
+      delete record.gc;
+      source.heap = {
+        value: record,
+        sampledAt: performance.now(),
+      };
+      source.memoryPending = false;
+      source.memoryUnavailable = false;
+    },
+  );
   port.once("close", close);
   port.once("messageerror", close);
   port.unref();
