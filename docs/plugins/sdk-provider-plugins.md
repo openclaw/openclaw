@@ -588,6 +588,18 @@ MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
 
+Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
+through the existing private `provider-stream-shared` seam. Payload composition
+runs defaults before the caller hook and wire constraints after its result settles;
+each adapter keeps its own replacement/null policy. The stream mapper preserves
+synchronous returns without importing the embedded runner. These are bundled
+implementation helpers, not new third-party SDK contracts.
+
+Injected-client adapters also reuse the Anthropic thinking and output-cap owners
+through the private `provider-transport-runtime` seam. Client creation and
+provider-specific defaults stay with the adapter; the shared request builder
+owns sampling restrictions and cache-marker budgeting.
+
 Local provider transports can report a transient wait through the optional
 `StreamOptions.onProviderWait` callback. Pass `"response"` while waiting for a
 response, or `"slot"` only when backend evidence correlates the current request

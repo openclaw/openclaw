@@ -4,6 +4,10 @@
 export { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.js";
 export { buildAssistantMessage } from "../agents/stream-message-shared.js";
+/** @deprecated Bundled provider option composition; not a third-party SDK contract. */
+export { applyAnthropicThinkingOptions, clampMaxTokensToModel } from "@openclaw/ai/internal/shared";
+/** @deprecated Bundled provider framing primitive; not a third-party SDK contract. */
+export { iterateSseFrames } from "@openclaw/ai/internal/shared";
 export {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
