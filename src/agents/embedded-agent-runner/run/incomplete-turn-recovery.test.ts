@@ -209,10 +209,32 @@ describe("incomplete-turn recovery policy", () => {
     expect(isRecoveryInstructionEcho(`Let me plan this out. ${instruction}`)).toBe(true);
   });
 
-  it("flags a reply that restates one nudge sentence", () => {
+  it("keeps a reply that shares only one sentence of the nudge wording", () => {
     expect(
       isRecoveryInstructionEcho(
         "Wait, the system says: The previous attempt did not produce a user-visible answer, so I must answer now.",
+      ),
+    ).toBe(false);
+    // A genuine answer can open with the nudge's first sentence and still
+    // deliver the requested result; a single shared passage is not an echo.
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous attempt did not produce a user-visible answer because the provider stopped early. The disk has 12 GB free.",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches only the instruction that was actually injected", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need.",
+        EMPTY_RESPONSE_RETRY_INSTRUCTION,
+      ),
+    ).toBe(false);
+    expect(
+      isRecoveryInstructionEcho(
+        `Let me plan this out. ${EMPTY_RESPONSE_RETRY_INSTRUCTION}`,
+        EMPTY_RESPONSE_RETRY_INSTRUCTION,
       ),
     ).toBe(true);
   });

@@ -95,7 +95,7 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
       const result = await runEmbeddedAttempt(buildRestrictedFinalizationAttempt(attempt));
-      return projectSettledTurnFinalizationAttemptResult(result);
+      return projectSettledTurnFinalizationAttemptResult(result, attempt.prompt);
     },
   };
   builtInOpenClawHarnesses.add(harness);

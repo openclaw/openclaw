@@ -478,7 +478,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           } catch (error) {
             const echoedInstruction =
               error instanceof EmptySettledTurnFinalizationError &&
-              isRecoveryInstructionEcho(resolveFinalAssistantVisibleText(terminalAssistant!));
+              isRecoveryInstructionEcho(
+                resolveFinalAssistantVisibleText(terminalAssistant!),
+                instruction,
+              );
             if (!echoedInstruction || finalizationAttempt >= MAX_ECHOED_FINALIZATION_ATTEMPTS) {
               throw error;
             }

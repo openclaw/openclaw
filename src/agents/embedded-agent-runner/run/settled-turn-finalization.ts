@@ -494,7 +494,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
       ? isSilentReplyText(authoredText)
         ? authoredText
         : ""
-      : resolveSettledTurnFinalizationText(result);
+      : resolveSettledTurnFinalizationText(result, input.prompt);
   // Finalization replaces terminal ownership, not host-private facts from settled tools.
   // Its response model does not replace the original runtime-owned selection.
   // Replay, abort, and lifecycle state remain finalizer-local.

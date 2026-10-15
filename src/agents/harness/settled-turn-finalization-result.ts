@@ -32,6 +32,7 @@ function assistantContainsToolCall(
  */
 export function assertSettledTurnFinalizationResult(
   result: AgentHarnessSettledTurnFinalizationResult,
+  instruction?: string,
 ): AgentHarnessSettledTurnFinalizationResult {
   const unknownKey = Object.keys(result).find(
     (key) => !ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS.has(key),
@@ -56,18 +57,19 @@ export function assertSettledTurnFinalizationResult(
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
   }
-  resolveSettledTurnFinalizationText(result);
+  resolveSettledTurnFinalizationText(result, instruction);
   return result;
 }
 
 export function resolveSettledTurnFinalizationText(
   result: AgentHarnessSettledTurnFinalizationResult,
+  instruction?: string,
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
   if (!text || isSilentReplyText(text)) {
     throw new EmptySettledTurnFinalizationError(result);
   }
-  if (isRecoveryInstructionEcho(text)) {
+  if (isRecoveryInstructionEcho(text, instruction)) {
     // The finalizer restated the recovery nudge the runner injected instead of
     // answering the run, so the turn is unanswered and re-enters the existing
     // bounded tool-free recovery rather than publishing the restatement.
@@ -85,6 +87,7 @@ export function resolveSettledTurnFinalizationText(
  */
 export function projectSettledTurnFinalizationAttemptResult(
   result: AgentHarnessAttemptResult,
+  instruction?: string,
 ): AgentHarnessSettledTurnFinalizationResult {
   const terminal =
     "terminal" in result ? result.terminal : normalizeAgentRunAttemptTerminal(result);
@@ -133,19 +136,22 @@ export function projectSettledTurnFinalizationAttemptResult(
   if (!assistant) {
     throw new Error("Settled-turn finalization attempt returned no completed assistant message");
   }
-  return assertSettledTurnFinalizationResult({
-    assistant,
-    ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
-    ...(result.assistantTranscriptOwned
-      ? {
-          assistantTranscriptOwned: true,
-          ...(result.assistantTranscriptIdempotencyKey
-            ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
-            : {}),
-        }
-      : result.lastAssistantTextMessageIndex !== undefined
-        ? { assistantMessageIndex: result.lastAssistantTextMessageIndex }
-        : {}),
-    ...(result.diagnosticTrace ? { diagnosticTrace: result.diagnosticTrace } : {}),
-  });
+  return assertSettledTurnFinalizationResult(
+    {
+      assistant,
+      ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      ...(result.assistantTranscriptOwned
+        ? {
+            assistantTranscriptOwned: true,
+            ...(result.assistantTranscriptIdempotencyKey
+              ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
+              : {}),
+          }
+        : result.lastAssistantTextMessageIndex !== undefined
+          ? { assistantMessageIndex: result.lastAssistantTextMessageIndex }
+          : {}),
+      ...(result.diagnosticTrace ? { diagnosticTrace: result.diagnosticTrace } : {}),
+    },
+    instruction,
+  );
 }

@@ -431,7 +431,7 @@ export async function runAgentHarnessLifecycleFinalization(
         diagnostics.setPhase("resolve");
         return {
           outcome: "answered" as const,
-          result: assertSettledTurnFinalizationResult(rawResult),
+          result: assertSettledTurnFinalizationResult(rawResult, params.prompt),
         };
       } catch (error) {
         if (error instanceof EmptySettledTurnFinalizationError) {
