@@ -323,7 +323,7 @@ describe("remote model catalog refresh", () => {
     ).resolves.toMatchObject({ status: "error" });
   });
 
-  it.each(["invalid UTF-8", "unsupported schema"])(
+  it.each(["invalid UTF-8", "unsupported schema", "empty models", "rates on unknown pricing"])(
     "preserves the previous catalog without a fallback request after %s",
     async (failure) => {
       const databaseOptions = options();
@@ -346,6 +346,10 @@ describe("remote model catalog refresh", () => {
           ...bundle,
           generatedAt: bundle.generatedAt + 1,
           ...(failure === "unsupported schema" ? { schemaVersion: 3 } : {}),
+          ...(failure === "empty models" ? { models: [] } : {}),
+          ...(failure === "rates on unknown pricing"
+            ? { models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }] }
+            : {}),
         }),
       );
       if (failure === "invalid UTF-8") {

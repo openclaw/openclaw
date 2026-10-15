@@ -362,14 +362,14 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
     })
     .parse(value);
   const providers = Object.fromEntries(
-    Object.entries(bundle.providers).map(([id, provider]) => [
-      id,
-      {
-        ...provider,
-        models: parseCatalogRows(provider.models, modelSchema, `providers.${id}.models`, warn),
-      },
-    ]),
+    Object.entries(bundle.providers).flatMap<[string, ModelCatalogProvider]>(([id, provider]) => {
+      const models = parseCatalogRows(provider.models, modelSchema, `providers.${id}.models`, warn);
+      return models.length > 0 ? [[id, { ...provider, models }]] : [];
+    }),
   );
+  if (Object.keys(providers).length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers });
 }
 
@@ -389,6 +389,9 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
     warn,
     (model) => JSON.stringify([model.provider, model.id]),
   );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
   const providers = Object.fromEntries(
     Object.entries(bundle.providers).map(([id, provider]) => [
       id,

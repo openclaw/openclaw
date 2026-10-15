@@ -181,7 +181,11 @@ it.each([1, 2] as const)(
         ? validateAndSanitizeRemoteModelCatalogBundle(
             {
               ...validBundle,
-              providers: { first: { models: rows }, second: { models: [{ id: "kept" }] } },
+              providers: {
+                first: { models: rows },
+                second: { models: [{ id: "kept" }] },
+                empty: { models: [] },
+              },
             },
             warn,
           )
@@ -213,6 +217,8 @@ it.each([1, 2] as const)(
     ).toMatchObject([{ id: "kept" }]);
     if (bundle.schemaVersion === 2) {
       expect(bundle.providers.first?.recommendedModels).toEqual(["kept"]);
+    } else {
+      expect(bundle.providers).not.toHaveProperty("empty");
     }
     expect(warn).toHaveBeenCalledTimes(9);
     const rowPath = version === 1 ? "providers.first.models" : "models";
@@ -235,15 +241,26 @@ it.each([1, 2] as const)(
 );
 
 it.each([
-  { parse: validateAndSanitizeRemoteModelCatalogBundle, bundle: validBundle },
-  { parse: validateAndSanitizeRemoteModelCatalogBundleV2, bundle: validBundleV2 },
-])("keeps required remote bundle fields strict", ({ parse, bundle }) => {
+  {
+    parse: validateAndSanitizeRemoteModelCatalogBundle,
+    bundle: validBundle,
+    rows: (models: unknown[]) => ({ providers: { first: { models } } }),
+  },
+  {
+    parse: validateAndSanitizeRemoteModelCatalogBundleV2,
+    bundle: validBundleV2,
+    rows: (models: unknown[]) => ({ models }),
+  },
+])("rejects invalid envelopes and catalogs with no usable rows", ({ parse, bundle, rows }) => {
   for (const patch of [
     { sourceCommit: undefined },
     { generatedAt: "today" },
     { providers: null },
   ]) {
     expect(() => parse({ ...bundle, ...patch })).toThrow();
+  }
+  for (const models of [[], [{ id: "" }]]) {
+    expect(() => parse({ ...bundle, ...rows(models) }, vi.fn())).toThrow("no valid models");
   }
 });
 
