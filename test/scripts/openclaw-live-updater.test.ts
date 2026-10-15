@@ -446,6 +446,17 @@ describe("openclaw live updater", () => {
     }
   });
 
+  test("accepts the shared LaunchAgent stop deadline and rejects unbounded values", () => {
+    expect(resolveLaunchAgentExitTimeoutSeconds(undefined)).toBe(20);
+    expect(resolveLaunchAgentExitTimeoutSeconds(330)).toBe(330);
+    expect(() => resolveLaunchAgentExitTimeoutSeconds(0)).toThrow(
+      "managed Gateway LaunchAgent ExitTimeOut=0 prevents bounded stopped proof",
+    );
+    expect(() => resolveLaunchAgentExitTimeoutSeconds(331)).toThrow(
+      "managed Gateway LaunchAgent ExitTimeOut=331 prevents bounded stopped proof",
+    );
+  });
+
   test.each(["EPERM", "EIO"])(
     "uses actual plist read errno %s, then rechecks ownership",
     (code) => {
