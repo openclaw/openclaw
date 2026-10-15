@@ -4,6 +4,7 @@ import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-ove
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -67,10 +68,11 @@ export async function captureCronInferenceBinding(params: {
       authProfileStore: store,
     }).attempts;
     if (attempt?.kind !== "profile") {
+      // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && source.evidence !== "synthetic") {
+      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
         throw new Error(
-          "Automation requires a stored inference account. Select one with model@profile; environment and provider-config keys have no durable account ownership.",
+          "Automation requires a stored inference account or a key in provider config. Select an account with model@profile.",
         );
       }
       return undefined;

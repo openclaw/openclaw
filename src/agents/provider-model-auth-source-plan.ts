@@ -56,7 +56,10 @@ export type ProviderModelAuthSourceClassification =
       authorization: ProviderModelAuthAuthorization;
     };
 
-/** A credentialless route or a key the operator configured in env or provider config. */
+/**
+ * A credentialless route, or a direct credential with no stored account to record: a key in env
+ * or provider config, or an AWS SDK route the provider config declares.
+ */
 export function isConfiguredKeyAuthSource(
   source: ProviderModelAuthSourceClassification | { kind: "none" } | undefined,
 ): boolean {
@@ -64,7 +67,8 @@ export function isConfiguredKeyAuthSource(
     source?.kind === "direct" &&
     (source.evidence === "synthetic" ||
       source.evidence === "environment" ||
-      source.evidence === "provider-config")
+      source.evidence === "provider-config" ||
+      (source.evidence === "aws-sdk" && source.authorization === "declared"))
   );
 }
 

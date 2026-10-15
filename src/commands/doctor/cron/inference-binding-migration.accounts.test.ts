@@ -48,7 +48,7 @@ function job(id: string, model?: string): CronStoredJob {
   };
 }
 
-it("preserves explicit selections and direct keys while refusing ambiguity and missing accounts instead of pinning a previous fallback", async () => {
+it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withOpenClawTestState(
     {
       label: "cron-inference-account-selection",
@@ -233,10 +233,13 @@ it("preserves explicit selections and direct keys while refusing ambiguity and m
         const warnings = result.warnings.join("\n");
         expect(warnings).toContain("malformed");
         expect(warnings).toContain("invalid cron sessionTarget session id");
-        expect(warnings).toContain("ambiguous");
-        expect(warnings).toContain("More than one inference account");
+        // Several eligible accounts: the run's first planned account is recorded, not refused.
+        expect(warnings).not.toContain("More than one inference account");
+        expect(result.changes.join("\n")).toContain(
+          "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
+        );
+        expect(result.changes.join("\n")).toContain("Also eligible: openai:b");
         expect(warnings).toContain("openai:missing");
-        expect(warnings).toContain("previous-fallback");
         // A provider-config key needs no adoption: the job keeps running on it unbound.
         expect(warnings).not.toContain("Automation direct (direct)");
         expect(warnings).toContain("deleted-agent");
@@ -256,6 +259,15 @@ it("preserves explicit selections and direct keys while refusing ambiguity and m
           profileId: "openai:b",
           source: "user",
         });
+        expect(saved.find((j) => j.id === "ambiguous")?.inferenceBinding).toMatchObject({
+          profileId: "openai:a",
+          source: "auto",
+        });
+        // A previous auto fallback is not the job's account: it keeps the default's first account.
+        expect(saved.find((j) => j.id === "previous-fallback")?.inferenceBinding).toMatchObject({
+          provider: "openai",
+          profileId: "openai:a",
+        });
         expect(saved.find((j) => j.id === "provider-account")?.inferenceBinding).toMatchObject({
           provider: "synthetic",
           profileId: "synthetic:stored",
@@ -269,9 +281,7 @@ it("preserves explicit selections and direct keys while refusing ambiguity and m
           ),
         ).toEqual(malformedBefore);
         for (const id of [
-          "ambiguous",
           "missing",
-          "previous-fallback",
           "direct",
           "local",
           "deleted-agent",

@@ -116,14 +116,15 @@ const awsSdkConfig = {
 };
 
 it.each([
-  { source: "a current stored account", model, storedProfile: true, config: {} },
+  { source: "a current stored account", model, storedProfile: true, config: {}, admitted: false },
   {
-    source: "ambient AWS SDK credentials",
+    source: "a declared AWS SDK route",
     model: bedrockModel,
     storedProfile: false,
     config: awsSdkConfig,
+    admitted: true,
   },
-])("refuses legacy adoption from $source at the auth boundary", async (testCase) => {
+])("an unbound cron run on $source is admitted: $admitted", async (testCase) => {
   await withOpenClawTestState(
     { label: "cron-unbound-auth", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
@@ -139,40 +140,54 @@ it.each([
             }
           : {},
       });
-      const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
       const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-      await expect(
-        withPluginRuntimeGenerationScope(
-          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-          () =>
-            prepareEmbeddedRunAuthPlan({
-              assertCurrent() {},
-              runParams: {
-                sessionId: "fresh-legacy-fire",
-                runId: "legacy-fire",
-                workspaceDir: state.workspaceDir,
-                prompt: "Synthetic scheduled work",
-                timeoutMs: 1_000,
-                trigger: "cron",
-                config: testCase.config,
-              },
-              provider: testCase.model.provider,
-              modelId: testCase.model.id,
-              model: testCase.model,
-              agentDir: state.agentDir(),
+      const materialize = vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+        ...stores,
+        model: testCase.model,
+        logicalRef: { provider: testCase.model.provider, model: testCase.model.id },
+      });
+      const prepared = withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+        () =>
+          prepareEmbeddedRunAuthPlan({
+            assertCurrent() {},
+            runParams: {
+              sessionId: "fresh-legacy-fire",
+              runId: "legacy-fire",
               workspaceDir: state.workspaceDir,
-              nativeModelOwned: false,
-              ...stores,
-              getAgentHarness: () => harness,
-              setAgentHarness() {},
-              getRuntimeModel: () => testCase.model,
-              getEffectiveModel: () => testCase.model,
-              applyResolvedRuntimeModel() {},
-              selectHarnessForPreparedAttempts: () => harness,
-            }),
-        ),
-      ).rejects.toThrow("Automation has no recorded inference account");
-      expect(materialize).not.toHaveBeenCalled();
+              prompt: "Synthetic scheduled work",
+              timeoutMs: 1_000,
+              trigger: "cron",
+              config: testCase.config,
+            },
+            provider: testCase.model.provider,
+            modelId: testCase.model.id,
+            model: testCase.model,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            nativeModelOwned: false,
+            ...stores,
+            getAgentHarness: () => harness,
+            setAgentHarness() {},
+            getRuntimeModel: () => testCase.model,
+            getEffectiveModel: () => testCase.model,
+            applyResolvedRuntimeModel() {},
+            selectHarnessForPreparedAttempts: () => harness,
+          }),
+      );
+      if (testCase.admitted) {
+        expect((await prepared).preparedAuthAttempts).toMatchObject([
+          {
+            kind: "direct",
+            plan: {
+              credentialSource: { kind: "direct", evidence: "aws-sdk", authorization: "declared" },
+            },
+          },
+        ]);
+      } else {
+        await expect(prepared).rejects.toThrow("Automation has no recorded inference account");
+        expect(materialize).not.toHaveBeenCalled();
+      }
     },
   );
 });
