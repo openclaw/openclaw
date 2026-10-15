@@ -63,14 +63,12 @@ function featureCounts(
   return fulfillmentCounts(features.length, fulfilled, partial);
 }
 
-export function attachQaProfileScorecardEvidence(params: {
+function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
-  evidenceMode?: QaScorecardEvidenceMode;
-  profile: string;
   profilePlan: QaProfileEvidencePlan;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
-}) {
+}): QaEvidenceScorecardJson {
   const containment =
     params.evidence.schemaVersion === 3
       ? resolveQaEvidenceContainment(params.evidence.occurrences, params.evidence.entries)
@@ -145,7 +143,7 @@ export function attachQaProfileScorecardEvidence(params: {
     (category) => category.status === "partial",
   ).length;
   const profileFeatures = params.categories.flatMap((category) => category.features);
-  const scorecard: QaEvidenceScorecardJson = {
+  return {
     filters: {
       surface: params.filters.surface?.trim() || null,
       category: params.filters.category?.trim() || null,
@@ -162,29 +160,32 @@ export function attachQaProfileScorecardEvidence(params: {
     coverageIds: fulfillmentCounts(coverageIdCount, fulfilledCoverageIdCount),
     categoryReports,
   };
-  const evidence = attachQaEvidenceScorecard({
-    summary: params.evidence,
+}
+
+export async function attachQaProfileScorecardEvidenceToFile(params: {
+  evidencePath: string;
+  evidenceMode?: QaScorecardEvidenceMode;
+  profile: string;
+  profilePlan: QaProfileEvidencePlan;
+  filters: QaProfileScorecardFilters;
+  categories: readonly QaScorecardCategoryCoverageReport[];
+}) {
+  const evidence = validateQaEvidenceSummaryJson(
+    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
+  );
+  const scorecard = buildQaProfileScorecardEvidence({
+    evidence,
+    profilePlan: params.profilePlan,
+    filters: params.filters,
+    categories: params.categories,
+  });
+  const nextEvidence = attachQaEvidenceScorecard({
+    summary: evidence,
     evidenceMode: params.evidenceMode,
     profile: params.profile,
     profilePlan: params.profilePlan,
     scorecard,
   });
-  return { evidence, scorecard };
-}
-
-export async function attachQaProfileScorecardEvidenceToFile(
-  params: Omit<Parameters<typeof attachQaProfileScorecardEvidence>[0], "evidence"> & {
-    evidencePath: string;
-  },
-) {
-  const evidence = validateQaEvidenceSummaryJson(
-    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
-  );
-  const attached = attachQaProfileScorecardEvidence({ ...params, evidence });
-  await fs.writeFile(
-    params.evidencePath,
-    `${JSON.stringify(attached.evidence, null, 2)}\n`,
-    "utf8",
-  );
-  return attached.scorecard;
+  await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");
+  return scorecard;
 }

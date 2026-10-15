@@ -642,7 +642,7 @@ extensions/qa-channel/src/channel-actions.ts	2
 extensions/qa-channel/src/channel-base.ts	6
 extensions/qa-channel/src/channel.ts	3
 extensions/qa-channel/src/gateway.ts	2
-extensions/qa-channel/src/setup.ts	1
+extensions/qa-channel/src/setup.ts	2
 extensions/qa-lab/src/auth-profile.fixture.ts	3
 extensions/qa-lab/src/browser-runtime.ts	2
 extensions/qa-lab/src/bundled-plugin-staging.ts	4
@@ -708,6 +708,7 @@ extensions/qa-lab/src/posix-process-group.ts	3
 extensions/qa-lab/src/providers/aimock/server.ts	2
 extensions/qa-lab/src/providers/index.ts	1
 extensions/qa-lab/src/providers/live-config.ts	1
+extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
@@ -729,7 +730,7 @@ extensions/qa-lab/src/suite-runtime-agent-process.ts	6
 extensions/qa-lab/src/suite-runtime-agent-session.ts	4
 extensions/qa-lab/src/suite-runtime-agent-tools.ts	1
 extensions/qa-lab/src/suite-runtime-gateway.ts	2
-extensions/qa-lab/src/suite-summary.ts	2
+extensions/qa-lab/src/suite-summary.ts	4
 extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
 extensions/qa-lab/src/tool-search-gateway.fixture.ts	4

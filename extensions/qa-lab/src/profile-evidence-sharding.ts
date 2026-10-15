@@ -24,7 +24,7 @@ import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
-import { attachQaProfileScorecardEvidence } from "./scorecard-evidence.js";
+import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const DEFAULT_QA_PROFILE_SHARD_COUNT = 8;
@@ -402,8 +402,9 @@ export async function aggregateQaProfileEvidenceShards(params: {
     }
     await assertShardDestinationAvailable(destination);
 
+    const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    for (const artifact of collectQaEvidenceArtifacts(summary)) {
+    for (const artifact of collectQaEvidenceArtifacts(rebasedSummary)) {
       let relativePath = resolvedArtifacts.get(artifact.path);
       if (!relativePath) {
         relativePath = await resolveChildArtifactPath({
@@ -417,7 +418,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
       artifact.path = `shards/${shard.id}/${relativePath}`;
     }
     seenShardIds.add(shard.id);
-    summaries.push(summary);
+    summaries.push(rebasedSummary);
     payloads.push({ destination, source: payloadRoot });
     expectedCells.push(...childPlan.expectedCells);
     observedCells.push(...childPlan.observedCells);
@@ -446,14 +447,14 @@ export async function aggregateQaProfileEvidenceShards(params: {
     });
   }
 
-  const { evidence } = attachQaProfileScorecardEvidence({
-    evidence: merged,
+  await fs.writeFile(outputPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
+  await attachQaProfileScorecardEvidenceToFile({
+    evidencePath: outputPath,
     evidenceMode: merged.evidenceMode,
     profile: membership.profile.id,
     profilePlan,
     filters: {},
     categories: membership.categories,
   });
-  await fs.writeFile(outputPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  return evidence;
+  return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(outputPath, "utf8")));
 }

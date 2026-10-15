@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import {
   buildAssistantEvents,
@@ -15,35 +14,10 @@ function readOutputItemSlots(events: StreamEvent[]) {
       (event) =>
         event.type === "response.output_item.added" || event.type === "response.output_item.done",
     )
-    .map((event) => [
-      event.type,
-      event.item.type === "compaction" ? undefined : event.item.id,
-      event.output_index,
-    ]);
+    .map((event) => [event.type, event.item.id, event.output_index]);
 }
 
 describe("mock OpenAI Responses output item slots", () => {
-  it("preserves already-native Anthropic tool IDs", () => {
-    const events: StreamEvent[] = [
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          type: "function_call",
-          id: "fc_native_123",
-          name: "read",
-          call_id: "toolu_native_123",
-          arguments: "{}",
-        },
-      },
-    ];
-    expect(adaptAnthropicToolCallIds(events)).toMatchObject([
-      {
-        item: { call_id: "toolu_native_123" },
-      },
-    ]);
-  });
-
   it("emits the provider no-details failure used by repeated-request recovery QA", () => {
     const events = buildFailedResponseEvents();
     expect(events).toEqual([

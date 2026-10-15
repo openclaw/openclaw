@@ -457,7 +457,7 @@ describe("subagent forked-context evidence", () => {
         }),
       },
     ];
-    expect(buildAssistantText(input, {}, "")).not.toContain(code);
+    expect(buildAssistantText(input, {})).not.toContain(code);
   });
 
   it.each([
@@ -479,7 +479,7 @@ describe("subagent forked-context evidence", () => {
       result: childResult,
     },
   ])("recovers history through $name", ({ input, result }) => {
-    expect(buildAssistantText(input, {}, "")).toBe(result);
+    expect(buildAssistantText(input, {})).toBe(result);
   });
 
   it.each([
@@ -512,7 +512,7 @@ describe("subagent forked-context evidence", () => {
       body: {},
     },
   ])("does not credit $name as inherited context", ({ input, body }) => {
-    expect(buildAssistantText(input, body, "")).toBe("FORKED-CONTEXT-MISSING-HISTORY");
+    expect(buildAssistantText(input, body)).toBe("FORKED-CONTEXT-MISSING-HISTORY");
   });
 
   it.each([
@@ -521,11 +521,11 @@ describe("subagent forked-context evidence", () => {
     { name: "raw v4 event with route notice", completion: rawCompletionInput },
   ])("relays a completed child result through $name", ({ completion }) => {
     const result = "FORKED-CONTEXT-CHILD: FORKED-CONTEXT-BETA";
-    expect(buildAssistantText([userInput(prompt), completion(result)], {}, "")).toBe(result);
-    expect(buildAssistantText([userInput(prompt), completion(childResult, "failed")], {}, "")).toBe(
+    expect(buildAssistantText([userInput(prompt), completion(result)], {})).toBe(result);
+    expect(buildAssistantText([userInput(prompt), completion(childResult, "failed")], {})).toBe(
       "FORKED-CONTEXT-MISSING-RESULT",
     );
-    expect(buildAssistantText([userInput(prompt), completion(code)], {}, "")).toBe(
+    expect(buildAssistantText([userInput(prompt), completion(code)], {})).toBe(
       "FORKED-CONTEXT-MISSING-RESULT",
     );
   });
@@ -536,9 +536,9 @@ describe("subagent forked-context evidence", () => {
       "another-task",
     );
     const failed = settledInput("No inherited context", "failed").content[0].text;
-    expect(
-      buildAssistantText([userInput(prompt), userInput(`${failed}\n\n${other}`)], {}, ""),
-    ).toBe("FORKED-CONTEXT-MISSING-RESULT");
+    expect(buildAssistantText([userInput(prompt), userInput(`${failed}\n\n${other}`)], {})).toBe(
+      "FORKED-CONTEXT-MISSING-RESULT",
+    );
   });
 
   it.each(forkEvidenceCases)(

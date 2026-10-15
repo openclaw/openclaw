@@ -33,7 +33,6 @@ import {
   type StreamEvent,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
-  type MockOpenAiPreparedRequest,
   type AnthropicMessagesRequest,
   type QaMockProviderDispatchRequest,
   type QaMockProviderDispatchResult,
@@ -454,7 +453,7 @@ const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
 ];
 
 async function buildResponsesPayload(
-  request: MockOpenAiPreparedRequest,
+  body: Record<string, unknown>,
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
@@ -463,10 +462,13 @@ async function buildResponsesPayload(
     compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
-  const { body, input, model, prompt, allInputText } = request;
+  const model = typeof body.model === "string" ? body.model : "";
   const providerVariant = resolveMockProviderVariant(model);
+  const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
+  const prompt = extractLastUserText(input);
   const hasCompletedToolOutput = hasToolOutput(input);
+  const allInputText = extractAllRequestTexts(input, body);
   const {
     rawToolOutput,
     hasCodeModeControlOutput,
@@ -1072,7 +1074,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (/remember this fact/i.test(prompt)) {
-    return buildAssistantEvents(buildAssistantText(input, body, model));
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (sideEffectKind) {
     if (isSettledToolContinuation) {
@@ -1824,7 +1826,7 @@ async function buildResponsesPayload(
   }
   const forkTask = extractMockSubagentContext(input);
   if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
-    return buildAssistantEvents(buildAssistantText(input, body, model));
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   const forkCompletion = readForkedContextCompletion(input);
   if (
@@ -1862,7 +1864,7 @@ async function buildResponsesPayload(
         message: "Waiting for the forked child to recover the visible code.",
       });
     }
-    return buildAssistantEvents(buildAssistantText(input, body, model));
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1981,7 +1983,7 @@ async function buildResponsesPayload(
   if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
     await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
-  return buildAssistantEvents(buildAssistantText(input, body, model));
+  return buildAssistantEvents(buildAssistantText(input, body));
 }
 
 export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions) {
@@ -2059,9 +2061,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       toolOutput: extractToolOutput(input),
       model,
       providerVariant: resolveMockProviderVariant(model),
-      codeModeExecSurface: resolveCodeModeExecSurface(
-        resolveCurrentToolDeclarationSurface(body, input),
-      ),
+      codeModeExecSurface:
+        resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),
       requestKind,
       compactionSummaryFaultMode,
@@ -2123,8 +2124,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
               ? buildAssistantEvents("")
               : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
       } else {
-        const preparedRequest = { body, input, model, prompt, allInputText };
-        events = await buildResponsesPayload(preparedRequest, scenarioState, {
+        events = await buildResponsesPayload(body, scenarioState, {
           subagentTurn,
           waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
           requestKind,
@@ -2247,7 +2247,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const dispatched = await dispatchProvider({ ...request, route: "responses" });
     const created = dispatched.events[0];
     if (created?.type === "response.created") {
-      created.response.model = dispatched.model;
+      created.response.model = typeof request.body.model === "string" ? request.body.model : "";
     }
     return dispatched;
   };

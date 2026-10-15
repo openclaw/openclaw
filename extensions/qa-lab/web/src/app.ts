@@ -1264,6 +1264,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
         }
         const viewport = node;
         const trackWidth = Number(viewport.dataset.captureTimelineTrackWidth ?? "0");
+        if (!Number.isFinite(trackWidth) || trackWidth <= 0) {
+          return;
+        }
         const percentFromEvent = (clientX: number) => {
           const rect = viewport.getBoundingClientRect();
           const localX = clientX - rect.left + viewport.scrollLeft;

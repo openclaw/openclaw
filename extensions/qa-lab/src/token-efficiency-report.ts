@@ -255,7 +255,12 @@ function liveUsageShapeFailures(
   const failures: string[] = [];
   for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
     const value: unknown = usage[key];
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      !Number.isInteger(value) ||
+      value < 0
+    ) {
       failures.push(`${scenarioId} ${runtime} live usage ${key} must be a non-negative integer`);
     }
   }

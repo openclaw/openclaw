@@ -132,11 +132,7 @@ export function buildImageInspectionReply(
   return undefined;
 }
 
-export function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  model: string,
-) {
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
   const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
@@ -165,6 +161,7 @@ export function buildAssistantText(
   const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
+  const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =
     typeof toolJson?.text === "string"
       ? toolJson.text

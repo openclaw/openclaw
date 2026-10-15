@@ -14,28 +14,29 @@ export function applyQaSetup(params: {
   accountId: string;
   input: QaChannelSetupInput;
 }): OpenClawConfig {
-  const section = (params.cfg as CoreConfig).channels?.["qa-channel"] ?? {};
+  const nextCfg = structuredClone(params.cfg) as CoreConfig;
+  const section = nextCfg.channels?.["qa-channel"] ?? {};
+  const accounts = { ...section.accounts };
   const target =
-    params.accountId === DEFAULT_ACCOUNT_ID
-      ? { ...section }
-      : { ...section.accounts?.[params.accountId] };
-  if (params.input.baseUrl !== undefined) {
+    params.accountId === DEFAULT_ACCOUNT_ID ? { ...section } : { ...accounts[params.accountId] };
+  if (typeof params.input.baseUrl === "string") {
     target.baseUrl = params.input.baseUrl;
   }
-  if (params.input.botUserId !== undefined) {
+  if (typeof params.input.botUserId === "string") {
     target.botUserId = params.input.botUserId;
   }
-  if (params.input.botDisplayName !== undefined) {
+  if (typeof params.input.botDisplayName === "string") {
     target.botDisplayName = params.input.botDisplayName;
   }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      "qa-channel":
-        params.accountId === DEFAULT_ACCOUNT_ID
-          ? target
-          : { ...section, accounts: { ...section.accounts, [params.accountId]: target } },
-    },
-  };
+  nextCfg.channels ??= {};
+  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+    nextCfg.channels["qa-channel"] = target;
+  } else {
+    accounts[params.accountId] = target;
+    nextCfg.channels["qa-channel"] = {
+      ...section,
+      accounts,
+    };
+  }
+  return nextCfg as OpenClawConfig;
 }

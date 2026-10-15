@@ -264,7 +264,7 @@ export function resolveQaLabRunPlan(params: {
   const membership = resolveQaRunProfileMembership(
     {
       profile: selection.profile,
-      scenarioIds: selection.scenarioIds,
+      scenarioIds: selection.scenarioIds ?? undefined,
     },
     { scenarios: params.scenarios, scorecardReport: params.scorecardReport },
   );

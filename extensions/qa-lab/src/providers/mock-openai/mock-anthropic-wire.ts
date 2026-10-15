@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   type ResponsesInputItem,
-  type MockOutputItem,
   type StreamEvent,
   type AnthropicMessageContentBlock,
   type AnthropicMessage,
@@ -107,8 +106,11 @@ export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] 
     id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
       ? id
       : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-  const adaptItem = (item: MockOutputItem): MockOutputItem => {
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
+  const adaptItem = (item: Record<string, unknown>) => {
+    if (
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      typeof item.call_id === "string"
+    ) {
       return { ...item, call_id: adaptId(item.call_id) };
     }
     return item;
@@ -147,17 +149,20 @@ export function extractAssistantOutputFromEvents(events: StreamEvent[]): Extract
       continue;
     }
     const item = event.item;
-    if (item.type === "function_call") {
+    if (item.type === "function_call" && typeof item.name === "string") {
       toolCalls.push({
-        id: item.call_id,
+        id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
         name: item.name,
-        input: parseJsonObjectBody(item.arguments) ?? {},
+        input:
+          typeof item.arguments === "string" ? (parseJsonObjectBody(item.arguments) ?? {}) : {},
       });
       continue;
     }
-    if (item.type === "message") {
-      for (const piece of item.content) {
-        text = piece.text;
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const piece of item.content as Array<{ type?: unknown; text?: unknown }>) {
+        if (piece?.type === "output_text" && typeof piece.text === "string") {
+          text = piece.text;
+        }
       }
     }
   }

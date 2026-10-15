@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import type { StreamEvent } from "./mock-openai-contracts.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import {
   type MockServer,
@@ -3128,6 +3130,20 @@ describe("qa mock openai server", () => {
     }
   });
 
+  it("preserves already-native Anthropic tool IDs", () => {
+    const events: StreamEvent[] = [
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: { type: "function_call", name: "read", call_id: "toolu_native_123", arguments: "{}" },
+      },
+    ];
+    expect(adaptAnthropicToolCallIds(events)).toMatchObject([
+      {
+        item: { call_id: "toolu_native_123" },
+      },
+    ]);
+  });
   it("uses native Codex custom exec, output arrays, and cell_id waits", async () => {
     const server = await startMockServer();
     const tools = NATIVE_CODE_MODE_TOOLS;

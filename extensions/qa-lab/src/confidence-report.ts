@@ -78,7 +78,8 @@ function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return value.every((entry): entry is string => typeof entry === "string") ? value : undefined;
+  const values = value.filter((entry): entry is string => typeof entry === "string");
+  return values.length === value.length ? values : undefined;
 }
 
 function isGatewayLogSentinelFinding(value: unknown): value is GatewayLogSentinelFinding {

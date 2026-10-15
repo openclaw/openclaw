@@ -409,7 +409,7 @@ export function mergeQaEvidenceSummaries(params: {
   evidenceSummaries: readonly QaEvidenceSummaryJson[];
   generatedAt: string;
 }) {
-  const summaries = params.evidenceSummaries;
+  const summaries = params.evidenceSummaries.map(validateQaEvidenceSummaryJson);
   const versions = new Set(summaries.map((summary) => summary.schemaVersion));
   if (versions.size > 1) {
     throw new Error("cannot merge v2 and v3 evidence without an invocation-owned import");

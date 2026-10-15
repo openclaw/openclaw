@@ -61,21 +61,21 @@ function decodeCodeModeTarget(code: string | undefined) {
 
 export function resolveCodeModeExecSurface(
   body: Record<string, unknown>,
-): MockOpenAiCodeModeExecSurface | undefined {
+): MockOpenAiCodeModeExecSurface | null {
   const tools = [
     ...(Array.isArray(body.tools) ? body.tools : []),
     ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
   ];
   const execDefinition = findNamedToolDefinition(tools, "exec");
   if (!execDefinition || !hasToolDefinition(body, "wait")) {
-    return undefined;
+    return null;
   }
   if (execDefinition.type === "custom") {
     return "native";
   }
   const schema = execDefinition.input_schema ?? execDefinition.parameters;
   if (!isRecord(schema)) {
-    return undefined;
+    return null;
   }
   const properties = schema.properties;
   const required = schema.required;
@@ -84,11 +84,11 @@ export function resolveCodeModeExecSurface(
     Array.isArray(required) &&
     required.includes("code")
     ? "guest"
-    : undefined;
+    : null;
 }
 
 function hasCodeModeExecSurface(body: Record<string, unknown>) {
-  return resolveCodeModeExecSurface(body) !== undefined;
+  return resolveCodeModeExecSurface(body) !== null;
 }
 
 export function resolveCurrentToolDeclarationSurface(
@@ -134,7 +134,7 @@ function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefine
 
 function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
   const source = toolCall?.name === "exec" ? readGeneratedCodeModeExecSource(toolCall) : undefined;
-  return source !== undefined && decodeCodeModeTarget(source) !== null;
+  return typeof source === "string" && decodeCodeModeTarget(source) !== null;
 }
 
 function parseNativeCodeModeOutput(
@@ -318,7 +318,7 @@ export function readScenarioToolCompletion(
   const toolOutputCallId = extractToolOutputCallId(input);
   const completedToolCall = findToolCallByCallId(input, toolOutputCallId);
   const hasCodeModeControlOutput =
-    codeModeSurface !== undefined &&
+    codeModeSurface !== null &&
     Boolean(toolOutputCallId) &&
     (isGeneratedCodeModeExecCall(completedToolCall) ||
       Boolean(completedToolCall && findGeneratedCodeModeWaitTarget(input, completedToolCall)));
