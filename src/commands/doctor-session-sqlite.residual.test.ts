@@ -146,3 +146,105 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
     expect(move!.artifact?.classification).toBe(history === "matching" ? "imported" : "protected");
   },
 );
+
+const CODEX_TRANSCRIPT_LINES = Object.freeze([
+  JSON.stringify({
+    type: "session",
+    id: "session-1",
+    version: 3,
+    timestamp: "2026-08-30T00:00:00Z",
+    cwd: "/fixture",
+  }),
+  JSON.stringify({
+    type: "message",
+    id: "one",
+    parentId: null,
+    message: {
+      role: "user",
+      content: "preserved history",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+    },
+  }),
+]);
+
+async function retryImportedStore(store: ReturnType<typeof createLegacyStore>) {
+  const warnings: string[] = [];
+  vi.spyOn(pluginDoctor, "runPostSessionPluginDoctorStateRepairs").mockResolvedValue({
+    changes: [],
+    warnings: [],
+  });
+  await noteSessionTranscriptHealth({
+    cfg: { agents: { entries: { main: {} } } },
+    env: store.env,
+    shouldRepair: true,
+    onWarnings: (messages) => warnings.push(...messages),
+  });
+  const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
+  const targets = fs
+    .readdirSync(runsDir)
+    .filter((name) => name.endsWith(".json") && !name.endsWith(".failure.json"))
+    .flatMap((name) => readMigrationManifest(path.join(runsDir, name)).targets);
+  return { warnings, targets };
+}
+
+it("archives a Doctor retry when SQLite already holds the importer's Codex spelling", async () => {
+  const store = createLegacyStore({ transcriptLines: CODEX_TRANSCRIPT_LINES });
+  const scope = {
+    agentId: "main",
+    env: store.env,
+    sessionId: "session-1",
+    sessionKey: "agent:main:main",
+    storePath: store.storePath,
+  };
+  await importSqliteSessionRows({
+    ...scope,
+    entry: { sessionId: "session-1", updatedAt: 5000 },
+    repairLegacyTranscript: true,
+    readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
+  });
+  expect(loadTranscriptEventsSync(scope)[1]).toMatchObject({
+    message: { provider: "openai", api: "openai-chatgpt-responses" },
+  });
+  const original = fs.readFileSync(store.transcriptPath);
+  const { warnings, targets } = await retryImportedStore(store);
+  const move = targets
+    .flatMap((target) => target.completedMoves)
+    .find((candidate) => candidate.sourcePath === store.transcriptPath);
+  expect(warnings).toEqual([]);
+  expect(fs.existsSync(store.storePath)).toBe(false);
+  expect(move).toBeDefined();
+  expect(fs.readFileSync(move!.archivePath)).toEqual(original);
+  expect(move!.artifact?.classification).toBe("imported");
+  expect(targets.some((target) => target.validationBeforeArchive === "failed")).toBe(false);
+  expect(targets.some((target) => target.validationBeforeArchive === "passed")).toBe(true);
+});
+
+it("keeps a Doctor retry blocked when the imported message itself changed", async () => {
+  const store = createLegacyStore({ transcriptLines: CODEX_TRANSCRIPT_LINES });
+  const scope = {
+    agentId: "main",
+    env: store.env,
+    sessionKey: "agent:main:main",
+    storePath: store.storePath,
+  };
+  await importSqliteSessionRows({
+    ...scope,
+    entry: { sessionId: "session-1", updatedAt: 5000 },
+    repairLegacyTranscript: true,
+    readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
+  });
+  fs.writeFileSync(
+    store.transcriptPath,
+    fs.readFileSync(store.transcriptPath, "utf8").replace("preserved history", "changed history"),
+  );
+  const { targets } = await retryImportedStore(store);
+  const target = targets.find((candidate) => candidate.storePath === store.storePath);
+  expect(fs.existsSync(store.storePath)).toBe(true);
+  expect(fs.existsSync(store.transcriptPath)).toBe(true);
+  expect(target?.completedMoves).toEqual([]);
+  expect(target?.validationBeforeArchive).toBe("failed");
+  expect(target?.issues).toContainEqual(
+    expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
+  );
+});

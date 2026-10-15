@@ -222,3 +222,152 @@ it("accepts a timestamp-only extra session header and refuses a divergent one", 
     );
   });
 });
+
+it("keeps ordered receipt adoption on exact bytes when only the Codex spelling differs", async () => {
+  await withOpenClawTestState({ label: "verify-ordered-codex-spelling" }, async (state) => {
+    const sessionId = "ordered-codex";
+    const header = {
+      type: "session",
+      id: sessionId,
+      version: 3,
+      timestamp: "2026-05-26T00:00:00.000Z",
+    };
+    const stored = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      message: {
+        role: "user",
+        content: "stored once",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+      },
+    };
+    const filename = await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(stored)}\n`,
+    );
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    await importSqliteSessionRows({
+      ...scope,
+      entry: { sessionId, updatedAt: 1 },
+      readTranscriptEvents: createTranscriptEventReader(filename, sessionId),
+    });
+    const canonical = {
+      ...stored,
+      message: { ...stored.message, provider: "openai", api: "openai-chatgpt-responses" },
+    };
+    await state.writeText(
+      "legacy.jsonl",
+      `${JSON.stringify(header)}\n${JSON.stringify(canonical)}\n`,
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const source = { path: filename, sessionId, originalPath: filename };
+    expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
+    expect(verifyTranscriptEvents(database.db, source, "appendable")).toEqual({
+      events: 2,
+      missingEvents: 0,
+      sqliteEvents: 2,
+    });
+  });
+});
+
+it("accepts a retry after import rewrote a parent link and dropped the unselected branch", async () => {
+  await withOpenClawTestState({ label: "verify-branch-repair-retry" }, async (state) => {
+    const sessionId = "branch-repair";
+    const turn = (
+      id: string,
+      parentId: string | null,
+      role: "user" | "assistant",
+      text: string,
+    ) => ({
+      type: "message",
+      id,
+      parentId,
+      message: { role, content: [{ type: "text", text }] },
+    });
+    const header = {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-08-30T00:00:00Z",
+      cwd: "/fixture",
+    };
+    const events = [
+      header,
+      turn("parent", null, "assistant", "previous"),
+      turn(
+        "original",
+        "parent",
+        "user",
+        "hello\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nretired context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ),
+      turn("abandoned", "original", "assistant", "hidden answer"),
+      turn("visible", "parent", "user", "hello"),
+      turn("answer", "visible", "assistant", "answer"),
+      {
+        type: "leaf",
+        id: "selection",
+        parentId: "abandoned",
+        targetId: "answer",
+      },
+    ];
+    const filename = await state.writeText(
+      "branch.jsonl",
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    await importSqliteSessionRows({
+      ...scope,
+      entry: { sessionId, updatedAt: 1 },
+      repairLegacyTranscript: true,
+      readTranscriptEvents: createTranscriptEventReader(filename, sessionId),
+    });
+    const storedIds = loadTranscriptEventsSync(scope).map((event) =>
+      typeof event.id === "string" ? event.id : "",
+    );
+    expect(storedIds).toEqual([sessionId, "parent", "visible", "answer", "selection"]);
+    expect(loadTranscriptEventsSync(scope).at(-1)).toMatchObject({
+      id: "selection",
+      parentId: "answer",
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const source = { path: filename, sessionId, originalPath: filename };
+    for (const mode of ["contained", "appendable"] as const) {
+      expect(verifyTranscriptEvents(database.db, source, mode)).toEqual({
+        events: storedIds.length,
+        missingEvents: 0,
+        sqliteEvents: storedIds.length,
+      });
+    }
+    expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
+
+    const changed = events.map((event) =>
+      event.id === "answer"
+        ? {
+            ...event,
+            message: { role: "assistant", content: [{ type: "text", text: "changed answer" }] },
+          }
+        : event,
+    );
+    await state.writeText(
+      "branch.jsonl",
+      `${changed.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    expect(() => verifyTranscriptEvents(database.db, source, "appendable")).toThrow(
+      "Legacy event answer conflicts with the SQLite event of the same identity",
+    );
+  });
+});

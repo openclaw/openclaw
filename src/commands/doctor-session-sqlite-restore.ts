@@ -33,7 +33,17 @@ import {
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
+import {
+  createMigrationTargetInput,
+  resolveDoctorSessionSqliteConfig,
+  resolveDoctorSessionSqliteMaintenancePaths,
+  resolveDoctorSessionSqliteMaintenanceRoots,
+  resolveDoctorSessionSqliteTargets,
+} from "./doctor-session-sqlite-targets.js";
+import type {
+  DoctorSessionSqliteOptions,
+  DoctorSessionSqliteRestoreReport,
+} from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 export async function restoreSessionSqliteMigrationRuns(params: {
@@ -84,6 +94,26 @@ async function restoreManifestContexts(
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return restoreReport;
+}
+
+/** Called only under the public maintenance lock, before its strict alias recheck. */
+export async function reconcileDoctorSessionSqlitePublication(
+  options: DoctorSessionSqliteOptions,
+  sourcePath: string,
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const cfg = resolveDoctorSessionSqliteConfig(options);
+  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
+  assertDoctorSqliteMaintenancePathsNotAliased(
+    `session SQLite ${options.mode}`,
+    resolveDoctorSessionSqliteMaintenancePaths(targets),
+    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
+  );
+  await reconcileSessionSqliteMigrationPublications({
+    env,
+    sourcePath,
+    trustedTargets: targets.map(createMigrationTargetInput),
+  });
 }
 
 /** Undo only recorded, still-linked publication intermediates before a fresh import or restore. */

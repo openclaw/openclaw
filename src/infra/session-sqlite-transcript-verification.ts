@@ -1,10 +1,7 @@
 /** Shared read-only proof that retained transcript events exist in canonical SQLite. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLegacyOpenAICodexTranscriptMetadata,
-  type TranscriptEntry,
-} from "../config/sessions/legacy-transcript-repair.js";
+import { normalizeLegacyOpenAICodexTranscriptMetadata } from "../config/sessions/legacy-transcript-repair.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
@@ -44,7 +41,7 @@ function legacyImportComparisonJson(eventJson: string): string {
   if (!isRecord(parsed)) {
     return eventJson;
   }
-  if (normalizeLegacyOpenAICodexTranscriptMetadata([parsed as TranscriptEntry]) === 0) {
+  if (normalizeLegacyOpenAICodexTranscriptMetadata([parsed]) === 0) {
     return eventJson;
   }
   return JSON.stringify(parsed);
@@ -137,13 +134,17 @@ export function verifyTranscriptEvents(
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (
-          !expected.done &&
-          samePersistedLegacyEvent(event.event_json, expected.value.eventJson)
-        ) {
-          expected = sourceRows.next();
-          if (expected.done) {
-            break;
+        if (!expected.done) {
+          // Ordered receipts stay byte-identical. Spelling equivalence is only for a retry.
+          const sameEvent =
+            mode === "ordered"
+              ? event.event_json === expected.value.eventJson
+              : samePersistedLegacyEvent(event.event_json, expected.value.eventJson);
+          if (sameEvent) {
+            expected = sourceRows.next();
+            if (expected.done) {
+              break;
+            }
           }
         }
       }

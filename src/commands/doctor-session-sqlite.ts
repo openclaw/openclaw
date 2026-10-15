@@ -95,7 +95,6 @@ import {
   resolveDoctorSessionSqliteConfig,
   resolveDoctorSessionSqliteMaintenancePaths,
   resolveDoctorSessionSqliteMaintenanceRoots,
-  resolveDoctorSessionSqliteTargets,
 } from "./doctor-session-sqlite-targets.js";
 import {
   createDoctorSessionSqliteTargetReport,
@@ -651,25 +650,7 @@ export async function settleRetainedDoctorSessionSources(
   }
 }
 
-/** Called only under the public maintenance lock, before its strict alias recheck. */
-export async function reconcileDoctorSessionSqlitePublication(
-  options: DoctorSessionSqliteOptions,
-  sourcePath: string,
-): Promise<void> {
-  const env = options.env ?? process.env;
-  const cfg = resolveDoctorSessionSqliteConfig(options);
-  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
-  assertDoctorSqliteMaintenancePathsNotAliased(
-    `session SQLite ${options.mode}`,
-    resolveDoctorSessionSqliteMaintenancePaths(targets),
-    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
-  );
-  await reconcileSessionSqliteMigrationPublications({
-    env,
-    sourcePath,
-    trustedTargets: targets.map(createMigrationTargetInput),
-  });
-}
+export { reconcileDoctorSessionSqlitePublication } from "./doctor-session-sqlite-restore.js";
 
 async function inspectOrMigrateTarget(params: {
   configuredAgentIds: ReadonlySet<string>;
@@ -931,14 +912,6 @@ async function inspectOrMigrateTarget(params: {
         operation: "import-finalize",
       });
     }
-  } else if (
-    params.mode === "import" &&
-    !retainedImport &&
-    countBlockingSessionSqliteIssues(report) > 0
-  ) {
-    // Import already refused this store, so the before-archive check did not run.
-    // Record the refusal. The manifest otherwise stays at its creation-time value.
-    updateManifest("failed");
   }
   if (params.mode === "import") {
     const indexIdentity = params.expectedIndexIdentity;
@@ -1030,7 +1003,13 @@ async function inspectOrMigrateTarget(params: {
   if (params.mode !== "import") {
     appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths);
   }
-  updateManifest();
+  updateManifest(
+    params.mode === "import" && !retainedImport
+      ? validationPassed
+        ? "passed"
+        : "failed"
+      : undefined,
+  );
   return report;
 }
 
