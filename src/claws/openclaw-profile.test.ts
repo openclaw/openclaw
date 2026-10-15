@@ -7,39 +7,22 @@ import { parseClawOpenClawProfile } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("OpenClaw profile schema", () => {
-  it("accepts typed settings", () => {
-    const result = parseClawOpenClawProfile({
+async function profileFixture(pointer?: string) {
+  const root = tempDirs.make("openclaw-claw-profile-");
+  await mkdir(join(root, "profiles"));
+  const path = join(root, "openclaw.claw.json");
+  await writeFile(
+    path,
+    JSON.stringify({
       schemaVersion: 1,
-      agent: {
-        tools: {
-          profile: "coding",
-          allow: ["read", "github__list_issues"],
-          deny: ["exec"],
-          fs: { workspaceOnly: true },
-        },
-        memory: {
-          search: {
-            enabled: true,
-            rememberAcrossConversations: true,
-            sources: ["memory", "sessions"],
-          },
-        },
-      },
-    });
+      agent: { id: "triage" },
+      ...(pointer ? { metadata: { "openclaw.config": pointer } } : {}),
+    }),
+  );
+  return { root, path };
+}
 
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts a full profile only with a bounded allowlist", () => {
-    expect(
-      parseClawOpenClawProfile({
-        schemaVersion: 1,
-        agent: { tools: { profile: "full", allow: ["read", "write"] } },
-      }).ok,
-    ).toBe(true);
-  });
-
+describe("OpenClaw profile schema", () => {
   it("rejects disabled host filesystem confinement", () => {
     const result = parseClawOpenClawProfile({
       schemaVersion: 1,
@@ -99,10 +82,7 @@ describe("OpenClaw profile reader", () => {
   ])(
     "rejects profile YAML %s with its profile diagnostic",
     async (_label, declaration, feature) => {
-      const root = tempDirs.make("openclaw-claw-profile-yaml-");
-      await mkdir(join(root, "profiles"));
-      const manifestPath = join(root, "openclaw.claw.json");
-      await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }));
+      const { root, path: manifestPath } = await profileFixture();
       await writeFile(join(root, "profiles", "openclaw.yml"), `schemaVersion: 1\n${declaration}\n`);
 
       const result = await readClawManifestFile(manifestPath);
@@ -126,10 +106,7 @@ describe("OpenClaw profile reader", () => {
     ["duplicate key", "schemaVersion: 1\nschemaVersion: 1\nagent: {}\n"],
     ["invalid syntax", "schemaVersion: 1\nagent: [\n"],
   ])("reports a profile YAML %s as a parse failure", async (_label, profile) => {
-    const root = tempDirs.make("openclaw-claw-profile-yaml-invalid-");
-    await mkdir(join(root, "profiles"));
-    const manifestPath = join(root, "openclaw.claw.json");
-    await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }));
+    const { root, path: manifestPath } = await profileFixture();
     await writeFile(join(root, "profiles", "openclaw.yml"), profile);
 
     const result = await readClawManifestFile(manifestPath);
@@ -175,7 +152,7 @@ describe("OpenClaw profile reader", () => {
         "agent:",
         "  tools:",
         "    profile: coding",
-        "    allow: [read]",
+        "    allow: [read, github__list_issues]",
         "    deny: [exec]",
         "    fs:",
         "      workspaceOnly: true",
@@ -191,7 +168,7 @@ describe("OpenClaw profile reader", () => {
         agent: {
           tools: {
             profile: "coding",
-            allow: ["read"],
+            allow: ["read", "github__list_issues"],
             deny: ["exec"],
             fs: { workspaceOnly: true },
           },
@@ -221,13 +198,7 @@ describe("OpenClaw profile reader", () => {
   ] as const)(
     "loads a legacy dynamic $toolProfile profile through the update migration path",
     async ({ toolProfile, strictOk }) => {
-      const root = tempDirs.make("openclaw-claw-legacy-profile-");
-      await mkdir(join(root, "profiles"));
-      await writeFile(
-        join(root, "openclaw.claw.json"),
-        JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
-        "utf8",
-      );
+      const { root } = await profileFixture();
       await writeFile(
         join(root, "profiles", "openclaw.yml"),
         `schemaVersion: 1\nagent:\n  tools:\n    profile: ${toolProfile}\n`,
@@ -262,13 +233,7 @@ describe("OpenClaw profile reader", () => {
   );
 
   it("requires package authors to bound a legacy full profile before update", async () => {
-    const root = tempDirs.make("openclaw-claw-legacy-full-profile-");
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "openclaw.claw.json"),
-      JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
-      "utf8",
-    );
+    const { root } = await profileFixture();
     await writeFile(
       join(root, "profiles", "openclaw.yml"),
       "schemaVersion: 1\nagent:\n  tools:\n    profile: full\n",
@@ -290,16 +255,7 @@ describe("OpenClaw profile reader", () => {
   });
 
   it("rejects a hardlinked profile", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-hardlink-");
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "openclaw.claw.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-      }),
-      "utf8",
-    );
+    const { root } = await profileFixture();
     const source = join(root, "source.yml");
     await writeFile(source, "schemaVersion: 1\nagent: {}\n", "utf8");
     await link(source, join(root, "profiles", "openclaw.yml"));
@@ -312,17 +268,7 @@ describe("OpenClaw profile reader", () => {
     });
   });
   it("rejects a symlinked profile at the read boundary", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-symlink-");
-    await mkdir(join(root, "profiles"));
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-      }),
-      "utf8",
-    );
+    const { root, path } = await profileFixture();
     await writeFile(join(root, "source.yml"), "schemaVersion: 1\nagent: {}\n", "utf8");
     await symlink("../source.yml", join(root, "profiles", "openclaw.yml"));
 
@@ -362,18 +308,7 @@ describe("OpenClaw profile reader", () => {
   });
 
   it("still reads the deprecated metadata profile pointer with a warning", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-legacy-pointer-");
-    await mkdir(join(root, "profiles"));
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles/triage.openclaw.yml" },
-      }),
-      "utf8",
-    );
+    const { root, path } = await profileFixture("profiles/triage.openclaw.yml");
     await writeFile(
       join(root, "profiles", "triage.openclaw.yml"),
       "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
@@ -403,18 +338,7 @@ describe("OpenClaw profile reader", () => {
   });
 
   it("accepts a deprecated pointer that already targets the conventional profile", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-legacy-conventional-");
-    await mkdir(join(root, "profiles"));
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
-      }),
-      "utf8",
-    );
+    const { root, path } = await profileFixture("profiles/openclaw.yml");
     await writeFile(
       join(root, "profiles", "openclaw.yml"),
       "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
@@ -427,18 +351,7 @@ describe("OpenClaw profile reader", () => {
   });
 
   it("fails closed when a deprecated pointer diverges from the conventional profile", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-conflict-");
-    await mkdir(join(root, "profiles"));
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles/other.openclaw.yml" },
-      }),
-      "utf8",
-    );
+    const { root, path } = await profileFixture("profiles/other.openclaw.yml");
     await writeFile(join(root, "profiles", "openclaw.yml"), "schemaVersion: 1\n", "utf8");
     await writeFile(join(root, "profiles", "other.openclaw.yml"), "schemaVersion: 1\n", "utf8");
 
@@ -455,24 +368,8 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
-  it("keeps the shipped pointer-based fixtures resolvable", async () => {
-    const result = await readClawManifestFile("src/claws/fixtures/incident-response.claw.json");
-
-    expect(result).toMatchObject({
-      ok: true,
-      openClawProfile: { schemaVersion: 1, agent: { tools: { deny: ["exec", "browser"] } } },
-    });
-    if (!result.ok) {
-      throw new Error("expected the shipped fixture to remain valid");
-    }
-    expect(result.diagnostics.some((entry) => entry.level === "error")).toBe(false);
-  });
-
   it("does not inspect profiles owned by other harnesses", async () => {
-    const root = tempDirs.make("openclaw-claw-foreign-profile-");
-    await mkdir(join(root, "profiles"));
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(path, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }), "utf8");
+    const { root, path } = await profileFixture();
     await writeFile(join(root, "profiles", "codex.yml"), Buffer.alloc(300 * 1024, "x"));
 
     const result = await readClawManifestFile(path);

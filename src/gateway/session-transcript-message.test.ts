@@ -3,10 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
-import {
-  projectSessionMessagePayload,
-  projectTranscriptEntryMessage,
-} from "./session-transcript-message.js";
+import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 const position = { source: "selected-snapshot", rawSeq: 4 };
 const message = {
@@ -16,6 +14,45 @@ const message = {
 };
 
 describe("trusted transcript display metadata", () => {
+  it.each([
+    { content: [], __openclaw: { runId: "recovering-run" }, pending: true },
+    {
+      content: [{ type: "text", text: "Useful partial answer" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    {
+      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    { content: [], __openclaw: { runId: "other-run" }, pending: true },
+  ])(
+    "defers attempt diagnostics without inferring terminal settlement: %j",
+    ({ pending, ...failure }) => {
+      const raw = {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "context exceeded",
+        ...failure,
+      };
+      const original = structuredClone(raw);
+      const result = projectSessionMessagePayload({
+        message: raw,
+        sessionKey: "agent:main:main",
+      });
+      expect(result.deferredAssistantError === true).toBe(pending);
+      expect(Boolean(result.payload)).toBe(!pending);
+      expect(result.projectionState.assistantErrorPending).toBe(true);
+      if (failure["__openclaw"].runId === "recovering-run" && result.payload) {
+        expect(result.payload.message).not.toHaveProperty("openclawRunError");
+        expect(result.payload.message).not.toHaveProperty("stopReason");
+        expect(result.payload.message).not.toHaveProperty("errorMessage");
+      }
+      expect(raw).toEqual(original);
+    },
+  );
+
   it("keeps nested activity run ownership distinct from entry deduplication in history and live events", () => {
     const activity = {
       ...createNestedToolActivity({
@@ -74,7 +111,7 @@ describe("trusted transcript display metadata", () => {
       customType: "run-failed-before-reply",
       content: "This turn ended before a reply.",
       display: true,
-      details: { error: "PRIVATE_DIAGNOSTIC" },
+      details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
     };
     const timestamp = "2026-09-08T00:00:00.000Z";
     const history = projectTranscriptEntryMessage(
@@ -96,6 +133,7 @@ describe("trusted transcript display metadata", () => {
       expect(metadata?.transcriptPosition).toEqual(transcriptPosition);
       expect(metadata).toMatchObject({ id: "entry", seq: 2 });
       if (custom) {
+        expect(readSessionMessageIdentity(projected)?.runId).toBe("failed-run");
         expect(projected).toMatchObject({
           role: "custom",
           customType: "run-failed-before-reply",

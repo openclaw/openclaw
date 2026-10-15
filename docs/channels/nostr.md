@@ -22,7 +22,7 @@ From a local checkout (dev workflows):
 openclaw plugins install --link <path-to-local-nostr-plugin>
 ```
 
-Restart the gateway after installing or enabling plugins. Onboarding (`openclaw onboard`) and `openclaw channels add` surface Nostr from the shared channel catalog once the plugin is installed.
+Installing or enabling the plugin applies it to a running Gateway; check the [application result](/plugins/manage-plugins#apply-changes-and-inspect). Onboarding (`openclaw onboard`) and `openclaw channels add` surface Nostr from the shared channel catalog once the plugin is installed.
 
 ### Non-interactive setup
 
@@ -204,7 +204,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ### Not receiving messages
 
 - Verify the private key is valid.
-- Ensure relay URLs are reachable and use `wss://` (or `ws://` for local).
+- Check that relay URLs are reachable and use `wss://` (or `ws://` for local).
 - Confirm `enabled` is not `false`.
 - Check gateway logs for relay connection errors.
 

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { SessionProgressHovercardProvider } from "../components/session-progress-hovercard.runtime.tsx";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
@@ -139,6 +140,95 @@ async function capture(page: Page, name: string, content: Locator): Promise<void
 }
 
 suite.define(() => {
+  it.each([
+    {
+      name: "authored activation and limits",
+      initialMode: { enabled: "auto", timeoutMs: 5000 },
+      expectedPatch: { executor: "quickjs" },
+    },
+    {
+      name: "inherited automatic activation",
+      initialMode: undefined,
+      expectedPatch: { enabled: "auto", executor: "quickjs" },
+    },
+  ])(
+    "saves and reloads the Code Mode executor with $name",
+    async ({ initialMode, expectedPatch }) => {
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 1000, width: 1440 },
+        },
+        async ({ page }) => {
+          const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
+          const retainedMode = { enabled: "auto", ...initialMode };
+          const quickjsConfig = {
+            tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "config.get": configResponse(initialConfig, "executor-node"),
+            },
+          });
+
+          expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
+          const executorRow = settingsRow(page, "Code Mode executor");
+          const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
+          const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
+            name: "Code Mode",
+            exact: true,
+          });
+          await expect.poll(() => executor.inputValue()).toBe("node");
+          expect(await executorRow.textContent()).toContain("not a security sandbox");
+          expect(await enabled.isChecked()).toBe(true);
+          await capture(page, "code-mode-node-default.png", executor);
+
+          await gateway.deferNext("config.patch");
+          await executor.selectOption("quickjs");
+          const quickjsPatch = mutationParams(await gateway.waitForRequest("config.patch"));
+          expect(quickjsPatch.baseHash).toBe("executor-node");
+          expect(JSON.parse(String(quickjsPatch.raw))).toEqual({
+            tools: { codeMode: expectedPatch },
+          });
+          expect(await executor.isDisabled()).toBe(true);
+
+          const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
+          await gateway.setMethodResponse("config.get", quickjsResponse);
+          await gateway.resolveDeferred("config.patch", { ok: true, ...quickjsResponse });
+          await expect.poll(() => executor.isDisabled()).toBe(false);
+          expect((await page.reload())?.status()).toBe(200);
+          await expect.poll(() => executor.inputValue()).toBe("quickjs");
+          expect(await enabled.isChecked()).toBe(true);
+          await capture(page, "code-mode-quickjs-reloaded.png", executor);
+
+          const priorPatches = (await gateway.getRequests("config.patch")).length;
+          await gateway.deferNext("config.patch");
+          await executor.selectOption("node");
+          const nodePatch = mutationParams(
+            await gateway.waitForRequest("config.patch", { after: priorPatches }),
+          );
+          expect(nodePatch.baseHash).toBe("executor-quickjs");
+          expect(JSON.parse(String(nodePatch.raw))).toEqual({
+            tools: { codeMode: { executor: null } },
+          });
+
+          const nodeResponse = configResponse(
+            { tools: { codeMode: retainedMode } },
+            "executor-node-restored",
+          );
+          await gateway.setMethodResponse("config.get", nodeResponse);
+          await gateway.resolveDeferred("config.patch", { ok: true, ...nodeResponse });
+          await expect.poll(() => executor.isDisabled()).toBe(false);
+          expect((await page.reload())?.status()).toBe(200);
+          await expect.poll(() => executor.inputValue()).toBe("node");
+          expect(await enabled.isChecked()).toBe(true);
+        },
+      );
+    },
+  );
+
   it("retains a Raw revert when an autosave commits after its connection closes", async () => {
     await suite.withPage(
       {
@@ -376,11 +466,11 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Disabled");
+        await expect.poll(() => codeModeRow.textContent()).not.toContain("Using default:");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.locator("wa-switch").click();
+        await codeModeSwitch.click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
         expect(patchParams.sessionKey).toBe("agent:main:main");
@@ -472,9 +562,82 @@ suite.define(() => {
   tools: {},
 }
 `;
-        await rawEditor.fill(rawDraft);
+        const rawDiagnostics = await page.evaluateHandle(() => {
+          const editor = document.querySelector<HTMLTextAreaElement>(".config-raw-field textarea");
+          const runtime = document.querySelector<SessionProgressHovercardProvider>(
+            "openclaw-session-progress-hovercard-provider",
+          )?.context?.runtimeConfig;
+          const snapshot = (phase: string, input?: HTMLTextAreaElement) => {
+            const current = document.querySelector<HTMLTextAreaElement>(
+              ".config-raw-field textarea",
+            );
+            const state = runtime?.state;
+            return {
+              phase,
+              at: performance.now(),
+              sameEditor: current === editor,
+              editorConnected: editor?.isConnected,
+              focused: current === document.activeElement,
+              value: current?.value,
+              selection: [current?.selectionStart, current?.selectionEnd],
+              inputValue: input?.value,
+              inputIsOriginalEditor: input ? input === editor : undefined,
+              owner: state
+                ? {
+                    raw: state.configRaw,
+                    dirty: state.configFormDirty,
+                    mode: state.configFormMode,
+                    saving: state.configSaving,
+                    loading: state.configLoading,
+                  }
+                : null,
+            };
+          };
+          const events = [snapshot("before-fill")];
+          const record = (phase: string, input?: HTMLTextAreaElement) => {
+            if (events.length < 100) {
+              events.push(snapshot(phase, input));
+            }
+          };
+          const onInput = (event: Event) => {
+            const input = event.target;
+            if (
+              input instanceof HTMLTextAreaElement &&
+              input.matches(".config-raw-field textarea")
+            ) {
+              record("input-capture", input);
+              queueMicrotask(() => record("input-microtask", input));
+            }
+          };
+          document.addEventListener("input", onInput, true);
+          const stop = runtime?.subscribe(() => record("owner-publish"));
+          return {
+            read: () => ({ events, final: snapshot("failure") }),
+            stop: () => {
+              document.removeEventListener("input", onInput, true);
+              stop?.();
+            },
+          };
+        });
         const rawSave = page.getByRole("button", { name: "Save", exact: true });
-        await expect.poll(() => rawSave.isEnabled()).toBe(true);
+        try {
+          await rawEditor.fill(rawDraft);
+          await expect
+            .poll(async () => ({
+              raw: await rawEditor.inputValue(),
+              saveEnabled: await rawSave.isEnabled(),
+            }))
+            .toEqual({ raw: rawDraft, saveEnabled: true });
+        } catch (error) {
+          const diagnostics = await rawDiagnostics
+            .evaluate((data) => data.read())
+            .catch((unavailable: unknown) => ({ unavailable: String(unavailable) }));
+          console.error("Raw config draft diagnostics", JSON.stringify(diagnostics));
+          throw error;
+        } finally {
+          await rawDiagnostics.evaluate((data) => data.stop()).catch(() => undefined);
+          await rawDiagnostics.dispose();
+        }
         await capture(page, "02-raw-draft.png", rawEditor);
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
@@ -514,7 +677,7 @@ suite.define(() => {
     );
   });
 
-  it("refreshes config after reconnect and client replacement before the next save", async () => {
+  it("config.set refreshes config after reconnect and client replacement before the next save", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -601,7 +764,10 @@ suite.define(() => {
           tools: {},
         });
         expect(await gateway.getRequests("config.set")).toHaveLength(setsBeforeEdit + 1);
-        await gateway.resolveDeferred("config.set", { hash: "snapshot-saved" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "snapshot-saved",
+        });
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
@@ -610,7 +776,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+  it("config.set keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -704,7 +870,10 @@ suite.define(() => {
             "hmac-sha256:v1:opaque-next",
           ),
         );
-        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "hmac-sha256:v1:opaque-next",
+        });
         await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
       },
     );

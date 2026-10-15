@@ -3,6 +3,38 @@ import type {
   AssistantTranscriptRoleHeaderKind,
 } from "./assistant-transcript-headers.js";
 
+/** A replacement in the original text's UTF-16 coordinates; equal bounds insert text. */
+export type MarkdownTextEdit = { start: number; end: number; text: string };
+
+/** Apply disjoint edits; equal-position insertions keep caller order and shift their boundary. */
+export function applyMarkdownTextEdits(text: string, edits: readonly MarkdownTextEdit[]) {
+  let output = "";
+  let cursor = 0;
+  const shifts = edits
+    .toSorted((a, b) => a.start - b.start || a.end - b.end)
+    .map((edit) => {
+      output += text.slice(cursor, edit.start) + edit.text;
+      cursor = edit.end;
+      return { end: edit.end, shift: output.length - cursor };
+    });
+  return {
+    text: output + text.slice(cursor),
+    mapOffset: (offset: number): number => {
+      let low = 0;
+      let high = shifts.length;
+      while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        if ((shifts[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      return offset + (shifts[low - 1]?.shift ?? 0);
+    },
+  };
+}
+
 export type MarkdownStyle =
   | "bold"
   | "italic"
@@ -36,25 +68,22 @@ export type MarkdownLinkSpan = {
 // Every span transform must use copyMarkdownLinkSpan so the private fact survives.
 const autoLinkedMarkdownLinks = new WeakSet<MarkdownLinkSpan>();
 
+/** Callers supply a fresh span; transforms copy before attaching provenance. */
 export function createMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  options: { autoLinked?: boolean } = {},
+  autoLinked: boolean,
 ): MarkdownLinkSpan {
-  const created = { ...span };
-  if (options.autoLinked) {
-    autoLinkedMarkdownLinks.add(created);
+  if (autoLinked) {
+    autoLinkedMarkdownLinks.add(span);
   }
-  return created;
+  return span;
 }
 
 export function copyMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  overrides: Partial<MarkdownLinkSpan> = {},
+  overrides?: Partial<MarkdownLinkSpan>,
 ): MarkdownLinkSpan {
-  return createMarkdownLinkSpan(
-    { ...span, ...overrides },
-    { autoLinked: autoLinkedMarkdownLinks.has(span) },
-  );
+  return createMarkdownLinkSpan({ ...span, ...overrides }, autoLinkedMarkdownLinks.has(span));
 }
 
 export function isAutoLinkedMarkdownLink(span: MarkdownLinkSpan): boolean {
@@ -101,33 +130,14 @@ function clipSpans<T extends { start: number; end: number }>(
   return clipped;
 }
 
-export function clampStyleSpans(
-  spans: MarkdownStyleSpan[],
-  maxLength: number,
-): MarkdownStyleSpan[] {
-  return clipSpans(spans, 0, maxLength, createStyleSpan);
-}
-
-export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
-  return clipSpans(spans, 0, maxLength, copyMarkdownLinkSpan);
-}
-
-export function clampAnnotationSpans(
-  spans: MarkdownAnnotationSpan[],
-  maxLength: number,
-): MarkdownAnnotationSpan[] {
-  return clipSpans(spans, 0, maxLength, (span) => ({ ...span }));
-}
-
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
-  const sorted = [...spans].toSorted((a, b) => a.start - b.start || a.end - b.end);
+  const sorted = spans.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const merged: MarkdownAnnotationSpan[] = [];
   for (const span of sorted) {
     const previous = merged.at(-1);
     if (
       previous &&
       previous.end === span.start &&
-      previous.type === span.type &&
       previous.kind === span.kind &&
       previous.role === span.role
     ) {
@@ -140,7 +150,7 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
 }
 
 export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].toSorted((a, b) => {
+  const sorted = spans.toSorted((a, b) => {
     if (a.start !== b.start) {
       return a.start - b.start;
     }

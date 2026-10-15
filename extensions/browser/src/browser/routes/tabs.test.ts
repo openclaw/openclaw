@@ -1,7 +1,7 @@
 // Browser tests cover tabs plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toBrowserErrorResponse } from "../errors.js";
+import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const navigationGuardMocks = vi.hoisted(() => ({
@@ -140,18 +140,6 @@ function createRouteContext(
     }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn(toBrowserErrorResponse),
-    ensureBrowserAvailable: profileCtx.ensureBrowserAvailable,
-    ensureTabAvailable: profileCtx.ensureTabAvailable,
-    isHttpReachable: profileCtx.isHttpReachable,
-    isReachable: profileCtx.isReachable,
-    listTabs: profileCtx.listTabs,
-    openTab: profileCtx.openTab,
-    labelTab: profileCtx.labelTab,
-    focusTab: profileCtx.focusTab,
-    closeTab: profileCtx.closeTab,
-    stopRunningBrowser: profileCtx.stopRunningBrowser,
-    resetProfile: profileCtx.resetProfile,
   };
 }
 
@@ -163,6 +151,8 @@ async function callTabsRoute(params: {
   actionTimeoutMs?: number;
   signal?: AbortSignal;
   ssrfPolicy?: unknown;
+  query?: Record<string, unknown>;
+  assertCurrent?: () => Promise<void>;
 }) {
   const { app, getHandlers, postHandlers } = createBrowserRouteApp();
   registerBrowserTabRoutes(
@@ -180,14 +170,58 @@ async function callTabsRoute(params: {
   await handler?.(
     {
       params: {},
-      query: {},
+      query: params.query ?? {},
       body: params.body ?? {},
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     },
     response.res,
   );
   return response;
 }
+
+it.each([{ driver: "existing-session" as const }, { cdpIsLoopback: false }, { attachOnly: true }])(
+  "refuses managed dashboard tab lookup after a profile changes to %j",
+  async (override) => {
+    const profileCtx = createProfileContext({ profile: makeBrowserProfile(override) });
+    const response = await callTabsRoute({
+      method: "get",
+      path: "/tabs",
+      query: { managedOnly: true },
+      profileCtx,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: "This dashboard requires a local managed browser profile",
+    });
+    expect(profileCtx.isReachable).not.toHaveBeenCalled();
+    expect(profileCtx.listTabs).not.toHaveBeenCalled();
+  },
+);
+
+it("does not open a dashboard tab after its owner disappears during browser startup", async () => {
+  let ownerCurrent = true;
+  const profileCtx = createProfileContext({
+    profile: makeBrowserProfile(),
+    ensureBrowserAvailable: vi.fn(async () => {
+      ownerCurrent = false;
+    }),
+  });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "http://service.example/", managedOnly: true },
+    profileCtx,
+    assertCurrent: async () => {
+      if (!ownerCurrent) {
+        throw new Error("dashboard was removed");
+      }
+    },
+  });
+  expect(response.statusCode).toBe(500);
+  expect(response.body).toEqual({ error: "Error: dashboard was removed" });
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
+});
 
 it("returns the profile that actually handled tab open", async () => {
   const profileCtx = createProfileContext({
@@ -226,6 +260,18 @@ it("returns the profile that actually handled tab open", async () => {
     },
     resolvedProfile: "hot-profile",
   });
+});
+
+it("rejects an invalid open timeoutMs before opening a tab", async () => {
+  const profileCtx = createProfileContext({ openTab: vi.fn() });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com", timeoutMs: -5 },
+    profileCtx,
+  });
+  expect(response.statusCode).toBe(400);
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
 });
 
 async function callTabsAction(params: {
@@ -289,6 +335,27 @@ describe("browser tab routes", () => {
       ssrfPolicy ? { ssrfPolicy } : {},
     );
   });
+
+  it.each([
+    { label: "managed", overrides: {}, expected: true },
+    {
+      label: "existing-session",
+      overrides: { driver: "existing-session" as const },
+      expected: false,
+    },
+    { label: "attach-only", overrides: { attachOnly: true }, expected: false },
+    { label: "remote CDP", overrides: { cdpIsLoopback: false }, expected: false },
+    { label: "attach-only engine", overrides: { engine: "lightpanda" as const }, expected: false },
+  ])(
+    "advertises automatic preview resizing only for $label ownership",
+    async ({ overrides, expected }) => {
+      const response = await callTabsList({
+        profileCtx: createProfileContext({ profile: makeBrowserProfile(overrides) }),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({ running: true, canAutoResizeViewport: expected });
+    },
+  );
 
   it("validates tab-open input before resolving or leasing a profile", async () => {
     const profileCtx = createProfileContext();
@@ -522,7 +589,7 @@ describe("browser tab routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs: [
           publicTab(),
           { ...internalTab(), url: "", urlUnavailableReason: "navigation_blocked" },
@@ -536,7 +603,7 @@ describe("browser tab routes", () => {
       navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
       const recovered = await callTabsRoute(request);
       expect(recovered.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs,
       });
     },

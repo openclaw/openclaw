@@ -16,6 +16,12 @@ Use [Meeting plugins](/plugins/meeting-plugins) for shared installation, modes,
 Chrome and virtual-audio setup, transcripts, remote-node requirements, and
 verification.
 
+`bidi` mode supports the shared GPT-Live voice and native agent delegation.
+Use the [shared Live configuration](/plugins/meeting-plugins#configure-teams-or-zoom)
+under `plugins.entries.zoom-meetings.config`. Browser participant audio is
+captured separately from native assistant-microphone injection, so Live can
+hear interruptions while speaking.
+
 ## Handle Zoom policy and manual actions
 
 The browser adapter chooses **Join from browser**, fills the guest name, turns

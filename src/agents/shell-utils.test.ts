@@ -1,9 +1,10 @@
 // Verifies shell selection, PATH lookup, and platform-specific shell helpers.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   buildShellCommandInvocation,
@@ -14,6 +15,12 @@ import {
   getShellConfig,
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  // Whole-module autospy mutates native ChildProcess prototypes across shared-worker files.
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const isWin = process.platform === "win32";
 
@@ -40,6 +47,22 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput("a\u0000\u0007\u007f\u0080b\t\n")).toBe(
       "a\\x00\\x07\\x7f\\x80b\t\n",
     );
+  });
+
+  it.each(["report-👩\u200d💻.json"])("preserves Unicode joiners in command output: %s", (text) => {
+    expect(sanitizeBinaryOutput(text)).toBe(text);
+    expect(sanitizeBinaryOutput(text, { ansiMode: "compat" })).toBe(text);
+
+    const sanitize = createStreamingBinaryOutputSanitizer();
+    const chunks = ["\u001b[3", "2m", ...Array.from(text), "\u001b[", "0m"];
+    expect(chunks.map(sanitize).join("")).toBe(text);
+  });
+
+  it("still removes other format characters and lone surrogates", () => {
+    const text = "a\u200bb\u202ec\u2066d\u2069e\ufefff\ud800g\udc00h\u0000";
+    const expected = "abcdefgh\\x00";
+    expect(sanitizeBinaryOutput(text)).toBe(expected);
+    expect(createStreamingBinaryOutputSanitizer()(text)).toBe(expected);
   });
 });
 
@@ -175,15 +198,6 @@ describe("getShellConfig", () => {
     expect(args).toEqual(["-c"]);
   });
 
-  it("falls back to sh on PATH when SHELL is /sbin/nologin", () => {
-    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
-    process.env.SHELL = "/sbin/nologin";
-    process.env.PATH = binDir;
-    const { shell, args } = getShellConfig();
-    expect(shell).toBe(path.join(binDir, "sh"));
-    expect(args).toEqual(["-c"]);
-  });
-
   it("falls back to startup-suppressed bash on PATH when SHELL is a placeholder", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
     process.env.SHELL = "/usr/bin/false";
@@ -192,13 +206,58 @@ describe("getShellConfig", () => {
     expect(shell).toBe(path.join(binDir, "bash"));
     expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
-
   it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
     process.env.SHELL = "/usr/bin/false";
     process.env.PATH = "";
     const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
     expect(args).toEqual(["-c"]);
+  });
+});
+
+describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("matches which cwd discovery for empty PATH entries without spawning a resolver", () => {
+    const root = tempDirs.make("openclaw-shell-cwd-");
+    fs.writeFileSync(path.join(root, "bash"), "", { mode: 0o755 });
+    const expected = execFileSync("/usr/bin/which", ["bash"], {
+      cwd: root,
+      env: { PATH: ":" },
+      encoding: "utf8",
+    }).trim();
+    vi.stubEnv("PATH", ":");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const spawn = vi.mocked(spawnSync);
+    spawn.mockClear();
+
+    expect(path.resolve(root, getBashShellConfig().shell)).toBe(path.resolve(root, expected));
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to sh without spawning which when bash is unavailable", () => {
+    const root = tempDirs.make("openclaw-shell-no-bash-");
+    fs.writeFileSync(path.join(root, "sh"), "", { mode: 0o755 });
+    vi.stubEnv("PATH", root);
+    const existsSync = fs.existsSync.bind(fs);
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) =>
+      candidate === "/bin/bash" ? false : existsSync(candidate),
+    );
+    const spawn = vi.mocked(spawnSync);
+    spawn.mockClear();
+
+    expect(getBashShellConfig()).toEqual({
+      shell: path.join(root, "sh"),
+      args: ["-c"],
+      commandTransport: "argv",
+    });
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 
@@ -400,14 +459,15 @@ describe("detectRuntimeShell", () => {
     envSnapshot.restore();
   });
 
-  if (!isWin) {
-    it("ignores non-interactive SHELL placeholders and falls through to runtime hints", () => {
+  it.runIf(!isWin)(
+    "ignores non-interactive SHELL placeholders and falls through to runtime hints",
+    () => {
       process.env.SHELL = "/usr/bin/false";
       process.env.BASH_VERSION = "5.2.0";
 
       expect(detectRuntimeShell()).toBe("bash");
-    });
-  }
+    },
+  );
 });
 
 describe("getShellConfig on Windows", () => {

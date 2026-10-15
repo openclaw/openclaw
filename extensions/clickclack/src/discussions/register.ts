@@ -5,6 +5,7 @@ import { ClickClackDiscussionService } from "./service.js";
 import {
   enforceClickClackDiscussionToolTarget,
   isClickClackDiscussionSessionTarget,
+  resolveClickClackDiscussionSessionTarget,
 } from "./tool-policy.js";
 import { createClickClackDiscussionTool } from "./tool.js";
 
@@ -17,12 +18,9 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   const service = new ClickClackDiscussionService(api.runtime);
   api.registerService({
     id: "clickclack-discussion-session-events",
-    start: ({ gatewayEvents }) => {
-      service.bindGatewayEvents(gatewayEvents);
-    },
-    stop: () => {
-      service.cleanup();
-    },
+    apiVersion: 2,
+    start: ({ gatewayEvents, scheduler }) => service.bindGatewayEvents(gatewayEvents, scheduler),
+    stop: () => service.cleanup(),
   });
   api.registerTool((context) =>
     createClickClackDiscussionTool({ service, sessionKey: context.sessionKey }),
@@ -39,6 +37,16 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
       });
       return target ? { expectedSessionId: target.binding.sessionId } : undefined;
     },
+    {
+      async resolveAsync({ requesterSessionKey, targetSessionKey }) {
+        const target = await resolveClickClackDiscussionSessionTarget({
+          runtime: api.runtime,
+          requesterSessionKey,
+          targetSessionKey,
+        });
+        return target ? { expectedSessionId: target.binding.sessionId } : undefined;
+      },
+    },
   );
   // Registration is process-stable; provider methods read live config so a
   // channel hot reload can enable discussions without restarting the gateway.
@@ -46,9 +54,17 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   api.lifecycle.registerRuntimeLifecycle({
     id: "clickclack-discussions",
     description: "Stops the lifecycle reconciler for managed ClickClack discussions.",
-    cleanup: () => {
-      unregisterSessionAccess();
-      service.cleanup();
+    cleanup: ({ reason, sessionKey, runId }) => {
+      // Session cleanup shares this hook; only plugin retirement owns the service.
+      if (
+        sessionKey === undefined &&
+        runId === undefined &&
+        (reason === "restart" || reason === "disable")
+      ) {
+        unregisterSessionAccess();
+        return service.cleanup();
+      }
+      return undefined;
     },
   });
 }

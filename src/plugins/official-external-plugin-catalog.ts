@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Reads official external plugin/channel/provider catalogs into manifest-like metadata. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resolvePluginInstallSources, type PluginInstallSource } from "./install-channel-specs.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES } from "./official-external-plugin-bundled-catalogs.js";
@@ -17,6 +20,7 @@ import {
 import type {
   OfficialExternalChannelSecretContract,
   OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogManifest,
   OfficialExternalPluginCatalogInstallCandidate,
   OfficialExternalPluginCatalogSourceProfile,
   OfficialExternalPluginCatalogProfileConfig,
@@ -30,19 +34,11 @@ export type {
   OfficialExternalWebSearchProvider,
   OfficialExternalPluginCatalogEntry,
   OfficialExternalPluginCatalogFeed,
-  HostedOfficialExternalPluginCatalogMetadata,
-  HostedOfficialExternalPluginCatalogSnapshot,
-  HostedOfficialExternalPluginCatalogSnapshotStore,
-  HostedOfficialExternalPluginCatalogTrustState,
-  HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   HostedOfficialExternalPluginCatalogLoadResult,
 } from "./official-external-plugin-catalog.types.js";
 
 export {
-  HostedCatalogSignedFeedMonotonicityError,
   isOfficialExternalPluginCatalogFeed,
-  isOfficialExternalPluginCatalogSequence,
-  parseOfficialExternalPluginCatalogTimestamp,
   getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginId,
 } from "./official-external-plugin-catalog-source.js";
@@ -56,15 +52,10 @@ type OfficialExternalProviderContract =
 function getFeedEntryInstallCandidates(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogInstallCandidate[] {
-  const state = normalizeOptionalString(entry.state);
-  if (state !== "available") {
-    return [];
-  }
-  const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
-  if (publisherTrust !== "official") {
-    return [];
-  }
-  return getFeedEntryInstallCandidateRecords(entry);
+  return normalizeOptionalString(entry.state) === "available" &&
+    normalizeOptionalString(entry.publisher?.trust) === "official"
+    ? getFeedEntryInstallCandidateRecords(entry)
+    : [];
 }
 
 const BUNDLED_CATALOG_SOURCE_REFS = new Set(
@@ -74,16 +65,10 @@ const BUNDLED_CATALOG_SOURCE_REFS = new Set(
 function* bundledOfficialExternalPluginCatalogEntries(): Generator<OfficialExternalPluginCatalogEntry> {
   const seen = new Set<string>();
   for (const entry of BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES) {
-    const install = isRecord(entry.install) ? entry.install : undefined;
-    const candidates = install?.candidates;
     if (
-      Array.isArray(candidates) &&
-      candidates.some((candidate) => {
-        if (!isRecord(candidate)) {
-          return false;
-        }
-        return !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS);
-      })
+      getFeedEntryInstallCandidateRecords(entry).some(
+        (candidate) => !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS),
+      )
     ) {
       continue;
     }
@@ -209,15 +194,12 @@ function normalizeNpmExpectedIntegrity(value: unknown): string | undefined {
   return integrity;
 }
 
-/** Returns manifest metadata from an official external catalog entry when present. */
 /** Returns legacy plugin ids used only for trusted update migrations. */
 export function resolveOfficialExternalPluginLegacyIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
-  return uniqueStrings(
-    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
-      .map((pluginId) => normalizeOptionalString(pluginId))
-      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  return normalizeUniqueTrimmedStringList(
+    getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds,
   );
 }
 
@@ -225,10 +207,8 @@ export function resolveOfficialExternalPluginLegacyIds(
 export function resolveOfficialExternalPluginLegacyNpmPackageNames(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
-  return uniqueStrings(
-    (getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames ?? [])
-      .map((packageName) => normalizeOptionalString(packageName))
-      .filter((packageName): packageName is string => Boolean(packageName)),
+  return normalizeUniqueTrimmedStringList(
+    getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames,
   );
 }
 
@@ -247,17 +227,11 @@ export function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  const lookupIds = [
-    normalizeOptionalString(manifest?.plugin?.id),
-    normalizeOptionalString(manifest?.channel?.id),
-  ];
+  const ids = [manifest?.plugin?.id, manifest?.channel?.id];
   for (const provider of manifest?.providers ?? []) {
-    lookupIds.push(normalizeOptionalString(provider.id));
-    for (const alias of provider.aliases ?? []) {
-      lookupIds.push(normalizeOptionalString(alias));
-    }
+    ids.push(provider.id, ...(provider.aliases ?? []));
   }
-  return uniqueStrings(lookupIds.filter((value): value is string => Boolean(value)));
+  return normalizeUniqueTrimmedStringList(ids);
 }
 
 export function resolveOfficialExternalPluginLabel(
@@ -350,35 +324,43 @@ export function isOfficialExternalPluginId(pluginId: string): boolean {
   );
 }
 
+function resolveOfficialExternalPluginOwners(
+  matches: (manifest: OfficialExternalPluginCatalogManifest) => boolean | undefined,
+): string[] {
+  const pluginIds = new Set<string>();
+  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    if (pluginId && manifest && matches(manifest)) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+function normalizedProviderIdSet(providerIds: readonly string[]): Set<string> {
+  return new Set(
+    providerIds
+      .map(normalizeOptionalLowercaseString)
+      .filter((providerId): providerId is string => Boolean(providerId)),
+  );
+}
+
 /** Resolves official external plugin owners for configured capability provider ids. */
 export function resolveOfficialExternalProviderContractPluginIds(params: {
   contract: OfficialExternalProviderContract;
   providerIds: ReadonlySet<string>;
 }): string[] {
-  const configuredProviderIds = new Set(
-    [...params.providerIds]
-      .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-      .filter((providerId): providerId is string => Boolean(providerId)),
-  );
+  const configuredProviderIds = normalizedProviderIdSet([...params.providerIds]);
   if (configuredProviderIds.size === 0) {
     return [];
   }
-  const pluginIds = new Set<string>();
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providerIds =
-      getOfficialExternalPluginCatalogManifest(entry)?.contracts?.[params.contract];
-    if (
-      pluginId &&
-      providerIds?.some((providerId) => {
-        const normalized = normalizeOptionalString(providerId)?.toLowerCase();
-        return normalized ? configuredProviderIds.has(normalized) : false;
-      })
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.contracts?.[params.contract]?.some((providerId) => {
+      const normalized = normalizeOptionalString(providerId)?.toLowerCase();
+      return normalized ? configuredProviderIds.has(normalized) : false;
+    }),
+  );
 }
 
 /** Resolves official web provider owners from matching documented environment credentials. */
@@ -386,19 +368,13 @@ export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params
   contract: OfficialExternalProviderContract;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const pluginIds = new Set<string>();
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const contractProviderIds = new Set(
-      (manifest?.contracts?.[params.contract] ?? [])
-        .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-        .filter((providerId): providerId is string => Boolean(providerId)),
+  return resolveOfficialExternalPluginOwners((manifest) => {
+    const contractProviderIds = normalizedProviderIdSet(
+      manifest.contracts?.[params.contract] ?? [],
     );
-    if (
-      pluginId &&
+    return (
       contractProviderIds.size > 0 &&
-      manifest?.webSearchProviders?.some((provider) => {
+      manifest.webSearchProviders?.some((provider) => {
         const providerId = normalizeOptionalString(provider.id)?.toLowerCase();
         return (
           providerId !== undefined &&
@@ -406,60 +382,35 @@ export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params
           provider.envVars?.some((envVar) => Boolean(params.env[envVar]?.trim()))
         );
       })
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+    );
+  });
 }
 
 /** Resolves official external plugin owners for configured model provider ids. */
 export function resolveOfficialExternalProviderPluginIds(params: {
   providerIds: ReadonlySet<string>;
 }): string[] {
-  const configuredProviderIds = new Set(
-    [...params.providerIds]
-      .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-      .filter((providerId): providerId is string => Boolean(providerId)),
-  );
+  const configuredProviderIds = normalizedProviderIdSet([...params.providerIds]);
   if (configuredProviderIds.size === 0) {
     return [];
   }
-  const pluginIds = new Set<string>();
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers;
-    if (
-      pluginId &&
-      providers?.some((provider) =>
-        [provider.id, ...(provider.aliases ?? [])].some((providerId) => {
-          const normalized = normalizeOptionalString(providerId)?.toLowerCase();
-          return normalized ? configuredProviderIds.has(normalized) : false;
-        }),
-      )
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.providers?.some((provider) =>
+      [provider.id, ...(provider.aliases ?? [])].some((providerId) => {
+        const normalized = normalizeOptionalString(providerId)?.toLowerCase();
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      }),
+    ),
+  );
 }
 
 /** Resolves official external provider owners with configured environment credentials. */
 export function resolveOfficialExternalProviderPluginIdsForEnv(env: NodeJS.ProcessEnv): string[] {
-  const pluginIds = new Set<string>();
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers;
-    if (
-      pluginId &&
-      providers?.some((provider) =>
-        provider.envVars?.some((envVar) => Boolean(env[envVar]?.trim())),
-      )
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.providers?.some((provider) =>
+      provider.envVars?.some((envVar) => Boolean(env[envVar]?.trim())),
+    ),
+  );
 }
 
 export function listOfficialExternalChannelCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
@@ -475,21 +426,27 @@ export function listOfficialExternalChannelEnvVars(): Array<{
   return listOfficialExternalChannelCatalogEntries().flatMap((entry) => {
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
-    const envVars = uniqueStrings(
-      [
-        ...(channel?.envVars ?? []),
-        ...(channel?.configuredState?.env?.allOf ?? []),
-        ...(channel?.configuredState?.env?.anyOf ?? []),
-      ]
-        .map((envVar) => normalizeOptionalString(envVar))
-        .filter((envVar): envVar is string => Boolean(envVar)),
-    );
+    const envVars = normalizeUniqueTrimmedStringList([
+      ...(channel?.envVars ?? []),
+      ...(channel?.configuredState?.env?.allOf ?? []),
+      ...(channel?.configuredState?.env?.anyOf ?? []),
+    ]);
     return channelId && envVars.length > 0 ? [{ channelId, envVars }] : [];
   });
 }
 
 const CHANNEL_SECRET_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
 const CHANNEL_SECRET_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+function findOfficialExternalChannelManifest(channelId: string) {
+  const entry = listOfficialExternalChannelCatalogEntries().find(
+    (candidate) =>
+      normalizeOptionalLowercaseString(
+        getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+      ) === channelId,
+  );
+  return getOfficialExternalPluginCatalogManifest(entry ?? {});
+}
 
 /** Returns a validated host fallback secret contract for one external channel. */
 export function getOfficialExternalChannelSecretContract(
@@ -499,13 +456,7 @@ export function getOfficialExternalChannelSecretContract(
   if (!normalizedChannelId) {
     return undefined;
   }
-  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
-    const id = normalizeOptionalString(
-      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
-    )?.toLowerCase();
-    return id === normalizedChannelId;
-  });
-  const fields = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelSecrets?.fields;
+  const fields = findOfficialExternalChannelManifest(normalizedChannelId)?.channelSecrets?.fields;
   if (!fields) {
     return undefined;
   }
@@ -542,14 +493,8 @@ export function getOfficialExternalChannelHostSchemaAllOf(
   if (!normalizedChannelId) {
     return [];
   }
-  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
-    const id = normalizeOptionalString(
-      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
-    )?.toLowerCase();
-    return id === normalizedChannelId;
-  });
-  const clauses = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
-    ?.schemaAllOf;
+  const clauses =
+    findOfficialExternalChannelManifest(normalizedChannelId)?.channelHostConfig?.schemaAllOf;
   return Array.isArray(clauses) ? clauses.filter(isRecord) : [];
 }
 
@@ -589,6 +534,10 @@ export function isExternallyDistributedPlugin(plugin: {
   packageName?: string;
   packageBuild?: { bundledDist?: boolean };
 }): boolean {
+  // Staged publication metadata must not transfer bundled repair ownership.
+  if (plugin.packageBuild?.bundledDist === true) {
+    return false;
+  }
   const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
   return (
     plugin.packageBuild?.bundledDist === false ||

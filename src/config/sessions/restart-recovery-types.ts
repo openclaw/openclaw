@@ -1,6 +1,20 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
+/** Exact task and requester generation captured by the admitted host completion turn. */
+export type HarnessCompletionRecovery = {
+  taskId: string;
+  /** Terminal outcome captured when this completion input was admitted. */
+  taskStatus: "succeeded" | "failed";
+  taskRunId: string;
+  sourceRunId: string;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  sessionId: string;
+  /** Absence is an expected absent revision, not a wildcard. */
+  lifecycleRevision?: string;
+};
+
 export type RestartRecoveryBeforeAgentReplyState =
   | "admitted"
   | "pending"
@@ -14,13 +28,26 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
   captured?: true;
   payloads?: Array<{ mediaUrls?: string[]; visible?: boolean }>;
   payloadsTruncated?: true;
+  /** Classification facts only; raw terminal text and errors are never retained here. */
+  meta?: {
+    terminalReply?: { disposition: "silent" };
+    yielded?: true;
+    continuationPending?: true;
+    aborted?: true;
+    error?: true;
+  };
+  requesterContinuationSettled?: true;
   deliveryStatus?: {
     status: "failed" | "partial_failed" | "sent" | "suppressed";
+    resultCount?: number;
     errorMessage?: string;
+    /** Producer reason, capped to 256 characters by the receipt owner. */
+    reason?: string;
     payloadOutcomes?: Array<{
       index: number;
       status: "failed" | "sent" | "suppressed";
       sentBeforeError?: boolean;
+      reason?: string;
     }>;
   };
   messagingToolSentTargets?: Array<{
@@ -32,6 +59,8 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
     threadSuppressed?: boolean;
     mediaUrls?: string[];
     visible?: boolean;
+    /** Explicit false remains progress-only after a restart. */
+    sourceReplyFinal?: boolean;
   }>;
   messagingToolSentTargetsTruncated?: true;
   /** Aggregate committed sends were not all represented by route-checkable target records. */
@@ -41,7 +70,15 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
 };
 
 export type RestartRecoveryTerminalDeliveryEvidence =
-  RestartRecoveryTerminalDeliveryEvidenceResult & { runId: string };
+  RestartRecoveryTerminalDeliveryEvidenceResult & {
+    runId: string;
+    harnessCompletion?: HarnessCompletionRecovery;
+    deliveryContext?: DeliveryContext;
+    /** Identified queue completion retained for its original admitted source. */
+    durableFinalReceipt?: { intentId: string; deliveryId: string; platformMessageId: string };
+    /** Actual completion run; a resumed run can differ from its queued source. */
+    transcriptRunId?: string;
+  };
 
 /** Durable ownership and idempotency state for gateway restart recovery. */
 export type SessionRestartRecoveryState = {
@@ -60,6 +97,7 @@ export type SessionRestartRecoveryState = {
   restartRecoveryDeliveryRequestFingerprint?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
+  restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
   restartRecoveryRequesterAccountId?: string;
   restartRecoveryRequesterSenderId?: string;
   restartRecoverySameChannelThreadRequired?: true;

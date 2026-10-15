@@ -1,10 +1,7 @@
-// Microsoft plugin module implements tts behavior.
 import { statSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type EdgeTTSClient = Pick<import("node-edge-tts").EdgeTTS, "ttsPromise">;
 
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
@@ -23,44 +20,39 @@ export function inferEdgeExtension(outputFormat: string): string {
   return ".mp3";
 }
 
-export async function edgeTTS(
-  params: {
-    text: string;
-    outputPath: string;
-    config: {
-      voice: string;
-      lang: string;
-      outputFormat: string;
-      saveSubtitles: boolean;
-      proxy?: string;
-      rate?: string;
-      pitch?: string;
-      volume?: string;
-      timeoutMs?: number;
-    };
-    timeoutMs: number;
-  },
-  ttsOverride?: EdgeTTSClient,
-): Promise<void> {
+export async function edgeTTS(params: {
+  text: string;
+  outputPath: string;
+  config: {
+    voice: string;
+    lang: string;
+    outputFormat: string;
+    saveSubtitles: boolean;
+    proxy?: string;
+    rate?: string;
+    pitch?: string;
+    volume?: string;
+    timeoutMs?: number;
+  };
+  timeoutMs: number;
+}): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
   if (text.trim().length === 0) {
     throw new Error("Microsoft TTS text cannot be empty");
   }
   const { writeExternalFileWithinRoot } = await import("openclaw/plugin-sdk/security-runtime");
 
-  const tts =
-    ttsOverride ??
-    new (await import("node-edge-tts")).EdgeTTS({
-      voice: config.voice,
-      lang: config.lang,
-      outputFormat: config.outputFormat,
-      saveSubtitles: config.saveSubtitles,
-      proxy: config.proxy,
-      rate: config.rate,
-      pitch: config.pitch,
-      volume: config.volume,
-      timeout: config.timeoutMs ?? timeoutMs,
-    });
+  const tts = new (await import("node-edge-tts")).EdgeTTS({
+    voice: config.voice,
+    lang: config.lang,
+    outputFormat: config.outputFormat,
+    saveSubtitles: config.saveSubtitles,
+    proxy: config.proxy,
+    rate: config.rate,
+    pitch: config.pitch,
+    volume: config.volume,
+    timeout: config.timeoutMs ?? timeoutMs,
+  });
 
   await mkdir(path.dirname(outputPath), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt += 1) {

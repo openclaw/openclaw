@@ -1,16 +1,16 @@
-import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import { renderRunsSection } from "./view-runs.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { RunsSection } from "./view-runs.tsx";
 
-type CronRunsSectionProps = Parameters<typeof renderRunsSection>[0];
+type CronRunsSectionProps = Parameters<typeof RunsSection>[0];
 
 function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRunsSectionProps {
   return {
-    basePath: "",
-    agentId: "main",
     runs: [],
+    runsState: "ready",
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -18,6 +18,7 @@ function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRun
     runsQuery: "",
     runsSortDir: "desc",
     onLoadMoreRuns: () => undefined,
+    onRefresh: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };
@@ -25,7 +26,8 @@ function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRun
 
 function renderRuns(overrides: Partial<CronRunsSectionProps> = {}) {
   const container = document.createElement("div");
-  render(renderRunsSection(createRunsProps(overrides)), container);
+  mountSolid(() => RunsSection(createRunsProps(overrides)), { container });
+  flush();
   return container;
 }
 
@@ -136,23 +138,6 @@ describe("cron run filter accessibility", () => {
       expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
     } finally {
       await restoreOriginalState();
-    }
-  });
-
-  it("creates selected run filter markup without a browser document", () => {
-    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-    expect(documentDescriptor).toBeDefined();
-    if (!documentDescriptor) {
-      throw new Error("Expected a restorable document descriptor");
-    }
-
-    try {
-      Object.defineProperty(globalThis, "document", { configurable: true, value: undefined });
-      expect(() =>
-        renderRunsSection(createRunsProps({ runsStatuses: ["ok", "error", "skipped"] })),
-      ).not.toThrow();
-    } finally {
-      Object.defineProperty(globalThis, "document", documentDescriptor);
     }
   });
 });

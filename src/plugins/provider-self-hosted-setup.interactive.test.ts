@@ -3,9 +3,9 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { promptAndConfigureOpenAICompatibleSelfHostedProviderAuth } from "./provider-self-hosted-setup.js";
 
-const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, upsertAuthProfileWithLockOrThrow } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
-  upsertAuthProfileWithLock: vi.fn(async () => null),
+  upsertAuthProfileWithLockOrThrow: vi.fn(async () => undefined),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -13,7 +13,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 }));
 
 describe("promptAndConfigureOpenAICompatibleSelfHostedProviderAuth", () => {
@@ -102,7 +102,7 @@ describe("promptAndConfigureOpenAICompatibleSelfHostedProviderAuth", () => {
       expect(prompt.validate?.(" ")).toBe("Required");
       expect(prompt.validate?.(" value ")).toBeUndefined();
     }
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

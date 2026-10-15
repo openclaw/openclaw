@@ -35,6 +35,11 @@ vi.mock("../runtime.js", async () => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
+  loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
 }));
 vi.mock("../config/mcp-config.js", () => ({
   listConfiguredMcpServers: mocks.listConfiguredMcpServers,
@@ -108,10 +113,12 @@ describe("claws add legacy v1 resume", () => {
         .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
         .run("openclaw.clawInstallRecord.v1", "demo-agent");
       await mkdir(workspace);
-      let config = { agents: { list: [legacyPlan.agent.config] } };
+      const { id, ...entry } = legacyPlan.agent.config;
+      let config = { agents: { entries: { [id]: entry } } };
       mocks.loadConfig.mockImplementation(() => config);
       mocks.applyClawAddPlan.mockImplementationOnce(async (boundedPlan) => {
-        config = { agents: { list: [boundedPlan.agent.config] } };
+        const { id: boundedId, ...boundedEntry } = boundedPlan.agent.config;
+        config = { agents: { entries: { [boundedId]: boundedEntry } } };
         return {
           schemaVersion: "openclaw.clawAddResult.v1",
           stability: "experimental",

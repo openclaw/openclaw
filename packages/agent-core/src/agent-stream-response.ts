@@ -1,4 +1,12 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import {
+  createEmptyTransportUsage,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
+import {
+  appendTextDeltaToAssistantMessage,
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+} from "@openclaw/llm-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -6,6 +14,7 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import { uuidv7 } from "./harness/session/uuid.js";
+import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
   type AgentCoreStreamRuntimeDeps,
   resolveAgentCoreStreamFn,
@@ -13,14 +22,17 @@ import {
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
+import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentMessage,
   AgentToolCall,
+  AgentToolResult,
   StreamFn,
   ToolLoopIntervention,
+  ToolResultContentSource,
 } from "./types.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -28,10 +40,12 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 export type AsyncToolBatchScheduling = {
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
+  hasUnobservedAsyncToolResults: boolean;
 };
 
 export type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
+  terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;
@@ -39,35 +53,7 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<
-  AssistantMessageEvent,
-  {
-    type:
-      | "text_start"
-      | "text_delta"
-      | "text_end"
-      | "thinking_start"
-      | "thinking_delta"
-      | "thinking_end"
-      | "toolcall_start"
-      | "toolcall_delta"
-      | "toolcall_end";
-  }
->;
-
-function appendTextDeltaToAssistantMessage(
-  message: AssistantMessage,
-  contentIndex: number,
-  delta: string,
-): AssistantMessage {
-  const content = [...message.content];
-  const currentContent = content[contentIndex];
-  content[contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + delta }
-      : { type: "text", text: delta };
-  return { ...message, content };
-}
+type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
 
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
@@ -76,17 +62,21 @@ function resolveAssistantMessageUpdate(
   if ("partial" in event && event.partial) {
     return event.partial;
   }
-  if (event.type === "text_delta") {
-    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+  if (event.type !== "text_delta") {
+    return currentMessage;
   }
-  return currentMessage;
+  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
     return message;
   }
-  const content = message.content.filter((item) => item.type !== "toolCall" || item.async);
+  const failed = message.stopReason === "aborted" || message.stopReason === "error";
+  // Executed async calls already own earlier fragments; a failed tail cannot admit another call.
+  const content = message.content.filter(
+    (item) => item.type !== "toolCall" || (!failed && item.async),
+  );
   return content.length === message.content.length
     ? message
     : replaceCompactionReplayOwnerContent(message, content);
@@ -102,6 +92,36 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
+}
+
+export async function emitToolResultMessage(
+  finalized: {
+    toolCall: AgentToolCall;
+    result: AgentToolResult<unknown>;
+    isError: boolean;
+    resultContentSource?: ToolResultContentSource;
+  },
+  emit: AgentEventSink,
+): Promise<ToolResultMessage> {
+  const message = copyInternalToolResultState(
+    finalized.result,
+    withToolResultContentSource(
+      {
+        role: "toolResult",
+        toolCallId: finalized.toolCall.id,
+        toolName: finalized.toolCall.name,
+        content: finalized.result.content ?? [],
+        details: finalized.result.details,
+        isError: finalized.isError,
+        timestamp: Date.now(),
+      },
+      finalized.resultContentSource,
+    ),
+  );
+  await emit({ type: "message_start", message });
+  const event = { type: "message_end" as const, message };
+  await emit(event);
+  return event.message;
 }
 
 export async function streamAgentResponse(
@@ -153,7 +173,11 @@ export async function streamAgentResponse(
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
   const abortFailedResponse = (message?: AssistantMessage) => {
-    if (message?.stopReason === "error" || message?.stopReason === "aborted") {
+    if (
+      message &&
+      (message.stopReason === "error" || message.stopReason === "aborted") &&
+      !isResponsesOutputLimitToolCallError(message)
+    ) {
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
     }
   };
@@ -173,11 +197,25 @@ export async function streamAgentResponse(
   let admissions = Promise.resolve();
   let executionFailure: { error: unknown } | undefined;
   const emitToolEvent: AgentEventSink = async (event) => {
-    if (event.type === "message_end" && event.message.role === "toolResult") {
-      context.messages.push(event.message);
-      newMessages.push(event.message);
+    if (event.type !== "message_end" || event.message.role !== "toolResult") {
+      await emit(event);
+      return;
     }
-    await emit(event);
+    const message = event.message;
+    const contextIndex = context.messages.push(message) - 1;
+    const newIndex = newMessages.push(message) - 1;
+    try {
+      await emit(event);
+    } finally {
+      if (event.message !== message && event.message.role === "toolResult") {
+        if (context.messages[contextIndex] === message) {
+          context.messages[contextIndex] = event.message;
+        }
+        if (newMessages[newIndex] === message) {
+          newMessages[newIndex] = event.message;
+        }
+      }
+    }
   };
   const enqueueTools = (message: AssistantMessage) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -192,6 +230,7 @@ export async function streamAgentResponse(
     if (calls.length === 0) {
       return;
     }
+    const hasUnobservedAsyncToolResults = executedIds.size > 0;
     for (const call of calls) {
       executedIds.add(call.id);
     }
@@ -207,6 +246,7 @@ export async function streamAgentResponse(
         const batch = await executeAsyncTools(message, calls, executionSignal, emitToolEvent, {
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
+          hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
         if (batch.fatal || batch.terminateRun) {
@@ -246,18 +286,6 @@ export async function streamAgentResponse(
                 message,
                 message.content.slice(committedContentCount),
               );
-        const updatePartial = async (message: AssistantMessage) => {
-          const fragment = remainingFragment(message);
-          if (partialIndex === undefined) {
-            partialIndex = context.messages.length;
-            context.messages.push(fragment);
-            await emit({ type: "message_start", message: { ...fragment } });
-          } else {
-            context.messages[partialIndex] = fragment;
-          }
-          return fragment;
-        };
-
         const commitFragment = async (message: AssistantMessage) => {
           if (partialIndex === undefined) {
             context.messages.push(message);
@@ -276,7 +304,9 @@ export async function streamAgentResponse(
             case "start": {
               const message = event.partial;
               partialMessage = message;
-              await updatePartial(message);
+              partialIndex = context.messages.length;
+              context.messages.push(message);
+              await emit({ type: "message_start", message: { ...message } });
               break;
             }
 
@@ -295,7 +325,14 @@ export async function streamAgentResponse(
                 if (event.contentIndex < committedContentCount) {
                   break;
                 }
-                const fragment = await updatePartial(message);
+                const fragment = remainingFragment(message);
+                if (partialIndex === undefined) {
+                  partialIndex = context.messages.length;
+                  context.messages.push(fragment);
+                  await emit({ type: "message_start", message: { ...fragment } });
+                } else {
+                  context.messages[partialIndex] = fragment;
+                }
                 const fragmentEvent = {
                   ...event,
                   contentIndex: event.contentIndex - committedContentCount,
@@ -316,21 +353,19 @@ export async function streamAgentResponse(
                 ) {
                   const prefix = prepareAssistantMessage(
                     ensureToolTurnIdentity({
-                      ...replaceCompactionReplayOwnerContent(
-                        message,
-                        message.content.slice(committedContentCount, event.contentIndex + 1),
+                      // Persistence takes ownership and freezes nested values. Detach the
+                      // completed prefix from the provider's still-mutable stream, after
+                      // replay checkpoints have been reindexed using original block identity.
+                      ...structuredClone(
+                        replaceCompactionReplayOwnerContent(
+                          message,
+                          message.content.slice(committedContentCount, event.contentIndex + 1),
+                        ),
                       ),
                       ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                       stopReason: "toolUse",
                       // Usage belongs to the terminal fragment, once per provider response.
-                      usage: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                        totalTokens: 0,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                      },
+                      usage: createEmptyTransportUsage(),
                     }),
                   );
                   streamedTurnId ??= prefix.turnId;
@@ -357,15 +392,33 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-          // Fence queued side effects before result hooks or transcript persistence can yield.
+          // Output-limit recovery drains admitted tools; other failures fence queued starts.
           abortFailedResponse(terminal);
           const result = await response.result();
           abortFailedResponse(result);
+          const outputLimit = isResponsesOutputLimitToolCallError(result);
+          if (outputLimit) {
+            // Record one provider terminal, with its original usage, after tool outcomes settle.
+            await executions;
+          }
+          const tail = remainingFragment(result);
           const finalMessage = prepareAssistantMessage(
             ensureToolTurnIdentity(
               removeNonExecutableToolCalls({
-                ...remainingFragment(result),
+                ...tail,
+                // The provider stop covers the whole response. Its calls were committed
+                // with earlier fragments, so a call-free tail is the response's end.
+                ...(committedContentCount > 0 &&
+                tail.stopReason === "toolUse" &&
+                !tail.content.some((item) => item.type === "toolCall")
+                  ? { stopReason: "stop" as const }
+                  : {}),
                 ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
+                ...(outputLimit && signal?.aborted
+                  ? { stopReason: "aborted" }
+                  : outputLimit && batches.length > 0 && batches.every((batch) => batch.terminate)
+                    ? { errorCode: PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE }
+                    : {}),
               }),
             ),
           );

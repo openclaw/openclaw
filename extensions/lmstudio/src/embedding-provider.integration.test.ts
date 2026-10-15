@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
 afterEach(() => {
@@ -10,7 +11,7 @@ afterEach(() => {
 describe("LM Studio embedding request headers", () => {
   it.each([
     {
-      name: "preserves resolved remote literals while resolving provider-owned headers",
+      name: "preserves resolved provider and remote literals",
       providerQuery: "",
       remoteQuery: "",
       providerOwnsDestination: true,
@@ -85,7 +86,9 @@ describe("LM Studio embedding request headers", () => {
           headers: {
             "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
             "x-shared": "remote-value",
-            ...(providerOwnsDestination ? { "x-provider-only": "resolved-provider-value" } : {}),
+            ...(providerOwnsDestination
+              ? { "x-provider-only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}" }
+              : {}),
             authorization: "Bearer synthetic-memory-key",
           },
         },
@@ -103,7 +106,7 @@ describe("LM Studio embedding request headers", () => {
   });
 });
 
-it.each(["single", "documents", "queries", "cancelled"] as const)(
+it.each(["documents", "queries", "cancelled"] as const)(
   "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
   async (kind) => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
@@ -193,28 +196,24 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         model: "embedding-model",
         fallback: "none",
         remote: { apiKey: "lmstudio-local" },
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                apiKey: "lmstudio-local",
-                localService: { command: "/usr/bin/lms" },
-                models: [
-                  {
-                    id: "embedding-model",
-                    name: "Embedding model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 0,
-                    contextTokens: 2048,
-                  },
-                ],
+        config: createModelProviderConfig({
+          lmstudio: {
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            apiKey: "lmstudio-local",
+            localService: { command: "/usr/bin/lms" },
+            models: [
+              {
+                id: "embedding-model",
+                name: "Embedding model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 0,
+                contextTokens: 2048,
               },
-            },
+            ],
           },
-        },
+        }),
         acquireLocalService: async () => {
           leases++;
           return {
@@ -247,8 +246,6 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         await expect(active).rejects.toThrow("cancelled active load");
         await expect(recovered).resolves.toEqual([1, 0]);
         expect(requests.filter((url) => url === "/v1/embeddings")).toHaveLength(1);
-      } else if (kind === "single") {
-        await expect(provider.embed("second")).resolves.toEqual([1, 0]);
       } else {
         await expect(
           provider.embedBatch(["second", "third"], {

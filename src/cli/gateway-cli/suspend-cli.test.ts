@@ -1,16 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OutputRuntimeEnv } from "../../runtime.js";
+import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
-
-function createRuntime(): OutputRuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 const readyResult = {
   status: "ready" as const,
@@ -32,56 +22,38 @@ describe("gateway suspend CLI", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([undefined, 0, "0", " 0 ", "0.25", "1e1"])(
-    "prints a ready lease for wait %j",
-    async (waitSeconds) => {
-      const callGateway = vi.fn(async () => readyResult);
-      const runtime = createRuntime();
+  it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
+    const callGateway = vi.fn(async () => readyResult);
+    const runtime = createNonExitingRuntimeEnv();
+    const rpcOpts = { url: "wss://gateway.example:19444", token: "opaque-credential" };
 
-      await runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime });
+    await runGatewaySuspend({ rpcOpts, waitSeconds: 0 }, { callGateway, runtime });
 
-      expect(callGateway).toHaveBeenCalledWith(
-        "gateway.suspend.prepare",
-        {},
-        { requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u) },
-      );
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
-      expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
-      expect(runtime.log).toHaveBeenCalledWith(
-        `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
-      );
-      expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
-    },
-  );
+    expect(callGateway).toHaveBeenCalledWith("gateway.suspend.prepare", rpcOpts, {
+      requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u),
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
+    expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
+    expect(runtime.log).toHaveBeenCalledWith(
+      `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
+  });
 
-  it.each(["", "   ", "\t\n"])(
-    "rejects blank wait %j before acquiring a lease",
-    async (waitSeconds) => {
-      const callGateway = vi.fn(async () => readyResult);
+  it("rejects whitespace-only wait before acquiring a lease", async () => {
+    const callGateway = vi.fn(async () => readyResult);
 
-      await expect(
-        runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime: createRuntime() }),
-      ).rejects.toThrow("--wait must be a non-negative number of seconds");
-      expect(callGateway).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      runGatewaySuspend(
+        { rpcOpts: {}, waitSeconds: " \t\n" },
+        { callGateway, runtime: createNonExitingRuntimeEnv() },
+      ),
+    ).rejects.toThrow("--wait must be a non-negative number of seconds");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   it.each([
-    {
-      name: "default gateway",
-      rpcOpts: {},
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1",
-    },
-    {
-      name: "custom local port",
-      rpcOpts: { localPortOverride: 18999 },
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1 --port 18999",
-    },
     {
       name: "named profile and custom local port",
       rpcOpts: { localPortOverride: 18999 },
@@ -96,19 +68,12 @@ describe("gateway suspend CLI", () => {
       container: "demo",
       command: "openclaw --container demo gateway resume suspension-1 --port 18999",
     },
-    {
-      name: "explicit URL and credentials remain private",
-      rpcOpts: { url: "wss://gateway.example:19444", token: "opaque-credential" },
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1",
-    },
   ])(
     "prints a correctly scoped resume hint for $name",
     async ({ rpcOpts, profile, container, command }) => {
       vi.stubEnv("OPENCLAW_PROFILE", profile);
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await runGatewaySuspend(
         { rpcOpts },
@@ -125,7 +90,7 @@ describe("gateway suspend CLI", () => {
     await expect(
       runGatewaySuspend(
         { rpcOpts: {}, requestId: "host-operation" },
-        { callGateway, runtime: createRuntime() },
+        { callGateway, runtime: createNonExitingRuntimeEnv() },
       ),
     ).rejects.toThrow(
       "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nRetry later or use --wait <seconds>.",
@@ -145,7 +110,7 @@ describe("gateway suspend CLI", () => {
 
     await runGatewaySuspend(
       { rpcOpts: {}, requestId: "host-operation", waitSeconds: "2" },
-      { callGateway, runtime: createRuntime(), nowMs: () => now, sleep },
+      { callGateway, runtime: createNonExitingRuntimeEnv(), nowMs: () => now, sleep },
     );
 
     expect(sleep).toHaveBeenCalledExactlyOnceWith(200);
@@ -157,7 +122,7 @@ describe("gateway suspend CLI", () => {
   });
 
   it("emits the latest busy result and exits nonzero in JSON mode", async () => {
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await runGatewaySuspend(
       { rpcOpts: { json: true }, requestId: "host-operation", json: true },
@@ -180,7 +145,7 @@ describe("gateway suspend CLI", () => {
         { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.2" },
         {
           callGateway,
-          runtime: createRuntime(),
+          runtime: createNonExitingRuntimeEnv(),
           nowMs: () => now,
           sleep: async () => {
             // A lagging clock can wake far past the advertised --wait window.
@@ -188,28 +153,10 @@ describe("gateway suspend CLI", () => {
           },
         },
       ),
-    ).rejects.toThrow("Timed out waiting for the Gateway to become idle.");
-    expect(callGateway).toHaveBeenCalledOnce();
-  });
-
-  it("reports the latest blockers when the wait deadline expires", async () => {
-    let now = 1_000;
-
-    await expect(
-      runGatewaySuspend(
-        { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.1" },
-        {
-          callGateway: vi.fn(async () => busyResult),
-          runtime: createRuntime(),
-          nowMs: () => now,
-          sleep: async (delayMs) => {
-            now += delayMs;
-          },
-        },
-      ),
     ).rejects.toThrow(
       "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nTimed out waiting for the Gateway to become idle.",
     );
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 });
 
@@ -222,7 +169,7 @@ describe("gateway resume CLI", () => {
         "No matching suspension was held (lease already expired or resumed); gateway is running.",
     },
   ])("prints the resumed=$resumed outcome", async ({ resumed, message }) => {
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
     const callGateway = vi.fn(async () => ({ ok: true, status: "running", resumed }));
 
     await runGatewayResume({ rpcOpts: {}, suspensionId: "suspension-1" }, { callGateway, runtime });

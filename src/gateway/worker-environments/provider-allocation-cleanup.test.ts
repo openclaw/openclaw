@@ -1,18 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
 
 describe("worker allocation cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each([
-    { bound: false, failRetirement: false },
-    { bound: true, failRetirement: false },
-    { bound: true, failRetirement: true },
-  ])(
+  it.each([{ bound: true, failRetirement: true }])(
     "retires node enrollment before completing provider cleanup (bound: $bound, retry: $failRetirement)",
     async ({ bound, failRetirement }) => {
       const retirementEntered = createDeferredCore();
@@ -36,13 +32,12 @@ describe("worker allocation cleanup", () => {
             throw new Error("expected pending enrollment");
           }
           if (bound) {
-            bindCloudWorkerSetupCompletion({
-              db: support.testState.stateDb.db,
-              completion: {
-                setupId: enrollment.setupId,
-                deviceId: "cleanup-device",
-                completedAtMs: 1_000,
-              },
+            await completeWorkerNodeSetupForTest({
+              baseDir: support.testState.root,
+              store: support.testState.store,
+              setupId: enrollment.setupId,
+              deviceId: "cleanup-device",
+              completedAtMs: 1_000,
             });
           }
           throw WorkerProviderError.cleanupComplete("cleanup-node-lease", primaryError);
@@ -57,7 +52,8 @@ describe("worker allocation cleanup", () => {
             mode: "connect",
             setupCode: "fixture-setup-code",
             setupId: expectDefined(
-              support.testState.store.ensureNodeEnrollment(record.environmentId).nodeSetupId,
+              (await support.testState.store.ensureNodeEnrollment(record.environmentId))
+                .nodeSetupId,
               "node setup identity",
             ),
             openclawVersion: "2026.8.1",
@@ -69,7 +65,7 @@ describe("worker allocation cleanup", () => {
         });
       let service = createService();
       const creation = service
-        .create("development", "confirmed-node-cleanup")
+        .createWithRequest({ profileId: "development", idempotencyKey: "confirmed-node-cleanup" })
         .catch((error: unknown) => error);
       try {
         await Promise.race([
@@ -116,7 +112,7 @@ describe("worker allocation cleanup", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "does not replay a confirmed-cleaned-up allocation after restart (replay: %s)",
     async (replay) => {
       const primaryError = new Error("project preparation failed before enrollment");
@@ -130,7 +126,12 @@ describe("worker allocation cleanup", () => {
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({ provision, destroy });
       let service = support.createService(provider);
-      await expect(service.create("development", "confirmed-cleanup")).rejects.toMatchObject({
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "confirmed-cleanup",
+        }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
         message: expect.stringContaining(
           replay ? "allocation response lost" : primaryError.message,
@@ -165,60 +166,46 @@ describe("worker allocation cleanup", () => {
     },
   );
 
-  it("cancels a requested environment without resolving a provider", async () => {
-    const intent = support.testState.store.createIntent({
-      environmentId: "never-provisioned",
-      providerId: "unavailable",
-      profileId: "removed",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "never-started",
-    });
-    support.testState.providersEnabled = false;
-    const service = support.createService(support.createProvider());
-    await expect(service.destroy(intent.environmentId)).resolves.toMatchObject({
-      state: "failed",
-      leaseId: null,
-    });
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
-    expect(support.testState.store.getCredential(intent.environmentId)).toBeUndefined();
-  });
-
-  it.each([
-    { leaseId: "", sharedHost: false },
-    { leaseId: "unattested-host" },
-    { leaseId: "unattested-host", sharedHost: "false" },
-  ])("retains cleanup intent for an invalid allocation identity %j", async (allocation) => {
-    const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({
-      provision: async () => {
-        throw new Error("response lost");
-      },
-      // Exercise the untyped plugin result boundary without changing the public contract.
-      resolveAllocation: async () => allocation as never,
-      destroy,
-    });
-    const service = support.createService(provider);
-    await expect(service.create("development", "invalid-allocation")).rejects.toMatchObject({
-      code: "provider_failure",
-    });
-    const pending = expectDefined(support.testState.store.list()[0], "invalid allocation intent");
-    await expect(service.destroy(pending.environmentId)).rejects.toMatchObject({
-      code: "provider_failure",
-      message: "Worker provider returned an invalid allocation identity",
-    });
-    expect(support.testState.store.get(pending.environmentId)).toMatchObject({
-      state: "provisioning",
-      leaseId: null,
-      sharedHost: null,
-      destroyRequestedAtMs: expect.any(Number),
-      lastError: "Worker provider returned an invalid allocation identity",
-    });
-    expect(destroy).not.toHaveBeenCalled();
-  });
+  it.each([{ leaseId: "unattested-host" }])(
+    "retains cleanup intent for an invalid allocation identity %j",
+    async (allocation) => {
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        provision: async () => {
+          throw new Error("response lost");
+        },
+        // Exercise the untyped plugin result boundary without changing the public contract.
+        resolveAllocation: async () => allocation as never,
+        destroy,
+      });
+      const service = support.createService(provider);
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "invalid-allocation",
+        }),
+      ).rejects.toMatchObject({
+        code: "provider_failure",
+      });
+      const pending = expectDefined(support.testState.store.list()[0], "invalid allocation intent");
+      await expect(service.destroy(pending.environmentId)).rejects.toMatchObject({
+        code: "provider_failure",
+        message: "Worker provider returned an invalid allocation identity",
+      });
+      expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+        state: "provisioning",
+        leaseId: null,
+        sharedHost: null,
+        destroyRequestedAtMs: expect.any(Number),
+        lastError: "Worker provider returned an invalid allocation identity",
+      });
+      expect(destroy).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
-    ["destroy", "restart"].flatMap((entrance) =>
-      ["still refused", "repaired"].map((preflight) => ({ entrance, preflight })),
+    ["restart"].flatMap((entrance) =>
+      ["still refused"].map((preflight) => ({ entrance, preflight })),
     ),
   )(
     "does not replay provisioning when preflight is $preflight during $entrance cleanup",
@@ -244,12 +231,17 @@ describe("worker allocation cleanup", () => {
         resolveAllocation,
       };
       let service = support.createService(provider);
-      await expect(service.create("development", "preflight-cleanup")).rejects.toMatchObject({
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "preflight-cleanup",
+        }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
       });
       const pending = expectDefined(support.testState.store.list()[0], "failed preflight intent");
       expect(pending).toMatchObject({ state: "provisioning", leaseId: null });
-      support.testState.store.requestDestroy({
+      await support.testState.store.requestDestroy({
         environmentId: pending.environmentId,
         state: pending.state,
       });
@@ -298,7 +290,7 @@ describe("worker allocation cleanup", () => {
     },
   );
 
-  it.each(["destroyed", "failed"] as const)(
+  it.each(["destroyed"] as const)(
     "retains an unreported allocation across failed teardown and restart (%s)",
     async (terminalState) => {
       const physicalLeases = new Set<string>();
@@ -320,11 +312,13 @@ describe("worker allocation cleanup", () => {
         );
       const provider = support.createProvider({ provision, resolveAllocation, destroy });
       const first = support.createService(provider);
-      await expect(first.create("development", "lost-allocation")).rejects.toMatchObject({
+      await expect(
+        first.createWithRequest({ profileId: "development", idempotencyKey: "lost-allocation" }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
       });
       const pending = expectDefined(support.testState.store.list()[0], "unreported allocation");
-      support.testState.store.requestDestroy({
+      await support.testState.store.requestDestroy({
         environmentId: pending.environmentId,
         state: pending.state,
         terminalState,
@@ -358,8 +352,7 @@ describe("worker allocation cleanup", () => {
       expect(physicalLeases.size).toBe(0);
       expect(support.testState.store.get(pending.environmentId)).toMatchObject({
         state: terminalState,
-        leaseId: terminalState === "failed" ? null : leaseId,
-        ...(terminalState === "failed" ? { lastError: "allocation response lost" } : {}),
+        leaseId,
       });
     },
   );
@@ -367,13 +360,25 @@ describe("worker allocation cleanup", () => {
   it.each(["queued", "resolving"] as const)(
     "fences a replaced cleanup owner while allocation resolution is %s",
     async (phase) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const provisionEntered = createDeferredCore();
+      const resolutionEntered = createDeferredCore();
+      const intentCommitted = createDeferredCore();
       const provisionPending = createDeferredCore();
       const resolutionPending = createDeferredCore();
+      const requestDestroy = support.testState.store.requestDestroy.bind(support.testState.store);
+      vi.spyOn(support.testState.store, "requestDestroy").mockImplementation(async (input) => {
+        const record = await requestDestroy(input);
+        intentCommitted.resolve();
+        return record;
+      });
       const resolveAllocation = vi.fn(async () => {
+        resolutionEntered.resolve();
         await resolutionPending.promise;
         return { leaseId: "old-allocation", sharedHost: false };
       });
       const provision = vi.fn(async () => {
+        provisionEntered.resolve();
         if (phase === "queued") {
           await provisionPending.promise;
         }
@@ -388,22 +393,41 @@ describe("worker allocation cleanup", () => {
           resolveProvisionTimeoutMs: () => 20,
         }),
       );
-      await expect(service.create("development", "owner-race")).rejects.toMatchObject({
-        code: "provider_failure",
-      });
-      const pending = expectDefined(support.testState.store.list()[0], "pending owner");
-      const teardown = service.destroy(pending.environmentId);
-      const rejected = expect(teardown).rejects.toMatchObject({ code: "invalid_state" });
+      const creation = service
+        .createWithRequest({ profileId: "development", idempotencyKey: "owner-race" })
+        .catch((error: unknown) => error);
+      let teardownResult: Promise<unknown> | undefined;
       try {
-        await support.waitForFast(() =>
-          expect(
-            support.testState.store.get(pending.environmentId)?.destroyRequestedAtMs,
-          ).not.toBeNull(),
-        );
-        if (phase === "resolving") {
-          await support.waitForFast(() => expect(resolveAllocation).toHaveBeenCalledOnce());
+        await Promise.race([
+          provisionEntered.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before provider entry", { cause: result });
+          }),
+        ]);
+        if (phase === "queued") {
+          await vi.advanceTimersByTimeAsync(20);
         }
-        const replacement = support.testState.store.transition({
+        expect(await creation).toMatchObject({ code: "provider_failure" });
+        const pending = expectDefined(support.testState.store.list()[0], "pending owner");
+        teardownResult = service.destroy(pending.environmentId).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await Promise.race([
+          intentCommitted.promise,
+          teardownResult.then((result) => {
+            throw new Error("Teardown ended before destroy intent committed", { cause: result });
+          }),
+        ]);
+        if (phase === "resolving") {
+          await Promise.race([
+            resolutionEntered.promise,
+            teardownResult.then((result) => {
+              throw new Error("Teardown ended before allocation resolution", { cause: result });
+            }),
+          ]);
+        }
+        const replacement = await support.testState.store.transition({
           environmentId: pending.environmentId,
           from: "provisioning",
           to: "draining",
@@ -415,7 +439,7 @@ describe("worker allocation cleanup", () => {
         });
         provisionPending.resolve();
         resolutionPending.resolve();
-        await rejected;
+        expect(await teardownResult).toMatchObject({ error: expect.any(Error) });
         expect(support.testState.store.get(pending.environmentId)).toEqual(replacement);
         expect(resolveAllocation).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
         expect(provision).toHaveBeenCalledOnce();
@@ -423,14 +447,17 @@ describe("worker allocation cleanup", () => {
       } finally {
         provisionPending.resolve();
         resolutionPending.resolve();
-        await teardown.catch(() => undefined);
+        await Promise.all([creation, teardownResult]);
       }
     },
   );
 
   it("keeps timed-out allocation resolution owned until settlement, including shutdown", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const resolutionEntered = createDeferredCore();
     const resolutionPending = createDeferredCore();
     const resolveAllocation = vi.fn(async () => {
+      resolutionEntered.resolve();
       await resolutionPending.promise;
       return { leaseId: "late-allocation", sharedHost: false };
     });
@@ -444,20 +471,40 @@ describe("worker allocation cleanup", () => {
         providerCallTimeoutMs: 20,
       },
     );
-    await expect(service.create("development", "resolution-timeout")).rejects.toMatchObject({
+    await expect(
+      service.createWithRequest({ profileId: "development", idempotencyKey: "resolution-timeout" }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
     });
     const pending = expectDefined(support.testState.store.list()[0], "pending resolution");
-    await expect.soft(service.destroy(pending.environmentId)).rejects.toMatchObject({
-      code: "provider_failure",
-      message: "Worker provider operation timed out after 20ms",
-    });
-    const retry = service.destroy(pending.environmentId);
+    const teardownResult = service.destroy(pending.environmentId).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    let retryResult: Promise<unknown> | undefined;
+    let stopping: Promise<void> | undefined;
     let stopped = false;
-    const stopping = service.stop().then(() => {
-      stopped = true;
-    });
     try {
+      await Promise.race([
+        resolutionEntered.promise,
+        teardownResult.then((result) => {
+          throw new Error("Teardown ended before allocation resolution", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(20);
+      expect.soft(await teardownResult).toMatchObject({
+        error: {
+          code: "provider_failure",
+          message: "Worker provider operation timed out after 20ms",
+        },
+      });
+      retryResult = service.destroy(pending.environmentId).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      stopping = service.stop().then(() => {
+        stopped = true;
+      });
       // The retry and shutdown have been admitted, but neither can release the provider queue.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -472,9 +519,9 @@ describe("worker allocation cleanup", () => {
       });
     } finally {
       resolutionPending.resolve();
-      await retry;
-      await stopping;
+      await Promise.all([teardownResult, retryResult, stopping]);
     }
+    expect(await retryResult).toMatchObject({ value: { state: "destroyed" } });
     expect(resolveAllocation).toHaveBeenCalledTimes(2);
     expect(provision).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();

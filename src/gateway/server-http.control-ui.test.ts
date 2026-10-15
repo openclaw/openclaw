@@ -2,6 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   AUTH_NONE,
@@ -11,24 +13,51 @@ import {
 } from "./server-http.test-harness.js";
 
 describe("Gateway Control UI identity", () => {
-  it.each(["", "/console/"])("keeps UI resource authentication at base %j", async (basePath) => {
-    await withGatewayServer({
-      prefix: "control-ui-resource-auth",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { controlUiEnabled: true, controlUiBasePath: basePath },
-      run: async (server) => {
-        const base = basePath.replace(/\/$/, "");
-        for (const [method, path] of [
-          ["GET", `${base}/avatar/main?meta=1`],
-          ["GET", `${base}/__openclaw__/assistant-media?source=missing.png`],
-          ["POST", `${base}/__openclaw__/assistant-media?meta=1&allow=1&source=missing.png`],
-        ] as const) {
-          const response = await sendRequest(server, { path, method });
-          expect(response.res.statusCode, path).toBe(401);
-        }
-      },
-    });
-  });
+  it.each([
+    { basePath: "", enabled: true },
+    { basePath: "/console/", enabled: false },
+  ])(
+    "keeps authenticated media available at $basePath with dashboard enabled=$enabled",
+    async ({ basePath, enabled }) => {
+      await withGatewayServer({
+        prefix: "control-ui-resource-auth",
+        resolvedAuth: AUTH_TOKEN,
+        overrides: { controlUiEnabled: enabled, controlUiBasePath: basePath },
+        run: async (server) => {
+          const base = basePath.replace(/\/$/, "");
+          const media = await saveMediaBuffer(
+            createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 }),
+            "image/png",
+          );
+          const query = new URLSearchParams({ meta: "1", source: `media://inbound/${media.id}` });
+          const mediaPath = `${base}/__openclaw__/assistant-media?${query}`;
+          for (const [method, path] of [
+            ["GET", mediaPath],
+            ["POST", `${mediaPath}&allow=1`],
+          ] as const) {
+            const response = await sendRequest(server, { path, method });
+            expect(response.res.statusCode, path).toBe(401);
+          }
+          const metadata = await sendRequest(server, {
+            path: mediaPath,
+            authorization: `Bearer ${AUTH_TOKEN.token}`,
+          });
+          expect(metadata.res.statusCode).toBe(200);
+          expect(JSON.parse(metadata.getBody())).toMatchObject({
+            available: true,
+            mimeType: "image/png",
+            mediaTicket: expect.any(String),
+          });
+          const avatar = await sendRequest(server, { path: `${base}/avatar/main?meta=1` });
+          expect(avatar.res.statusCode).toBe(enabled ? 401 : 404);
+          if (!enabled) {
+            const document = await sendRequest(server, { path: `${base}/` });
+            expect(document.res.statusCode).toBe(404);
+          }
+        },
+      });
+    },
+  );
 
   it("keeps the root UI POST rejection ahead of the startup fallback", async () => {
     await withGatewayServer({
@@ -109,7 +138,7 @@ describe("Gateway Control UI identity", () => {
     });
   });
 
-  it("keeps static requests independent of workspace identity reads while bootstrap resolves identity", async () => {
+  it("keeps assets independent of identity reads while documents and bootstrap resolve identity", async () => {
     await withTempDir("openclaw-http-identity-", async (controlUiRoot) => {
       await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
       const workspace = await fs.realpath(controlUiRoot);
@@ -129,34 +158,55 @@ describe("Gateway Control UI identity", () => {
           getRuntimeConfig: () => ({
             agents: {
               ownership: "explicit",
-              entries: { ops: { workspace }, research: {} },
+              entries: { ops: {}, research: { workspace } },
               defaults: { systemAgent: { agentId: "research" } },
             },
           }),
         },
         run: async (server) => {
+          const identityRuntime = await import("../agents/identity-file-runtime.js");
+          const prepareIdentity = vi.spyOn(identityRuntime, "prepareIdentityFile");
           const realpath = vi.spyOn(fsSync, "realpathSync");
           const identityReads = () =>
             realpath.mock.calls.filter(
               ([file]) => nodePath.basename(String(file)) === "IDENTITY.md",
             );
           try {
-            for (const path of ["/", "/chat", "/assets/app.js"]) {
-              const response = await sendRequest(server, { path, method: "GET" });
-              expect(response.res.statusCode, path).toBe(200);
+            for (const method of ["GET", "HEAD"]) {
+              const response = await sendRequest(server, { path: "/assets/app.js", method });
+              expect(response.res.statusCode, method).toBe(200);
+              if (method === "HEAD") {
+                expect(response.getBody()).toBe("");
+              }
             }
             expect(identityReads()).toHaveLength(0);
+            expect(prepareIdentity).not.toHaveBeenCalled();
+
+            for (const path of ["/", "/chat"]) {
+              const response = await sendRequest(server, { path, method: "GET" });
+              expect(response.res.statusCode, path).toBe(200);
+              expect(response.getBody()).toContain('data-openclaw-bootstrap-config="');
+              expect(response.getBody()).toContain(
+                "&quot;assistantAgentId&quot;:&quot;research&quot;",
+              );
+              expect(response.getBody()).toContain(
+                "&quot;assistantName&quot;:&quot;Synthetic assistant&quot;",
+              );
+              expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
+            }
 
             const bootstrap = await sendRequest(server, {
               path: "/control-ui-config.json",
               method: "GET",
             });
             expect(JSON.parse(bootstrap.getBody())).toMatchObject({
-              assistantAgentId: "ops",
+              assistantAgentId: "research",
               assistantName: "Synthetic assistant",
             });
-            expect(identityReads().length).toBeGreaterThan(0);
+            expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
+            expect(identityReads()).toHaveLength(0);
           } finally {
+            prepareIdentity.mockRestore();
             realpath.mockRestore();
           }
         },

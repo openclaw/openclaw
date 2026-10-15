@@ -1,6 +1,6 @@
-// Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   createConfigIO,
@@ -9,6 +9,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
@@ -28,17 +29,17 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
+import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
-  createBackupResourceInventory,
+  createBackupResourcePlan,
   type BackupAgentRoot,
   type BackupRegenerableKind,
-  type BackupResourceInventory,
 } from "./backup-resource-inventory.js";
-import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { buildCleanupPlan } from "./cleanup-utils.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -46,12 +47,12 @@ export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
-  params: Parameters<typeof recordBackupRunOutcome>[0],
+  params: Parameters<typeof recordBackupRunOutcomeWithOwner>[0],
 ): Promise<void> {
   try {
     // A rejected private input must not be reopened for best-effort outcome writes.
     assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-    await recordBackupRunOutcome(params);
+    await recordBackupRunOutcomeWithOwner(params);
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
@@ -72,7 +73,7 @@ export function resolveRequiredBackupPath(
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";
-type BackupSkipReason = "covered" | "missing" | "regenerable" | "unresolved" | "private";
+type BackupSkipReason = "covered" | "missing" | "regenerable" | "private";
 
 export type BackupAsset = {
   kind: BackupAssetKind;
@@ -82,22 +83,11 @@ export type BackupAsset = {
 };
 
 type SkippedBackupAsset = {
-  kind: BackupAssetKind | BackupRegenerableKind | "plugin resources";
+  kind: BackupAssetKind | BackupRegenerableKind;
   sourcePath: string;
   displayPath: string;
   reason: BackupSkipReason;
   coveredBy?: string;
-};
-
-type BackupPlan = {
-  configCapture?: BackupConfigCapture;
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-  inventory: BackupResourceInventory;
-  included: BackupAsset[];
-  skipped: SkippedBackupAsset[];
 };
 
 type BackupAssetCandidate = {
@@ -107,29 +97,18 @@ type BackupAssetCandidate = {
   exists: boolean;
 };
 
-function backupAssetPriority(kind: BackupAssetKind): number {
-  switch (kind) {
-    case "state":
-      return 0;
-    case "config":
-      return 1;
-    case "credentials":
-      return 2;
-    case "workspace":
-      return 3;
-    case "agent":
-      return 4;
-    case "managed skill":
-      return 5;
-  }
-  throw new Error("Unsupported backup asset kind");
-}
+const BACKUP_ASSET_PRIORITY = {
+  state: 0,
+  config: 1,
+  credentials: 2,
+  workspace: 3,
+  agent: 4,
+  "managed skill": 5,
+} satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-function formatBackupArchiveTimestamp(
-  nowMs = Date.now(),
-  offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
-): string {
+export function buildBackupArchiveRoot(nowMs = Date.now()): string {
+  const offsetMinutes = -new Date(nowMs).getTimezoneOffset();
   const shifted = nowMs + offsetMinutes * 60_000;
   const local = new Date(shifted);
   const sign = offsetMinutes >= 0 ? "+" : "-";
@@ -143,22 +122,16 @@ function formatBackupArchiveTimestamp(
   const minutes = String(local.getUTCMinutes()).padStart(2, "0");
   const seconds = String(local.getUTCSeconds()).padStart(2, "0");
   const millis = String(local.getUTCMilliseconds()).padStart(3, "0");
-  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
+  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}-openclaw-backup`;
 }
 
-/** Build the root directory name stored inside a backup tarball. */
-export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
-}
-
-/** Build the default `.tar.gz` filename for a backup archive. */
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
 }
 
 /** Encode an absolute or relative source path into a traversal-safe archive payload path. */
 function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
-  const normalized = sourcePath.replaceAll("\\", "/");
+  const normalized = normalizeWindowsNamespaceAlias(sourcePath).replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {
     const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";
@@ -171,7 +144,6 @@ function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
-/** Build the archive-relative payload path for one source path. */
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
@@ -185,12 +157,11 @@ async function resolveBackupPlanFromPaths(params: {
   agentRoots?: readonly BackupAgentRoot[];
   pluginInventory?: ActivatedPluginBackupInventory;
   configCapture?: BackupConfigCapture;
-  unresolvedOwnership?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = params.stateDir;
@@ -210,7 +181,7 @@ async function resolveBackupPlanFromPaths(params: {
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
   const configSourcePath = await canonicalizePathForContainment(configPath);
   const oauthSourcePath = await canonicalizePathForContainment(oauthDir);
-  const inventory = await createBackupResourceInventory({
+  const resources = await createBackupResourcePlan({
     stateDir: canonicalStateDir,
     configPaths: [
       configPath,
@@ -230,7 +201,7 @@ async function resolveBackupPlanFromPaths(params: {
       await Promise.all(
         excludedWorkspaceDirs.map(async (workspaceDir) =>
           [path.resolve(workspaceDir), await canonicalizePathForContainment(workspaceDir)].filter(
-            (dir) => dir !== canonicalStateDir && !isPathWithin(canonicalStateDir, dir),
+            (dir) => dir !== canonicalStateDir && !isPathInside(dir, canonicalStateDir),
           ),
         ),
       )
@@ -243,48 +214,28 @@ async function resolveBackupPlanFromPaths(params: {
 
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
-    if (!(await pathExists(resolvedConfigPath))) {
-      return {
-        stateDir,
-        configPath,
-        oauthDir,
-        workspaceDirs: [],
-        inventory,
-        included: [],
-        skipped: [
-          {
-            kind: "config",
-            sourcePath: resolvedConfigPath,
-            displayPath: shortenHomePath(resolvedConfigPath),
-            reason: "missing",
-          },
-        ],
-      };
-    }
-
-    const canonicalConfigPath = await canonicalizeExistingPath(resolvedConfigPath);
+    const exists = await pathExists(resolvedConfigPath);
+    const sourcePath = exists
+      ? await canonicalizeExistingPath(resolvedConfigPath)
+      : resolvedConfigPath;
+    const asset = { kind: "config" as const, sourcePath, displayPath: shortenHomePath(sourcePath) };
     return {
       stateDir,
       configPath,
       oauthDir,
       workspaceDirs: [],
-      inventory,
-      included: [
-        {
-          kind: "config",
-          sourcePath: canonicalConfigPath,
-          displayPath: shortenHomePath(canonicalConfigPath),
-          archivePath: buildBackupArchivePath(archiveRoot, canonicalConfigPath),
-        },
-      ],
-      skipped: [],
+      resources,
+      included: exists
+        ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
+        : [],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" as const }],
     };
   }
 
   const isOwnedPathCoveredBy = (sourcePath: string, sourceRoot: string): boolean => {
     let ancestor = sourcePath;
-    while (isPathWithin(ancestor, sourceRoot)) {
-      if (inventory.isVolatile(ancestor)) {
+    while (isPathInside(sourceRoot, ancestor)) {
+      if (resources.isVolatile(ancestor)) {
         return false;
       }
       if (ancestor === sourceRoot) {
@@ -355,7 +306,7 @@ async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const skipped: SkippedBackupAsset[] = [];
   const seenCanonicalPaths = new Set<string>();
-  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+  for (const candidate of candidates.toSorted(compareCandidates)) {
     // Check both the original selection and the already resolved target before deduplication.
     const privateSelection = isUpdateCapturePath(candidate.sourcePath, stateDir);
     const privateTarget =
@@ -402,7 +353,7 @@ async function resolveBackupPlanFromPaths(params: {
     const coveredBy = included.find((asset) =>
       candidate.kind === "config" || candidate.kind === "credentials"
         ? isOwnedPathCoveredBy(candidate.canonicalPath, asset.sourcePath)
-        : isPathWithin(candidate.canonicalPath, asset.sourcePath),
+        : isPathInside(asset.sourcePath, candidate.canonicalPath),
     );
     if (coveredBy) {
       skipped.push({
@@ -423,10 +374,10 @@ async function resolveBackupPlanFromPaths(params: {
     });
   }
 
-  const regenerableRoots = inventory.regenerableRoots.filter(
+  const regenerableRoots = resources.regenerableRoots.filter(
     (resource) =>
-      !inventory.isIncluded(resource.sourcePath) &&
-      included.some((asset) => isPathWithin(resource.sourcePath, asset.sourcePath)),
+      !resources.isIncluded(resource.sourcePath) &&
+      included.some((asset) => isPathInside(asset.sourcePath, resource.sourcePath)),
   );
   const regenerableResourceExists = await Promise.all(
     regenerableRoots.map((resource) => pathExists(resource.sourcePath)),
@@ -442,16 +393,6 @@ async function resolveBackupPlanFromPaths(params: {
       reason: "regenerable",
     });
   }
-  if (params.unresolvedOwnership) {
-    for (const kind of ["agent", "plugin resources"] as const) {
-      skipped.push({
-        kind,
-        sourcePath: configPath,
-        displayPath: shortenHomePath(configPath),
-        reason: "unresolved",
-      });
-    }
-  }
 
   return {
     stateDir,
@@ -459,22 +400,18 @@ async function resolveBackupPlanFromPaths(params: {
     oauthDir,
     workspaceDirs: workspaceDirs.map((entry) => path.resolve(entry)),
     configCapture: params.configCapture,
-    inventory,
+    resources,
     included,
     skipped,
   };
 }
 
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
-  if (depthDelta !== 0) {
-    return depthDelta;
-  }
-  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.canonicalPath.localeCompare(right.canonicalPath);
+  return (
+    left.canonicalPath.length - right.canonicalPath.length ||
+    BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind] ||
+    left.canonicalPath.localeCompare(right.canonicalPath)
+  );
 }
 
 // Managed skill roots support operator-created directory links outside the root.
@@ -532,7 +469,7 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
       if (
         !targetPath ||
         params.ownerRoots.some(
-          (ownerRoot) => isPathWithin(targetPath, ownerRoot) || isPathWithin(ownerRoot, targetPath),
+          (ownerRoot) => isPathInside(ownerRoot, targetPath) || isPathInside(targetPath, ownerRoot),
         )
       ) {
         continue;
@@ -572,7 +509,6 @@ export async function canonicalizePathForContainment(targetPath: string): Promis
   }
 }
 
-/** Resolve one configured agent's canonical backup root and owner database path. */
 export async function resolveBackupAgentRoot(
   config: OpenClawConfig,
   agentId: string,
@@ -587,21 +523,31 @@ export async function resolveBackupAgentRoot(
   };
 }
 
-/** Resolve configured agent storage roots and their canonical database paths for backup ownership. */
 export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<BackupAgentRoot[]> {
   return await Promise.all(
     listAgentIds(config).map((agentId) => resolveBackupAgentRoot(config, agentId)),
   );
 }
 
-/** Resolve the backup plan from the current OpenClaw state/config/workspace paths on disk. */
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
-): Promise<BackupPlan> {
+) {
+  if (params.onlyConfig) {
+    return await resolveBackupPlanFromState(params);
+  }
+  assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
+  return await withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params));
+}
+
+async function resolveBackupPlanFromState(params: {
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  nowMs?: number;
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();
@@ -622,25 +568,27 @@ export async function resolveBackupPlanFromDisk(
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot =
+    (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
-  if (includeWorkspace && discoverySnapshot.exists && !discoverySnapshot.valid) {
+  if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(
-      `Config invalid at ${shortenHomePath(discoverySnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
+      `Backup discovery failed at ${shortenHomePath(discoverySnapshot.path)}: ${discoverySnapshot.issues.map((issue) => issue.message).join("; ")}. Agent and plugin ownership could not be resolved. Resolve the reported error and retry backup, or use --only-config to save the config alone.`,
     );
   }
-  const unresolvedOwnership = discoverySnapshot.exists && !discoverySnapshot.valid;
-  const discoveredWorkspaceDirs = unresolvedOwnership
-    ? []
-    : buildCleanupPlan({
-        cfg: discoverySnapshot.config,
-        stateDir,
-        configPath,
-        oauthDir,
-      }).workspaceDirs;
-  const agentRoots = unresolvedOwnership
-    ? []
-    : await resolveBackupAgentRoots(discoverySnapshot.config);
+  const discoveredWorkspaceDirs = buildCleanupPlan({
+    cfg: discoverySnapshot.config,
+    stateDir,
+    configPath,
+    oauthDir,
+  }).workspaceDirs;
+  const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
+  const pluginInventory = resolveActivatedPluginBackupInventory({
+    config: discoverySnapshot.config,
+    env: process.env,
+    stateDir,
+    workspaceDirs: discoveredWorkspaceDirs,
+  });
   // Effective agent workspaces can omit their shared base. Exclude it only here
   // so full backups and destructive cleanup retain their existing selection.
   if (!includeWorkspace && discoverySnapshot.valid) {
@@ -649,14 +597,6 @@ export async function resolveBackupPlanFromDisk(
       discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));
     }
   }
-  const pluginInventory = unresolvedOwnership
-    ? undefined
-    : resolveActivatedPluginBackupInventory({
-        config: discoverySnapshot.config,
-        env: process.env,
-        stateDir,
-        workspaceDirs: includeWorkspace ? discoveredWorkspaceDirs : [],
-      });
   return await resolveBackupPlanFromPaths({
     stateDir,
     configPath,
@@ -665,7 +605,6 @@ export async function resolveBackupPlanFromDisk(
     agentRoots,
     pluginInventory,
     configCapture,
-    unresolvedOwnership,
     includeWorkspace,
     onlyConfig,
     skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),

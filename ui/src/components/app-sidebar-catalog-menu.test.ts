@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
+import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.tsx";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 describe("SidebarCatalogMenuController", () => {
@@ -9,17 +9,23 @@ describe("SidebarCatalogMenuController", () => {
     const trigger = document.createElement("button");
     const order: string[] = [];
     trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
-    const controller = new SidebarCatalogMenuController({
-      beforeOpen: () => order.push("open"),
-      requestUpdate: vi.fn(),
-      terminalAvailable: () => true,
-      openTerminal: vi.fn(),
-      navigate: vi.fn(),
-      beginMutation: vi.fn(),
-      isMutationCurrent: vi.fn(),
-      archive: vi.fn(),
-      afterDelete: vi.fn(),
-    });
+    const controller = new SidebarCatalogMenuController(
+      {
+        basePath: "",
+        getRouteSessionKey: () => "",
+        requestUpdate: vi.fn(),
+        terminalAvailable: true,
+        sessionDataContext: undefined,
+        sessionData: {
+          beginSessionMutation: vi.fn(),
+          isSessionMutationScopeCurrent: vi.fn(),
+          archiveSessionCatalog: vi.fn(),
+          importSessionCatalog: vi.fn(),
+          sessionScopeGeneration: 0,
+        },
+      },
+      () => order.push("open"),
+    );
 
     controller.open(
       {

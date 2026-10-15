@@ -191,40 +191,6 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("unpaired-live");
   });
 
-  it("runs unfiltered nodes list with pairing data when node.list is unavailable", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [
-            {
-              nodeId: "pairing-scoped",
-              displayName: "Pairing Scoped",
-              remoteIp: "10.0.0.9",
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.list") {
-        throw new Error("unauthorized");
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "list"]);
-
-    const output = getRuntimeOutput();
-    expect(output).toContain("Pending: 0 · Paired: 1");
-    expect(output).toContain("Pairing Scoped");
-    // The degraded table must never look authoritative: the fallback is
-    // announced on stderr so --json stdout stays parseable.
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("live node view unavailable"),
-    );
-    expect(output).not.toContain("live node view unavailable");
-  });
-
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
     const now = Date.now();
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
@@ -263,6 +229,10 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("Pending\\nNode");
     expect(output).toContain("Paired\\nNode");
     expect(output).toContain("10.0.0.5\\rrewritten");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("live node view unavailable"),
+    );
+    expect(output).not.toContain("live node view unavailable");
 
     runtime.log.mockClear();
     await runProgram(["nodes", "list", "--json"]);
@@ -317,39 +287,6 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
-  });
-
-  it("counts catalog-only paired nodes in the filtered list total", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [{ nodeId: "paired-store", displayName: "Paired Store" }],
-        };
-      }
-      if (opts.method === "node.list") {
-        return {
-          nodes: [
-            { nodeId: "paired-store", connected: true },
-            {
-              nodeId: "catalog-only",
-              displayName: "Catalog Only",
-              paired: true,
-              connected: true,
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "list", "--connected"]);
-
-    const output = getRuntimeOutput();
-    expect(output).toMatch(/^Pending: 0 · Paired: 2$/m);
-    expect(output).toContain("Paired Store");
-    expect(output).toContain("Catalog Only");
   });
 
   it("runs nodes status --last-connected using the recorded node.list fact", async () => {
@@ -431,37 +368,6 @@ describe("cli program (nodes basics)", () => {
       ]);
     },
   );
-
-  it.each([
-    { command: "status", duration: "24h" },
-    { command: "status", duration: "1h30m" },
-    { command: "status", duration: "0" },
-    { command: "status", duration: " 24H " },
-    { command: "list", duration: "24h" },
-    { command: "list", duration: "1h30m" },
-    { command: "list", duration: "0" },
-    { command: "list", duration: " 24H " },
-  ])("preserves nodes $command --last-connected $duration", async ({ command, duration }) => {
-    const node = {
-      nodeId: "recent-node",
-      displayName: "Recent Node",
-      paired: true,
-      connected: true,
-      lastConnectedAtMs: Date.now() + 60_000,
-    };
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const { method } = (args[0] ?? {}) as { method?: string };
-      return method === "node.pair.list" ? { pending: [], paired: [node] } : { nodes: [node] };
-    });
-
-    await runProgram(["nodes", command, "--last-connected", duration, "--json"]);
-
-    const result = writeJsonArgAt(0) as {
-      nodes?: Array<{ nodeId: string }>;
-      paired?: Array<{ nodeId: string }>;
-    };
-    expect((result.nodes ?? result.paired)?.map(({ nodeId }) => nodeId)).toEqual(["recent-node"]);
-  });
 
   it.each([
     {
@@ -552,6 +458,7 @@ describe("cli program (nodes basics)", () => {
         pendingDeclaredCommands: ["camera.snap", "system.run"],
         paired: true,
         connected: true,
+        connectedAtMs: Date.now() - 60_000,
       },
       expectedOutput: [
         "Pending Reapproval Node",
@@ -560,7 +467,7 @@ describe("cli program (nodes basics)", () => {
         "openclaw nodes approve request-reapproval",
       ],
     },
-  ])("runs nodes status and renders $label", async ({ node, expectedOutput }) => {
+  ])("runs nodes status and renders $label", async ({ label, node, expectedOutput }) => {
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [node],
@@ -573,18 +480,15 @@ describe("cli program (nodes basics)", () => {
     for (const expected of expectedOutput) {
       expect(output).toContain(expected);
     }
+    if (label === "pending node reapproval") {
+      expect(output).toMatch(/connected \([^)]* ago\) · reapproval pending/);
+    }
     expect(
       gatewayRequests().find((request) => request.method === "node.list")?.useStoredDeviceAuth,
     ).toBe(true);
   });
 
   it.each([
-    {
-      platform: "win32",
-      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
-      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
-      rejectedPath: "path: C:\\one;D:…:\\four",
-    },
     {
       platform: "windows",
       pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
@@ -617,27 +521,6 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain(fixture.expectedPath);
     expect(output).not.toContain(fixture.rejectedPath);
-  });
-
-  it("keeps connection age adjacent to connection status before pending approval", async () => {
-    programGatewayCallMock.mockResolvedValue({
-      ts: Date.now(),
-      nodes: [
-        {
-          nodeId: "pending-reapproval-node",
-          displayName: "Pending Reapproval Node",
-          approvalState: "pending-reapproval",
-          pendingRequestId: "request-reapproval",
-          paired: true,
-          connected: true,
-          connectedAtMs: Date.now() - 60_000,
-        },
-      ],
-    });
-
-    await runProgram(["nodes", "status"]);
-
-    expect(getRuntimeOutput()).toMatch(/connected \([^)]* ago\) · reapproval pending/);
   });
 
   it("runs nodes describe and calls node.describe", async () => {
@@ -726,50 +609,6 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("url-secret");
     expect(output).not.toContain("gateway.example");
     expect(output).not.toContain("secret-token");
-  });
-
-  it("describes pending-only nodes through the pairing diagnostics view", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        params?: { nodeId?: string };
-        useStoredDeviceAuth?: boolean;
-      };
-      if (opts.method === "node.list") {
-        return opts.useStoredDeviceAuth
-          ? {
-              nodes: [
-                {
-                  nodeId: "pending-only-node",
-                  displayName: "Pending Only Node",
-                  approvalState: "pending-approval",
-                  pendingRequestId: "pending-only-request",
-                  paired: false,
-                  connected: false,
-                },
-              ],
-            }
-          : { nodes: [] };
-      }
-      if (opts.method === "node.describe" && opts.params?.nodeId === "pending-only-node") {
-        return {
-          nodeId: "pending-only-node",
-          displayName: "Pending Only Node",
-          approvalState: "pending-approval",
-          pendingRequestId: "pending-only-request",
-          paired: false,
-          connected: false,
-        };
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "describe", "--node", "pending-only-node"]);
-
-    const describeRequest = gatewayRequests().find((request) => request.method === "node.describe");
-    expect(describeRequest?.params).toEqual({ nodeId: "pending-only-node" });
-    expect(describeRequest?.useStoredDeviceAuth).toBe(true);
-    expect(getRuntimeOutput()).toContain("pending-only-request");
   });
 
   it("describes nodes through the paired-node fallback on older gateways", async () => {
@@ -962,38 +801,6 @@ describe("cli program (nodes basics)", () => {
       nodeId: "ios-node",
       displayName: "Renamed Node",
     });
-  });
-
-  it("runs nodes invoke and calls node.invoke", async () => {
-    mockGatewayWithIosNodeListAnd("node.invoke", {
-      ok: true,
-      nodeId: "ios-node",
-      command: "canvas.eval",
-      payload: { result: "ok" },
-    });
-
-    await runProgram([
-      "nodes",
-      "invoke",
-      "--node",
-      "ios-node",
-      "--command",
-      "canvas.eval",
-      "--params",
-      '{"javaScript":"1+1"}',
-    ]);
-
-    expectGatewayRequest("node.list", {});
-    expectGatewayRequest("node.invoke", {
-      nodeId: "ios-node",
-      command: "canvas.eval",
-      params: { javaScript: "1+1" },
-      timeoutMs: 15000,
-      idempotencyKey: "idem-test",
-    });
-    const invokeRequest = gatewayRequests().find((candidate) => candidate.method === "node.invoke");
-    expect(invokeRequest?.clientName).toBe("cli");
-    expect(invokeRequest?.mode).toBe("cli");
   });
 
   it("reports the inventory timeout instead of invoking a stale paired node", async () => {

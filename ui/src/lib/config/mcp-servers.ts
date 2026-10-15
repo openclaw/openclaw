@@ -1,9 +1,13 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { formatUiError } from "../format-error.ts";
 import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
+
+registerMcpEnglish();
 
 export const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
@@ -15,6 +19,7 @@ export type McpServerSummary = {
   transport: McpServerTransport | "invalid";
   target: string;
   auth: string | null;
+  signIn: "operator" | "requester" | "profile" | null;
   toolFilter: boolean;
   parallel: boolean;
   tls: "verify-off" | "mtls" | null;
@@ -32,6 +37,15 @@ function splitMcpCommandLine(value: string): string[] | null {
 
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index] ?? "";
+    if (!quote && /\s/u.test(char)) {
+      if (tokenStarted) {
+        parts.push(current);
+        current = "";
+        tokenStarted = false;
+      }
+      continue;
+    }
+    tokenStarted = true;
     if (char === "\\" && quote === '"') {
       let slashCount = 1;
       while (value[index + slashCount] === "\\") {
@@ -50,18 +64,15 @@ function splitMcpCommandLine(value: string): string[] | null {
         current += "\\".repeat(slashCount);
         index += slashCount - 1;
       }
-      tokenStarted = true;
       continue;
     }
     if (char === "\\" && quote === null) {
       const next = value[index + 1];
       if (next && (next === '"' || next === "'" || /\s/u.test(next))) {
         current += next;
-        tokenStarted = true;
         index += 1;
       } else {
         current += char;
-        tokenStarted = true;
       }
       continue;
     }
@@ -71,24 +82,13 @@ function splitMcpCommandLine(value: string): string[] | null {
       } else {
         current += char;
       }
-      tokenStarted = true;
       continue;
     }
     if (char === "'" || char === '"') {
       quote = char;
-      tokenStarted = true;
-      continue;
-    }
-    if (/\s/u.test(char)) {
-      if (tokenStarted) {
-        parts.push(current);
-        current = "";
-        tokenStarted = false;
-      }
       continue;
     }
     current += char;
-    tokenStarted = true;
   }
 
   if (quote) {
@@ -105,12 +105,7 @@ export function parseMcpTarget(
   transport: McpServerTransport,
 ): Record<string, unknown> | null {
   if (transport !== "stdio") {
-    try {
-      const protocol = new URL(target).protocol;
-      return protocol === "http:" || protocol === "https:" ? { url: target, transport } : null;
-    } catch {
-      return null;
-    }
+    return isHttpUrl(target) ? { url: target, transport } : null;
   }
   if (/^https?:\/\//i.test(target)) {
     return null;
@@ -130,34 +125,45 @@ export function summarizeMcpServers(
   }
   const servers = asRecord(asRecord(config.mcp)?.servers) ?? {};
   return Object.entries(servers)
-    .map(([name, value]) => {
+    .map<McpServerSummary>(([name, value]) => {
       const server = asRecord(value) ?? {};
       const url = typeof server.url === "string" ? server.url : "";
       // Command only: stdio args routinely carry tokens, and this projection
       // is visible to read-only operators.
       const command = typeof server.command === "string" ? server.command : "";
-      const transport = command
-        ? ("stdio" as const)
+      const oauth = asRecord(server.oauth);
+      const transport: McpServerSummary["transport"] = command
+        ? "stdio"
         : url
           ? server.transport === "streamable-http"
-            ? ("streamable-http" as const)
+            ? "streamable-http"
             : server.transport === undefined || server.transport === "sse"
-              ? ("sse" as const)
-              : ("invalid" as const)
-          : ("invalid" as const);
+              ? "sse"
+              : "invalid"
+          : "invalid";
       return {
         name,
         enabled: server.enabled !== false,
         transport,
         target: command || redactSensitiveUrlLikeString(url),
         auth: typeof server.auth === "string" ? server.auth : null,
+        signIn:
+          server.auth !== "oauth"
+            ? null
+            : oauth?.authProfileId
+              ? "profile"
+              : oauth?.identity === "per-requester"
+                ? "requester"
+                : transport !== "stdio" && transport !== "invalid" && parseMcpTarget(url, transport)
+                  ? "operator"
+                  : null,
         toolFilter: Boolean(server.toolFilter),
         parallel: server.supportsParallelToolCalls === true,
         tls:
           server.sslVerify === false
-            ? ("verify-off" as const)
+            ? "verify-off"
             : server.clientCert || server.clientKey
-              ? ("mtls" as const)
+              ? "mtls"
               : null,
       };
     })

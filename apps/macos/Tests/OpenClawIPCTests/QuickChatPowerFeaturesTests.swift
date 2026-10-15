@@ -18,9 +18,10 @@ extension QuickChatModelControlSnapshot {
 }
 
 @MainActor
+@Suite(.testWaitLimit)
 struct QuickChatPowerFeaturesTests {
     private static let solModelChoice = OpenClawChatModelChoice(
-        modelID: "gpt-5.6-sol",
+        modelID: "gpt-5.6-luna",
         name: "Sol",
         provider: "openai",
         contextWindow: 400_000,
@@ -125,7 +126,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:main:main", agentID: nil),
             models: models,
             sessions: sessions,
             agents: agents)
@@ -135,7 +136,7 @@ struct QuickChatPowerFeaturesTests {
             recents: [],
             defaultProvider: snapshot.defaultProvider)
 
-        #expect(snapshot.currentModelSelectionID == "openai/gpt-5.6-sol")
+        #expect(snapshot.currentModelSelectionID == "openai/gpt-5.6-luna")
         #expect(snapshot.currentThinkingLevel == "medium")
         #expect(snapshot.thinkingOptions.map(\.id) == ["off", "medium", "high"])
         #expect(sections.providers.map(\.id) == ["openai", "anthropic"])
@@ -150,7 +151,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:work:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:work:main", agentID: nil),
             models: [.init(
                 modelID: "deepseek-v4", name: "Fixture", provider: "deepseek", contextWindow: nil,
                 thinkingLevels: [.init(id: "off", label: "off"), .init(id: "high", label: "high")],
@@ -164,24 +165,45 @@ struct QuickChatPowerFeaturesTests {
         #expect(snapshot.defaultProvider == "deepseek")
     }
 
+    @Test(arguments: [false, true])
+    func `restricted controls project a saved forbidden model onto the server default`(hasDefault: Bool) throws {
+        let policy = try JSONDecoder().decode(OpenClawChatModelSelectionPolicy.self, from: Data(
+            """
+            {"restricted":true,"defaultModel":\(hasDefault ? "\"fixture/allowed\"" : "null")}
+            """.utf8))
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
+            #"{"sessions":[{"key":"agent:main:main","model":"historical","modelProvider":"fixture"}]}"#.utf8))
+        let snapshot = QuickChatModelControlLogic.snapshot(
+            target: .init(sessionKey: "agent:main:main", agentID: nil),
+            models: [.init(modelID: "allowed", name: "Allowed", provider: "fixture", contextWindow: nil)],
+            sessions: sessions,
+            agents: nil,
+            modelSelectionPolicy: policy)
+
+        #expect(snapshot.currentModelSelectionID == (hasDefault ? "fixture/allowed" : nil))
+        #expect(snapshot.defaultProvider == (hasDefault ? "fixture" : nil))
+        #expect(sessions.sessions.first?.model == "historical")
+        #expect(sessions.sessions.first?.modelProvider == "fixture")
+    }
+
     @Test func `model patch decision only patches an explicit unapplied selection`() {
         #expect(QuickChatModelControlLogic.modelPatchDecision(
             selectionID: nil,
             appliedSelectionID: nil) == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: "openai/gpt-5.6-sol") == .none)
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: "openai/gpt-5.6-luna") == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: "openai/gpt-5.6-sol",
-            currentSessionSelectionID: "anthropic/claude-sonnet-4-6") == .patch("openai/gpt-5.6-sol"))
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: "openai/gpt-5.6-luna",
+            currentSessionSelectionID: "anthropic/claude-sonnet-4-6") == .patch("openai/gpt-5.6-luna"))
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
+            selectionID: "openai/gpt-5.6-luna",
             appliedSelectionID: nil,
-            currentSessionSelectionID: "openai/gpt-5.6-sol") == .none)
+            currentSessionSelectionID: "openai/gpt-5.6-luna") == .none)
         #expect(QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: "openai/gpt-5.6-sol",
-            appliedSelectionID: nil) == .patch("openai/gpt-5.6-sol"))
+            selectionID: "openai/gpt-5.6-luna",
+            appliedSelectionID: nil) == .patch("openai/gpt-5.6-luna"))
         #expect(QuickChatModelControlLogic.modelPatchDecision(
             selectionID: OpenClawChatViewModel.defaultModelSelectionID,
             appliedSelectionID: nil) == .patch(nil))
@@ -375,13 +397,13 @@ struct QuickChatPowerFeaturesTests {
         #expect(sendCount == 0)
     }
 
-    @Test func `blocked model patch does not block another target controls bootstrap`() async {
+    @Test func `blocked model patch does not block another target controls bootstrap`() async throws {
         let patchStarted = AsyncTestGate()
         let finishPatch = AsyncTestGate()
         let targetBControlsStarted = AsyncTestGate()
         var agentsCallCount = 0
         var patchCompleted = false
-        var controlTargets: [QuickChatRoutingTarget] = []
+        var controlTargets: [OpenClawChatSessionTarget] = []
         let choice = Self.solModelChoice
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:a:main" },
@@ -416,7 +438,7 @@ struct QuickChatPowerFeaturesTests {
                     defaultProvider: nil)
             },
             settingsPatchProvider: { target, _ in
-                #expect(target == QuickChatRoutingTarget(sessionKey: "agent:a:main", agentID: nil))
+                #expect(target == OpenClawChatSessionTarget(sessionKey: "agent:a:main", agentID: nil))
                 patchStarted.open()
                 await finishPatch.wait()
                 patchCompleted = true
@@ -430,36 +452,27 @@ struct QuickChatPowerFeaturesTests {
         model.selectModel(choice.selectionID)
         model.text = "Hello A"
         let targetASend = Task { await model.send() }
-        let watchdog = Task {
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled else { return }
-            Issue.record("timed out waiting for cross-target model controls bootstrap")
-            patchStarted.open()
-            targetBControlsStarted.open()
-            finishPatch.open()
-        }
         defer {
-            watchdog.cancel()
             targetASend.cancel()
             patchStarted.open()
             targetBControlsStarted.open()
             finishPatch.open()
         }
 
-        await patchStarted.wait()
+        try await patchStarted.wait("model patch")
         model.endPresentation()
         let secondPresentationID = model.beginPresentation()
         let targetBRefresh = Task {
             await model.refreshForPresentation(id: secondPresentationID)
         }
 
-        await targetBControlsStarted.wait()
+        try await targetBControlsStarted.wait("target B model controls")
         await targetBRefresh.value
         model.text = "Hello B"
         #expect(!patchCompleted)
         #expect(!model.isUpdatingModel)
         #expect(model.canSend)
-        #expect(controlTargets.contains(QuickChatRoutingTarget(
+        #expect(controlTargets.contains(OpenClawChatSessionTarget(
             sessionKey: "agent:b:main",
             agentID: nil)))
 
@@ -642,7 +655,7 @@ struct QuickChatPowerFeaturesTests {
         {
           "key": "agent:main:main",
           "modelProvider": "openai",
-          "model": "gpt-5.6-sol",
+          "model": "gpt-5.6-luna",
           "thinkingLevel": "medium"
         }
       ]

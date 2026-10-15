@@ -1,6 +1,7 @@
 // Tests runtime queue settings with mocked provider fallback state.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveQueueSettings } from "./settings-runtime.js";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 
@@ -17,7 +18,6 @@ describe("resolveQueueSettings runtime defaults", () => {
         },
       },
     });
-    const { resolveQueueSettings } = await import("./settings-runtime.js");
 
     expect(resolveQueueSettings({ cfg: {} as OpenClawConfig, channel: "demo" })).toEqual({
       mode: "steer",
@@ -30,7 +30,6 @@ describe("resolveQueueSettings runtime defaults", () => {
 
   it("falls back without loading bundled channel plugins", async () => {
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-    const { resolveQueueSettings } = await import("./settings-runtime.js");
 
     expect(resolveQueueSettings({ cfg: {} as OpenClawConfig, channel: "telegram" })).toEqual({
       mode: "steer",
@@ -39,5 +38,26 @@ describe("resolveQueueSettings runtime defaults", () => {
       dropPolicy: "summarize",
     });
     expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("telegram");
+  });
+
+  it("applies plugin-channel overrides before global mode and plugin debounce defaults", () => {
+    getLoadedChannelPluginMock.mockReturnValueOnce({
+      defaults: { queue: { debounceMs: 125 } },
+    });
+
+    expect(
+      resolveQueueSettings({
+        cfg: {
+          messages: {
+            queue: {
+              mode: "steer",
+              byChannel: { x: "followup" },
+              debounceMsByChannel: { x: 750 },
+            },
+          },
+        },
+        channel: " X ",
+      }),
+    ).toEqual({ mode: "followup", debounceMs: 750, cap: 20, dropPolicy: "summarize" });
   });
 });

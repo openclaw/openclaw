@@ -38,29 +38,115 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
+| `grok-build` | [Grok Build](https://docs.x.ai/build/overview) (`grok agent stdio`)                                    |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
 | `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
+| `mcode`      | MiniMax Code (`mcode acp`; install and authenticate its CLI on the Gateway host)                       |
 | `mux`        | [Mux](https://mux.coder.com)                                                                           |
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
 | `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `pool`       | Pool (`pool acp`)                                                                                      |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
 | `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
+| `zeroclaw`   | ZeroClaw (`zeroclaw acp`)                                                                              |
 
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
+`grok-build` is an ACPX agent target, not the xAI model id `xai/grok-build-0.1`. Use `agentId: "grok-build"` to launch the Grok Build CLI through ACP; use `xai/grok-build-0.1` only when selecting that model on OpenClaw's xAI provider route.
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
 
 Model control is adapter-capability dependent. Codex ACP model refs are
-normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
-`session/set_model` support; if a harness exposes neither that ACP capability
-nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
+normalized by OpenClaw before startup. Other harnesses need an advertised model
+config option with `session/set_config_option`, or legacy ACP `models` with
+`session/set_model`. Without supported ACP model control or an adapter-specific
+startup model flag, OpenClaw/acpx cannot force a model selection.
+
+## GitHub Copilot CLI in native chat
+
+GitHub Copilot CLI can serve ordinary OpenClaw chat through the installed-agent
+model picker, including web chat and channels. This route uses the local
+`copilot --acp --stdio` process, not an OpenClaw API-provider credential.
+
+Install an ACP-capable CLI and sign in under the same OS account that runs the
+Gateway. Copilot CLI 1.0.86 supports model discovery and selection over ACP:
+
+```bash
+npm install -g @github/copilot
+copilot --version
+copilot login
+```
+
+Refresh the model catalog, then choose an `acp-copilot/<model-id>` entry. OpenClaw
+uses only the models advertised by that CLI; it does not supply a static model
+list. Installation detection alone does not prove authentication or model access.
+To prevent new native Copilot turns and catalog discovery, set
+`plugins.entries.acpx.config.nativeAgents.copilot` to `false`. Classic
+`/acp spawn copilot` sessions and `acp.allowedAgents` are separate.
+
+Copilot owns authentication and billing:
+
+- Native GitHub authentication uses the CLI's OAuth login or its supported GitHub
+  token routes, including an authenticated `gh` fallback. Environment tokens
+  (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`) can override a stored login.
+- Copilot model usage consumes the account's plan allowance. Do not assume a
+  model is free because its catalog entry is available; check the account's
+  included usage and additional-usage budget.
+- Explicit CLI BYOK configuration (`COPILOT_PROVIDER_*`,
+  `COPILOT_PROVIDERS_CONFIG`, or the CLI's `providers.json`) can route model
+  requests to a separately billed provider even when GitHub login is available.
+  Configure that route deliberately. OpenClaw does not choose it or copy an
+  OpenClaw API credential into the native harness.
+
+See GitHub's [CLI authentication guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)
+for account and plan requirements. Native chat permission and sandbox boundaries
+below still apply.
+
+Installed native agents keep their own sign-in. During discovery, `/models` can
+report **Checking native agent** without requiring an OpenClaw API key. If
+availability is unconfirmed, check the native app on the Gateway host and run
+`/models` again.
+
+<a id="tool-profiles-for-native-chat-runtimes" />
+
+## Permissions for native chat runtimes
+
+Enable an installed agent from **Models → Installed agents**. For a runtime that
+uses its own native permissions, OpenClaw asks **Use {runtime}’s native permissions?**
+before enabling it. Accepting remembers consent for the selected OpenClaw agent
+in the same config update as enablement. New chats using that runtime then start
+with **Full access** and optional sandboxing off, without repeating the prompt.
+Enabling a native app does not sign you in to that app.
+
+The native agent uses its own permissions on the Gateway host. OpenClaw does not
+claim to enforce its optional tool restrictions inside that agent. Other agents
+and their chats stay unchanged, and tools hosted by OpenClaw retain their policy.
+Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
+revoke remembered consent. Disabling and re-enabling the app does not erase it.
+
+For a runtime configured manually without remembered consent, the Control UI
+still offers **Continue for this chat** to an administrator when selecting the
+runtime or sending a message with that selection. This fallback changes only
+that chat's permissions.
+
+Declining leaves permissions unchanged and keeps the message unsent. A first send
+can create an empty chat so confirmation is bound to that chat, but no message is
+saved or run before you confirm. Confirmation saves the permissions and retries
+that message once, including a chat's first message, without pinning its default model.
+Selection-only confirmation does not send the draft. This per-chat consent is
+not inherited by another chat and is cleared when the session resets or the
+selected runtime changes.
+
+Required sandboxes, required workspace boundaries, and incompatible remote
+execution placement cannot be waived by this confirmation. A restricted user
+must ask an administrator or choose a compatible runtime.
 
 ## Required config
 
@@ -81,12 +167,14 @@ Core ACP baseline:
       "cursor",
       "droid",
       "gemini",
+      "grok-build",
       "iflow",
       "kilocode",
       "kimi",
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {
@@ -126,7 +214,7 @@ ACPX isolates bare session names by OpenClaw owner. If a session reports
 `openclaw doctor --fix`, then restart. Doctor uses the same service workspace
 as the Gateway; ACPX's default state directory is `<service workspace>/state`.
 
-The repair requires one current, unambiguous canonical owner claim with matching
+The repair requires one current, unambiguous stored owner claim with matching
 backend identifiers. It preserves the raw history, event-log references, upstream
 session IDs, timestamps, options, and usage. Persistent record names move to an
 owner-qualified resource; existing oneshot physical IDs and histories remain intact.
@@ -136,7 +224,7 @@ session does not bypass this repair.
 
 This is an offline, crash-recoverable migration with atomic destination-file
 publication. Files and SQLite are not one atomic transaction. Interrupted repairs
-can be rerun: Doctor checks the existing destination and canonical claim before
+can be rerun: Doctor checks the existing destination and stored owner claim before
 finishing the metadata update and archiving the old persistent record.
 
 ## Plugin setup for acpx backend
@@ -177,17 +265,19 @@ Then verify backend health:
 /acp doctor
 ```
 
-### acpx runtime startup probe
+<a id="acpx-runtime-startup-probe" />
+
+### acpx runtime startup check
 
 The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
 version to configure). By default it registers the embedded backend during
-Gateway startup and waits for one health probe before the gateway `ready`
-signal. That probe also supplies failure diagnostics and is bounded by
+Gateway startup and waits for one health check before the gateway `ready`
+signal. That check also supplies failure diagnostics and is bounded by
 `plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
-launch a second probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+launch a second check. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
-intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
-on-demand probe.
+intentionally keep the startup check disabled. Run `/acp doctor` for an explicit
+on-demand check.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:
@@ -291,29 +381,36 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
 Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+An interactive turn can continue beyond the plugin operation limit until its
+turn budget expires, the harness finishes, or you cancel it.
 `sessions_spawn` does not accept per-call timeout overrides; the operator path
-is `agents.defaults.subagents.runTimeoutSeconds`. Restart the gateway after
-changing `timeoutSeconds`.
+is `agents.defaults.subagents.runTimeoutSeconds`. With the default hybrid reload
+mode, changing `timeoutSeconds` automatically reloads the plugin. See
+[Config hot reload](/gateway/configuration/hot-reload).
 
-### Health probe agent configuration
+<a id="health-probe-agent-configuration" />
 
-When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
-plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+### Health check agent configuration
+
+When `/acp doctor` or the startup check verifies the backend, the bundled `acpx`
+plugin checks one harness agent. If `acp.allowedAgents` is set, it defaults to
 the first allowed agent; otherwise it defaults to `codex`. If your deployment
-needs a different ACP agent for health checks, set the probe agent explicitly:
+needs a different ACP agent for health checks, set the check agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude
 ```
 
-Restart the gateway after changing this value.
+With the default hybrid reload mode, this change automatically reloads the plugin.
+Run `/acp doctor` to check the updated backend.
 
 ## Permission configuration
 
 ACP sessions run without an interactive TTY for file-write and shell-exec
 permission prompts. This does not disable ACP form or URL elicitation during a
 channel-delivered turn: those requests use transient Gateway questions instead.
-The acpx plugin provides two config keys that control harness permissions:
+The acpx plugin provides two config keys that control harness permissions,
+`permissionMode` and `nonInteractivePermissions`, both described below.
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 
@@ -349,12 +446,13 @@ openclaw config set plugins.entries.acpx.config.permissionMode approve-all
 openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
 ```
 
-Restart the gateway after changing these values.
+With the default hybrid reload mode, these changes automatically reload the plugin.
+See [Config hot reload](/gateway/configuration/hot-reload) for other reload modes.
 
 <Warning>
 OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions deny restricted actions instead of crashing.
 </Warning>
 
 ## Related

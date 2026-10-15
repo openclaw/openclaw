@@ -1,89 +1,146 @@
-/**
- * Unauthorized-role flood guard tests for logging and socket close decisions.
- */
-import { describe, expect, it } from "vitest";
-import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
-import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayRequestOptions } from "../../server-methods/types.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "./authenticated-request-dispatch.test-support.js";
 
-describe("UnauthorizedFloodGuard", () => {
-  it("suppresses repeated unauthorized responses and closes after threshold", () => {
-    const guard = new UnauthorizedFloodGuard({ closeAfter: 2, logEvery: 3 });
+const mocks = vi.hoisted(() => ({
+  handleGatewayRequest: vi.fn<(options: GatewayRequestOptions) => void>(),
+  logWs: vi.fn<typeof import("../../ws-log.js").logWs>(),
+}));
 
-    const first = guard.registerUnauthorized();
-    expect(first).toEqual({
-      shouldClose: false,
-      shouldLog: true,
-      count: 1,
-      suppressedSinceLastLog: 0,
-    });
+// mock-isolation: Inject exact response errors without loading or dispatching real Gateway methods.
+vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
+  handleGatewayRequest: mocks.handleGatewayRequest,
+}));
+// mock-isolation: Flood accounting owns no shared request queue or scheduling budget.
+vi.mock("./request-start.js", () => ({
+  scheduleGatewayRequestStart: () => Promise.resolve(),
+}));
+vi.mock("../../ws-log.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../ws-log.js")>()),
+  logWs: mocks.logWs,
+}));
 
-    const second = guard.registerUnauthorized();
-    expect(second).toEqual({
-      shouldClose: false,
-      shouldLog: false,
-      count: 2,
-      suppressedSinceLastLog: 0,
-    });
-
-    const third = guard.registerUnauthorized();
-    expect(third).toEqual({
-      shouldClose: true,
-      shouldLog: true,
-      count: 3,
-      suppressedSinceLastLog: 1,
-    });
-  });
-
-  it("uses default thresholds for non-finite options", () => {
-    const guard = new UnauthorizedFloodGuard({
-      closeAfter: Number.NaN,
-      logEvery: Number.POSITIVE_INFINITY,
-    });
-
-    for (let i = 0; i < 10; i += 1) {
-      expect(guard.registerUnauthorized().shouldClose).toBe(false);
-    }
-
-    const eleventh = guard.registerUnauthorized();
-    expect(eleventh).toMatchObject({
-      shouldClose: true,
-      shouldLog: true,
-      count: 11,
-      suppressedSinceLastLog: 9,
-    });
-  });
-
-  it("resets counters", () => {
-    const guard = new UnauthorizedFloodGuard({ closeAfter: 10, logEvery: 50 });
-    guard.registerUnauthorized();
-    guard.registerUnauthorized();
-    guard.reset();
-
-    const next = guard.registerUnauthorized();
-    expect(next).toEqual({
-      shouldClose: false,
-      shouldLog: true,
-      count: 1,
-      suppressedSinceLastLog: 0,
-    });
-  });
+afterEach(() => {
+  mocks.handleGatewayRequest.mockReset();
+  mocks.logWs.mockClear();
 });
 
-describe("isUnauthorizedRoleError", () => {
-  it("detects unauthorized role responses", () => {
-    expect(
-      isUnauthorizedRoleError(errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized role: node")),
-    ).toBe(true);
+const unauthorized = errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized role: node");
+
+function createConnection(connId = "flood-test-connection") {
+  const client = createOperatorWsClient({ connId });
+  const harness = createDispatchTestHarness({ connId });
+  let sequence = 0;
+  return {
+    ...harness,
+    async respond(responseError: ErrorShape | null = unauthorized) {
+      const error = responseError ?? undefined;
+      mocks.handleGatewayRequest.mockImplementationOnce(({ respond }) => {
+        respond(error === undefined, undefined, error);
+      });
+      const id = String(++sequence);
+      await harness.dispatcher.dispatch({ type: "req", id, method: "health", params: {} }, client);
+      expect(harness.send).toHaveBeenLastCalledWith({
+        type: "res",
+        id,
+        ok: error === undefined,
+        payload: undefined,
+        error,
+      });
+    },
+  };
+}
+
+function responseLogs() {
+  return mocks.logWs.mock.calls.flatMap(([direction, kind, meta]) =>
+    direction === "out" && kind === "res" ? [typeof meta === "function" ? meta() : meta] : [],
+  );
+}
+
+describe("authenticated WebSocket unauthorized-role floods", () => {
+  it("sends every response, suppresses repeated logs, and closes after the threshold", async () => {
+    const connection = createConnection();
+    for (let count = 1; count <= 10; count += 1) {
+      await connection.respond();
+    }
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(responseLogs()).toHaveLength(1);
+    expect(responseLogs()[0]).toMatchObject({ unauthorizedCount: 1 });
+
+    await connection.respond();
+    expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
+    expect(connection.setCloseCause).toHaveBeenLastCalledWith("repeated-unauthorized-requests", {
+      unauthorizedCount: 11,
+      method: "health",
+    });
+    expect(responseLogs()[1]).toMatchObject({
+      unauthorizedCount: 11,
+      suppressedUnauthorizedResponses: 9,
+    });
+
+    await connection.respond();
+    expect(connection.send).toHaveBeenCalledTimes(12);
+    expect(connection.close).toHaveBeenCalledTimes(2);
+    expect(responseLogs()).toHaveLength(3);
+    expect(responseLogs()[2]).toMatchObject({ unauthorizedCount: 12 });
+    expect(responseLogs()[2]).not.toHaveProperty("suppressedUnauthorizedResponses");
   });
 
-  it("ignores non-role authorization errors", () => {
+  it("resets the counter after a successful response", async () => {
+    const connection = createConnection();
+    for (let count = 0; count < 10; count += 1) {
+      await connection.respond();
+    }
+    await connection.respond(null);
+    for (let count = 0; count < 10; count += 1) {
+      await connection.respond();
+    }
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(responseLogs().map((entry) => entry?.unauthorizedCount)).toEqual([1, undefined, 1]);
+    await connection.respond();
+    expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
+  });
+
+  it("keeps counters owned by their connection", async () => {
+    const first = createConnection("first-connection");
+    const second = createConnection("second-connection");
+    for (let count = 0; count < 10; count += 1) {
+      await first.respond();
+    }
+    await second.respond();
+    expect(first.close).not.toHaveBeenCalled();
+    expect(second.close).not.toHaveBeenCalled();
+    expect(responseLogs().map((entry) => [entry?.connId, entry?.unauthorizedCount])).toEqual([
+      ["first-connection", 1],
+      ["second-connection", 1],
+    ]);
+  });
+
+  it.each([
+    errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin"),
+    errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"),
+  ])("does not count non-role errors: $message", async (error) => {
+    const connection = createConnection();
+    await connection.respond();
+    for (let count = 0; count < 12; count += 1) {
+      await connection.respond(error);
+    }
+    await connection.respond();
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(responseLogs()).toHaveLength(14);
     expect(
-      isUnauthorizedRoleError(
-        errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin"),
-      ),
-    ).toBe(false);
-    expect(isUnauthorizedRoleError(errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"))).toBe(
-      false,
-    );
+      responseLogs()
+        .slice(1, 13)
+        .every((entry) => entry?.unauthorizedCount === undefined),
+    ).toBe(true);
+    expect(responseLogs()[13]).toMatchObject({ unauthorizedCount: 1 });
   });
 });

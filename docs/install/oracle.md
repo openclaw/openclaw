@@ -96,7 +96,7 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up
     systemctl --user restart openclaw-gateway.service
     ```
 
-    `gateway.trustedProxies=["127.0.0.1"]` here is only for the local Tailscale Serve proxy's forwarded-IP/local-client handling. It is **not** `gateway.auth.mode: "trusted-proxy"`. Diff viewer routes keep fail-closed behavior in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
+    `gateway.trustedProxies=["127.0.0.1"]` here is only for the local Tailscale Serve proxy's forwarded-IP/local-client handling. It is **not** `gateway.auth.mode: "trusted-proxy"`. Diff viewer routes still reject requests they cannot verify in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
 
   </Step>
 
@@ -181,13 +181,17 @@ OpenClaw state lives under:
 - `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
-These survive reboots. To take a portable snapshot:
+These survive reboots. To create a backup archive:
 
 ```bash
 openclaw backup create
 openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
+Absolute symbolic links keep their original target locations, including links
+to separately backed-up config or credentials. Review these links before
+activating state on another host or at another path; see the
+[backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 Restore verifies and extracts into a fresh staging directory; activation is a
 separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
 for the rollback warnings and activation sequence.

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatPluginLine } from "../cli/plugins-list-format.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { VERSION } from "../version.js";
 import { createPluginRecord, recordPluginError } from "./loader-records.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -68,7 +69,7 @@ it.each([
   // Native Node supplies the real error shape, without the host test process's SDK aliases.
   const result = JSON.parse(
     execFileSync(
-      process.execPath,
+      resolveTestNodeExecPath(),
       [
         "--input-type=module",
         "-e",

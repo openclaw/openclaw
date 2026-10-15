@@ -144,7 +144,7 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome
 openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome-node
 ```
 
-Chrome mic/speaker audio routes through the local OpenClaw audio bridge. If the native backend is unavailable, the join fails with a setup error instead of joining without an audio path.
+With generated input commands, the shared browser bridge captures participant playback separately from assistant output. The native backend injects assistant audio into Meet's virtual microphone and captures that injection for waveform verification. Remote playback is kept off the microphone bus, and the same path runs locally or on a paired node. Explicit `chrome.audioInputCommand` overrides retain their configured provider-input path. Live requires managed isolated capture, so remove an input override before selecting it. If the required native backend or browser capture is unavailable, the join fails with an audio-path error.
 
 If startup fails after OpenClaw acquires a command-pair audio bridge, it attempts to stop that bridge before rolling back a tab opened by the failed join. This startup cleanup leaves reused or adopted tabs, including `chrome.launch: false` sessions, untouched. Node cleanup targets the returned bridge ID; if node startup fails before returning an ID, the Gateway cannot guarantee remote bridge cleanup. External bridge commands manage their own process lifecycle.
 
@@ -204,7 +204,7 @@ export GEMINI_API_KEY=...
 
 Use `realtime.provider: "openai"` with `OPENAI_API_KEY` instead if OpenAI is the realtime voice provider.
 
-Restart or reload the Gateway after enabling `voice-call`; plugin config changes do not take effect until reload. Verify:
+Plugin enablement and config changes apply automatically with the default hybrid reload mode (see [Hot reload](/gateway/configuration/hot-reload)). If you changed the Gateway's process environment, restart it with those variables available. Verify:
 
 ```bash
 openclaw config validate

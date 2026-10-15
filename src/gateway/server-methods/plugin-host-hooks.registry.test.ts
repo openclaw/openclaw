@@ -3,9 +3,10 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
+  createPluginRegistryOwner,
+  getActivePluginRegistryVersion,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -49,7 +50,9 @@ describe("plugin host hook registry ownership", () => {
       };
       const local = fixture("Local registry", scope);
       const processDefault = fixture("Process default", WRITE_SCOPE);
-      markPluginRegistryActive(local);
+      setActivePluginRegistry(local);
+      const localGeneration = getActivePluginRegistryVersion();
+      const localOwner = createPluginRegistryOwner(local);
       setActivePluginRegistry(processDefault);
       const methodRegistry = createGatewayMethodRegistry(
         createCoreGatewayMethodDescriptors(pluginHostHookHandlers),
@@ -80,10 +83,12 @@ describe("plugin host hook registry ownership", () => {
             ? { ok: true, result: { label: "Local registry" } }
             : {
                 ok: true,
+                generation: localGeneration,
                 descriptors: [{ pluginId, id: "panel", label: "Local registry" }],
               },
         ]);
       } finally {
+        await localOwner.close();
         await disposePluginRegistryInstances(local);
       }
     },

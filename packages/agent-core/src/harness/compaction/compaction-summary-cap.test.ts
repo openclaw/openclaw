@@ -1,24 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
+import type { AssistantMessage, StreamFn, Usage } from "../../llm.js";
 import { compact } from "./compaction.js";
+import {
+  createCompactionModel,
+  createContextUsage as createUsage,
+} from "./compaction.test-support.js";
 import { createFileOps } from "./utils.js";
 
 const MAX_SUMMARY_CHARS = 16_000;
 const TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_HEADING = "\n\n---\n\n**Turn Context (split turn):**\n\n";
-
-function createUsage(totalTokens: number): Usage {
-  return {
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    contextUsage: { state: "available", promptTokens: totalTokens, totalTokens },
-    totalTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 function createAssistant(text: string, usage: Usage): AssistantMessage {
   return {
@@ -35,18 +27,7 @@ function createAssistant(text: string, usage: Usage): AssistantMessage {
 
 describe("split-turn compaction summary cap", () => {
   it("preserves the previous summary and latest split-turn context", async () => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
+    const model = createCompactionModel();
     let prefixSummary = "prefix summary";
     const prompts: string[] = [];
     const streamFn = vi.fn<StreamFn>((_model, context) => {

@@ -7,9 +7,7 @@ let activeOverlays = 0;
 let frame: number | null = null;
 
 function notify() {
-  for (const listener of listeners) {
-    listener();
-  }
+  listeners.forEach((listener) => listener());
 }
 
 function trackSurfaceLayout() {
@@ -104,6 +102,27 @@ export function subscribeNativeOverlayOcclusion(
 }
 
 const occludingSurfaces = new WeakSet<HTMLElement>();
+
+/** Lifecycle owners release geometry only after closing has actually finished. */
+export function acquireNativeOverlaySurface(element: HTMLElement): () => void {
+  if (!hasNativeBrowserBridge()) {
+    return () => {};
+  }
+  const elements = () => [element];
+  surfaces.add(elements);
+  notify();
+  trackSurfaceLayout();
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    surfaces.delete(elements);
+    notify();
+    trackSurfaceLayout();
+  };
+}
 
 /** Keep a connected menu above native views through closing and owner removal. */
 export function occludeNativeBrowserSurface(

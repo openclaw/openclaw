@@ -22,8 +22,10 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install clawhub:@openclaw/diffs
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
     `diffs` and its language pack ship as separate packages rather than with
     OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix
@@ -386,7 +388,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
   <Accordion title="Viewer accessibility">
     - Viewer URL resolves to `127.0.0.1` by default.
     - For remote access, set `gateway.publicOrigin`, set plugin `viewerBaseUrl`, or pass `baseUrl` per call.
-    - `gateway.trustedProxies` can include loopback for a same-host proxy such as Tailscale Serve. Raw loopback viewer requests without forwarded client-IP headers then fail closed by design.
+    - `gateway.trustedProxies` can include loopback for a same-host proxy such as Tailscale Serve. Raw loopback viewer requests without forwarded client-IP headers are then rejected by design.
     - For that proxy topology, prefer `mode: "file"`/`"both"` for an attachment. For a shareable viewer link, intentionally enable `security.allowRemoteViewer` plus plugin `viewerBaseUrl`/a proxy `baseUrl`.
     - Enable `security.allowRemoteViewer` only when external viewer access is intended.
 

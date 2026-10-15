@@ -7,7 +7,6 @@ import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.
 
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
-type LocalPackageOverrideKind = "added" | "modified" | "deleted";
 export type LocalPackageOverrideConflictReason =
   | "target-changed"
   | "target-exists"
@@ -18,14 +17,19 @@ export type LocalPackageOverrideConflictReason =
   | "rollback-failed";
 
 export type LocalPackageOverrideChange = {
-  kind: LocalPackageOverrideKind;
   path: string;
-  baseline?: PackageDistContentInventoryEntry;
   dependencies?: string[];
   reapply?: boolean;
-  savedPath?: string;
-  mode?: number;
-};
+} & (
+  | { kind: "deleted"; baseline: PackageDistContentInventoryEntry }
+  | { kind: "added"; savedPath: string; mode: number }
+  | {
+      kind: "modified";
+      baseline: PackageDistContentInventoryEntry;
+      savedPath: string;
+      mode: number;
+    }
+);
 
 export type LocalPackageOverridesResult = {
   status: "none" | "preserved" | "applied" | "conflict" | "error";
@@ -42,7 +46,6 @@ export type LocalPackageOverridesResult = {
 };
 
 export type LocalPackageOverridesPlan = {
-  packageRoot: string;
   recoveryDir: string;
   changes: LocalPackageOverrideChange[];
   result: LocalPackageOverridesResult;
@@ -74,32 +77,6 @@ export async function packageRootExists(packageRoot: string): Promise<boolean> {
   }
 }
 
-export type LocalOverridePackageRootIdentity = {
-  realPath: string;
-  device: bigint;
-  inode: bigint;
-};
-
-export async function readLocalOverridePackageRootIdentity(
-  packageRoot: string,
-): Promise<LocalOverridePackageRootIdentity> {
-  const realPath = await fs.realpath(packageRoot);
-  const stats = await fs.stat(realPath, { bigint: true });
-  if (!stats.isDirectory()) {
-    throw new Error(`local override package root is not a directory: ${packageRoot}`);
-  }
-  return { realPath, device: stats.dev, inode: stats.ino };
-}
-
-export function isSameLocalOverridePackageRoot(
-  left: LocalOverridePackageRootIdentity,
-  right: LocalOverridePackageRootIdentity,
-): boolean {
-  return (
-    left.realPath === right.realPath && left.device === right.device && left.inode === right.inode
-  );
-}
-
 export type LocalPackageOverrideTargetProbe =
   | { status: "missing" }
   | { status: "blocked" }
@@ -107,7 +84,6 @@ export type LocalPackageOverrideTargetProbe =
   | {
       status: "present";
       hardlinked: boolean;
-      mode: number;
       safeFile: boolean;
     };
 
@@ -119,7 +95,6 @@ export async function probeLocalOverrideTarget(
     return {
       status: "present",
       hardlinked: stats.nlink > 1n,
-      mode: Number(stats.mode & 0o777n),
       safeFile: stats.isFile() && !stats.isSymbolicLink(),
     };
   } catch (error) {
@@ -203,14 +178,6 @@ export async function assertRecoveryRootOutsidePackageRoot(
   }
 }
 
-export function countChanges(changes: LocalPackageOverrideChange[]) {
-  return {
-    added: changes.filter((change) => change.kind === "added").length,
-    modified: changes.filter((change) => change.kind === "modified").length,
-    deleted: changes.filter((change) => change.kind === "deleted").length,
-  };
-}
-
 export function normalizeLocalOverridePathSeparators(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
@@ -256,27 +223,11 @@ export async function inspectLocalOverrideTarget(params: {
   const target = await params.packageFs.read(params.relativePath, {
     hardlinks: "reject",
     maxBytes: params.expectedSize,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return {
     mode: normalizeFileMode(target.stat.mode),
     sha256: createHash("sha256").update(target.buffer).digest("hex"),
-  };
-}
-
-export async function buildLocalOverrideInventoryEntry(params: {
-  relativePath: string;
-  sourcePath: string;
-  mode?: number;
-}): Promise<PackageDistContentInventoryEntry> {
-  const content = await fs.readFile(params.sourcePath);
-  const stats = await fs.stat(params.sourcePath);
-  return {
-    path: params.relativePath,
-    sha256: createHash("sha256").update(content).digest("hex"),
-    mode: params.mode ?? normalizeFileMode(stats.mode),
-    size: content.length,
   };
 }
 
@@ -298,11 +249,11 @@ export function mergeLocalOverrideFileMode(targetMode: number, overrideMode: num
 export async function writeFileWithMode(
   content: Buffer,
   destination: string,
-  mode?: number,
+  mode: number,
 ): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.writeFile(destination, content);
-  if (mode !== undefined && process.platform !== "win32") {
+  if (process.platform !== "win32") {
     await fs.chmod(destination, mode);
   }
 }

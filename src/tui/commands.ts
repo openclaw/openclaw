@@ -1,4 +1,3 @@
-// Defines TUI slash commands and their help metadata.
 import type { SlashCommand } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
@@ -7,6 +6,7 @@ import {
   listChatCommandsForConfig,
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   listThinkingLevelLabels,
   type ReasoningLevel,
@@ -35,6 +35,15 @@ type ParsedCommand = {
   name: string;
   args: string;
 };
+
+export function isTuiBtwCommand(text: string): boolean {
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
+}
+
+export function isTuiSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
+}
 
 type SlashCommandOptions = {
   cfg?: OpenClawConfig;
@@ -91,6 +100,12 @@ type TuiCommandRow = readonly [
 
 const TUI_COMMAND_ROWS = [
   ["help", "Show slash command help", "/help"],
+  [
+    "browser-setup",
+    "Set up Chrome on the TUI process host (not the Gateway)",
+    "/browser-setup [inspect|install|verify] (TUI process host)",
+    ["inspect", "install", "verify"],
+  ],
   ["question", "Reopen the pending agent question", "/question"],
   [
     "commands",
@@ -174,9 +189,8 @@ const TUI_COMMAND_ROWS = [
   ],
 ] as const satisfies readonly TuiCommandRow[];
 
-const TUI_COMMAND_ROW_VALUES: readonly TuiCommandRow[] = TUI_COMMAND_ROWS;
-const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROW_VALUES.map(
-  ([name, description, help, completions, options]) => {
+const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROWS.map(
+  ([name, description, help, completions, options]: TuiCommandRow) => {
     const descriptor: TuiCommandDescriptor = { name, description, help, completions };
     descriptor.aliases = options?.aliases;
     descriptor.scope = options?.scope;
@@ -203,10 +217,6 @@ function commandIsVisible(command: TuiCommandDescriptor, local: boolean): boolea
   return command.scope !== (local ? "remote" : "local");
 }
 
-function normalizeSlashCommandName(value: string): string {
-  return value.replace(/^\//, "").trim();
-}
-
 function appendSlashCommand(
   commands: SlashCommand[],
   seen: Map<string, SlashCommand["getArgumentCompletions"]>,
@@ -214,7 +224,7 @@ function appendSlashCommand(
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
 ) {
-  const normalizedName = normalizeSlashCommandName(name);
+  const normalizedName = name.replace(/^\//, "").trim();
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
@@ -241,11 +251,6 @@ export function parseCommand(input: string): ParsedCommand {
     name: descriptor?.name ?? normalized,
     args: rest.join(" ").trim(),
   };
-}
-
-/** Whether a slash input belongs to the shared Gateway command registry. */
-export function isSharedTextCommand(input: string): boolean {
-  return resolveTextCommand(input) !== null;
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {

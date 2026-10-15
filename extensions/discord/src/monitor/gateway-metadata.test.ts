@@ -19,6 +19,15 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mockFetchWithSsrFGuard,
 }));
 
+const captureHost = vi.hoisted(() => ({
+  capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureHttpExchangeAsync: captureHost.capture,
+}));
+
 async function listenLoopbackServer(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -113,7 +122,33 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
   beforeEach(() => {
     vi.useRealTimers();
     mockFetchWithSsrFGuard.mockReset();
+    captureHost.capture.mockReset().mockResolvedValue(undefined);
   });
+
+  it.each(["present", "rejected"] as const)(
+    "returns gateway metadata and releases transport with %s async capture",
+    async (capability) => {
+      if (capability === "rejected") {
+        captureHost.capture.mockRejectedValue(new Error("capture write failed"));
+      }
+      const release = stubGuardedFetch(new Response('{"url":"wss://gateway.discord.gg/"}'));
+      const response = await fetchDiscordGatewayMetadataGuarded(
+        "https://discord.com/api/v10/gateway/bot",
+        undefined,
+        { capture: { flowId: "metadata-flow", meta: { subsystem: "discord-gateway-metadata" } } },
+      );
+
+      await expect(response.json()).resolves.toEqual({ url: "wss://gateway.discord.gg/" });
+      expect(release).toHaveBeenCalledOnce();
+      expect(captureHost.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          response,
+          flowId: "metadata-flow",
+          meta: { subsystem: "discord-gateway-metadata" },
+        }),
+      );
+    },
+  );
 
   it("returns under-cap response bodies and releases the guarded fetch", async () => {
     const payload = JSON.stringify({

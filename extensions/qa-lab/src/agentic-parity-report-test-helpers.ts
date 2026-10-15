@@ -1,6 +1,6 @@
-import type { QaRuntimeParitySuiteSummary } from "./agentic-parity-report.js";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 
-export function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
+export function makeRuntimeParitySummary(): QaParitySuiteSummary {
   return {
     scenarios: [
       {

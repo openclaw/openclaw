@@ -2,12 +2,16 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import type { Frame, Page } from "playwright-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState } from "./pw-session-state.js";
+import * as pwSession from "./pw-session.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import {
   armDialogViaPlaywright,
@@ -51,6 +55,8 @@ async function readTargetId(page: import("playwright-core").Page): Promise<strin
 
 describe.runIf(runChromiumProof)("managed Chromium action and download cancellation", () => {
   const cleanup: Array<() => Promise<void>> = [];
+  const actionObservers = new Map<string, (page: Page) => void>();
+  let observingResolvedPages = false;
 
   afterEach(async () => {
     const errors: unknown[] = [];
@@ -97,23 +103,108 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     return { cdpUrl, pages };
   }
 
-  function observeLocatorAction(page: import("playwright-core").Page, method: "click" | "fill") {
-    const started = createDeferred<void>();
-    const settled = createDeferred<void>();
-    const frame = page.mainFrame();
-    // Observe the real dependency promise so cancellation assertions cannot race
-    // ahead of native action admission or mistake an outer abort race for cleanup.
-    const observe = (pending: Promise<void>) => {
-      started.resolve();
-      void pending.then(settled.resolve, settled.resolve);
-      return pending;
+  async function createPolicyDownloadPage() {
+    const rootDir = tempDirs.make("openclaw-download-policy-");
+    const payload = Buffer.from("policy download proof\n");
+    let downloadRequestCount = 0;
+    const downloadServer = createServer((request, response) => {
+      if (request.url === "/proof.txt") {
+        downloadRequestCount += 1;
+        response.writeHead(200, {
+          "content-disposition": 'attachment; filename="proof.txt"',
+          "content-length": String(payload.byteLength),
+          "content-type": "text/plain",
+        });
+        response.end(payload);
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<a href="http://localhost:${downloadPort}/proof.txt" download>Allowed download</a>` +
+          `<a href="http://127.0.0.1:${downloadPort}/proof.txt" download>Denied download</a>`,
+      );
+    });
+    const downloadPort = await listen(downloadServer);
+    cleanup.push(async () => await closeServer(downloadServer));
+
+    const cdpPort = await getFreePort();
+    const context = await getPlaywrightCore().chromium.launchPersistentContext(
+      path.join(rootDir, "profile"),
+      {
+        headless: true,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+        args: [`--remote-debugging-port=${cdpPort}`],
+      },
+    );
+    cleanup.push(async () => await context.close());
+    const page = context.pages()[0] ?? (await context.newPage());
+    await page.goto(`http://localhost:${downloadPort}/`);
+    const cdpUrl = `http://127.0.0.1:${cdpPort}`;
+    cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
+    const targetId = await readTargetId(page);
+    const controlled = await getPageForTargetId({ cdpUrl, targetId });
+    const snapshot = await snapshotRoleViaPlaywright({ cdpUrl, targetId });
+    const refFor = (name: string) => {
+      const match = Object.entries(snapshot.refs).find(([, ref]) => ref.name === name);
+      if (!match) {
+        throw new Error(`Missing download ref: ${name}`);
+      }
+      return match[0];
     };
-    if (method === "click") {
-      const click = frame.click.bind(frame);
-      frame.click = (selector, options) => observe(click(selector, options));
-    } else {
-      const fill = frame.fill.bind(frame);
-      frame.fill = (selector, value, options) => observe(fill(selector, value, options));
+    return {
+      cdpUrl,
+      controlled,
+      downloadRequestCount: () => downloadRequestCount,
+      page,
+      payload,
+      refFor,
+      rootDir,
+      targetId,
+    };
+  }
+
+  function observeLocatorAction(targetId: string, method: "click" | "fill") {
+    const started = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
+    const observedFrames = new WeakSet<Frame>();
+    // Discovery of another target can replace the cached connection. Observe the
+    // exact Page returned to the action, not a Frame retained during fixture setup.
+    actionObservers.set(targetId, (page) => {
+      const frame = page.mainFrame();
+      if (observedFrames.has(frame)) {
+        return;
+      }
+      observedFrames.add(frame);
+      const observe = (pending: Promise<void>) => {
+        started.resolve();
+        void pending.then(settled.resolve, settled.resolve);
+        return pending;
+      };
+      if (method === "click") {
+        const click = frame.click.bind(frame);
+        frame.click = (selector, options) => observe(click(selector, options));
+      } else {
+        const fill = frame.fill.bind(frame);
+        frame.fill = (selector, value, options) => observe(fill(selector, value, options));
+      }
+    });
+    if (!observingResolvedPages) {
+      observingResolvedPages = true;
+      const resolvePage = pwSession.getPageForTargetId;
+      const resolver = vi
+        .spyOn(pwSession, "getPageForTargetId")
+        .mockImplementation(async (opts) => {
+          const page = await resolvePage(opts);
+          if (opts.targetId) {
+            actionObservers.get(opts.targetId)?.(page);
+          }
+          return page;
+        });
+      cleanup.push(async () => {
+        resolver.mockRestore();
+        actionObservers.clear();
+        observingResolvedPages = false;
+      });
     }
     return { started: started.promise, settled: settled.promise };
   }
@@ -138,8 +229,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
         .locator("button")
         .evaluate((element: HTMLButtonElement) => (element.disabled = true));
     }
-    const firstNative = observeLocatorAction(first!.controlled, "click");
-    const secondNative = observeLocatorAction(second!.controlled, "click");
+    const firstNative = observeLocatorAction(first!.targetId, "click");
+    const secondNative = observeLocatorAction(second!.targetId, "click");
     const controller = new AbortController();
     const reason = new Error("only the first action was cancelled");
     const firstClick = clickViaPlaywright({
@@ -181,7 +272,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await page.owner
       .locator("input")
       .evaluate((element: HTMLInputElement) => (element.disabled = true));
-    const native = observeLocatorAction(page.controlled, "fill");
+    const native = observeLocatorAction(page.targetId, "fill");
     const controller = new AbortController();
     const reason = new Error("typing was cancelled");
     const typing = typeViaPlaywright({
@@ -213,7 +304,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await first!.owner
       .locator("button")
       .evaluate((element: HTMLButtonElement) => (element.disabled = true));
-    const native = observeLocatorAction(first!.controlled, "click");
+    const native = observeLocatorAction(first!.targetId, "click");
     const firstUpload = uploadViaPlaywright({
       cdpUrl,
       targetId: first!.targetId,
@@ -249,8 +340,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     const filePath = await createUploadFile();
     const { cdpUrl, pages } = await createActionPages(["<p>Waiting for a file input</p>"]);
     const page = pages[0]!;
-    const started = createDeferred<void>();
-    const settled = createDeferred<void>();
+    const started = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
     const frame = page.controlled.mainFrame();
     const setInputFiles = frame.setInputFiles.bind(frame);
     frame.setInputFiles = (selector, files, options) => {
@@ -289,7 +380,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     ]);
     const page = pages[0]!;
     page.owner.on("dialog", () => {});
-    const native = observeLocatorAction(page.controlled, "click");
+    const native = observeLocatorAction(page.targetId, "click");
     let settled = false;
     void native.settled.then(() => {
       settled = true;
@@ -311,9 +402,82 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await expect(page.owner.locator("button").textContent()).resolves.toBe("Accepted");
   }, 20_000);
 
-  it.each(["caller abort", "invalid output directory"])(
+  it.each([
+    { mode: "ref-based", trigger: "Allowed download" },
+    { mode: "waiter", trigger: "Allowed download" },
+  ] as const)(
+    "allows a $mode download through a configured strict-policy hostname exception",
+    async ({ mode, trigger }) => {
+      const fixture = await createPolicyDownloadPage();
+      const outputPath = path.join(fixture.rootDir, `${mode}-allowed.txt`);
+      const options = {
+        cdpUrl: fixture.cdpUrl,
+        targetId: fixture.targetId,
+        path: outputPath,
+        rootDir: fixture.rootDir,
+        timeoutMs: 5_000,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["localhost"],
+        },
+      };
+      const pending =
+        mode === "ref-based"
+          ? downloadViaPlaywright({ ...options, ref: fixture.refFor(trigger) })
+          : waitForDownloadViaPlaywright(options);
+      if (mode === "waiter") {
+        await expect.poll(() => ensurePageState(fixture.controlled).downloadWaiterDepth).toBe(1);
+        await fixture.page.getByRole("link", { name: trigger }).click();
+      }
+
+      const result = await pending;
+      await expect(fs.readFile(result.path)).resolves.toEqual(fixture.payload);
+      expect(fixture.downloadRequestCount()).toBe(1);
+    },
+    20_000,
+  );
+
+  it.each([
+    { mode: "ref-based", trigger: "Denied download" },
+    { mode: "waiter", trigger: "Denied download" },
+  ] as const)(
+    "rejects a $mode download outside a configured strict-policy hostname exception",
+    async ({ mode, trigger }) => {
+      const fixture = await createPolicyDownloadPage();
+      const outputPath = path.join(fixture.rootDir, `${mode}-denied.txt`);
+      const options = {
+        cdpUrl: fixture.cdpUrl,
+        targetId: fixture.targetId,
+        path: outputPath,
+        rootDir: fixture.rootDir,
+        timeoutMs: 5_000,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["localhost"],
+        },
+      };
+      const pending =
+        mode === "ref-based"
+          ? downloadViaPlaywright({ ...options, ref: fixture.refFor(trigger) })
+          : waitForDownloadViaPlaywright(options);
+      if (mode === "waiter") {
+        await expect.poll(() => ensurePageState(fixture.controlled).downloadWaiterDepth).toBe(1);
+        await fixture.page.getByRole("link", { name: trigger }).click();
+      }
+
+      await expect(pending).rejects.toThrow(/blocked|private/i);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(fixture.downloadRequestCount()).toBe(0);
+    },
+    20_000,
+  );
+
+  it.for(["caller abort", "invalid output directory"])(
     "cancels a streaming download after %s without publishing output",
-    async (failure) => {
+    { timeout: 20_000 },
+    async (failure, { signal, onTestFinished }) => {
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
+      onTestFinished(() => write.mockRestore());
       const rootDir = tempDirs.make("openclaw-download-stream-cancel-");
       cleanup.push(async () => await fs.rm(rootDir, { recursive: true, force: true }));
       let closeDownloadResponse: (() => void) | undefined;
@@ -358,7 +522,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       cleanup.push(async () => closeDownloadResponse?.());
 
       const controlledPage = await getPageForTargetId({ cdpUrl, targetId });
-      const saveStarted = createDeferred<void>();
+      const saveStarted = Promise.withResolvers<void>();
       let cancellationCount = 0;
       controlledPage.once("download", (download) => {
         const saveAs = download.saveAs.bind(download);
@@ -398,7 +562,9 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
         await Promise.race([saveStarted.promise, capture]);
         controller.abort(reason);
         await expect(outcome).resolves.toBe(reason);
-        await expect.poll(async () => await fs.readdir(outputRoot)).toEqual([]);
+        // Cancellation settles before the real output writer removes its staging files.
+        await withinTest(writeSettled.promise, signal);
+        expect(await fs.readdir(outputRoot)).toEqual([]);
         await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         await expect(outcome).resolves.toMatchObject({
@@ -411,7 +577,6 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       await expect.poll(() => responseClosed).toBe(true);
       expect(ensurePageState(controlledPage).downloadWaiterDepth).toBe(0);
     },
-    20_000,
   );
 
   it("does not let a cancelled waiter capture and write a later download", async () => {

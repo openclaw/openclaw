@@ -10,6 +10,27 @@ import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-rec
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
+import { readToolResultDetails } from "./tool-result-error.js";
+
+function readTimeoutDiagnostic(result: unknown): ToolErrorSummary["terminalDiagnostic"] {
+  const details = readToolResultDetails(result);
+  const timeoutMs = details?.timeoutMs;
+  if (
+    details?.timedOut !== true ||
+    typeof timeoutMs !== "number" ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "timeout",
+    timeoutMs,
+    ...(details.partial === true && Array.isArray(details.results) && details.results.length > 0
+      ? { partialResults: details.results.length }
+      : {}),
+  };
+}
 
 /** Build one attempt-scoped facts-in/state-out terminal observer for every harness. */
 export function createToolTerminalObserver(
@@ -40,13 +61,21 @@ export function createToolTerminalObserver(
       : (observation.nativeMutation ??
         buildToolMutationState(observation.toolName, executedArguments));
     const replaySafe = observation.replaySafe ?? mutation.replaySafe;
+    const details = readToolResultDetails(observation.result);
     let lastToolError: ToolErrorSummary | undefined;
-    if (observation.outcome === "failure") {
+    if (!executionStarted && details?.status === "skipped" && details.deniedReason === "steering") {
+      // Skipping work neither creates a failure nor recovers an earlier one.
+      lastToolError = errors.read().lastToolError;
+    } else if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
+      const terminalDiagnostic =
+        observation.failure?.terminalDiagnostic ??
+        (executionStarted ? readTimeoutDiagnostic(observation.result) : undefined);
       const failure: ToolErrorSummary = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
+        ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
         executionStarted,
         mutatingAction,
       };

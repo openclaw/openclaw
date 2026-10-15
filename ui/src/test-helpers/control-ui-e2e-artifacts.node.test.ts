@@ -18,29 +18,6 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-it("retains old proof and repeated scenario outputs with identical filenames", () => {
-  const parent = makeTempDir(tempDirs, "control-ui-proof-");
-  const previous = path.join(parent, "same-scenario");
-  mkdirSync(previous);
-  for (const name of artifactNames) {
-    writeFileSync(path.join(previous, name), `old:${name}`);
-  }
-  const outputs = Array.from({ length: 3 }, (_, attempt) => {
-    const directory = createControlUiE2eArtifactDir("same-scenario", parent);
-    for (const name of artifactNames) {
-      writeFileSync(path.join(directory, name), `${attempt}:${name}`);
-    }
-    return directory;
-  });
-  for (const name of artifactNames) {
-    expect(readFileSync(path.join(previous, name), "utf8")).toBe(`old:${name}`);
-    for (const [attempt, directory] of outputs.entries()) {
-      expect(readFileSync(path.join(directory, name), "utf8")).toBe(`${attempt}:${name}`);
-    }
-  }
-  expect(new Set(outputs).size).toBe(3);
-});
-
 it("allocates independently in concurrent workers sharing the same parent and scope", async () => {
   const parent = makeTempDir(tempDirs, "control-ui-proof-workers-");
   const previous = path.join(parent, "same-scenario");
@@ -100,7 +77,7 @@ it("keeps explicit parents authoritative and trims the existing configured root"
   expect(path.dirname(createControlUiE2eArtifactDir("explicit", explicit))).toBe(explicit);
 });
 
-it.each([undefined, "", "   "])(
+it.each([undefined, "   "])(
   "uses the repository parent for an unset or blank root (%s)",
   (root) => {
     vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", root);

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import {
   listSetupInferenceAuthOptions,
+  listSetupInferenceEnableOptions,
   listSetupInferenceInstallOptions,
+  listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
 } from "./setup-inference-auth-options.js";
 import { resolveCandidatePresentation } from "./setup-inference-core.js";
 
@@ -22,6 +25,23 @@ const metaEntry: ProviderInstallCatalogEntry = {
 };
 
 describe("setup inference install options", () => {
+  it("keeps detected-only choices out of every metadata-only setup row", () => {
+    const choice = {
+      ...metaEntry,
+      assistantVisibility: "detected-only" as const,
+      appGuidedAuth: "oauth" as const,
+      appGuidedSecret: true,
+      appGuidedDiscovery: true,
+    };
+    expect({
+      auth: listSetupInferenceAuthOptions([choice]),
+      enable: listSetupInferenceEnableOptions([choice]),
+      install: listSetupInferenceInstallOptions([choice], []),
+      manual: listSetupInferenceManualProviders([choice]),
+      prepare: listSetupInferencePrepareOptions([choice]),
+    }).toEqual({ auth: [], enable: [], install: [], manual: [], prepare: [] });
+  });
+
   it.each([
     ["claude-cli", "claude-cli/sonnet", "claude"],
     ["codex-cli", "openai/default", "openai"],
@@ -64,5 +84,60 @@ describe("setup inference install options", () => {
         ],
       ),
     ).toEqual([]);
+  });
+
+  it("preserves the shared presentation fields across guided setup surfaces", () => {
+    const choice = {
+      ...metaEntry,
+      icon: "sparkles",
+      website: "https://meta.example",
+      appGuidedAuth: "oauth" as const,
+      appGuidedSecret: true,
+      appGuidedDiscovery: true,
+      appGuidedActionLabel: "Connect Meta",
+    };
+
+    expect(listSetupInferenceAuthOptions([choice])).toEqual([
+      {
+        id: "meta-api-key",
+        brandId: "meta",
+        label: "Meta API key",
+        hint: "Meta Responses API",
+        icon: "sparkles",
+        website: "https://meta.example",
+        groupLabel: "Meta",
+        kind: "oauth",
+        featured: false,
+      },
+    ]);
+    expect(listSetupInferenceEnableOptions([choice])[0]).toMatchObject({
+      id: "meta-api-key",
+      brandId: "meta",
+      label: "Meta API key",
+      hint: "Meta Responses API",
+      icon: "sparkles",
+      website: "https://meta.example",
+      groupLabel: "Meta",
+    });
+    expect(listSetupInferenceManualProviders([choice])[0]).toMatchObject({
+      id: "meta-api-key",
+      brandId: "meta",
+      label: "Meta API key",
+      hint: "Meta Responses API",
+      icon: "sparkles",
+      website: "https://meta.example",
+      groupLabel: "Meta",
+    });
+    expect(listSetupInferencePrepareOptions([choice])).toEqual([
+      {
+        id: "meta-api-key",
+        brandId: "meta",
+        label: "Meta API key",
+        hint: "Meta Responses API",
+        icon: "sparkles",
+        website: "https://meta.example",
+        actionLabel: "Connect Meta",
+      },
+    ]);
   });
 });

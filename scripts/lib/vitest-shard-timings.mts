@@ -23,7 +23,7 @@ export function createShardTimingSample(spec: VitestShardTimingSpec, durationMs:
     return null;
   }
 
-  const targets = spec.timingTargets ?? spec.includePatterns;
+  const targets = spec.timingIncludePatterns ?? spec.timingTargets ?? spec.includePatterns;
   const includePatternCount = Array.isArray(targets) ? targets.length : 0;
   return {
     baseConfig: spec.config,

@@ -9,10 +9,14 @@ import { inspectLinuxProcessGroupStats } from "./posix-process-stat.js";
 const procFs = vi.hoisted(() => ({ readFileSync: vi.fn(), readdirSync: vi.fn() }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
+  const overrides = {
     readFileSync: procFs.readFileSync.mockImplementation(actual.readFileSync),
     readdirSync: procFs.readdirSync.mockImplementation(actual.readdirSync),
+  };
+  return {
+    ...actual,
+    ...overrides,
+    default: { ...actual, ...overrides },
   };
 });
 
@@ -21,31 +25,24 @@ afterEach(() => {
 });
 
 describe("POSIX process group inspection", () => {
-  it("treats Linux zombie and dead members as stopped", () => {
+  it("uses canonical death evidence only for members of the requested group", () => {
+    const isDead = vi.fn(() => true);
     expect(
-      inspectLinuxProcessGroupStats(123, [
-        "123 (leader) Z 1 123 123 0 -1 0",
-        "124 (helper (worker)) X 1 123 123 0 -1 0",
-        "125 (unrelated) S 1 999 999 0 -1 0",
-      ]),
+      inspectLinuxProcessGroupStats(
+        123,
+        [
+          "123 (leader) Z 1 123 123 0 -1 0",
+          "124 (helper (worker)) X 1 123 123 0 -1 0",
+          "125 (unrelated) S 1 999 999 0 -1 0",
+        ],
+        isDead,
+      ),
     ).toEqual({
       alive: false,
       diagnostics:
         'pgid=123 members=[pid=123 state=Z command="leader", pid=124 state=X command="helper (worker)"]',
     });
-  });
-
-  it("treats runnable members as alive and empty snapshots as unknown", () => {
-    expect(
-      inspectLinuxProcessGroupStats(123, [
-        "123 (leader) Z 1 123 123 0 -1 0",
-        "124 (worker) D 1 123 123 0 -1 0",
-      ]).alive,
-    ).toBe(true);
-    expect(inspectLinuxProcessGroupStats(123, ["125 (other) S 1 999 999 0 -1 0"])).toEqual({
-      alive: null,
-      diagnostics: "pgid=123 members=[]",
-    });
+    expect(isDead.mock.calls).toEqual([[123], [124]]);
   });
 
   it("bounds process group diagnostics", () => {
@@ -54,17 +51,18 @@ describe("POSIX process group inspection", () => {
       (_, index) => `${index + 1} (${`worker-${index}`.padEnd(32, "x")}) S 1 123 123 0 -1 0`,
     );
 
-    const inspection = inspectLinuxProcessGroupStats(123, stats);
+    const inspection = inspectLinuxProcessGroupStats(123, stats, () => false);
 
     expect(inspection.alive).toBe(true);
     expect(inspection.diagnostics.length).toBeLessThanOrEqual(2_048);
     expect(inspection.diagnostics).toMatch(/\.\.\.$/u);
   });
 
-  it.each(["ENOENT", "ESRCH", "EACCES"])(
+  it.each(["EACCES"])(
     "distinguishes a vanished /proc member from unreadable state (%s)",
     (code) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "kill").mockImplementation(() => true);
       procFs.readdirSync.mockReturnValueOnce([
         { name: "123", isDirectory: () => true },
         { name: "999", isDirectory: () => true },
@@ -74,6 +72,9 @@ describe("POSIX process group inspection", () => {
         .mockImplementationOnce(() => {
           throw Object.assign(new Error("stat read failed"), { code });
         });
+      if (code !== "EACCES") {
+        procFs.readFileSync.mockReturnValueOnce("State:\tZ\nThreads:\t1\n");
+      }
 
       const inspection = inspectLinuxProcessGroup(123);
       if (code === "EACCES") {
@@ -84,66 +85,44 @@ describe("POSIX process group inspection", () => {
     },
   );
 
-  it.each(["empty", "unavailable"])(
-    "confirms a group reaped during an %s Linux snapshot is stopped",
-    (snapshot) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      let reaped = false;
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        if (reaped) {
-          throw Object.assign(new Error("group reaped"), { code: "ESRCH" });
-        }
-        return true;
-      });
+  it.each([
+    { status: "State:\tZ\nThreads:\t2\n", alive: true },
+    { status: "State:\tZ\nThreads:\t1\n", alive: false },
+  ])("preserves cleanup until all threads have exited ($status)", ({ status, alive }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    procFs.readdirSync.mockReturnValueOnce([{ name: "123", isDirectory: () => true }]);
+    procFs.readFileSync
+      .mockClear()
+      .mockReturnValueOnce("123 (leader) Z 1 123 123 0 -1 0")
+      .mockReturnValueOnce(status);
 
-      expect(
-        isQaPosixProcessGroupAlive(123, () => {
-          reaped = true;
-          return snapshot === "empty" ? inspectLinuxProcessGroupStats(123, []) : null;
-        }),
-      ).toBe(false);
-    },
-  );
-
-  it("fails closed when the Linux member snapshot is unavailable", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      expect(isQaPosixProcessGroupAlive(123, () => null)).toBe(true);
-      expect(processKill).toHaveBeenCalledWith(-123, 0);
-    } finally {
-      platform.mockRestore();
-    }
+    expect(isQaPosixProcessGroupAlive(123)).toBe(alive);
+    expect(procFs.readFileSync).toHaveBeenCalledWith("/proc/123/status", "utf8");
   });
 
-  it("treats a kill-visible Linux group with only zombie members as stopped", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      expect(
-        isQaPosixProcessGroupAlive(123, () => ({
-          alive: false,
-          diagnostics: 'pgid=123 members=[pid=123 state=Z command="leader"]',
-        })),
-      ).toBe(false);
-      expect(processKill).toHaveBeenCalledWith(-123, 0);
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("stops on ESRCH and never falls back to a positive pid", () => {
-    const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      expect(pid).toBe(-123);
-      if (signal === 0) {
-        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  it.each([
+    { snapshot: "empty", inspection: inspectLinuxProcessGroupStats(123, [], () => true) },
+    { snapshot: "unreadable", inspection: null },
+  ])("re-probes the kernel after an inconclusive $snapshot snapshot", ({ inspection }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    let present = true;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      if (!present) {
+        throw Object.assign(new Error("group reaped"), { code: "ESRCH" });
       }
       return true;
     });
 
-    expect(isQaPosixProcessGroupAlive(123)).toBe(false);
-    expect(signalQaPosixProcessGroup(123, "SIGTERM")).toBeUndefined();
-    expect(processKill).not.toHaveBeenCalledWith(123, expect.anything());
+    // The last zombie is reaped between the existence probe and the /proc scan.
+    expect(
+      isQaPosixProcessGroupAlive(123, () => {
+        present = false;
+        return inspection;
+      }),
+    ).toBe(false);
+    present = true;
+    expect(isQaPosixProcessGroupAlive(123, () => inspection)).toBe(true);
   });
 
   it.each(["ESRCH", "EPERM"])("preserves the group signal contract on %s", (code) => {

@@ -1,5 +1,6 @@
 import { isNonEmptyProtocolString, isProtocolRecord } from "./protocol-value-normalization.js";
 import type { EventFrame, ResponseFrame } from "./schema/frames.js";
+export { GATEWAY_SERVER_CAPS } from "./server-capabilities.js";
 export type {
   ConnectParams,
   ErrorShape,

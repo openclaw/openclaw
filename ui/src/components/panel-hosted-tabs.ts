@@ -1,15 +1,49 @@
+import type {
+  emptyLegacyContent,
+  LegacyDirectiveResult,
+  LegacyTemplateResult,
+} from "../lit/solid-content.tsx";
+
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
+
+const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
+
+export function notifyPanelHostedTabsChanged(
+  element: HTMLElement,
+  facts: readonly unknown[],
+): void {
+  const key = JSON.stringify(facts);
+  if (hostedTabsChangeKeys.get(element) !== key) {
+    hostedTabsChangeKeys.set(element, key);
+    element.dispatchEvent(
+      new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
+    );
+  }
+}
 
 export type PanelHostedTab = {
   id: string;
   label: string;
-  url: string;
-  kind: "remote" | "native";
+  /** Page URL used for hostname favicon lookup when no explicit favicon is available. */
+  url?: string;
+  /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
+  favicon?: string;
+  icon?: LegacyTemplateResult | Node | LegacyDirectiveResult;
+  title?: string | null;
+  statusLabel?: string | null;
+  badge?: string | null;
+  className?: string;
 };
 
 export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
+  /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
+  readonly hostedActions?:
+    | LegacyTemplateResult
+    | Node
+    | typeof emptyLegacyContent
+    | LegacyDirectiveResult;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

@@ -9,6 +9,7 @@ const matchingParams = {
   canUseInternalRuntimeHandoff: true,
   expectedExistingSessionId: "session-1",
   resolvedSessionId: "session-1",
+  resolvedSessionKey: "agent:main:discord:dm:123",
   runId: "recovery-run-1",
   sessionEntry: {
     sessionId: "session-1",
@@ -33,28 +34,66 @@ const matchingUiParams = {
   sessionEntry: { ...matchingParams.sessionEntry, restartRecoverySourceIngress: "control-ui" },
 } as const;
 
+const matchingTargetlessParams = {
+  ...matchingParams,
+  sessionEntry: {
+    ...matchingParams.sessionEntry,
+    restartRecoveryDeliveryContext: { channel: "discord" },
+  },
+} as const;
+
+const matchingInternalParams = {
+  ...matchingParams,
+  resolvedSessionKey: "agent:main:dashboard:recovered-cli",
+  sessionEntry: {
+    ...matchingParams.sessionEntry,
+    restartRecoverySourceIngress: "internal",
+    restartRecoveryDeliveryContext: undefined,
+  },
+} as const;
+
 describe("resolveAgentRestartRecoveryContext", () => {
-  it.each([matchingParams, matchingUiParams])("rejects mismatched recovery ownership", (params) => {
-    for (const override of [
-      { canUseInternalRuntimeHandoff: false },
-      { expectedExistingSessionId: undefined },
-      { expectedExistingSessionId: "replacement-session" },
-      { resolvedSessionId: "replacement-session" },
-      { runId: "replacement-run" },
-      { sessionEntry: undefined },
-      { sessionEntry: { ...params.sessionEntry, sessionId: "replacement-session" } },
-      { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
-      { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
-      {
-        sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: "internal" as const },
-      },
-    ]) {
-      expect(resolveAgentRestartRecoveryContext({ ...params, ...override })).toBeUndefined();
-    }
+  it.each([matchingParams, matchingUiParams, matchingInternalParams])(
+    "rejects mismatched recovery ownership",
+    (params) => {
+      for (const override of [
+        { canUseInternalRuntimeHandoff: false },
+        { expectedExistingSessionId: undefined },
+        { expectedExistingSessionId: "replacement-session" },
+        { resolvedSessionId: "replacement-session" },
+        { runId: "replacement-run" },
+        { sessionEntry: undefined },
+        { sessionEntry: { ...params.sessionEntry, sessionId: "replacement-session" } },
+        { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
+        { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
+      ]) {
+        expect(resolveAgentRestartRecoveryContext({ ...params, ...override })).toBeUndefined();
+      }
+    },
+  );
+
+  it("does not restore an internal source for ordinary runs or external delivery claims", () => {
+    expect(
+      resolveAgentRestartRecoveryContext({
+        ...matchingInternalParams,
+        isRestartRecoveryResumeRun: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAgentRestartRecoveryContext({
+        ...matchingInternalParams,
+        sessionEntry: {
+          ...matchingInternalParams.sessionEntry,
+          restartRecoveryDeliveryContext:
+            matchingParams.sessionEntry.restartRecoveryDeliveryContext,
+        },
+      }),
+    ).toBeUndefined();
   });
 
-  it("restores only pinned authoring for an admitted Control UI recovery", () => {
+  it("preserves WebChat policy context and pinned authoring for an admitted Control UI recovery", () => {
     expect(resolveAgentRestartRecoveryContext(matchingUiParams)).toEqual({
+      messageChannel: "webchat",
       pinnedWidgetAuthoring: true,
     });
     expect(
@@ -65,12 +104,13 @@ describe("resolveAgentRestartRecoveryContext", () => {
     ).toBeUndefined();
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "restores correlated channel delivery facts (resume=%s)",
     (isRestartRecoveryResumeRun) => {
       expect(
         resolveAgentRestartRecoveryContext({ ...matchingParams, isRestartRecoveryResumeRun }),
       ).toEqual({
+        messageChannel: "discord",
         channel: {
           channel: "discord",
           currentChannelId: "discord:dm:123",
@@ -90,6 +130,21 @@ describe("resolveAgentRestartRecoveryContext", () => {
           },
         }),
       ).toBeUndefined();
+    },
+  );
+
+  it.each(["   "])(
+    "preserves the source provider without granting channel delivery authority when target is %j",
+    (to) => {
+      expect(
+        resolveAgentRestartRecoveryContext({
+          ...matchingTargetlessParams,
+          sessionEntry: {
+            ...matchingTargetlessParams.sessionEntry,
+            restartRecoveryDeliveryContext: { channel: " Discord ", to },
+          },
+        }),
+      ).toEqual({ messageChannel: "discord" });
     },
   );
 });

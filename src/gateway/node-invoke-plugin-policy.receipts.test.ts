@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
@@ -172,10 +173,7 @@ describe("plugin node action receipts", () => {
     "does not attribute a late %s policy result after runtime authority closes",
     async (outcome) => {
       let releasePolicy: (() => void) | undefined;
-      let markPolicyStarted: (() => void) | undefined;
-      const policyStarted = new Promise<void>((resolve) => {
-        markPolicyStarted = resolve;
-      });
+      const { promise: policyStarted, resolve: markPolicyStarted } = createDeferred();
       const policyWait = new Promise<void>((resolve) => {
         releasePolicy = resolve;
       });

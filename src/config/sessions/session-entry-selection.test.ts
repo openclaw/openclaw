@@ -54,6 +54,7 @@ describe("inheritSessionSelection", () => {
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-primary",
         agentRuntimeOverride: "vertex-runtime",
+        nativeRuntimeConsent: "vertex-runtime",
         contextWindow: "1m",
         authProfileOverride: profile,
         authProfileOverrideSource: source,
@@ -64,6 +65,7 @@ describe("inheritSessionSelection", () => {
       expect(inherited.modelOverride).toBeUndefined();
       expect(inherited.modelOverrideSource).toBeUndefined();
       expect(inherited.agentRuntimeOverride).toBeUndefined();
+      expect(inherited.nativeRuntimeConsent).toBeUndefined();
       expect(inherited.contextWindow).toBe("1m");
       expect(inherited.authProfileOverride).toBe(inheritedProfile);
       expect(inherited.authProfileOverrideSource).toBe(inheritedProfile ? "user" : undefined);

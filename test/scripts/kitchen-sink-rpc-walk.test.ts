@@ -1,4 +1,3 @@
-// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -13,8 +12,9 @@ import fs, {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   assertChannelAccountRunning,
   assertCommandResourceCeiling,
@@ -27,6 +27,8 @@ import {
   assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
+  assertKitchenSinkResourcePlugins,
+  assertKitchenSinkResourceShutdown,
   assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
@@ -40,10 +42,9 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-  listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
-  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  kitchenSinkResourceEnv,
   parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
@@ -51,6 +52,7 @@ import {
   resolveKitchenSinkRpcConfig,
   resolveKitchenSinkRpcPort,
   runCommand,
+  runKitchenSinkResourceToolWorkload,
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
@@ -64,17 +66,218 @@ import {
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
 import {
+  measureResourceOperations,
+  type KitchenSinkResourcePhase,
+} from "../../scripts/e2e/lib/kitchen-sink-resources.mts";
+import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
-import { waitForChildClose } from "../helpers/process-wait.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+it("resource proof requires clean joined Gateway exit, not forced termination", () => {
+  const clean = { exited: true, exitCode: 0, signal: null, signals: ["SIGTERM"] };
+  expect(() => assertKitchenSinkResourceShutdown(clean)).not.toThrow();
+  for (const failed of [
+    { ...clean, exited: false },
+    { ...clean, exitCode: 1 },
+    { ...clean, signals: ["SIGTERM", "SIGKILL"] },
+    { ...clean, exitCode: null, signal: "SIGKILL", signals: ["SIGTERM", "SIGKILL"] },
+  ]) {
+    expect(() => assertKitchenSinkResourceShutdown(failed)).toThrow("did not exit cleanly");
+  }
+});
+
+it.each(["valid", "wrong session", "wrong tool"])(
+  "measures the actual session and tool RPC callbacks: %s",
+  async (response) => {
+    const phases: KitchenSinkResourcePhase[] = [];
+    const events: string[] = [];
+    let step = 0;
+    const sample = async () => {
+      events.push("sample");
+      step++;
+      return {
+        pid: 123,
+        atMonotonicMicros: step * 1000,
+        process: { user: step * 100, system: step * 10 },
+        mainThread: { user: step * 50, system: step * 5 },
+        cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
+        memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        activeResources: {},
+        runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
+      };
+    };
+    const rpc = vi.fn(async (method: string, _params: unknown) => {
+      events.push(method);
+      return method === "sessions.create"
+        ? {
+            ok: true,
+            key: response === "wrong session" ? "wrong" : "agent:main:kitchen-sink-rpc",
+            sessionId: "fixture-session",
+          }
+        : {
+            ok: true,
+            source: "plugin",
+            output: {
+              route: "tool:kitchen_sink_text",
+              text: response === "wrong tool" ? "wrong" : "Kitchen Sink fixture",
+            },
+          };
+    });
+    const measure: Parameters<typeof runKitchenSinkResourceToolWorkload>[0]["measure"] = async (
+      name,
+      count,
+      run,
+      options,
+    ) => {
+      const phase = await measureResourceOperations({ name, count, run, sample, ...options });
+      phases.push(phase);
+      if (phase.status === "failed") {
+        throw new Error(phase.error);
+      }
+      return phase;
+    };
+    const result = runKitchenSinkResourceToolWorkload({ rpc, measure }, 20);
+    if (response !== "valid") {
+      await expect(result).rejects.toThrow(response === "wrong session" ? "session" : "fixture");
+      expect(phases.at(-1)).toMatchObject({
+        status: "failed",
+        operations: { attempted: 1, completed: 0, failed: 1 },
+      });
+      expect(rpc).toHaveBeenCalledTimes(response === "wrong session" ? 1 : 2);
+      return;
+    }
+    await result;
+    expect(rpc.mock.calls).toEqual([
+      [
+        "sessions.create",
+        { key: "agent:main:kitchen-sink-rpc", agentId: "main", label: "kitchen-sink-resources" },
+      ],
+      ...Array.from({ length: 20 }, (_, index) => [
+        "tools.invoke",
+        {
+          name: "kitchen_sink_text",
+          args: { prompt: "explain kitchen sink resource profiling" },
+          sessionKey: "agent:main:kitchen-sink-rpc",
+          agentId: "main",
+          idempotencyKey: `kitchen-sink-resources-${index}`,
+        },
+      ]),
+    ]);
+    expect(events).toEqual([
+      "sample",
+      "sessions.create",
+      "sample",
+      "sample",
+      "tools.invoke",
+      "sample",
+      ...Array.from({ length: 19 }, () => "tools.invoke"),
+      "sample",
+    ]);
+    expect(phases).toMatchObject([
+      {
+        name: "session-create",
+        status: "exercised",
+        operations: { attempted: 1, completed: 1, failed: 0 },
+      },
+      {
+        name: "plugin-tool",
+        status: "exercised",
+        operations: { attempted: 20, completed: 20, failed: 0 },
+        breakdown: [
+          { name: "plugin-tool-first", operations: { completed: 1 } },
+          { name: "plugin-tool-warm", operations: { completed: 19 } },
+        ],
+      },
+    ]);
+  },
+);
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;
-const realNow = Date.now;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+// The parent writes readiness before sending a receipt, so process settlement
+// can consult the durable record if the independent receipt pipe arrives late.
+function fixtureReadyBeforeSettlement(readyPath: string, operation: PromiseLike<unknown>) {
+  return Promise.race([
+    receipts.waitFor(readyPath, "ready"),
+    Promise.resolve(operation).then(
+      () => {
+        if (!existsSync(readyPath)) {
+          throw new Error("timed out waiting for condition");
+        }
+      },
+      (error: unknown) => {
+        if (!existsSync(readyPath)) {
+          throw error;
+        }
+      },
+    ),
+  ]);
+}
+
+it("admits resource comparison explicitly without inheriting developer credentials", () => {
+  expect(validateCliArgs([])).toBeUndefined();
+  expect(validateCliArgs(["--resource-profile", "report.json"])).toBe(path.resolve("report.json"));
+  expect(() => validateCliArgs(["--resource-profile"])).toThrow("requires one report path");
+  expect(() => validateCliArgs(["--resource-profile", "a", "--resource-profile", "b"])).toThrow(
+    "requires one report path",
+  );
+  const env = kitchenSinkResourceEnv({
+    PATH: "/usr/bin",
+    OPENAI_API_KEY: "test-only",
+    NODE_OPTIONS: "--require=developer-hook",
+    HTTPS_PROXY: "http://example.invalid",
+  });
+  expect(env.PATH).toBe("/usr/bin");
+  expect(env.OPENAI_API_KEY).toBeUndefined();
+  expect(env.NODE_OPTIONS).toBeUndefined();
+  expect(env.HTTPS_PROXY).toBeUndefined();
+  expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
+});
+
+it("rejects an active-plugin contaminated baseline and missing or failed conformance activation", () => {
+  const fixture = { id: "openclaw-kitchen-sink-fixture", runtime: { state: "active" } };
+  expect(assertKitchenSinkResourcePlugins({ plugins: [] }, false)).toEqual([]);
+  expect(assertKitchenSinkResourcePlugins({ plugins: [fixture] }, true)).toEqual([fixture.id]);
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [fixture, { id: "memory-core", runtime: { state: "active" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [fixture] }, false)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [] }, true)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [{ ...fixture, runtime: { state: "service-failed" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+});
 
 type RunTaskkill = NonNullable<
   NonNullable<Parameters<typeof signalProcessGroup>[2]>["runTaskkill"]
@@ -109,9 +312,9 @@ const commandResult = (stdout: string) => ({ stderr: "", stdout });
 
 function samplePosixSnapshot(
   stdout: string,
-  options: { commandLineNeedles?: string[]; platform?: NodeJS.Platform } = {},
+  options: { commandLineNeedles?: string[]; platform?: NodeJS.Platform; pid?: number } = {},
 ) {
-  return sampleProcess(4321, {
+  return sampleProcess(options.pid ?? 4321, {
     platform: options.platform ?? "linux",
     posixCommandLineNeedles: options.commandLineNeedles,
     runCommand: async (command: string, args: string[]) => {
@@ -165,9 +368,18 @@ async function sampleWindowsSnapshot(stdout: string, commandLineNeedles?: string
   return { calls, sample };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
+let processFixtureCleanup: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  try {
+    // Vitest runs afterEach before onTestFinished, including after a timeout.
+    // Join fake-time process cleanup before restoring the clock it still owns.
+    await processFixtureCleanup?.();
+  } finally {
+    processFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  }
 });
 
 function captureSyncError(action: () => void): Error {
@@ -180,13 +392,88 @@ function captureSyncError(action: () => void): Error {
 }
 
 describe("kitchen-sink RPC isolated state", () => {
-  it("prints help without creating temp state or installing the plugin", async () => {
-    const result = await runCommand(process.execPath, [
-      "--import",
-      "tsx",
-      "scripts/e2e/kitchen-sink-rpc-walk.mts",
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.for([
+    { runtime: "Node", entry: "entry.mjs", files: ["entry.mjs"], selected: "entry.mjs" },
+    {
+      runtime: "Bun",
+      entry: "entry.mjs",
+      files: ["entry.mjs", "dist/index.mjs"],
+      selected: "entry.mjs",
+    },
+    {
+      runtime: "Bun",
+      entry: "",
+      files: ["dist/index.mjs", "dist/index.js"],
+      selected: "dist/index.mjs",
+    },
+    { runtime: "Bun", entry: "", files: ["dist/index.js"], selected: "dist/index.js" },
+    { runtime: "Node", entry: "missing.mjs", files: ["dist/index.mjs"], selected: null },
+  ])("preserves $runtime entry selection for $entry with $files", async (row, context) => {
+    let executable = row.runtime === "Node" ? resolveTestNodeExecPath() : process.execPath;
+    if (row.runtime === "Bun") {
+      try {
+        executable = (await runCommand("bun", ["-p", "process.execPath"])).stdout.trim();
+      } catch (error) {
+        // Ordinary Node CI does not install Bun; dedicated Bun proof must run every row.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          context.skip("Bun is not installed; Bun runtime qualification is required separately");
+        }
+        throw error;
+      }
+    }
+    const root = tempDirs.make("openclaw-kitchen-rpc-runtime-");
+    // Do not inherit repository aliases when the temp parent is inside the checkout.
+    writeFileSync(path.join(root, "tsconfig.json"), "{}\n");
+    const receiptPath = path.join(root, "entry.json");
+    const fixture = `
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({
+  execPath: process.execPath, bun: process.versions.bun, argv: process.argv, pid: process.pid
+}));
+process.exit(17);
+`;
+    for (const file of row.files) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), fixture);
+    }
+    const preload = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+    const walker = fileURLToPath(
+      new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url),
+    );
+    await expect(
+      runCommand(executable, [...(row.runtime === "Node" ? ["--import", preload] : []), walker], {
+        cwd: root,
+        env: { ...process.env, OPENCLAW_ENTRY: row.entry, TMPDIR: root, TEMP: root, TMP: root },
+      }),
+    ).rejects.toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining(row.selected ? "failed with 17" : row.entry),
+    });
+    if (!row.selected) {
+      expect(existsSync(receiptPath)).toBe(false);
+      return;
+    }
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    expect(fs.realpathSync(receipt.execPath)).toBe(fs.realpathSync(executable));
+    expect(receipt.bun).toEqual(row.runtime === "Bun" ? expect.any(String) : undefined);
+    expect(receipt.argv.slice(1)).toEqual([
+      path.join(root, row.selected),
+      "plugins",
+      "install",
       "--help",
     ]);
+    expect(Number.isSafeInteger(receipt.pid) && receipt.pid > 0).toBe(true);
+    expect(isProcessAlive(receipt.pid)).toBe(false);
+  });
+
+  it("prints help before malformed guardrails without creating temp state", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
+      { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } },
+    );
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
@@ -200,24 +487,6 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
-  });
-
-  it("prints help before parsing malformed runtime guardrails", async () => {
-    const result = await runCommand(
-      process.execPath,
-      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
-        },
-      },
-    );
-
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
-    );
   });
 
   it("detects short and long help flags", () => {
@@ -321,22 +590,26 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(existsSync(root)).toBe(false);
   });
 
-  it("uses the candidate config dialect only for an authorized frozen target", async () => {
-    const { root, env } = makeEnv();
+  it("preserves a disabled memory slot when enabling the resource fixture", async () => {
+    const { root, env } = makeEnv(kitchenSinkResourceEnv());
     try {
-      configureKitchenSink(
-        { ...env, OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
-        18888,
+      writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ plugins: { enabled: false, slots: { memory: "none" } } }),
       );
-      const frozenConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
-      expect(frozenConfig.plugins.allow).toBeUndefined();
-      expect(frozenConfig.messages.tts).toMatchObject({ provider: "kitchen-sink-speech" });
-      expect(frozenConfig.tts).toBeUndefined();
-
-      configureKitchenSink(env, 18889);
-      const currentConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
-      expect(currentConfig.plugins.allow).toContain("openclaw-kitchen-sink-fixture");
-      expect(currentConfig.tts).toMatchObject({ provider: "kitchen-sink-speech" });
+      configureKitchenSink(env, 18888);
+      const config = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(config.plugins).toMatchObject({
+        enabled: true,
+        slots: { memory: "none" },
+        allow: ["openclaw-kitchen-sink-fixture"],
+        entries: {
+          "openclaw-kitchen-sink-fixture": {
+            enabled: true,
+            config: { personality: "conformance" },
+          },
+        },
+      });
     } finally {
       await cleanupKitchenSinkEnv(root);
     }
@@ -400,116 +673,86 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
-  it("treats ESRCH during gateway teardown as already exited", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => {
-      const error = Object.assign(new Error("process already exited"), { code: "ESRCH" });
-      throw error;
-    });
+  it.each(["ESRCH", "false"])(
+    "treats %s gateway kill outcomes as already exited",
+    async (outcome) => {
+      const child = new EventEmitter() as EventEmitter & {
+        exitCode: number | null;
+        kill: ReturnType<typeof vi.fn>;
+        signalCode: NodeJS.Signals | null;
+      };
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = vi.fn(() => {
+        if (outcome === "ESRCH") {
+          throw Object.assign(new Error("process already exited"), { code: "ESRCH" });
+        }
+        return false;
+      });
 
-    await expect(
-      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
-    ).resolves.toBeUndefined();
+      await expect(
+        stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+      ).resolves.toBeUndefined();
 
-    expect(child.kill).toHaveBeenCalledOnce();
-  });
-
-  it("treats failed gateway kill signals as already exited", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => false);
-
-    await expect(
-      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
-    ).resolves.toBeUndefined();
-
-    expect(child.kill).toHaveBeenCalledOnce();
-  });
-
-  it.each(["gateway", "command"] as const)(
-    "signals Windows %s process trees with taskkill",
-    (owner) => {
-      const runTaskkill = vi.fn<RunTaskkill>(() => ({ error: undefined, status: 0 }));
-
-      expect(invokeWindowsTreeSignal(owner, "SIGTERM", runTaskkill)).toBe(
-        owner === "gateway" ? true : undefined,
-      );
-      expectTaskkillCall(runTaskkill, 1, false);
-      expect(invokeWindowsTreeSignal(owner, "SIGKILL", runTaskkill)).toBe(
-        owner === "gateway" ? true : undefined,
-      );
-      expectTaskkillCall(runTaskkill, 2, true);
+      expect(child.kill).toHaveBeenCalledOnce();
     },
   );
-
   it.each(["gateway", "command"] as const)(
-    "force-kills Windows %s process trees when graceful taskkill fails",
+    "signals Windows %s process trees and escalates failed graceful taskkill",
     (owner) => {
-      const runTaskkill = vi
-        .fn<RunTaskkill>()
-        .mockReturnValueOnce({ error: undefined, status: 1 })
-        .mockReturnValueOnce({ error: undefined, status: 0 });
-
-      expect(invokeWindowsTreeSignal(owner, "SIGTERM", runTaskkill)).toBe(
-        owner === "gateway" ? true : undefined,
-      );
-      expectTaskkillCall(runTaskkill, 1, false);
-      expectTaskkillCall(runTaskkill, 2, true);
-    },
-  );
-
-  posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      exitCode: 0,
-      kill: vi.fn(),
-      pid: 12347,
-      signalCode: null as NodeJS.Signals | null,
-    });
-    const killProcess = vi.fn(() => true);
-
-    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 1 });
-
-    expect(killProcess).toHaveBeenNthCalledWith(1, -12347, 0);
-    expect(killProcess).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
-    expect(killProcess).toHaveBeenCalledWith(-12347, "SIGKILL");
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  posixIt("rechecks process group liveness after the wrapper exits during teardown", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      exitCode: null as number | null,
-      kill: vi.fn(),
-      pid: 12348,
-      signalCode: null as NodeJS.Signals | null,
-    });
-    const killProcess = vi.fn((_pid: number, signal: number | string) => {
-      if (signal === "SIGTERM") {
-        setTimeout(() => {
-          child.exitCode = 0;
-          child.emit("exit", 0, null);
-        }, 0);
+      for (const gracefulStatus of [0, 1]) {
+        const runTaskkill =
+          gracefulStatus === 0
+            ? vi.fn<RunTaskkill>(() => ({ error: undefined, status: 0 }))
+            : vi
+                .fn<RunTaskkill>()
+                .mockReturnValueOnce({ error: undefined, status: 1 })
+                .mockReturnValueOnce({ error: undefined, status: 0 });
+        expect(invokeWindowsTreeSignal(owner, "SIGTERM", runTaskkill)).toBe(
+          owner === "gateway" ? true : undefined,
+        );
+        expectTaskkillCall(runTaskkill, 1, false);
+        if (gracefulStatus === 0) {
+          expect(invokeWindowsTreeSignal(owner, "SIGKILL", runTaskkill)).toBe(
+            owner === "gateway" ? true : undefined,
+          );
+        }
+        expectTaskkillCall(runTaskkill, 2, true);
       }
-      return true;
-    });
+    },
+  );
 
-    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 100 });
+  posixIt.each(["before", "during"])(
+    "joins a process group when its wrapper exits %s teardown",
+    async (timing) => {
+      const child = Object.assign(new EventEmitter(), {
+        exitCode: timing === "before" ? 0 : null,
+        kill: vi.fn(),
+        pid: 12348,
+        signalCode: null as NodeJS.Signals | null,
+      });
+      const killProcess = vi.fn((_pid: number, signal: number | string) => {
+        if (timing === "during" && signal === "SIGTERM") {
+          setTimeout(() => {
+            child.exitCode = 0;
+            child.emit("exit", 0, null);
+          }, 0);
+        }
+        return true;
+      });
 
-    expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
-    expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
-    expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
-    expect(child.kill).not.toHaveBeenCalled();
-  });
+      await stopGateway(child, {
+        killGraceMs: 1,
+        killProcess,
+        teardownGraceMs: timing === "before" ? 1 : 100,
+      });
+
+      expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
+      expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
+      expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails readiness waits before polling after signaled gateway exits", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-signal-ready-"));
@@ -630,7 +873,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
 });
 
 describe("kitchen-sink RPC gateway readiness logs", () => {
-  it("scans gateway readiness logs incrementally across appended chunks", () => {
+  it.each(["append", "rotate"])("finds readiness across %s updates", (mode) => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-scan-"));
     try {
       const logPath = path.join(root, "gateway.log");
@@ -639,10 +882,13 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
 
       expect(scanner()).toBe(false);
 
-      writeFileSync(logPath, "[gateway] rea", { flag: "a" });
-      expect(scanner()).toBe(false);
-
-      writeFileSync(logPath, "dy\n", { flag: "a" });
+      if (mode === "append") {
+        writeFileSync(logPath, "[gateway] rea", { flag: "a" });
+        expect(scanner()).toBe(false);
+        writeFileSync(logPath, "dy\n", { flag: "a" });
+      } else {
+        writeFileSync(logPath, "[gateway] ready\n");
+      }
       expect(scanner()).toBe(true);
       expect(scanner()).toBe(true);
     } finally {
@@ -650,68 +896,42 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
     }
   });
 
-  it("resets the readiness scanner after log rotation", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-rotate-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "older log contents without readiness\n");
-      const scanner = createGatewayReadyLogScanner(logPath, "[gateway] ready");
-
-      expect(scanner()).toBe(false);
-
-      writeFileSync(logPath, "[gateway] ready\n");
-      expect(scanner()).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("scans gateway error logs incrementally and keeps the latest findings", () => {
+  it.each([
+    {
+      name: "late failure",
+      text: `${"ordinary line\n".repeat(2000)}0 errors\n[ERROR] late failure\n`,
+      line: "[ERROR] late failure",
+      lineNumber: 2002,
+      truncated: false,
+    },
+    {
+      name: "dirty zero-error line",
+      text: "[ERROR] 0 errors reported but fatal state remained\n",
+      line: "[ERROR] 0 errors reported but fatal state remained",
+      lineNumber: 1,
+      truncated: false,
+    },
+    {
+      name: "bounded long line",
+      text: `${"x".repeat(200_000)}[ERROR] giant line\n`,
+      line: "[truncated]",
+      lineNumber: 1,
+      truncated: true,
+    },
+  ])("retains error findings for $name", ({ text, line, lineNumber, truncated }) => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-errors-"));
     try {
       const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, `${"ordinary line\n".repeat(2000)}0 errors\n[ERROR] late failure\n`);
-
-      expect(findErrorLogFindings(logPath)).toEqual([
-        {
-          line: "[ERROR] late failure",
-          lineNumber: 2002,
-        },
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("does not allowlist dirty error lines that mention zero errors", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-zero-error-smuggle-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "[ERROR] 0 errors reported but fatal state remained\n");
-
-      expect(findErrorLogFindings(logPath)).toEqual([
-        {
-          line: "[ERROR] 0 errors reported but fatal state remained",
-          lineNumber: 1,
-        },
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("bounds scanner memory for very long log lines", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-long-line-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, `${"x".repeat(200_000)}[ERROR] giant line\n`);
-
+      writeFileSync(logPath, text);
       const findings = findErrorLogFindings(logPath);
-
-      expect(findings).toHaveLength(1);
-      expect(findings[0]?.lineNumber).toBe(1);
-      expect(findings[0]?.line).toContain("[truncated]");
-      expect(findings[0]?.line.length).toBeLessThan(20_000);
+      if (truncated) {
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.lineNumber).toBe(lineNumber);
+        expect(findings[0]?.line).toContain(line);
+        expect(findings[0]?.line.length).toBeLessThan(20_000);
+      } else {
+        expect(findings).toEqual([{ line, lineNumber }]);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -719,20 +939,32 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
 });
 
 describe("kitchen-sink RPC command output capture", () => {
-  it("honors the resolved command output capture limit", async () => {
-    const result = await runCommand(
-      process.execPath,
-      ["-e", "process.stdout.write('abcdef'); process.stderr.write('UVWXYZ');"],
-      {
-        outputCaptureChars: 3,
-      },
-    );
-
-    expect(result.stdout).toBe("def");
-    expect(result.stderr).toBe("XYZ");
-    expect(result.stdoutTruncatedChars).toBe(3);
-    expect(result.stderrTruncatedChars).toBe(3);
-  });
+  it.each([
+    { exitCode: 0, stdout: "abcdef", stderr: "UVWXYZ", outputCaptureChars: 3 },
+    { exitCode: 7, stdout: "request failure", stderr: "diagnostic", outputCaptureChars: undefined },
+  ])(
+    "preserves bounded command output for exit $exitCode",
+    async ({ exitCode, stdout, stderr, outputCaptureChars }) => {
+      const result = runCommand(
+        process.execPath,
+        [
+          "-e",
+          `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); ${exitCode === 0 ? "" : `process.exit(${exitCode})`}`,
+        ],
+        { outputCaptureChars },
+      );
+      if (exitCode === 0) {
+        await expect(result).resolves.toEqual({
+          stdout: "def",
+          stderr: "XYZ",
+          stdoutTruncatedChars: 3,
+          stderrTruncatedChars: 3,
+        });
+      } else {
+        await expect(result).rejects.toMatchObject({ status: 7, signal: null, stdout, stderr });
+      }
+    },
+  );
 
   it("clamps oversized command timeout env values before scheduling timers", async () => {
     const previousTimeout = process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
@@ -754,16 +986,15 @@ describe("kitchen-sink RPC command output capture", () => {
     }
   });
 
-  posixIt("kills timed command process groups", async () => {
+  posixIt("kills timed command process groups", async ({ signal, onTestFinished }) => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
     const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
     const grandchildScript = [
-      "const fs = require('node:fs');",
       "process.on('SIGTERM', () => {});",
-      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "process.send('ready');",
       "setInterval(() => {}, 1000);",
     ].join(" ");
 
@@ -772,11 +1003,16 @@ describe("kitchen-sink RPC command output capture", () => {
       `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(grandchildScript)},
-], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
@@ -784,6 +1020,7 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const runPromise = runCommand(
       process.execPath,
       [scriptPath, grandchildPidPath, grandchildReadyPath],
@@ -800,133 +1037,101 @@ setInterval(() => {}, 1000);
       (error: unknown) => error,
     );
 
+    let finishing: Promise<unknown> | undefined;
+    const finishCommand = () =>
+      (finishing ??= (async () => {
+        if (vi.isFakeTimers()) {
+          await vi.runAllTimersAsync();
+          vi.useRealTimers();
+        }
+        return runErrorPromise;
+      })());
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        await finishCommand();
+        if (!grandchildPid && existsSync(grandchildPidPath)) {
+          grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        }
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      })());
+    processFixtureCleanup = cleanup;
+    onTestFinished(cleanup);
+
     try {
-      await waitFor(() => existsSync(grandchildPidPath));
-      await waitFor(() => existsSync(grandchildReadyPath));
+      await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      const runError = await runErrorPromise;
+      const runError = await withinTest(finishCommand(), signal);
       expect(runError).toBeInstanceOf(Error);
       expect((runError as Error).message).toContain("timed out after 500ms");
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+      await waitForProcessExit(grandchildPid, signal);
     } finally {
-      await runPromise.catch(() => {});
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
-      }
-      rmSync(root, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
-  posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-zero-"));
-    const scriptPath = path.join(root, "term-zero.mjs");
-    writeFileSync(
-      scriptPath,
-      `
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-      "utf8",
-    );
+  it.each(["sample", "missing", "error"])(
+    "records required command resource proof: %s",
+    async (outcome) => {
+      const samples: Array<{
+        aggregateRssMiB?: number;
+        elapsedMs?: number;
+        label?: string;
+        processId?: number;
+        rssMiB?: number;
+      }> = [];
+      const seenPids: number[] = [];
 
-    try {
-      await expect(
-        runCommand(process.execPath, [scriptPath], {
-          timeoutKillGraceMs: 1000,
-          timeoutMs: 100,
-        }),
-      ).rejects.toThrow("timed out after 100ms");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("records resource samples for command process trees", async () => {
-    const samples: Array<{
-      aggregateRssMiB?: number;
-      elapsedMs?: number;
-      label?: string;
-      processId?: number;
-      rssMiB?: number;
-    }> = [];
-    const seenPids: number[] = [];
-
-    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
-      resourceLabel: "plugins install",
-      resourceSampleIntervalMs: 1,
-      resourceSamples: samples,
-      sampleProcessImpl: async (pid: number) => {
-        seenPids.push(pid);
-        return {
-          aggregateRssMiB: 640,
-          cpuPercent: 12,
-          processId: pid + 1,
-          rssMiB: 512,
-        };
-      },
-    });
-
-    expect(result.stdout).toBe("");
-    expect(seenPids.length).toBeGreaterThan(0);
-    expect(samples[0]).toMatchObject({
-      aggregateRssMiB: 640,
-      label: "plugins install",
-      processId: expectDefined(seenPids[0], "sampled kitchen sink process id") + 1,
-      rssMiB: 512,
-    });
-    expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it("rejects required command resource proof when sampling captures nothing", async () => {
-    const samples: unknown[] = [];
-
-    await expect(
-      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
-        requireResourceSample: true,
+      const result = runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: outcome !== "sample",
         resourceLabel: "plugins install",
         resourceSampleIntervalMs: 1,
         resourceSamples: samples,
-        sampleProcessImpl: async () => null,
-      }),
-    ).rejects.toThrow("plugins install RSS sample was not captured");
-
-    expect(samples).toEqual([]);
-  });
-
-  it("includes sampler errors in required command resource proof failures", async () => {
-    await expect(
-      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
-        requireResourceSample: true,
-        resourceLabel: "plugins install",
-        resourceSampleIntervalMs: 1,
-        resourceSamples: [],
-        sampleProcessImpl: async () => {
-          throw new Error("ps failed");
+        sampleProcessImpl: async (pid: number) => {
+          seenPids.push(pid);
+          if (outcome === "error") {
+            throw new Error("ps failed");
+          }
+          if (outcome === "missing") {
+            return null;
+          }
+          return {
+            aggregateRssMiB: 640,
+            cpuPercent: 12,
+            processId: pid + 1,
+            rssMiB: 512,
+          };
         },
-      }),
-    ).rejects.toThrow("plugins install RSS sample was not captured: ps failed");
-  });
+      });
+
+      if (outcome !== "sample") {
+        await expect(result).rejects.toThrow(
+          `plugins install RSS sample was not captured${outcome === "error" ? ": ps failed" : ""}`,
+        );
+        expect(samples).toEqual([]);
+        return;
+      }
+      expect((await result).stdout).toBe("");
+      expect(seenPids.length).toBeGreaterThan(0);
+      expect(samples[0]).toMatchObject({
+        aggregateRssMiB: 640,
+        label: "plugins install",
+        processId: expectDefined(seenPids[0], "sampled kitchen sink process id") + 1,
+        rssMiB: 512,
+      });
+      expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+    },
+  );
 
   it("rejects command spawn failures as Error objects", async () => {
     await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
       code: "ENOENT",
-    });
-  });
-
-  it("preserves failed command output for structured consumers", async () => {
-    await expect(
-      runCommand(process.execPath, [
-        "-e",
-        'process.stdout.write("request failure"); process.stderr.write("diagnostic"); process.exit(7)',
-      ]),
-    ).rejects.toMatchObject({
-      status: 7,
-      signal: null,
-      stdout: "request failure",
-      stderr: "diagnostic",
     });
   });
 });
@@ -950,16 +1155,13 @@ describe("kitchen-sink RPC caller loading", () => {
     });
   });
 
-  it("uses built callGateway chunks for dist and packaged entries", () => {
+  it("loads built callGateway chunks only for dist and packaged entries", () => {
     expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["dist/index.js"] })).toBe(true);
     expect(
       usesBuiltOpenClawEntry({ command: "node", baseArgs: ["/app/openclaw.mjs"] }, "/repo", {
         OPENCLAW_ENTRY: "/app/openclaw.mjs",
       }),
     ).toBe(true);
-  });
-
-  it("does not deep-import gateway TypeScript for source pnpm runners", () => {
     expect(usesBuiltOpenClawEntry({ pnpm: true, baseArgs: ["openclaw"] })).toBe(false);
     expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["scripts/dev.mjs"] })).toBe(false);
   });
@@ -985,175 +1187,212 @@ describe("kitchen-sink RPC caller loading", () => {
     }
   });
 
-  posixIt("kills descendants when timed commands exit cleanly after SIGTERM", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
-    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    const grandchildReadyPath = path.join(root, "grandchild.ready");
-    const parentPidPath = path.join(root, "parent.pid");
-    let grandchildPid = 0;
-    const grandchildScript = [
-      "const fs = require('node:fs');",
-      "process.on('SIGTERM', () => {});",
-      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
-      "setInterval(() => {}, 1000);",
-    ].join(" ");
+  posixIt(
+    "kills descendants when timed commands exit cleanly after SIGTERM",
+    async ({ signal, onTestFinished }) => {
+      const tempDirs: string[] = [];
+      const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
+      const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      const grandchildReadyPath = path.join(root, "grandchild.ready");
+      const parentPidPath = path.join(root, "parent.pid");
+      let grandchildPid = 0;
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "process.send('ready');",
+        "setInterval(() => {}, 1000);",
+      ].join(" ");
 
-    writeFileSync(
-      scriptPath,
-      `
+      writeFileSync(
+        scriptPath,
+        `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(grandchildScript)},
-], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 process.on("SIGTERM", () => process.exit(0));
 fs.writeFileSync(process.argv[4], String(process.pid));
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 setInterval(() => {}, 1000);
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    // Readiness polling uses real time; command deadlines advance only after
-    // the real processes have installed their signal handlers.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const runPromise = runCommand(
-      process.execPath,
-      [scriptPath, grandchildPidPath, grandchildReadyPath, parentPidPath],
-      {
-        timeoutKillGraceMs: 100,
-        timeoutMs: 100,
-      },
-    );
-    let settled = false;
-    const runErrorPromise = runPromise.then(
-      () => {
-        settled = true;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
-    const finishCommand = () =>
-      waitFor(async () => {
-        await vi.runOnlyPendingTimersAsync();
-        return settled;
-      });
+      // Advance command deadlines only after the real processes report that
+      // their signal handlers are installed.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const runPromise = runCommand(
+        process.execPath,
+        [scriptPath, grandchildPidPath, grandchildReadyPath, parentPidPath],
+        {
+          timeoutKillGraceMs: 100,
+          timeoutMs: 100,
+        },
+      );
+      const runErrorPromise = runPromise.catch((error: unknown) => error);
+      let finishing: Promise<unknown> | undefined;
+      const finishCommand = () =>
+        (finishing ??= (async () => {
+          if (vi.isFakeTimers()) {
+            await vi.runAllTimersAsync();
+            vi.useRealTimers();
+          }
+          return runErrorPromise;
+        })());
 
-    try {
-      await waitFor(() => existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
-      const parentPid = Number.parseInt(readText(parentPidPath), 10);
-      await waitFor(() => existsSync(grandchildReadyPath));
-      expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          try {
+            // A readiness/assertion failure must still fire the deadline and kill grace.
+            await finishCommand();
+          } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            if (!grandchildPid && existsSync(grandchildPidPath)) {
+              grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+            }
+            if (grandchildPid && isProcessAlive(grandchildPid)) {
+              process.kill(grandchildPid, "SIGKILL");
+            }
+            cleanupTempDirs(tempDirs);
+          }
+        })());
+      processFixtureCleanup = cleanup;
+      onTestFinished(cleanup);
 
-      await vi.advanceTimersByTimeAsync(100);
-      await waitFor(() => !isProcessAlive(parentPid));
-      await finishCommand();
-      const runError = await runErrorPromise;
-      expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 100ms");
-      expect(runError).toMatchObject({ status: 0, signal: null });
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
-    } finally {
       try {
-        // A readiness/assertion failure must still fire the deadline and kill grace.
-        await finishCommand();
+        await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        const parentPid = Number.parseInt(readText(parentPidPath), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(100);
+        await waitForProcessExit(parentPid, signal);
+        const runError = await withinTest(finishCommand(), signal);
+        expect(runError).toBeInstanceOf(Error);
+        expect((runError as Error).message).toContain("timed out after 100ms");
+        expect(runError).toMatchObject({ status: 0, signal: null });
+        await waitForProcessExit(grandchildPid, signal);
       } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        cleanupTempDirs(tempDirs);
+        await cleanup();
       }
-    }
-  });
+    },
+  );
 
-  posixIt("cleans active command process groups before parent signal exit", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-parent-signal-");
-    const runnerPath = path.join(root, "runner.mjs");
-    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    const readyPath = path.join(root, "ready");
-    let grandchildPid = 0;
-    let runner: ReturnType<typeof spawn> | undefined;
-    const grandchildScript = [
-      "const fs = require('node:fs');",
-      "process.on('SIGTERM', () => {});",
-      "process.on('SIGHUP', () => {});",
-      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
+  posixIt(
+    "cleans active command process groups before parent signal exit",
+    async ({ signal, onTestFinished }) => {
+      const tempDirs: string[] = [];
+      const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-parent-signal-");
+      const runnerPath = path.join(root, "runner.mjs");
+      const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      const readyPath = path.join(root, "ready");
+      let grandchildPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+      let closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "process.on('SIGHUP', () => {});",
+        "process.send('ready');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
 
-    writeFileSync(
-      scriptPath,
-      `
+      writeFileSync(
+        scriptPath,
+        `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], {
-  stdio: "ignore",
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+grandchild.once("message", () => {
+  fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
+  sendReceipt(${JSON.stringify(readyPath)}, "ready");
 });
 fs.writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
-      "utf8",
-    );
-    writeFileSync(
-      runnerPath,
-      `
+        "utf8",
+      );
+      writeFileSync(
+        runnerPath,
+        `
 import { runCommand } from ${JSON.stringify(
-        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url).href,
-      )};
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.kitchenSinkRpcWalk).href,
+        )};
 
 await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
   timeoutKillGraceMs: 100,
   timeoutMs: 30_000,
 });
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    try {
-      runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
-        },
-        stdio: ["ignore", "ignore", "pipe"],
-      });
-      await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          // Let the runner retire its detached command group even if readiness failed.
+          if (runner?.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          await closed;
+          if (!grandchildPid && existsSync(grandchildPidPath)) {
+            grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+          }
+          if (grandchildPid && isProcessAlive(grandchildPid)) {
+            process.kill(grandchildPid, "SIGKILL");
+          }
+          cleanupTempDirs(tempDirs);
+        })());
+      processFixtureCleanup = cleanup;
+      onTestFinished(cleanup);
 
-      runner.kill("SIGTERM");
+      try {
+        const child = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        runner = child;
+        closed = new Promise((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        });
+        await withinTest(fixtureReadyBeforeSettlement(readyPath, closed), signal);
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(waitForChildClose(runner, 5_000)).resolves.toEqual({
-        code: null,
-        signal: "SIGTERM",
-      });
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
-    } finally {
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
+        runner.kill("SIGTERM");
+
+        await expect(withinTest(closed, signal)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForProcessExit(grandchildPid, signal);
+      } finally {
+        await cleanup();
       }
-      if (runner?.pid && isProcessAlive(runner.pid)) {
-        runner.kill("SIGKILL");
-      }
-      cleanupTempDirs(tempDirs);
-    }
-  });
+    },
+  );
 });
 
 describe("kitchen-sink RPC payload unwrapping", () => {
@@ -1165,72 +1404,72 @@ describe("kitchen-sink RPC payload unwrapping", () => {
         'warning: ignored trailing diagnostic {"ok":false,"result":{"stale":true}}',
       ].join("\n"),
     );
-
     expect(parsed).toEqual({ ok: true, result: { current: true } });
   });
 
-  it("preserves explicit nullish JSON-RPC result fields", () => {
-    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
-    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
-  });
-
-  it("prefers result before legacy payload and data envelopes", () => {
-    expect(unwrapRpcPayload({ result: false, payload: { stale: true } })).toBe(false);
-    expect(unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
-    expect(unwrapRpcPayload({ data: 0 })).toBe(0);
-  });
-
-  it("rejects error envelopes without success payload fields", () => {
-    const error = captureSyncError(() =>
-      unwrapRpcPayload({ error: { message: "session store unavailable" } }),
-    );
-
-    expect(error.message).toContain("gateway RPC returned error envelope");
-    expect(error.message).toContain("session store unavailable");
-    expect(unwrapRpcPayload({ error: { message: "ignored" }, payload: { ok: true } })).toEqual({
-      ok: true,
-    });
-  });
-
-  it("preserves gateway request error metadata from built RPC calls", () => {
-    const error = captureSyncError(() =>
-      unwrapRpcPayload({
-        ok: false,
-        error: {
-          type: "gateway_request_error",
-          code: "INVALID_REQUEST",
+  it("preserves payload precedence and rejects typed or bounded error envelopes", () => {
+    for (const [payload, expected] of [
+      [{ jsonrpc: "2.0", result: null }, null],
+      [{ jsonrpc: "2.0", result: undefined }, undefined],
+      [{ result: false, payload: { stale: true } }, false],
+      [{ payload: null, data: { stale: true } }, null],
+      [{ data: 0 }, 0],
+      [{ error: { message: "ignored" }, payload: { ok: true } }, { ok: true }],
+    ]) {
+      expect(unwrapRpcPayload(payload)).toEqual(expected);
+    }
+    for (const { payload, metadata, messages, bounded } of [
+      {
+        payload: { error: { message: "session store unavailable" } },
+        metadata: {},
+        messages: ["gateway RPC returned error envelope", "session store unavailable"],
+        bounded: false,
+      },
+      {
+        payload: {
+          ok: false,
+          error: {
+            type: "gateway_request_error",
+            code: "INVALID_REQUEST",
+            message: "unauthorized role: operator",
+            details: { method: "skills.bins" },
+            retryable: false,
+            retryAfterMs: 250,
+          },
+        },
+        metadata: {
+          name: "GatewayClientRequestError",
           message: "unauthorized role: operator",
+          gatewayCode: "INVALID_REQUEST",
           details: { method: "skills.bins" },
           retryable: false,
           retryAfterMs: 250,
         },
-      }),
-    );
-
-    expect(error).toMatchObject({
-      name: "GatewayClientRequestError",
-      message: "unauthorized role: operator",
-      gatewayCode: "INVALID_REQUEST",
-      details: { method: "skills.bins" },
-      retryable: false,
-      retryAfterMs: 250,
-    });
-  });
-
-  it("bounds failed RPC payload diagnostics", () => {
-    const error = captureSyncError(() =>
-      unwrapRpcPayload({
-        ok: false,
-        error: {
-          message: `rpc failed ${"x".repeat(4096)} DO_NOT_DUMP_RPC_MIDDLE ${"y".repeat(4096)} end`,
+        messages: [],
+        bounded: false,
+      },
+      {
+        payload: {
+          ok: false,
+          error: {
+            message: `rpc failed ${"x".repeat(4096)} DO_NOT_DUMP_RPC_MIDDLE ${"y".repeat(4096)} end`,
+          },
         },
-      }),
-    );
-
-    expect(error.message).toContain("gateway RPC failed");
-    expect(error.message).toContain("truncated");
-    expect(error.message).not.toContain("DO_NOT_DUMP_RPC_MIDDLE");
-    expect(error.message.length).toBeLessThan(1200);
+        metadata: {},
+        messages: ["gateway RPC failed", "truncated"],
+        bounded: true,
+      },
+    ]) {
+      const error = captureSyncError(() => unwrapRpcPayload(payload));
+      expect(error).toMatchObject(metadata);
+      for (const message of messages) {
+        expect(error.message).toContain(message);
+      }
+      if (bounded) {
+        expect(error.message).not.toContain("DO_NOT_DUMP_RPC_MIDDLE");
+        expect(error.message.length).toBeLessThan(1200);
+      }
+    }
   });
 });
 
@@ -1254,82 +1493,35 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toEqual(["kitchen", "kitchen-sink"]);
   });
 
-  it("requires every expected Kitchen Sink plugin tool", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [{ id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" }],
-        "tools.catalog plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.catalog plugin tools missing kitchen_sink_search, kitchen_sink_image_job");
-  });
-
-  it("requires plugin provenance for expected catalog tools", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          { id: "kitchen_sink_search", source: "core", pluginId: "openclaw-kitchen-sink-fixture" },
-          { id: "kitchen_sink_image_job", source: "plugin", pluginId: "other-plugin" },
-        ],
-        "tools.catalog plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.catalog plugin tools plugin provenance mismatch");
-  });
-
-  it("accepts complete expected tool coverage", () => {
-    expect(
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          {
-            id: "kitchen_sink_search",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-          {
-            id: "kitchen_sink_image_job",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-        ],
-        "tools.catalog plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
-  });
-
-  it("invokes every advertised Kitchen Sink tool during the RPC walk", () => {
-    expect(listKitchenSinkToolInvokeNames().toSorted()).toEqual([
-      "kitchen_sink_image_job",
-      "kitchen_sink_search",
-      "kitchen_sink_text",
-    ]);
-  });
-
-  it("walks broad read-only gateway RPC surfaces", () => {
-    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
-      expect.arrayContaining([
-        "gateway.identity.get",
-        "config.schema.lookup",
-        "models.list",
-        "skills.status",
-        "agents.list",
-        "sessions.list",
-        "cron.list",
-        "tasks.list",
-        "usage.status",
-        "voicewake.routing.get",
-        "talk.catalog",
-        "update.status",
-        "node.list",
-        "device.pair.list",
-        "exec.approvals.get",
-        "environments.status",
-      ]),
-    );
-  });
+  it.each(["missing", "wrong provenance", "complete"])(
+    "validates %s plugin catalog coverage",
+    (mode) => {
+      const entries = ["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"].map(
+        (id) => ({ id, source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" }),
+      );
+      if (mode === "missing") {
+        entries.splice(1);
+      } else if (mode === "wrong provenance") {
+        entries[1]!.source = "core";
+        entries[2]!.pluginId = "other-plugin";
+      }
+      const validate = () =>
+        assertExpectedKitchenSinkToolEntries(entries, "tools.catalog plugin tools", {
+          requirePluginProvenance: true,
+        });
+      if (mode === "complete") {
+        expect(validate()).toEqual([
+          "kitchen_sink_text",
+          "kitchen_sink_search",
+          "kitchen_sink_image_job",
+        ]);
+      } else {
+        expect(validate).toThrow(
+          `tools.catalog plugin tools ${mode === "missing" ? "missing kitchen_sink_search, kitchen_sink_image_job" : "plugin provenance mismatch"}`,
+        );
+      }
+    },
+  );
 
   it("proves node-only RPC authorization boundaries", async () => {
     expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
@@ -1406,28 +1598,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     }
   });
 
-  it("requires provenance for effective Kitchen Sink plugin tools too", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          {
-            id: "kitchen_sink_search",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-          {
-            id: "kitchen_sink_image_job",
-            source: "core",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-        ],
-        "tools.effective plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.effective plugin tools plugin provenance mismatch");
-  });
-
   it("requires the exact Kitchen Sink channel account", () => {
     expect(() =>
       assertChannelAccountRunning({
@@ -1461,114 +1631,86 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     }
   });
 
-  it("checks search, text, and image job tool invocation fixtures separately", () => {
+  it("validates structured tool fixtures and bounds failed invocation diagnostics", () => {
     const pngBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
       "base64",
     );
     const pngSha256 = createHash("sha256").update(pngBytes).digest("hex");
-    expect(() =>
-      assertKitchenSinkSearchInvokeResult({
-        ok: true,
-        source: "plugin",
+    const imageOutput = (mediaUrl: string, sha256: string) => ({
+      ok: true,
+      route: "tool:kitchen_sink_image_job",
+      job: { status: "completed", route: "tool:kitchen_sink_image_job" },
+      mediaUrl,
+      image: {
+        mimeType: "image/png",
+        metadata: { assetName: "kitchen_sink_office.png", height: 1024, sha256, width: 1024 },
+      },
+    });
+    const cases: Array<{
+      validate: (payload: unknown) => void;
+      output: unknown;
+      error?: string;
+      failed?: boolean;
+    }> = [
+      {
+        validate: assertKitchenSinkSearchInvokeResult,
         output: { results: [{ title: "Kitchen Sink image fixture" }] },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertKitchenSinkTextInvokeResult({
-        ok: true,
-        source: "plugin",
+      },
+      {
+        validate: assertKitchenSinkTextInvokeResult,
         output: {
           route: "tool:kitchen_sink_text",
           text: "Kitchen Sink text provider produced a deterministic reply.",
         },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertKitchenSinkImageJobInvokeResult({
-        ok: true,
-        source: "plugin",
-        output: {
-          ok: true,
-          route: "tool:kitchen_sink_image_job",
-          job: { status: "completed", route: "tool:kitchen_sink_image_job" },
-          mediaUrl: `data:image/png;base64,${pngBytes.toString("base64")}`,
-          image: {
-            mimeType: "image/png",
-            metadata: {
-              assetName: "kitchen_sink_office.png",
-              height: 1024,
-              sha256: pngSha256,
-              width: 1024,
-            },
-          },
-        },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertKitchenSinkTextInvokeResult({
-        ok: true,
-        source: "plugin",
+      },
+      {
+        validate: assertKitchenSinkImageJobInvokeResult,
+        output: imageOutput(`data:image/png;base64,${pngBytes.toString("base64")}`, pngSha256),
+      },
+      {
+        validate: assertKitchenSinkTextInvokeResult,
         output: { route: "tool:kitchen_sink_search" },
-      }),
-    ).toThrow("Kitchen Sink text tool output missed expected fixture");
-  });
-
-  it("rejects tool invocation canaries outside the structured result fields", () => {
-    expect(() =>
-      assertKitchenSinkSearchInvokeResult({
-        ok: true,
-        source: "plugin",
+        error: "Kitchen Sink text tool output missed expected fixture",
+      },
+      {
+        validate: assertKitchenSinkSearchInvokeResult,
         output: { note: "prompt mentioned Kitchen Sink image fixture" },
-      }),
-    ).toThrow("Kitchen Sink search tool output missed expected fixture");
-
-    expect(() =>
-      assertKitchenSinkTextInvokeResult({
-        ok: true,
-        source: "plugin",
+        error: "Kitchen Sink search tool output missed expected fixture",
+      },
+      {
+        validate: assertKitchenSinkTextInvokeResult,
         output: { text: "Kitchen Sink prompt echoed tool:kitchen_sink_text" },
-      }),
-    ).toThrow("Kitchen Sink text tool output missed expected fixture");
-
-    expect(() =>
-      assertKitchenSinkImageJobInvokeResult({
-        ok: true,
-        source: "plugin",
-        output: {
-          ok: true,
-          route: "tool:kitchen_sink_image_job",
-          job: { status: "completed", route: "tool:kitchen_sink_image_job" },
-          mediaUrl: "data:image/png;base64,fixture",
-          image: {
-            mimeType: "image/png",
-            metadata: {
-              assetName: "kitchen_sink_office.png",
-              height: 1024,
-              sha256: "not-a-real-hash",
-              width: 1024,
-            },
-          },
-        },
-      }),
-    ).toThrow("Kitchen Sink image job tool output missed expected fixture");
-  });
-
-  it("bounds failed tool invocation diagnostics", () => {
-    const error = captureSyncError(() =>
-      assertKitchenSinkSearchInvokeResult({
-        ok: false,
-        source: "plugin",
+        error: "Kitchen Sink text tool output missed expected fixture",
+      },
+      {
+        validate: assertKitchenSinkImageJobInvokeResult,
+        output: imageOutput("data:image/png;base64,fixture", "not-a-real-hash"),
+        error: "Kitchen Sink image job tool output missed expected fixture",
+      },
+      {
+        validate: assertKitchenSinkSearchInvokeResult,
         output: {
           text: `prefix ${"x".repeat(4096)} DO_NOT_DUMP_TOOL_MIDDLE ${"y".repeat(4096)} suffix`,
         },
-      }),
-    );
-
-    expect(error.message).toContain("Kitchen Sink search tool invoke failed");
-    expect(error.message).toContain("truncated");
-    expect(error.message).not.toContain("DO_NOT_DUMP_TOOL_MIDDLE");
-    expect(error.message.length).toBeLessThan(1400);
+        error: "Kitchen Sink search tool invoke failed",
+        failed: true,
+      },
+    ];
+    for (const { validate, output, error, failed } of cases) {
+      const invoke = () => validate({ ok: !failed, source: "plugin", output });
+      if (!error) {
+        expect(invoke).not.toThrow();
+        continue;
+      }
+      const caught = captureSyncError(invoke);
+      expect(caught.message).toContain(error);
+      if (failed) {
+        expect(caught.message).toContain("truncated");
+        expect(caught.message).not.toContain("DO_NOT_DUMP_TOOL_MIDDLE");
+        expect(caught.message.length).toBeLessThan(1400);
+      }
+    }
   });
 
   it("requires sessions.create to return the requested Kitchen Sink session", () => {
@@ -1595,95 +1737,78 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toThrow("sessions.create did not return the requested Kitchen Sink session");
   });
 
-  it("requires Kitchen Sink UI descriptor coverage", () => {
-    expect(() =>
-      assertKitchenSinkUiDescriptors({
-        ok: true,
-        descriptors: [{ pluginId: "openclaw-kitchen-sink-fixture", id: "kitchen-sink-panel" }],
-      }),
-    ).not.toThrow();
-
-    expect(() => assertKitchenSinkUiDescriptors({})).toThrow(
-      "plugins.uiDescriptors returned invalid payload",
-    );
-    expect(() => assertKitchenSinkUiDescriptors({ ok: true, descriptors: [] })).toThrow(
-      "plugins.uiDescriptors did not report Kitchen Sink descriptor",
-    );
-  });
-
-  it("allows conformance mode to skip generated Kitchen Sink UI descriptors", () => {
-    expect(() =>
-      assertKitchenSinkUiDescriptors(
-        {
-          ok: true,
-          descriptors: [],
-        },
-        { expectDescriptor: false },
-      ),
-    ).not.toThrow();
-
-    expect(() => assertKitchenSinkUiDescriptors({}, { expectDescriptor: false })).toThrow(
-      "plugins.uiDescriptors returned invalid payload",
-    );
-  });
+  it.each([true, false])(
+    "validates descriptor payloads with expectDescriptor=%s",
+    (expectDescriptor) => {
+      const options = expectDescriptor ? undefined : { expectDescriptor: false };
+      expect(() =>
+        assertKitchenSinkUiDescriptors(
+          {
+            ok: true,
+            descriptors: expectDescriptor
+              ? [{ pluginId: "openclaw-kitchen-sink-fixture", id: "kitchen-sink-panel" }]
+              : [],
+          },
+          options,
+        ),
+      ).not.toThrow();
+      expect(() => assertKitchenSinkUiDescriptors({}, options)).toThrow(
+        "plugins.uiDescriptors returned invalid payload",
+      );
+      if (expectDescriptor) {
+        expect(() => assertKitchenSinkUiDescriptors({ ok: true, descriptors: [] })).toThrow(
+          "plugins.uiDescriptors did not report Kitchen Sink descriptor",
+        );
+      }
+    },
+  );
 });
 
 describe("kitchen-sink RPC diagnostics assertions", () => {
-  it("fails when stability reports dropped or rejected payload diagnostics", () => {
-    expect(() =>
-      assertDiagnosticStabilityClean({
+  it.each([
+    {
+      name: "dropped and rejected",
+      payload: {
         dropped: 1,
         events: [{ type: "diagnostic.async_queue.dropped" }],
-        summary: {
-          payloadLarge: {
-            rejected: 1,
-            truncated: 1,
-          },
-        },
-      }),
-    ).toThrow("diagnostics.stability reported instability");
-  });
-
-  it("fails when async diagnostic drops only appear in the full summary", () => {
-    expect(() =>
-      assertDiagnosticStabilityClean({
+        summary: { payloadLarge: { rejected: 1, truncated: 1 } },
+      },
+      error: "diagnostics.stability reported instability",
+    },
+    {
+      name: "summary-only async drops",
+      payload: {
         dropped: 0,
         events: [],
-        summary: {
-          byType: {
-            "diagnostic.async_queue.dropped": 2,
-          },
-        },
-      }),
-    ).toThrow("async diagnostic drops=2");
-  });
-
-  it("allows chunked payload diagnostics that did not reject or truncate data", () => {
-    expect(() =>
-      assertDiagnosticStabilityClean({
+        summary: { byType: { "diagnostic.async_queue.dropped": 2 } },
+      },
+      error: "async diagnostic drops=2",
+    },
+    {
+      name: "lossless chunking",
+      payload: {
         dropped: 0,
         events: [{ type: "payload.large", action: "chunked" }],
-        summary: {
-          payloadLarge: {
-            rejected: 0,
-            truncated: 0,
-            chunked: 1,
-          },
-        },
-      }),
-    ).not.toThrow();
+        summary: { payloadLarge: { rejected: 0, truncated: 0, chunked: 1 } },
+      },
+      error: undefined,
+    },
+  ])("validates $name diagnostics", ({ payload, error }) => {
+    const validate = () => assertDiagnosticStabilityClean(payload);
+    if (error) {
+      expect(validate).toThrow(error);
+    } else {
+      expect(validate).not.toThrow();
+    }
   });
 });
 
 describe("kitchen-sink RPC health/status assertions", () => {
-  it("rejects empty health and status RPC payloads", () => {
-    expect(() => assertGatewayHealthPayload({})).toThrow("health payload missing");
-    expect(() => assertGatewayStatusPayload({})).toThrow("status payload missing");
-  });
-
-  it("accepts minimally valid gateway health and status RPC payloads", () => {
-    expect(() =>
-      assertGatewayHealthPayload({
+  it.each([
+    {
+      surface: "health",
+      validate: assertGatewayHealthPayload,
+      valid: {
         ok: true,
         ts: Date.now(),
         durationMs: 12,
@@ -1698,19 +1823,19 @@ describe("kitchen-sink RPC health/status assertions", () => {
           count: 0,
           recent: [],
         },
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      assertGatewayStatusPayload({
+      },
+      invalid: { ok: false },
+    },
+    {
+      surface: "status",
+      validate: assertGatewayStatusPayload,
+      valid: {
         heartbeat: {
           defaultAgentId: "main",
           agents: [],
         },
         channelSummary: [],
         queuedSystemEvents: [],
-        tasks: {},
-        taskAudit: {},
         sessions: {
           paths: [],
           count: 0,
@@ -1721,37 +1846,25 @@ describe("kitchen-sink RPC health/status assertions", () => {
           recent: [],
           byAgent: [],
         },
-      }),
-    ).not.toThrow();
-  });
+      },
+      invalid: { heartbeat: {} },
+    },
+  ])(
+    "accepts complete $surface and bounds failed payload diagnostics",
+    ({ surface, validate, valid, invalid }) => {
+      expect(() => validate({})).toThrow(`${surface} payload missing`);
+      expect(() => validate(valid)).not.toThrow();
+      const oversizedValue = `start ${"x".repeat(4096)} DO_NOT_DUMP_STATUS_MIDDLE ${"y".repeat(
+        4096,
+      )} end`;
 
-  it("bounds failed health and status payload diagnostics", () => {
-    const oversizedValue = `start ${"x".repeat(4096)} DO_NOT_DUMP_STATUS_MIDDLE ${"y".repeat(
-      4096,
-    )} end`;
-
-    const healthError = captureSyncError(() =>
-      assertGatewayHealthPayload({
-        ok: false,
-        oversizedValue,
-      }),
-    );
-    const statusError = captureSyncError(() =>
-      assertGatewayStatusPayload({
-        heartbeat: {},
-        oversizedValue,
-      }),
-    );
-
-    expect(healthError.message).toContain("health payload missing");
-    expect(statusError.message).toContain("status payload missing");
-    expect(`${healthError.message}\n${statusError.message}`).toContain("truncated");
-    expect(`${healthError.message}\n${statusError.message}`).not.toContain(
-      "DO_NOT_DUMP_STATUS_MIDDLE",
-    );
-    expect(healthError.message.length).toBeLessThan(1600);
-    expect(statusError.message.length).toBeLessThan(1600);
-  });
+      const error = captureSyncError(() => validate({ ...invalid, oversizedValue }));
+      expect(error.message).toContain(`${surface} payload missing`);
+      expect(error.message).toContain("truncated");
+      expect(error.message).not.toContain("DO_NOT_DUMP_STATUS_MIDDLE");
+      expect(error.message.length).toBeLessThan(1600);
+    },
+  );
 });
 
 describe("kitchen-sink RPC process sampling", () => {
@@ -1764,43 +1877,67 @@ describe("kitchen-sink RPC process sampling", () => {
     );
   });
 
-  it("samples RSS on Windows instead of silently disabling the resource guard", async () => {
-    const { calls, sample } = await sampleWindowsSnapshot(
-      `${256 * 1024 * 1024} 1.5 5678 ${288 * 1024 * 1024}`,
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 288,
-      cpuPercent: null,
-      cpuSeconds: 1.5,
-      processId: 5678,
-      rssMiB: 256,
-    });
+  it.each([
+    {
+      name: "process tree",
+      stdout: `${256 * 1024 * 1024} 1.5 5678 ${288 * 1024 * 1024}`,
+      needles: undefined,
+      expected: {
+        aggregateRssMiB: 288,
+        cpuPercent: null,
+        cpuSeconds: 1.5,
+        processId: 5678,
+        rssMiB: 256,
+      },
+      commandFragments: ["$rootPid = 1234", "ParentProcessId"],
+    },
+    {
+      name: "missing launcher",
+      stdout: `${384 * 1024 * 1024} 2.25 6789 ${512 * 1024 * 1024}`,
+      needles: ["gateway", "--port", "19080"],
+      expected: {
+        aggregateRssMiB: 512,
+        cpuPercent: null,
+        cpuSeconds: 2.25,
+        processId: 6789,
+        rssMiB: 384,
+      },
+      commandFragments: [
+        "CommandLine",
+        "'gateway'",
+        "'19080'",
+        "ProcessId -eq $PID",
+        "ParentProcessId",
+        "Sort-Object WorkingSet64 -Descending",
+      ],
+    },
+    {
+      name: "malformed CPU and id",
+      stdout: `${256 * 1024 * 1024} 2.25oops 6789x ${512 * 1024 * 1024}oops`,
+      needles: undefined,
+      expected: {
+        aggregateRssMiB: 256,
+        cpuPercent: null,
+        cpuSeconds: null,
+        processId: 1234,
+        rssMiB: 256,
+      },
+      commandFragments: [],
+    },
+    {
+      name: "malformed RSS",
+      stdout: `${256 * 1024 * 1024}oops 2.25 6789 ${512 * 1024 * 1024}`,
+      needles: undefined,
+      expected: null,
+      commandFragments: [],
+    },
+  ])("samples Windows RSS for $name", async ({ stdout, needles, expected, commandFragments }) => {
+    const { calls, sample } = await sampleWindowsSnapshot(stdout, needles);
+    expect(sample).toEqual(expected);
     expect(calls[0]?.command).toBe(resolveWindowsPowerShellPath());
-    expect(calls[0]?.args.join(" ")).toContain("$rootPid = 1234");
-    expect(calls[0]?.args.join(" ")).toContain("ParentProcessId");
-  });
-
-  it("can locate a Windows gateway process by command line when the launcher is gone", async () => {
-    const { calls, sample } = await sampleWindowsSnapshot(
-      `${384 * 1024 * 1024} 2.25 6789 ${512 * 1024 * 1024}`,
-      ["gateway", "--port", "19080"],
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 512,
-      cpuPercent: null,
-      cpuSeconds: 2.25,
-      processId: 6789,
-      rssMiB: 384,
-    });
-    const command = calls[0]?.args.join(" ") ?? "";
-    expect(command).toContain("CommandLine");
-    expect(command).toContain("'gateway'");
-    expect(command).toContain("'19080'");
-    expect(command).toContain("ProcessId -eq $PID");
-    expect(command).toContain("ParentProcessId");
-    expect(command).toContain("Sort-Object WorkingSet64 -Descending");
+    for (const fragment of commandFragments) {
+      expect(calls[0]?.args.join(" ")).toContain(fragment);
+    }
   });
 
   it("does not fall back to a PATH-resolved powershell command on Windows", async () => {
@@ -1815,73 +1952,6 @@ describe("kitchen-sink RPC process sampling", () => {
 
     expect(commands).toEqual([resolveWindowsPowerShellPath()]);
     expect(sample).toBeNull();
-  });
-
-  it("does not truncate malformed Windows PowerShell CPU or id samples", async () => {
-    const { sample } = await sampleWindowsSnapshot(
-      `${256 * 1024 * 1024} 2.25oops 6789x ${512 * 1024 * 1024}oops`,
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 256,
-      cpuPercent: null,
-      cpuSeconds: null,
-      processId: 1234,
-      rssMiB: 256,
-    });
-  });
-
-  it("rejects malformed Windows PowerShell RSS samples", async () => {
-    const { sample } = await sampleWindowsSnapshot(
-      `${256 * 1024 * 1024}oops 2.25 6789 ${512 * 1024 * 1024}`,
-    );
-
-    expect(sample).toBeNull();
-  });
-
-  posixIt("rejects malformed POSIX process rows before sampling RSS", async () => {
-    const badRows = [
-      "  5678  1234  9007199254740993  0.2 child",
-      "  5678x  1234  2048  0.2 child",
-      "  5678  1234x  2048  0.2 child",
-    ];
-
-    for (const badRow of badRows) {
-      const sample = await sampleProcess(1234, {
-        platform: "linux",
-        runCommand: async () => ({
-          stdout: [
-            "  PID  PPID   RSS %CPU COMMAND",
-            "  1234     1  2048  0.1 openclaw-gateway",
-            badRow,
-          ].join("\n"),
-          stderr: "",
-        }),
-      });
-
-      expect(sample).toBeNull();
-    }
-  });
-
-  posixIt("ignores malformed POSIX process rows outside the sampled tree", async () => {
-    const sample = await sampleProcess(1234, {
-      platform: "linux",
-      runCommand: async () => ({
-        stdout: [
-          "  PID  PPID   RSS %CPU COMMAND",
-          "  1234     1  2048  0.1 openclaw-gateway",
-          "  5678  1234  4096  0.2 child",
-          "  9999  9998  9007199254740993  0.2 unrelated",
-        ].join("\n"),
-        stderr: "",
-      }),
-    });
-
-    expect(sample).toMatchObject({
-      aggregateRssMiB: 6,
-      processId: 1234,
-      rssMiB: 2,
-    });
   });
 
   it("samples the Windows gateway process by listening port", async () => {
@@ -1915,22 +1985,38 @@ describe("kitchen-sink RPC process sampling", () => {
     ]);
   });
 
-  it("falls back to strict tasklist RSS when Windows PowerShell sampling fails", async () => {
+  it.each([
+    { name: "valid RSS", tasklist: '"node.exe","6789","Console","1","262,144 K"', valid: true },
+    {
+      name: "malformed pid",
+      tasklist: '"node.exe","9999x","Console","1","262,144 K"',
+      valid: true,
+    },
+    {
+      name: "malformed RSS",
+      tasklist: '"node.exe","6789","Console","1","262x144 K"',
+      valid: false,
+    },
+  ])("uses strict tasklist fallback for $name", async ({ tasklist, valid }) => {
     const calls: string[] = [];
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: createWindowsPortSampleRunner({
         calls,
         powershell: new Error("powershell unavailable"),
-        tasklist: '"node.exe","6789","Console","1","262,144 K"',
+        tasklist,
       }),
     });
 
-    expect(sample).toEqual({
-      cpuPercent: null,
-      cpuSeconds: null,
-      processId: 6789,
-      rssMiB: 256,
-    });
+    expect(sample).toEqual(
+      valid
+        ? {
+            cpuPercent: null,
+            cpuSeconds: null,
+            processId: 6789,
+            rssMiB: 256,
+          }
+        : null,
+    );
     expect(calls).toEqual([
       resolveWindowsSystem32Path("netstat.exe"),
       resolveWindowsPowerShellPath(),
@@ -1938,150 +2024,102 @@ describe("kitchen-sink RPC process sampling", () => {
     ]);
   });
 
-  it("falls back to the known Windows pid when tasklist reports malformed pid text", async () => {
-    const sample = await sampleWindowsProcessByPort(19675, {
-      runCommand: createWindowsPortSampleRunner({
-        powershell: new Error("powershell unavailable"),
-        tasklist: '"node.exe","9999x","Console","1","262,144 K"',
-      }),
-    });
-
-    expect(sample).toEqual({
-      cpuPercent: null,
-      cpuSeconds: null,
-      processId: 6789,
-      rssMiB: 256,
-    });
-  });
-
-  it("rejects malformed tasklist RSS instead of stripping digits", async () => {
-    const sample = await sampleWindowsProcessByPort(19675, {
-      runCommand: createWindowsPortSampleRunner({
-        powershell: new Error("powershell unavailable"),
-        tasklist: '"node.exe","6789","Console","1","262x144 K"',
-      }),
-    });
-
-    expect(sample).toBeNull();
-  });
-
-  it("samples direct POSIX gateway RSS with descendants", async () => {
-    const sample = await samplePosixSnapshot(
-      [
-        " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
-        " 4322  4321  131072   1.5 node helper.js",
-      ].join("\n"),
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 384,
-      cpuPercent: 12.5,
-      processId: 4321,
-      rssMiB: 256,
-    });
-  });
-
-  it("does not truncate malformed POSIX CPU samples", async () => {
-    const sample = await samplePosixSnapshot(
-      " 4321     1  262144  12.5.6 node dist/index.js gateway --port 19080",
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 256,
-      cpuPercent: null,
-      processId: 4321,
-      rssMiB: 256,
-    });
-  });
-
-  it("does not loop forever on self-parenting POSIX process rows", async () => {
-    const sample = await samplePosixSnapshot(
-      " 4321  4321  262144  12.5 node dist/index.js gateway --port 19080",
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 256,
-      cpuPercent: 12.5,
-      processId: 4321,
-      rssMiB: 256,
-    });
-  });
-
-  it("samples the POSIX gateway child instead of the pnpm launcher", async () => {
-    const sample = await samplePosixSnapshot(
-      [
-        " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
-        " 4322  4321  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback",
-        " 4323  4322   32768   1.5 node helper.js",
-      ].join("\n"),
-      { commandLineNeedles: ["gateway", "--port", "19080"] },
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 288,
-      cpuPercent: 12.5,
-      processId: 4322,
-      rssMiB: 256,
-    });
-  });
-
-  it("samples the POSIX gateway root when command-line needles match", async () => {
-    const sample = await samplePosixSnapshot(
-      " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
-      { commandLineNeedles: ["gateway", "--port", "19080"], platform: "darwin" },
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 256,
-      cpuPercent: 12.5,
-      processId: 4321,
-      rssMiB: 256,
-    });
-  });
-
-  it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
-    const sample = await samplePosixSnapshot(
-      [
-        " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
-        " 4322  4321  262144  12.5 openclaw-gateway",
-        " 4323  4322   32768   1.5 node helper.js",
-      ].join("\n"),
-      { commandLineNeedles: ["gateway", "--port", "19080"], platform: "darwin" },
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 288,
-      cpuPercent: 12.5,
-      processId: 4322,
-      rssMiB: 256,
-    });
-  });
-
-  it("falls back to the largest POSIX child when the gateway command line is unavailable", async () => {
-    const sample = await samplePosixSnapshot(
-      [
-        " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
-        " 4322  4321  262144  12.5 node",
-        " 4323  4322   32768   1.5 node helper.js",
-      ].join("\n"),
-      { commandLineNeedles: ["gateway", "--port", "19080"] },
-    );
-
-    expect(sample).toEqual({
-      aggregateRssMiB: 288,
-      cpuPercent: 12.5,
-      processId: 4322,
-      rssMiB: 256,
-    });
-  });
-
-  it("does not accept a POSIX launcher sample when the gateway child is missing", async () => {
-    const sample = await samplePosixSnapshot(
-      " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw status\n",
-      { commandLineNeedles: ["gateway", "--port", "19080"], platform: "darwin" },
-    );
-
-    expect(sample).toBeNull();
+  it("selects valid POSIX process trees and rejects malformed rows in the sampled tree", async () => {
+    const gatewayNeedles = ["gateway", "--port", "19080"];
+    const rows: Array<{
+      name: string;
+      lines: string[];
+      options?: Parameters<typeof samplePosixSnapshot>[1];
+      expected: Awaited<ReturnType<typeof samplePosixSnapshot>>;
+    }> = [
+      {
+        name: "direct gateway with descendants",
+        lines: [
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
+          " 4322  4321  131072   1.5 node helper.js",
+        ],
+        expected: { aggregateRssMiB: 384, cpuPercent: 12.5, processId: 4321, rssMiB: 256 },
+      },
+      {
+        name: "malformed CPU",
+        lines: [" 4321     1  262144  12.5.6 node dist/index.js gateway --port 19080"],
+        expected: { aggregateRssMiB: 256, cpuPercent: null, processId: 4321, rssMiB: 256 },
+      },
+      {
+        name: "self-parenting process",
+        lines: [" 4321  4321  262144  12.5 node dist/index.js gateway --port 19080"],
+        expected: { aggregateRssMiB: 256, cpuPercent: 12.5, processId: 4321, rssMiB: 256 },
+      },
+      {
+        name: "gateway child instead of launcher",
+        lines: [
+          " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          " 4322  4321  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback",
+          " 4323  4322   32768   1.5 node helper.js",
+        ],
+        options: { commandLineNeedles: gatewayNeedles },
+        expected: { aggregateRssMiB: 288, cpuPercent: 12.5, processId: 4322, rssMiB: 256 },
+      },
+      {
+        name: "matching gateway root",
+        lines: [
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        ],
+        options: { commandLineNeedles: gatewayNeedles, platform: "darwin" },
+        expected: { aggregateRssMiB: 256, cpuPercent: 12.5, processId: 4321, rssMiB: 256 },
+      },
+      ...["openclaw-gateway", "node"].map((command) => ({
+        name: `fallback to ${command === "node" ? "largest child" : "gateway title"}`,
+        lines: [
+          " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          ` 4322  4321  262144  12.5 ${command}`,
+          " 4323  4322   32768   1.5 node helper.js",
+        ],
+        options: {
+          commandLineNeedles: gatewayNeedles,
+          platform: command === "node" ? ("linux" as const) : ("darwin" as const),
+        },
+        expected: { aggregateRssMiB: 288, cpuPercent: 12.5, processId: 4322, rssMiB: 256 },
+      })),
+      {
+        name: "missing gateway child",
+        lines: [" 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw status\n"],
+        options: { commandLineNeedles: gatewayNeedles, platform: "darwin" },
+        expected: null,
+      },
+    ];
+    if (process.platform !== "win32") {
+      for (const badRow of [
+        "  5678  1234  9007199254740993  0.2 child",
+        "  5678x  1234  2048  0.2 child",
+        "  5678  1234x  2048  0.2 child",
+      ]) {
+        rows.push({
+          name: `malformed sampled row ${badRow}`,
+          lines: [
+            "  PID  PPID   RSS %CPU COMMAND",
+            "  1234     1  2048  0.1 openclaw-gateway",
+            badRow,
+          ],
+          options: { pid: 1234 },
+          expected: null,
+        });
+      }
+      rows.push({
+        name: "malformed unrelated row",
+        lines: [
+          "  PID  PPID   RSS %CPU COMMAND",
+          "  1234     1  2048  0.1 openclaw-gateway",
+          "  5678  1234  4096  0.2 child",
+          "  9999  9998  9007199254740993  0.2 unrelated",
+        ],
+        options: { pid: 1234 },
+        expected: { aggregateRssMiB: 6, cpuPercent: 0.1, processId: 1234, rssMiB: 2 },
+      });
+    }
+    for (const { name, lines, options, expected } of rows) {
+      expect(await samplePosixSnapshot(lines.join("\n"), options), name).toEqual(expected);
+    }
   });
 
   it("retries transient loopback fetch resets from Windows HTTP probes", async () => {
@@ -2158,19 +2196,21 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
-    let readStarted = false;
-    let canceled = false;
+  it("cancels stalled HTTP probe response streams when the external signal fires", async ({
+    signal,
+  }) => {
+    const readStarted = createDeferred();
+    const canceled = createDeferred();
     const controller = new AbortController();
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         new ReadableStream({
           pull() {
-            readStarted = true;
+            readStarted.resolve();
             return new Promise(() => {});
           },
           cancel() {
-            canceled = true;
+            canceled.resolve();
           },
         }),
         { status: 200 },
@@ -2185,11 +2225,19 @@ describe("kitchen-sink RPC process sampling", () => {
     });
     const rejection = expect(result).rejects.toThrow("gateway exited before ready");
 
-    await waitFor(() => readStarted);
-    controller.abort(new Error("gateway exited before ready"));
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(readStarted.promise, result, "timed out waiting for condition"),
+        signal,
+      );
+      controller.abort(new Error("gateway exited before ready"));
 
-    await rejection;
-    await waitFor(() => canceled);
+      await withinTest(rejection, signal);
+      await withinTest(canceled.promise, signal);
+    } finally {
+      controller.abort(new Error("gateway exited before ready"));
+      await rejection;
+    }
   });
 
   it("times out stalled HTTP probe response bodies", async () => {
@@ -2220,16 +2268,37 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
   });
 
-  it("fails when the sampled RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ rssMiB: 2049 })).toThrow(
-      "gateway RSS exceeded 2048 MiB: 2049 MiB",
-    );
-  });
-
-  it("fails when aggregate RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ aggregateRssMiB: 2049, rssMiB: 1024 })).toThrow(
-      "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
-    );
+  it.each([false, true])("enforces RSS locally and warns in Actions (%s)", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions ? "true" : "");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [assertCeiling, sample, message] of [
+      [assertResourceCeiling, { rssMiB: 2049 }, "gateway RSS exceeded 2048 MiB: 2049 MiB"],
+      [
+        assertResourceCeiling,
+        { aggregateRssMiB: 2049, rssMiB: 1024 },
+        "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
+      ],
+      [
+        assertCommandResourceCeiling,
+        { aggregateRssMiB: 8193, rssMiB: 1024 },
+        "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+      ],
+    ] as const) {
+      if (actions) {
+        expect(() => assertCeiling(sample)).not.toThrow();
+        expect(report).toHaveBeenCalledWith(expect.stringContaining(`::${message}`));
+      } else {
+        expect(() => assertCeiling(sample)).toThrow(message);
+      }
+    }
+    if (actions) {
+      expect(report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts,line=1,col=0",
+        ),
+      );
+    }
   });
 
   it("summarizes peak RSS across repeated process samples", () => {
@@ -2248,23 +2317,15 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
-  it("fails when process sampling does not capture RSS", () => {
+  it.each(["", "true"])("rejects missing and invalid RSS in Actions mode %s", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
-  });
-
-  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
       "gateway RSS sample was invalid: 0 MiB",
     );
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
       "command aggregate RSS sample was invalid: 0 MiB",
-    );
-  });
-
-  it("fails missing command samples and command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
-    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
-      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
     );
   });
 });
@@ -2273,13 +2334,15 @@ function readText(file: string) {
   return readFileSync(file, "utf8");
 }
 
-async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 3_000) {
-  const startedAt = realNow();
-  while (!(await condition())) {
-    if (realNow() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// runCommand bounds its group probe; it cannot join a foreign descendant's
+// kernel exit. Keep that observation deadline-free and tied to the test lifetime.
+async function waitForProcessExit(pid: number, signal: AbortSignal) {
+  while (isProcessAlive(pid)) {
+    try {
+      await realDelay(25, undefined, { signal });
+    } catch (cause) {
+      throw new Error(`timed out waiting for condition: process ${pid} to exit`, { cause });
     }
-    await realDelay(25);
   }
 }
 

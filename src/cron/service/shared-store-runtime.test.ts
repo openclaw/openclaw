@@ -1,17 +1,37 @@
-import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBoundedChildOutput } from "../../../test/helpers/bounded-child-output.js";
+import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
+import * as serviceStore from "./store.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
+const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
+const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
+const children = new Set<ChildProcess>();
+
+// Join children before the earlier store-cleanup hook releases their state.
+afterEach(async () => {
+  await Promise.all([...children].map((child) => stopChildProcess(child, 1_000)));
+  children.clear();
+});
 
 const log = { debug() {}, info() {}, warn() {}, error() {} };
 
 function createDisabledService(storePath: string): CronService {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
     cronEnabled: false,
     storePath,
     log,
@@ -50,13 +70,13 @@ async function addTarget(cron: CronService, suffix: string): Promise<CronJob> {
 }
 
 const schedulerChildScript = String.raw`
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { CronService } from ${JSON.stringify(serviceUrl.href)};
+import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
 const runs = JSON.parse(process.env.OPENCLAW_CRON_SHARED_STORE_RUNS);
-const { CronService } = await import(pathToFileURL(path.join(process.cwd(), "src/cron/service.ts")).href);
 const log = { debug() {}, info() {}, warn() {}, error() {} };
 for (const run of runs) {
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
     cronEnabled: true,
     storePath: run.storePath,
     log,
@@ -66,14 +86,47 @@ for (const run of runs) {
       return { status: "ok", summary: "scheduler child completed" };
     },
   });
-  await cron.start();
-  const result = await cron.run(run.jobId, "force");
-  cron.stop();
-  if (!result.ok || !("ran" in result) || result.ran !== true) {
-    throw new Error("scheduler child did not run " + run.jobId + ": " + JSON.stringify(result));
+  try {
+    await cron.start();
+    const result = await cron.run(run.jobId, "force");
+    if (!result.ok || !("ran" in result) || result.ran !== true) {
+      throw new Error("scheduler child did not complete the expected run " + run.jobId + ": " + JSON.stringify(result));
+    }
+  } finally {
+    cron.stop();
   }
 }
 `;
+
+function spawnSchedulerChild(script: string, runs: unknown) {
+  const startedAt = performance.now();
+  const child = spawn(
+    process.execPath,
+    [...resolveRuntimeWorkerArgv(serviceUrl).slice(0, -1), "--input-type=module", "--eval", script],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_CRON_SHARED_STORE_RUNS: JSON.stringify(runs) },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  children.add(child);
+  const stderr = createBoundedChildOutput();
+  child.stderr?.on("data", stderr.append);
+  const closed = once(child, "close");
+  const assertCompleted = () => {
+    expect(
+      { code: child.exitCode, signal: child.signalCode, stderr: stderr.text() },
+      `Scheduler child closed after ${Math.round(performance.now() - startedAt)}ms`,
+    ).toEqual({ code: 0, signal: null, stderr: "" });
+  };
+  return { child, closed, stderr, assertCompleted };
+}
+
+async function runSchedulerChild(runs: Array<{ storePath: string; jobId: string }>) {
+  const { closed, assertCompleted } = spawnSchedulerChild(schedulerChildScript, runs);
+  await closed;
+  assertCompleted();
+}
 
 describe("scheduler-disabled shared-store mutations", () => {
   it("cannot overwrite runtime committed by a scheduler process", async () => {
@@ -90,29 +143,10 @@ describe("scheduler-disabled shared-store mutations", () => {
       }),
     );
 
-    const child = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        path.join(process.cwd(), "scripts/tsx.mjs"),
-        "--input-type=module",
-        "--eval",
-        schedulerChildScript,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_CRON_SHARED_STORE_RUNS: JSON.stringify(
-            cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
-          ),
-        },
-        timeout: 60_000,
-      },
+    await closeOpenClawStateDatabaseAsync();
+    await runSchedulerChild(
+      cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
     );
-    expect(child.stderr).toBe("");
-    expect(child.status).toBe(0);
 
     for (const testCase of cases) {
       const before = (await loadCronStore(testCase.storePath)).jobs.find(
@@ -169,6 +203,7 @@ describe("scheduler-disabled shared-store mutations", () => {
     seed.stop();
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: false,
       storePath,
       log,
@@ -178,6 +213,13 @@ describe("scheduler-disabled shared-store mutations", () => {
         return { status: "ok" as const, summary: "unused" };
       },
       async listConfiguredChannels() {
+        return [];
+      },
+    });
+    const persist = serviceStore.persistCronJobMutation;
+    const admission = vi
+      .spyOn(serviceStore, "persistCronJobMutation")
+      .mockImplementationOnce(async (params) => {
         const peerStore = await loadCronStore(storePath);
         const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
         if (!peerTarget) {
@@ -185,15 +227,17 @@ describe("scheduler-disabled shared-store mutations", () => {
         }
         peerTarget.name = "peer-update";
         await saveCronStore(storePath, peerStore);
-        return [];
-      },
-    });
-
-    await expect(
-      cron.update(target.id, {
-        delivery: { mode: "webhook", to: "https://example.com/cron" },
-      }),
-    ).rejects.toThrow("changed after it was read");
+        return persist(params);
+      });
+    try {
+      await expect(
+        cron.update(target.id, {
+          delivery: { mode: "webhook", to: "https://example.com/cron" },
+        }),
+      ).rejects.toThrow("changed after it was read");
+    } finally {
+      admission.mockRestore();
+    }
     const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
     expect(persisted?.name).toBe("peer-update");
     expect(persisted?.delivery).toBeUndefined();

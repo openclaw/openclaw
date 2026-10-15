@@ -4,11 +4,11 @@ import {
   type OutboundLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { withTelegramNativeQuoteFallback } from "./reply-parameters.js";
 import {
   logTelegramOutboundSendOk,
   toAcceptedThreadScopedParams,
   withTelegramApiContext,
-  withTelegramNativeQuoteFallback,
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
@@ -30,8 +30,7 @@ export async function sendLocationTelegram(
       throw new Error("Telegram location is required.");
     }
     const hasName = Boolean(location.name);
-    const hasAddress = Boolean(location.address);
-    if (hasName !== hasAddress) {
+    if (hasName !== Boolean(location.address)) {
       throw new Error("Telegram venues require both location.name and location.address.");
     }
 
@@ -47,7 +46,6 @@ export async function sendLocationTelegram(
         replyQuoteText: opts.quoteText,
         useReplyIdAsQuoteSource: true,
       },
-      request: { kind: "nonIdempotent" },
     });
     const replyMarkup = buildInlineKeyboard(opts.buttons);
     const commonParams = {
@@ -81,12 +79,11 @@ export async function sendLocationTelegram(
         }, retryLabel);
       },
     });
-    const result = delivery.result;
     const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
     return finalizeTelegramOutbound({
       context,
       prepared,
-      result,
+      result: delivery.result,
       resultContext: `${label} send`,
       ...(botUserId !== undefined ? { botUserId } : {}),
       text: formatLocationText(location),

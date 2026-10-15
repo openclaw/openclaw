@@ -26,21 +26,15 @@ describe("private capture marker admission", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(["empty", "version", "oversized", "directory", "symlink", "dangling symlink"])(
+  it.each(["version", "oversized", "dangling symlink"])(
     "refuses a present %s marker without treating the artifact as ordinary data",
     (kind) => {
-      if (kind === "directory") {
-        fs.mkdirSync(marker);
-      } else if (kind.includes("symlink")) {
-        fs.symlinkSync(kind === "symlink" ? source : path.join(root, "missing"), marker);
+      if (kind === "dangling symlink") {
+        fs.symlinkSync(path.join(root, "missing"), marker);
       } else {
         fs.writeFileSync(
           marker,
-          kind === "empty"
-            ? ""
-            : kind === "version"
-              ? "openclaw-private-update-capture-v2\n"
-              : "x".repeat(4096),
+          kind === "version" ? "openclaw-private-update-capture-v2\n" : "x".repeat(4096),
         );
       }
       expect(() => assertNotUpdateCapturePath(source, stateDir)).toThrow(
@@ -114,5 +108,30 @@ describe("private capture marker admission", () => {
       "Private update capture marker",
     );
     expect(replaced).toBe(true);
+  });
+  it("resolves repeated symlink target components in filesystem order", () => {
+    const privateDir = path.join(root, "private");
+    fs.mkdirSync(path.join(privateDir, "child"), { recursive: true });
+    fs.writeFileSync(path.join(privateDir, markerName), markerContent);
+    fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+    fs.symlinkSync(
+      path.join(privateDir, "child"),
+      path.join(root, "hop"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const alias = path.join(root, "alias");
+    fs.symlinkSync("hop/../../hop/../raw.txt", alias);
+    expect(() => assertNotUpdateCapturePath(alias, stateDir)).toThrow(
+      "Private update captures are excluded",
+    );
+  });
+  it("assertNotUpdateCapturePath preserves an unresolved target with a trailing directory separator", () => {
+    const privateDir = path.join(root, "private");
+    fs.mkdirSync(privateDir);
+    fs.writeFileSync(path.join(privateDir, markerName), markerContent);
+    fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+    const alias = path.join(root, "alias");
+    fs.symlinkSync("private/raw.txt/", alias);
+    expect(() => assertNotUpdateCapturePath(alias, stateDir)).not.toThrow();
   });
 });

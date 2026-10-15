@@ -1,12 +1,26 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
+import * as sessionStore from "../session-utils-store.js";
+import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
+import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
@@ -17,15 +31,55 @@ const dispatchTestMocks = vi.hoisted(() => ({
   resolveTarget: vi.fn(),
 }));
 
+const sessionTargets = new WeakMap<GatewaySessionStoreTargetWithStore, Promise<string>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  });
+});
+afterEach(() => clearRuntimeConfigSnapshot());
+
 export function getDispatchTestMocks() {
   return dispatchTestMocks;
 }
 
-vi.mock("../../agents/worktrees/service.js", () => ({
-  managedWorktrees: {
-    findLiveByOwner: dispatchTestMocks.findLiveByOwner,
-  },
-}));
+beforeEach(() => {
+  const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnlyAsync = async (
+    key,
+    opts,
+    cfg,
+  ) => {
+    const target = await dispatchTestMocks.resolveTarget({
+      cfg,
+      key,
+      ...opts,
+      exactRead: true,
+      readOnly: true,
+    });
+    const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+    return {
+      ...target,
+      cfg,
+      entry: match?.entry,
+      legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+    };
+  };
+  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnlyAsync").mockImplementation(
+    readFixtureEntry,
+  );
+  vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
+    async (params) => {
+      params.assertActive?.();
+      return readFixtureEntry(params.key, params, params.cfg);
+    },
+  );
+  vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
+    dispatchTestMocks.findLiveByOwner(...args),
+  );
+});
 
 vi.mock("../../process/exec.js", async () => {
   const actual =
@@ -40,7 +94,31 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    resolveGatewaySessionStoreTargetWithStore: dispatchTestMocks.resolveTarget,
+    resolveGatewaySessionStoreTargetInWorker: async (
+      params: Parameters<typeof actual.resolveGatewaySessionStoreTargetInWorker>[0],
+    ) => {
+      const target: GatewaySessionStoreTargetWithStore =
+        await dispatchTestMocks.resolveTarget(params);
+      if (!params.onSelected || target.capturedReadSource) {
+        return target;
+      }
+      let prepared = sessionTargets.get(target);
+      if (!prepared) {
+        prepared = (async () => {
+          const storePath = path.join(tempDirs.make("openclaw-dispatch-session-"), "sessions.json");
+          for (const [sessionKey, entry] of Object.entries(target.store)) {
+            await replaceSessionEntry({ agentId: target.agentId, storePath, sessionKey }, entry);
+          }
+          return storePath;
+        })();
+        sessionTargets.set(target, prepared);
+      }
+      // Workspace admission retains the real worker's publication and physical source.
+      return actual.resolveGatewaySessionStoreTargetInWorker({
+        ...params,
+        cfg: { ...params.cfg, session: { ...params.cfg.session, store: await prepared } },
+      });
+    },
   };
 });
 
@@ -96,6 +174,7 @@ export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { s
 type DispatchSessionEntry = Pick<
   SessionEntry,
   | "sessionId"
+  | "deviceFolder"
   | "worktree"
   | "agentHarnessId"
   | "agentRuntimeOverride"
@@ -114,12 +193,15 @@ export function makeSessionTarget(entry?: DispatchSessionEntry) {
   const pinnedEntry = entry
     ? { providerOverride: "anthropic", modelOverride: "claude-test", ...entry }
     : undefined;
+  const store: Record<string, DispatchSessionEntry> = pinnedEntry
+    ? { [dispatchTestSessionKey]: pinnedEntry }
+    : {};
   return {
     agentId: "main",
     storePath: "/tmp/openclaw-agent.sqlite",
     canonicalKey: dispatchTestSessionKey,
     storeKeys: [dispatchTestSessionKey],
-    store: pinnedEntry ? { [dispatchTestSessionKey]: pinnedEntry } : {},
+    store,
   };
 }
 
@@ -144,13 +226,18 @@ export function makeDispatchTestContext(
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          capturedExecPolicy: true,
+          promptContext: 1,
+        },
         commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
       };
       return { available: true, node };
     });
   }
-  return {
+  const context = {
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -186,6 +273,8 @@ export function makeDispatchTestContext(
     ...overrides,
     workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  return context;
 }
 
 export async function invokeSessionDispatch(
@@ -200,9 +289,11 @@ export async function invokeSessionDispatch(
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await getSessionDispatchHandler()({
+    signal,
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
     respond,
@@ -245,6 +336,7 @@ export async function invokeSessionMove(
 export async function invokeSessionReclaim(
   context: GatewayRequestContext,
   sessionMutationAuthorization?: SessionMutationAuthorization,
+  params: Omit<SessionsReclaimParams, "key"> = {},
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -252,7 +344,7 @@ export async function invokeSessionReclaim(
     'sessionDispatchHandlers["sessions.reclaim"] test invariant',
   )({
     req: { id: "reclaim-request" } as never,
-    params: { key: dispatchTestSessionKey },
+    params: { key: dispatchTestSessionKey, ...params },
     respond,
     context,
     client: null,

@@ -8,13 +8,11 @@ import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
   MAX_PAGE_ERRORS,
-  observedPages,
   pageStates,
   type ArmedDialogResponse,
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
   type BrowserConsoleMessage,
-  type DownloadPayload,
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
@@ -34,7 +32,6 @@ import {
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
-let roleRefsCacheGeneration = 0;
 const MAX_OBSERVED_PAGE_TEXT_CHARS = 2_048;
 
 function truncateObservedPageText(value: string): string {
@@ -49,64 +46,18 @@ export function targetKey(cdpUrl: string, targetId: string) {
   return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
 }
 
-function roleRefsKey(cdpUrl: string, targetId: string) {
-  return targetKey(cdpUrl, targetId);
-}
-
 export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
   const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
   if (!normalizedTargetId) {
     return;
   }
   const state = ensurePageState(page);
-  const key = roleRefsKey(cdpUrl, normalizedTargetId);
-  const invalidBeforeGeneration = state.roleRefsInvalidBeforeGeneration;
-  const ariaInvalidBeforeGeneration = state.roleRefsAriaInvalidBeforeGeneration;
-  const cached = roleRefsByTarget.get(key);
-  if (
-    cached &&
-    ((invalidBeforeGeneration !== undefined && cached.generation <= invalidBeforeGeneration) ||
-      (ariaInvalidBeforeGeneration !== undefined &&
-        cached.mode === "aria" &&
-        cached.generation <= ariaInvalidBeforeGeneration))
-  ) {
+  const key = targetKey(cdpUrl, normalizedTargetId);
+  if (state.roleRefsInvalidated) {
     roleRefsByTarget.delete(key);
   }
-  state.roleRefsInvalidBeforeGeneration = undefined;
-  state.roleRefsAriaInvalidBeforeGeneration = undefined;
+  state.roleRefsInvalidated = false;
   state.roleRefsTargetKey = key;
-  if (!state.roleRefs) {
-    state.roleRefsTargetGeneration = roleRefsByTarget.get(key)?.generation;
-  }
-}
-
-/** Cache role refs for a target id after a snapshot. */
-function rememberRoleRefsForTarget(opts: {
-  cdpUrl: string;
-  targetId: string;
-  refs: RoleRefs;
-  frameSelector?: string;
-  mode?: NonNullable<PageState["roleRefsMode"]>;
-}): number | undefined {
-  const targetId = normalizeOptionalString(opts.targetId) ?? "";
-  if (!targetId) {
-    return undefined;
-  }
-  const key = roleRefsKey(opts.cdpUrl, targetId);
-  // A selector cannot preserve frame identity across replacement Page objects.
-  // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
-  if (opts.frameSelector) {
-    roleRefsByTarget.delete(key);
-    return undefined;
-  }
-  const generation = ++roleRefsCacheGeneration;
-  roleRefsByTarget.set(key, {
-    refs: opts.refs,
-    ...(opts.mode ? { mode: opts.mode } : {}),
-    generation,
-  });
-  pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
-  return generation;
 }
 
 /** Store role refs on the page and target cache. */
@@ -124,40 +75,34 @@ export function storeRoleRefsForTarget(opts: {
   }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
-  state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
   if (!targetId) {
     state.roleRefsTargetKey = undefined;
-    state.roleRefsTargetGeneration = undefined;
     return;
   }
   bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
-  state.roleRefsTargetGeneration = rememberRoleRefsForTarget({
-    cdpUrl: opts.cdpUrl,
-    targetId,
-    refs: opts.refs,
-    frameSelector: opts.frameSelector,
-    mode: opts.mode,
-  });
+  const key = targetKey(opts.cdpUrl, targetId);
+  // A selector cannot preserve frame identity across replacement Page objects.
+  // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
+  if (opts.frameSelector) {
+    roleRefsByTarget.delete(key);
+    return;
+  }
+  roleRefsByTarget.set(key, { refs: opts.refs, mode: opts.mode });
+  pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
 }
 
 function clearRoleRefs(state: PageState): void {
   if (state.roleRefsTargetKey) {
-    const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-    // A delayed event from an obsolete Page must not erase refs that a newer
-    // wrapper stored for the same target after this Page's generation.
-    if (cached?.generation === state.roleRefsTargetGeneration) {
-      roleRefsByTarget.delete(state.roleRefsTargetKey);
-    }
+    // A delayed event from an older wrapper may evict newer refs; a snapshot repairs it.
+    roleRefsByTarget.delete(state.roleRefsTargetKey);
   }
   state.roleRefs = undefined;
   state.roleRefsMode = undefined;
-  state.roleRefsFrameSelector = undefined;
   state.roleRefsFrame = undefined;
   state.roleRefsTargetKey = undefined;
-  state.roleRefsTargetGeneration = undefined;
 }
 
 function currentTargetRoleRefsMode(
@@ -166,8 +111,7 @@ function currentTargetRoleRefsMode(
   if (!state.roleRefsTargetKey) {
     return undefined;
   }
-  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
+  return roleRefsByTarget.get(state.roleRefsTargetKey)?.mode;
 }
 
 /** Restore cached role refs onto a newly resolved page. */
@@ -180,7 +124,7 @@ export function restoreRoleRefsForTarget(opts: {
   if (!targetId) {
     return;
   }
-  const cacheKey = roleRefsKey(opts.cdpUrl, targetId);
+  const cacheKey = targetKey(opts.cdpUrl, targetId);
   bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
   const cached = roleRefsByTarget.get(cacheKey);
   if (!cached) {
@@ -191,7 +135,6 @@ export function restoreRoleRefsForTarget(opts: {
     return;
   }
   state.roleRefsTargetKey = cacheKey;
-  state.roleRefsTargetGeneration = cached.generation;
   state.roleRefs = cached.refs;
   state.roleRefsMode = cached.mode;
 }
@@ -219,156 +162,119 @@ export function ensurePageState(page: Page): PageState {
   };
   pageStates.set(page, state);
 
-  if (!observedPages.has(page)) {
-    observedPages.add(page);
-    page.on("console", (msg: ConsoleMessage) => {
-      const location = msg.location();
-      const entry: BrowserConsoleMessage = {
-        type: truncateObservedPageText(msg.type()),
-        text: truncateObservedPageText(msg.text()),
-        timestamp: new Date().toISOString(),
-        location: { ...location, url: truncateObservedPageText(location.url) },
-      };
-      state.console.push(entry);
-      if (state.console.length > MAX_CONSOLE_MESSAGES) {
-        state.console.shift();
-      }
+  page.on("console", (msg: ConsoleMessage) => {
+    const location = msg.location();
+    const entry: BrowserConsoleMessage = {
+      type: truncateObservedPageText(msg.type()),
+      text: truncateObservedPageText(msg.text()),
+      timestamp: new Date().toISOString(),
+      location: { ...location, url: truncateObservedPageText(location.url) },
+    };
+    state.console.push(entry);
+    if (state.console.length > MAX_CONSOLE_MESSAGES) {
+      state.console.shift();
+    }
+  });
+  page.on("pageerror", (err: Error) => {
+    state.errors.push({
+      message: truncateObservedPageText(err.message || String(err)),
+      name: err.name ? truncateObservedPageText(err.name) : undefined,
+      stack: err.stack ? truncateObservedPageText(err.stack) : undefined,
+      timestamp: new Date().toISOString(),
     });
-    page.on("pageerror", (err: Error) => {
-      state.errors.push({
-        message: truncateObservedPageText(err.message || String(err)),
-        name: err.name ? truncateObservedPageText(err.name) : undefined,
-        stack: err.stack ? truncateObservedPageText(err.stack) : undefined,
-        timestamp: new Date().toISOString(),
-      });
-      if (state.errors.length > MAX_PAGE_ERRORS) {
-        state.errors.shift();
-      }
+    if (state.errors.length > MAX_PAGE_ERRORS) {
+      state.errors.shift();
+    }
+  });
+  page.on("request", (req: Request) => {
+    state.nextRequestId += 1;
+    const id = `r${state.nextRequestId}`;
+    state.requestIds.set(req, id);
+    state.requests.set(id, {
+      id,
+      timestamp: new Date().toISOString(),
+      method: req.method(),
+      url: truncateObservedPageText(req.url()),
+      resourceType: req.resourceType(),
     });
-    page.on("request", (req: Request) => {
-      state.nextRequestId += 1;
-      const id = `r${state.nextRequestId}`;
-      state.requestIds.set(req, id);
-      state.requests.set(id, {
-        id,
-        timestamp: new Date().toISOString(),
-        method: req.method(),
-        url: truncateObservedPageText(req.url()),
-        resourceType: req.resourceType(),
-      });
-      pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
-    });
-    page.on("response", (resp: Response) => {
-      const req = resp.request();
-      const id = state.requestIds.get(req);
-      if (!id) {
-        return;
+    pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
+  });
+  page.on("response", (resp: Response) => {
+    const id = state.requestIds.get(resp.request());
+    const rec = id ? state.requests.get(id) : undefined;
+    if (!rec) {
+      return;
+    }
+    rec.status = resp.status();
+    rec.ok = resp.ok();
+  });
+  page.on("requestfailed", (req: Request) => {
+    const id = state.requestIds.get(req);
+    const rec = id ? state.requests.get(id) : undefined;
+    if (!rec) {
+      return;
+    }
+    const failureText = req.failure()?.errorText;
+    rec.failureText = failureText ? truncateObservedPageText(failureText) : undefined;
+    rec.ok = false;
+  });
+  page.on("dialog", (dialog: Dialog) => {
+    observeDialog(state, dialog);
+  });
+  page.on("download", (download) => {
+    if (state.downloadWaiterDepth > 0) {
+      return;
+    }
+    const actionCapture = state.actionDownloadCapture;
+    const beforeSave = actionCapture?.beforeSave;
+    const captureOptions: BrowserDownloadCaptureOptions | undefined =
+      actionCapture && beforeSave
+        ? {
+            beforeSave: (candidate) => {
+              const validation = Promise.resolve().then(() => beforeSave(candidate));
+              actionCapture.validations.push(validation);
+              return validation;
+            },
+          }
+        : undefined;
+    const managedSave = saveBrowserDownload(download, captureOptions);
+    managedSave.catch(() => {});
+    download.path = async () => (await managedSave).path;
+    if (actionCapture) {
+      actionCapture.lastEventAtMs = Date.now();
+    }
+    actionCapture?.pending.push(managedSave);
+    for (const finish of actionCapture?.waiters.splice(0) ?? []) {
+      finish();
+    }
+  });
+  const invalidateFrameRefs = (frame: Frame, navigated: boolean) => {
+    const isMainFrame = frame === page.mainFrame();
+    if (!state.roleRefsTargetKey) {
+      state.roleRefsInvalidated = true;
+    }
+    const pageWideAriaRefs =
+      state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
+    if ((navigated && isMainFrame) || pageWideAriaRefs || frame === state.roleRefsFrame) {
+      clearRoleRefs(state);
+    }
+  };
+  page.on("framenavigated", (frame) => invalidateFrameRefs(frame, true));
+  page.on("framedetached", (frame) => invalidateFrameRefs(frame, false));
+  page.on("close", () => {
+    const emulationSession = state.emulation?.session;
+    state.emulation = undefined;
+    void emulationSession?.then((session) => session.detach()).catch(() => {});
+    clearArmedDialogResponse(state);
+    for (const controller of state.dialogAbortControllers) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("Page closed before browser action completed."));
       }
-      const rec = state.requests.get(id);
-      if (!rec) {
-        return;
-      }
-      rec.status = resp.status();
-      rec.ok = resp.ok();
-    });
-    page.on("requestfailed", (req: Request) => {
-      const id = state.requestIds.get(req);
-      if (!id) {
-        return;
-      }
-      const rec = state.requests.get(id);
-      if (!rec) {
-        return;
-      }
-      const failureText = req.failure()?.errorText;
-      rec.failureText = failureText ? truncateObservedPageText(failureText) : undefined;
-      rec.ok = false;
-    });
-    page.on("dialog", (dialog: Dialog) => {
-      observeDialog(state, dialog);
-    });
-    page.on("download", (download: DownloadPayload) => {
-      if (state.downloadWaiterDepth > 0) {
-        return;
-      }
-      const actionCapture = state.actionDownloadCapture;
-      const beforeSave = actionCapture?.beforeSave;
-      const captureOptions: BrowserDownloadCaptureOptions | undefined =
-        actionCapture && beforeSave
-          ? {
-              beforeSave: (candidate) => {
-                const validation = Promise.resolve().then(() => beforeSave(candidate));
-                actionCapture.validations.push(validation);
-                return validation;
-              },
-            }
-          : undefined;
-      const managedSave = saveBrowserDownload(download, captureOptions);
-      managedSave.catch(() => {});
-      download.path = async () => (await managedSave).path;
-      if (actionCapture) {
-        actionCapture.lastEventAtMs = Date.now();
-      }
-      actionCapture?.pending.push(managedSave);
-      for (const finish of actionCapture?.waiters.splice(0) ?? []) {
-        finish();
-      }
-    });
-    page.on("framenavigated", (frame) => {
-      // Clear role refs on main-frame navigation so stale refs from the
-      // previous page are never used to locate elements on the new page.
-      // Unscoped refs survive subframe navigation. Frame-scoped refs are
-      // invalid only when their exact Frame replaces its document.
-      const isMainFrame = frame === page.mainFrame();
-      const targetWasBound = state.roleRefsTargetKey !== undefined;
-      if (!targetWasBound) {
-        // Target discovery is asynchronous. Remember an early navigation so
-        // binding removes only cache generations that already existed. Refs a
-        // newer Page stores after this event must survive the delayed lookup.
-        if (isMainFrame) {
-          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
-        } else {
-          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
-        }
-      }
-      const pageWideAriaRefs =
-        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
-      if (isMainFrame || pageWideAriaRefs || frame === state.roleRefsFrame) {
-        // Replacement Page objects restore from this target cache, so local
-        // clearing alone could resurrect refs from the previous document.
-        clearRoleRefs(state);
-      }
-    });
-    page.on("framedetached", (frame) => {
-      if (!state.roleRefsTargetKey) {
-        if (frame === page.mainFrame()) {
-          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
-        } else {
-          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
-        }
-      }
-      const pageWideAriaRefs =
-        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
-      if (pageWideAriaRefs || frame === state.roleRefsFrame) {
-        clearRoleRefs(state);
-      }
-    });
-    page.on("close", () => {
-      const emulationSession = state.emulation?.session;
-      state.emulation = undefined;
-      void emulationSession?.then((session) => session.detach()).catch(() => {});
-      clearArmedDialogResponse(state);
-      for (const controller of state.dialogAbortControllers) {
-        if (!controller.signal.aborted) {
-          controller.abort(new Error("Page closed before browser action completed."));
-        }
-      }
-      state.dialogAbortControllers.clear();
-      state.pendingDialogs = [];
-      pageStates.delete(page);
-      observedPages.delete(page);
-    });
-  }
+    }
+    state.dialogAbortControllers.clear();
+    state.pendingDialogs = [];
+    pageStates.delete(page);
+  });
 
   return state;
 }
@@ -378,8 +284,6 @@ export function getObservedBrowserStateForPage(page: Page): BrowserObservedState
   const state = ensurePageState(page);
   return serializeObservedBrowserState(state);
 }
-
-/** Resolve a page and read its observed browser state. */
 
 export async function respondToObservedDialogOnPage(opts: {
   page: Page;

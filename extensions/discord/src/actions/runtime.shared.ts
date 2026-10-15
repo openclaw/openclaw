@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.shared behavior.
 import {
   parseAvailableTags,
   readNonNegativeIntegerParam,
@@ -19,13 +18,9 @@ const DISCORD_AUTO_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080]);
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
 ): string | null | undefined {
-  if (params.clearParent === true) {
-    return null;
-  }
-  if (params.parentId === null) {
-    return null;
-  }
-  return readStringParam(params, "parentId");
+  return params.clearParent === true || params.parentId === null
+    ? null
+    : readStringParam(params, "parentId");
 }
 
 /**
@@ -37,10 +32,7 @@ export function readDiscordAutoArchiveDurationParam(
   key: string,
 ): number | undefined {
   const value = readPositiveIntegerParam(params, key);
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
+  if (value !== undefined && !DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
     throw new Error(`${key} must be one of 60, 1440, 4320, or 10080 minutes`);
   }
   return value;
@@ -69,11 +61,10 @@ export function readDiscordChannelCreateParams(
     name: readStringParam(params, "name", { required: true }),
     type:
       readNonNegativeIntegerParam(params, "channelType") ??
-      readNonNegativeIntegerParam(params, "type") ??
-      undefined,
+      readNonNegativeIntegerParam(params, "type"),
     parentId: parentId ?? undefined,
-    topic: readStringParam(params, "topic") ?? undefined,
-    position: readNonNegativeIntegerParam(params, "position") ?? undefined,
+    topic: readStringParam(params, "topic"),
+    position: readNonNegativeIntegerParam(params, "position"),
     nsfw: asBoolean(params.nsfw),
   };
 }
@@ -82,12 +73,12 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
   const parentId = readDiscordParentIdParam(params);
   return {
     channelId: readStringParam(params, "channelId", { required: true }),
-    name: readStringParam(params, "name") ?? undefined,
-    topic: readStringParam(params, "topic") ?? undefined,
-    position: readNonNegativeIntegerParam(params, "position") ?? undefined,
-    parentId: parentId === undefined ? undefined : parentId,
+    name: readStringParam(params, "name"),
+    topic: readStringParam(params, "topic"),
+    position: readNonNegativeIntegerParam(params, "position"),
+    parentId,
     nsfw: asBoolean(params.nsfw),
-    rateLimitPerUser: readNonNegativeIntegerParam(params, "rateLimitPerUser") ?? undefined,
+    rateLimitPerUser: readNonNegativeIntegerParam(params, "rateLimitPerUser"),
     archived: asBoolean(params.archived),
     locked: asBoolean(params.locked),
     autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
@@ -100,7 +91,7 @@ export function readDiscordChannelMoveParams(params: Record<string, unknown>): D
   return {
     guildId: readStringParam(params, "guildId", { required: true }),
     channelId: readStringParam(params, "channelId", { required: true }),
-    parentId: parentId === undefined ? undefined : parentId,
-    position: readNonNegativeIntegerParam(params, "position") ?? undefined,
+    parentId,
+    position: readNonNegativeIntegerParam(params, "position"),
   };
 }

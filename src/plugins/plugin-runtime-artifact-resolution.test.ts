@@ -1,16 +1,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
+import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
 import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 
 const tempDirs: string[] = [];
 
@@ -72,6 +78,7 @@ function resolveFixture(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -79,26 +86,11 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
-  it.each(["source", "package-local", "root-bundled"])(
-    "exposes the selected %s runtime entry to registration",
-    (layout) => {
+  it.each(["disabled", "metadata-only"])(
+    "does not inspect built runtime files for %s plugins",
+    (mode) => {
       const fixture = createBundledPluginFixture();
-      const entry =
-        layout === "source"
-          ? fixture.source
-          : layout === "package-local"
-            ? path.join(fixture.rootDir, "dist", "index.js")
-            : fixture.builtSource;
-      fs.mkdirSync(path.dirname(entry), { recursive: true });
-      fs.writeFileSync(
-        entry,
-        `export default {
-        id: "fixture",
-        register(api) {
-          api.registerService({ id: api.runtimeSource ?? "missing runtime source", start() {} });
-        }
-      };\n`,
-      );
+      const open = vi.spyOn(fs, "openSync");
       const registry = withEnv(
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
@@ -108,13 +100,88 @@ describe("resolvePluginRuntimeArtifact", () => {
         () =>
           loadOpenClawPlugins({
             cache: false,
-            config: { plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } } },
+            config: {
+              plugins: {
+                allow: ["fixture"],
+                entries: { fixture: { enabled: mode !== "disabled" } },
+              },
+            },
             onlyPluginIds: ["fixture"],
-            preferBuiltPluginArtifacts: layout !== "source",
+            loadModules: mode !== "metadata-only",
+            preferBuiltPluginArtifacts: true,
           }),
       );
-      expect(registry.services.map(({ service }) => service.id)).toEqual([entry]);
-      expect(registry.plugins[0]?.source).toBe(fixture.source);
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.id).toBe("fixture");
+      expect(registry.plugins[0]?.enabled).toBe(mode !== "disabled");
+      const builtRoot = path.dirname(fixture.builtSource);
+      expect(
+        open.mock.calls.filter(
+          ([file]) => typeof file === "string" && file.startsWith(`${builtRoot}${path.sep}`),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    { layout: "source default", preferBuiltPluginArtifacts: undefined },
+    { layout: "package-local", preferBuiltPluginArtifacts: true },
+    { layout: "root-bundled", preferBuiltPluginArtifacts: true },
+  ])(
+    "exposes and fingerprints the selected $layout runtime entry",
+    ({ layout, preferBuiltPluginArtifacts }) => {
+      const fixture = createBundledPluginFixture();
+      const entry = !preferBuiltPluginArtifacts
+        ? fixture.source
+        : layout === "package-local"
+          ? path.join(fixture.rootDir, "dist", "index.js")
+          : fixture.builtSource;
+      const name = preferBuiltPluginArtifacts ? "fixture-built" : "fixture-source";
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.writeFileSync(
+        entry,
+        `export default {
+          id: "fixture", name: ${JSON.stringify(name)},
+          register(api) {
+            api.registerService({ id: api.runtimeSource ?? "missing runtime source", start() {} });
+          }
+        };`,
+      );
+      withEnv(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        },
+        () => {
+          const config = {
+            plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } },
+          };
+          const record = { pluginId: "fixture", origin: "bundled" as const, ...fixture };
+          const stagingRegistry = createEmptyPluginRegistry();
+          setPluginRuntimeLoadContext(
+            stagingRegistry,
+            resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts }),
+          );
+          const before = withPluginRuntimeRegistryScope(stagingRegistry, () =>
+            fingerprintPluginRuntimeArtifact(record),
+          );
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            config,
+            onlyPluginIds: ["fixture"],
+            preferBuiltPluginArtifacts,
+          });
+          expect(registry.services.map(({ service }) => service.id)).toEqual([entry]);
+          expect(registry.plugins[0]?.source).toBe(fixture.source);
+          expect(registry.plugins).toContainEqual(
+            expect.objectContaining({ id: "fixture", name, status: "loaded" }),
+          );
+          expect(fingerprintPluginRuntimeArtifact(record)).toBe(before);
+          fs.appendFileSync(entry, "\n// Runtime artifact replaced.\n");
+          expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(before);
+        },
+      );
     },
   );
 
@@ -165,43 +232,39 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it.each([".cjs", ".js"])(
-    "uses the emitted %s entry rather than a stale format neighbor",
-    (extension) => {
+  it.each([
+    { extension: ".cjs", neighbor: "built", missing: false },
+    { extension: ".js", neighbor: "built", missing: false },
+    { extension: ".cjs", neighbor: "built", missing: true },
+    { extension: ".js", neighbor: "source", missing: false },
+    { extension: ".js", neighbor: "package-local", missing: false },
+  ])(
+    "selects declared $extension output over a stale $neighbor neighbor (missing: $missing)",
+    ({ extension, neighbor, missing }) => {
       const fixture = createBundledPluginFixture(extension);
       const staleExtension = extension === ".js" ? ".cjs" : ".js";
-      fs.writeFileSync(
-        path.join(path.dirname(fixture.builtSource), `index${staleExtension}`),
-        'throw new Error("stale build format");\n',
-      );
-
-      expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-        fixture.builtSource,
-      );
+      const stale =
+        neighbor === "built"
+          ? path.join(path.dirname(fixture.builtSource), `index${staleExtension}`)
+          : path.join(fixture.rootDir, neighbor === "source" ? "index.js" : "dist/index.js");
+      fs.mkdirSync(path.dirname(stale), { recursive: true });
+      fs.writeFileSync(stale, 'throw new Error("stale build output");\n');
+      if (missing) {
+        fs.rmSync(fixture.builtSource);
+      }
+      const resolved = resolvePluginRuntimeArtifact({
+        ...fixture,
+        pluginId: "fixture",
+        entryKind: "runtime",
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest:
+          neighbor === "package-local" ? { build: { bundledDist: false } } : undefined,
+      });
+      expect(resolved.source).toBe(missing ? fixture.source : fixture.builtSource);
+      expect(resolved.source).not.toBe(fs.realpathSync(stale));
     },
   );
-
-  it("keeps the bundled root build ahead of adjacent source output", () => {
-    const fixture = createBundledPluginFixture();
-    fs.writeFileSync(path.join(fixture.rootDir, "index.js"), 'module.exports = { id: "stale" };\n');
-
-    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-      fixture.builtSource,
-    );
-  });
-
-  it("does not replace missing declared CJS output with a stale JavaScript neighbor", () => {
-    const fixture = createBundledPluginFixture(".cjs");
-    fs.rmSync(fixture.builtSource);
-    fs.writeFileSync(
-      path.join(path.dirname(fixture.builtSource), "index.js"),
-      "export default {};\n",
-    );
-
-    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-      fixture.source,
-    );
-  });
 
   it("never borrows a checkout root build for an installed package", () => {
     const fixture = createBundledPluginFixture();
@@ -216,45 +279,16 @@ describe("resolvePluginRuntimeArtifact", () => {
     ).toBe(fixture.source);
   });
 
-  it.each([
-    { firstPreference: false, firstArtifact: "source" },
-    { firstPreference: true, firstArtifact: "built" },
-  ])(
-    "pins the first $firstArtifact path so one plugin instance registers once",
-    ({ firstPreference }) => {
-      const fixture = createBundledPluginFixture();
-      const first = resolveFixture({
-        ...fixture,
-        preferBuiltPluginArtifacts: firstPreference,
-      });
-      const second = resolveFixture({
-        ...fixture,
-        preferBuiltPluginArtifacts: !firstPreference,
-      });
-
-      expect(first.source).toBe(firstPreference ? fixture.builtSource : fixture.source);
-      expect(second).toEqual(first);
-    },
-  );
-
-  it("prefers the root build for source-external plugins without using package-local output", () => {
+  it("pins the first built path so one plugin instance registers once", () => {
     const fixture = createBundledPluginFixture();
-    const packageLocalSource = path.join(fixture.rootDir, "dist", "index.js");
-    fs.mkdirSync(path.dirname(packageLocalSource), { recursive: true });
-    fs.writeFileSync(packageLocalSource, 'module.exports = { id: "stale" };\n');
+    const first = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true });
+    const second = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: false });
 
-    const resolved = resolvePluginRuntimeArtifact({
-      pluginId: "fixture",
-      entryKind: "runtime",
-      rootDir: fixture.rootDir,
-      source: fixture.source,
-      origin: "bundled",
-      preferBuiltPluginArtifacts: true,
-      packageManifest: { build: { bundledDist: false } },
-    });
-
-    expect(resolved.source).toBe(fixture.builtSource);
-    expect(resolved.source).not.toBe(fs.realpathSync(packageLocalSource));
+    expect(first.source).toBe(fixture.builtSource);
+    expect(second).toEqual(first);
+    expect(
+      resolveFixture({ ...fixture, source: fixture.source, preferBuiltPluginArtifacts: false }),
+    ).toEqual(first);
   });
 
   it.each([
@@ -322,24 +356,6 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it("aliases different physical inputs for the same logical runtime entry", () => {
-    const fixture = createBundledPluginFixture();
-    const first = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-    const aliased = resolvePluginRuntimeArtifact({
-      pluginId: "fixture",
-      entryKind: "runtime",
-      rootDir: fixture.rootDir,
-      source: fixture.builtSource,
-      origin: "bundled",
-      preferBuiltPluginArtifacts: true,
-    });
-
-    expect(aliased).toEqual(first);
-  });
-
   it.each(["setup", "provider-discovery"] as const)(
     "keeps runtime and %s entries distinct within one plugin root",
     (entryKind) => {
@@ -364,36 +380,13 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it("re-resolves after the active registry memo is cleared", () => {
-    const fixture = createBundledPluginFixture();
-    const sourceResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-
-    clearPluginRuntimeArtifactResolutionMemo();
-
-    const builtResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: true,
-    });
-    expect(sourceResolution.source).toBe(fixture.source);
-    expect(builtResolution.source).toBe(fixture.builtSource);
-  });
-
   it("re-resolves after the registry load cache is cleared", () => {
     const fixture = createBundledPluginFixture();
-    const sourceResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
+    const sourceResolution = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: false });
 
     clearPluginRegistryLoadCache();
 
-    const builtResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: true,
-    });
+    const builtResolution = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true });
     expect(sourceResolution.source).toBe(fixture.source);
     expect(builtResolution.source).toBe(fixture.builtSource);
   });
@@ -437,6 +430,82 @@ describe("resolvePluginRuntimeArtifact", () => {
       fixture.builtSource,
     ]);
     expect(getActivePluginChannelRegistry()).toBe(second);
+  });
+
+  it("binds explicit bundled source selection before a built-preferred runtime loads", async () => {
+    const { captureSystemAgentOwnerPluginArtifacts } =
+      await import("../system-agent/verified-inference.js");
+    const fixture = createBundledPluginFixture();
+    const packageRoot = path.dirname(path.dirname(fixture.rootDir));
+    fs.writeFileSync(fixture.source, 'export default { name: "fixture-source", register() {} };\n');
+    fs.writeFileSync(
+      fixture.builtSource,
+      'module.exports = { name: "fixture-built", register() {} };\n',
+    );
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "fixture",
+        providers: ["fixture"],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
+      },
+      () => {
+        const workspaceDir = path.join(packageRoot, "workspace");
+        const config: OpenClawConfig = {
+          agents: {
+            defaults: { workspace: workspaceDir },
+            entries: { main: {} },
+          },
+          plugins: {
+            allow: ["fixture"],
+            entries: { fixture: { enabled: true } },
+            load: { paths: [fixture.rootDir] },
+          },
+        };
+        const capture = () =>
+          captureSystemAgentOwnerPluginArtifacts({
+            config,
+            executionRoute: {
+              sourceConfig: config,
+              runConfig: config,
+              modelLabel: "fixture/model",
+              provider: "fixture",
+              model: "model",
+              agentDir: path.join(packageRoot, "agent"),
+              agentId: "main",
+              runner: "embedded",
+              agentHarnessRuntimeOverride: "openclaw",
+            },
+          });
+        const stagingRegistry = createEmptyPluginRegistry();
+        setPluginRuntimeLoadContext(
+          stagingRegistry,
+          resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts: true }),
+        );
+        const before = withPluginRuntimeRegistryScope(stagingRegistry, capture);
+        expect(before.ownerPluginIds).toEqual(["fixture"]);
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config,
+          onlyPluginIds: ["fixture"],
+          preferBuiltPluginArtifacts: true,
+        });
+        expect(registry.plugins).toContainEqual(
+          expect.objectContaining({ id: "fixture", name: "fixture-source", status: "loaded" }),
+        );
+        expect(capture()).toEqual(before);
+        fs.appendFileSync(fixture.source, "\n// Runtime artifact replaced.\n");
+        expect(capture()).not.toEqual(before);
+      },
+    );
   });
 
   it("leaves dist-only installs unchanged because both preferences resolve the built entry", () => {

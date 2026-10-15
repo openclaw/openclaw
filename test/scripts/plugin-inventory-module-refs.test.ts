@@ -18,9 +18,18 @@ const temp = useAutoCleanupTempDirTracker(afterEach);
 const requireHost = createRequire(import.meta.url);
 const sdk = "openclaw/plugin-sdk/channel-entry-contract";
 
-it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
-  "builds only declared SDK companion edges for %s",
-  async (binding) => {
+it.each([
+  { binding: "alias", origin: "bundled", evaluations: 1 },
+  { binding: "namespace", origin: "bundled", evaluations: 1 },
+  { binding: "inventory", origin: "bundled", evaluations: 1 },
+  { binding: "unrelated", origin: "bundled", evaluations: 0 },
+  { binding: "esm", origin: "global", evaluations: 2 },
+  { binding: "cjs", origin: "global", evaluations: 2 },
+  { binding: "esm", origin: "bundled", evaluations: 1 },
+  { binding: "cjs", origin: "bundled", evaluations: 1 },
+] as const)(
+  "builds only declared SDK companion edges for $binding ($origin)",
+  async ({ binding, origin, evaluations }) => {
     const root = temp.make("inventory companion ");
     const format = binding === "esm" || binding === "cjs" ? binding : undefined;
     const runtimeExtension = format === "cjs" ? "cjs" : "js";
@@ -79,21 +88,23 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
     expect(template).toBeDefined();
     const bundles = format
       ? []
-      : await build({
-          ...template,
-          config: false,
-          clean: false,
-          entry: {
-            [entryName]: entry,
-            ...(binding === "inventory"
-              ? { "extensions/openai/capability-catalog": companion }
-              : {}),
-          },
-          outDir,
-          dts: false,
-          logLevel: "silent",
-          plugins: [createPluginInventoryModuleRefsPlugin(root)],
-        });
+      : (
+          await build({
+            ...template,
+            config: false,
+            clean: false,
+            entry: {
+              [entryName]: entry,
+              ...(binding === "inventory"
+                ? { "extensions/openai/capability-catalog": companion }
+                : {}),
+            },
+            outDir,
+            dts: false,
+            logLevel: "silent",
+            plugins: [createPluginInventoryModuleRefsPlugin(root)],
+          })
+        ).bundles;
     if (format) {
       const plan = await buildPluginNpmRuntime({ packageDir: root, logLevel: "silent" });
       expect(plan?.runtimeBuildOutputs).toEqual([
@@ -136,6 +147,7 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
         );
       }
       const nativeListeners = process.listenerCount(event);
+      expect(nativeListeners).toBe(format ? 1 : 0);
       expect(fs.readFileSync(setup, "utf8")).toContain("new URL(");
       if (binding === "inventory") {
         expect(fs.existsSync(path.join(outDir, "extensions/openai/capability-catalog.js"))).toBe(
@@ -145,7 +157,7 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
       const rootDir = path.dirname(setup);
       const record = {
         id: "fixture",
-        origin: "bundled" as const,
+        origin,
         rootDir,
         source: setup,
         manifestPath: path.join(rootDir, "openclaw.plugin.json"),
@@ -161,14 +173,16 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
           default: { loadSetupPlugin(): { id: string } };
           retained: string[];
         };
+        expect(process.listenerCount(event)).toBe(nativeListeners);
         expect(module.retained).toEqual(["first", "escaped"]);
         expect(loader.initialize(() => module.default.loadSetupPlugin()).id).toBe("fixture");
         return module.default;
       });
-      expect(process.listenerCount(event)).toBe(nativeListeners + 1);
+      // Bundled code reuses the public load; installed packages evaluate a captured graph.
+      expect(process.listenerCount(event)).toBe(evaluations);
       await retirePluginCache(cache);
       expect(() => setupEntry.loadSetupPlugin()).toThrow("reloaded or disabled");
-      expect(process.listenerCount(event)).toBe(nativeListeners + 1);
+      expect(process.listenerCount(event)).toBe(evaluations);
     } finally {
       await retirePluginCache(cache);
       process.removeAllListeners(event);

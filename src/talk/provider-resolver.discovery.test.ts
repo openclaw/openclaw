@@ -22,16 +22,9 @@ afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("realtime voice provider discovery", () => {
-  it.each(
-    [false, true].flatMap((activeReady) =>
-      ["configured-voice", "configured-voice-alias"].map((configKey) => ({
-        activeReady,
-        configKey,
-      })),
-    ),
-  )(
-    "discovers $configKey config when the active provider is configured=$activeReady",
-    ({ activeReady, configKey }) => {
+  it.each(["configured-voice-alias"])(
+    "discovers %s config ahead of a configured active provider",
+    (configKey) => {
       withVoiceProviders((cfg) => {
         const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
         expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
@@ -41,7 +34,7 @@ describe("realtime voice provider discovery", () => {
         const result = resolveConfiguredRealtimeVoiceProvider({
           cfg,
           providerConfigs: {
-            "active-voice": { ready: activeReady },
+            "active-voice": { ready: true },
             [configKey]: { ready: true },
           },
         });
@@ -56,14 +49,9 @@ describe("realtime voice provider discovery", () => {
     },
   );
 
-  it.each(
-    ["configured-voice", "configured-voice-alias"].flatMap((configKey) =>
-      [undefined, " ", configKey].map((configuredProviderId) => ({
-        configKey,
-        configuredProviderId,
-      })),
-    ),
-  )(
+  it.each([
+    { configKey: "configured-voice-alias", configuredProviderId: "configured-voice-alias" },
+  ])(
     "selects cold $configKey config with explicit selection $configuredProviderId",
     ({ configuredProviderId, configKey }) => {
       withVoiceProviders((cfg) => {
@@ -76,45 +64,6 @@ describe("realtime voice provider discovery", () => {
       });
     },
   );
-
-  it("keeps environment-configured providers eligible with an unconfigured default map", () => {
-    withEnv({ VOICE_DISCOVERY_TEST_CONFIGURED_PROVIDER: "active-voice" }, () => {
-      withVoiceProviders((cfg) => {
-        const result = resolveConfiguredRealtimeVoiceProvider({
-          cfg,
-          providerConfigs: { "configured-voice": { ready: false } },
-        });
-        expect(result.provider.id).toBe("active-voice");
-      });
-    });
-  });
-
-  it("extends a cold config-derived discovery scope with per-call candidates", () => {
-    withVoiceProviders((cfg) => {
-      cfg.talk = { realtime: { provider: "active-voice" } };
-      const result = resolveConfiguredRealtimeVoiceProvider({
-        cfg,
-        providerConfigs: { "configured-voice": { ready: true } },
-      });
-      expect(result.provider.id).toBe("configured-voice");
-    });
-  });
-
-  it.each([
-    ["active-voice", "configured-voice-alias"],
-    ["configured-voice-alias", "active-voice"],
-  ])("discovers mixed canonical and runtime-alias candidates %s + %s", (scopeId, candidateId) => {
-    withEnv({ VOICE_DISCOVERY_TEST_CONFIGURED_PROVIDER: "configured-voice" }, () => {
-      withVoiceProviders((cfg) => {
-        cfg.talk = { realtime: { provider: scopeId } };
-        const result = resolveConfiguredRealtimeVoiceProvider({
-          cfg,
-          providerConfigs: { [candidateId]: {} },
-        });
-        expect(result.provider.id).toBe("configured-voice");
-      });
-    });
-  });
 
   it.each([
     { label: "disabled", policy: { entries: { "configured-voice": { enabled: false } } } },

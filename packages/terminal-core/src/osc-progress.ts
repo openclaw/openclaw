@@ -3,13 +3,6 @@
 const OSC_PROGRESS_PREFIX = "\u001b]9;4;";
 const OSC_PROGRESS_ST = "\u001b\\";
 
-/** Controller for terminal progress state. */
-export type OscProgressController = {
-  setIndeterminate: (label: string) => void;
-  setPercent: (label: string, percent: number) => void;
-  clear: () => void;
-};
-
 /** Return true when the terminal is known to support OSC progress messages. */
 export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boolean {
   if (!isTty) {
@@ -22,34 +15,7 @@ export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boo
 }
 
 /** Format one OSC progress control sequence. */
-function formatOscProgress(state: number, percent: number): string {
+export function formatOscProgress(state: number, percent: number): string {
   const normalizedPercent = Math.max(0, Math.min(100, Math.round(percent)));
   return `${OSC_PROGRESS_PREFIX}${state};${normalizedPercent}${OSC_PROGRESS_ST}`;
-}
-
-/** Create a progress controller, returning no-op methods on unsupported terminals. */
-export function createOscProgressController(params: {
-  env: NodeJS.ProcessEnv;
-  isTty: boolean;
-  write: (chunk: string) => void;
-}): OscProgressController {
-  if (!supportsOscProgress(params.env, params.isTty)) {
-    return {
-      setIndeterminate: () => {},
-      setPercent: () => {},
-      clear: () => {},
-    };
-  }
-
-  return {
-    setIndeterminate: (_label: string) => {
-      params.write(formatOscProgress(3, 0));
-    },
-    setPercent: (_label: string, percent: number) => {
-      params.write(formatOscProgress(1, percent));
-    },
-    clear: () => {
-      params.write(formatOscProgress(0, 0));
-    },
-  };
 }

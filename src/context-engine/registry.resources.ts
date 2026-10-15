@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
@@ -36,6 +37,7 @@ export function recordContextEngineRegistrationSource(
 }
 
 export class ContextEngineFactoryResources {
+  private cleanupInvocations?: ReturnType<PluginInvocationScope["beginCleanup"]>;
   readonly work = new AsyncWorkScope();
   readonly context = this.work.run(() => AsyncLocalStorage.snapshot());
   readonly cleanupWork = new AsyncWorkScope();
@@ -57,19 +59,26 @@ export class ContextEngineFactoryResources {
   }
 
   run<T>(operation: () => T | Promise<T>): Promise<T> {
-    return this.work.track(() => this.context(() => this.invoke(operation)));
+    return this.work.track(() =>
+      this.context(() => (this.invocations ? this.invocations.run(operation) : operation())),
+    );
   }
 
   runCleanup<T>(operation: () => T): T {
+    this.beginCleanup();
     try {
-      return this.cleanupWork.run(() => this.cleanupContext(() => this.invoke(operation)));
+      return this.cleanupWork.run(() =>
+        this.cleanupContext(() =>
+          this.cleanupInvocations ? this.cleanupInvocations.scope.run(operation) : operation(),
+        ),
+      );
     } finally {
       this.context(() => this.work.beginClose());
     }
   }
 
-  private invoke<T>(operation: () => T): T {
-    return this.invocations ? this.invocations.run(operation) : operation();
+  beginCleanup(): void {
+    this.cleanupInvocations ??= this.invocations?.beginCleanup();
   }
 
   wrap<T>(value: T): T {
@@ -80,6 +89,11 @@ export class ContextEngineFactoryResources {
     this.parentSignal?.removeEventListener("abort", this.abort);
     this.invocations?.release();
     let failure: { error: unknown } | undefined;
+    try {
+      await this.cleanupInvocations?.release();
+    } catch (error) {
+      failure = { error };
+    }
     // An uncovered donor stays held while primary cleanup finishes, even if that cleanup fails.
     for (const claim of this.claims) {
       try {
@@ -115,7 +129,12 @@ function retainContextEngineFactorySource(
     }
     const invocations = primary
       ? primary.createInvocationScope(registry)
-      : new PluginInvocationScope(registry, instances);
+      : new PluginInvocationScope(registry, instances, {
+          // A managed factory owns a logical consumer even on a caller-owned root view.
+          retained:
+            registration !== undefined &&
+            getPluginValueInstance(registration.factory) !== undefined,
+        });
     return new ContextEngineFactoryResources(claims, invocations);
   } catch (error) {
     if (claims.length > 0) {
@@ -134,6 +153,9 @@ export async function disposeContextEngineSources(
   if (sources.length === 0) {
     await dispose();
     return;
+  }
+  for (const source of sources) {
+    source.beginCleanup();
   }
   // Start instance cleanup before retiring the factory lifetime that it may need to stop.
   const cleanup = sources[0]!.cleanupWork.track(() => sources[0]!.runCleanup(dispose));
@@ -247,24 +269,39 @@ export async function resolveContextEngineFactory<T extends { engine: ContextEng
   return ref;
 }
 
+export type ContextEngineFactoryPreparation = {
+  completion: Promise<unknown>;
+  assertCurrent?: () => void;
+};
+
 /** Foreground engine resolution shares the same factory execution and physical resource owner. */
 export async function createContextEngineWithResources<T>(
   registry: PluginRegistry,
   registration: ContextEngineRegistration,
   create: (source: ContextEngineFactoryResources | undefined) => Promise<T>,
+  preparation?: ContextEngineFactoryPreparation,
 ): Promise<T> {
+  const completion = preparation?.completion;
+  const assertCurrent = preparation?.assertCurrent;
   return await runContextEngineFactoryResolution(async (abandon) => {
-    const source = retainContextEngineFactorySource(
-      registry,
-      registration,
-      getPluginRegistryInspectionResources(registry),
-      abandon,
-    );
+    let source: ContextEngineFactoryResources | undefined;
     try {
+      source = retainContextEngineFactorySource(
+        registry,
+        registration,
+        getPluginRegistryInspectionResources(registry),
+        abandon,
+      );
+      if (completion) {
+        await completion;
+        assertCurrent?.();
+      }
       return await (source ? source.run(() => create(source)) : create(undefined));
     } catch (error) {
       abandon(source);
       throw error;
+    } finally {
+      await completion;
     }
   });
 }

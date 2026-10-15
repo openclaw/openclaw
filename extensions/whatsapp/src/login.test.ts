@@ -1,7 +1,10 @@
 // Whatsapp tests cover login plugin behavior.
 import { EventEmitter } from "node:events";
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
+import { loginWeb } from "./login.js";
+import { createWaSocket, type waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
@@ -31,18 +34,7 @@ vi.mock("./auth-store.js", async () => {
   };
 });
 
-import type { waitForWaConnection } from "./session.js";
-let loginWeb: typeof import("./login.js").loginWeb;
-let createWaSocket: typeof import("./session.js").createWaSocket;
-let restoreCredsFromBackupIfNeeded: typeof import("./auth-store.js").restoreCredsFromBackupIfNeeded;
-
 describe("web login", () => {
-  beforeAll(async () => {
-    ({ loginWeb } = await import("./login.js"));
-    ({ createWaSocket } = await import("./session.js"));
-    ({ restoreCredsFromBackupIfNeeded } = await import("./auth-store.js"));
-  });
-
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();

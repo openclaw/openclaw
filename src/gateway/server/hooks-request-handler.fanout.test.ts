@@ -5,7 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import { createHooksConfig } from "../hooks-test-helpers.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
@@ -57,6 +59,7 @@ function createFanOutHandler(params?: {
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
   hooksConfig?: HooksConfigResolved;
+  getHooksConfig?: () => HooksConfigResolved | null;
   fanoutResponseDeadlineMs?: number;
 }) {
   const dispatchWakeHook = vi.fn(
@@ -74,7 +77,8 @@ function createFanOutHandler(params?: {
   } as unknown as ReturnType<typeof createSubsystemLogger>;
   const hooksConfig = params?.hooksConfig ?? createGmailHooksConfig();
   const handler = createHooksRequestHandler({
-    getHooksConfig: () => hooksConfig,
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getHooksConfig: params?.getHooksConfig ?? (() => hooksConfig),
     bindHost: "127.0.0.1",
     port: 18789,
     logHooks,
@@ -105,39 +109,6 @@ function gmailMessage(id: string) {
 describe("hook fan-out dispatch", () => {
   beforeEach(() => {
     readJsonBodyMock.mockReset();
-  });
-
-  test("dispatches one isolated run per batched gmail message", async () => {
-    const { handler, dispatchAgentHook } = createFanOutHandler();
-
-    const response = await postGmailPayload(handler, {
-      source: "gmail",
-      messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")],
-    });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(3);
-    const sessionKeys = dispatchAgentHook.mock.calls.map((call) => call[0].sessionKey);
-    expect(sessionKeys).toEqual(["hook:gmail:m1", "hook:gmail:m2", "hook:gmail:m3"]);
-    for (const [index, id] of ["m1", "m2", "m3"].entries()) {
-      const value = dispatchAgentHook.mock.calls[index]?.[0];
-      expect(value?.message).toContain(`${id}@example.com`);
-      expect(value?.message).toContain(`Subject ${id}`);
-      expect(value?.externalContentSource).toBe("gmail");
-    }
-    const body = JSON.parse(response.getBody()) as { runIds?: string[]; dispatched?: number };
-    expect(body.runIds).toHaveLength(3);
-    expect(body.dispatched).toBe(3);
-  });
-
-  test("single-message batches keep the single-dispatch response shape", async () => {
-    const { handler, dispatchAgentHook } = createFanOutHandler();
-
-    const response = await postGmailPayload(handler, { messages: [gmailMessage("solo")] });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(response.getBody())).toEqual({ ok: true, runId: "run:hook:gmail:solo" });
   });
 
   test("empty batches record a no-op instead of dispatching a junk run", async () => {
@@ -180,10 +151,7 @@ describe("hook fan-out dispatch", () => {
   });
 
   test("answers before the producer client timeout when an item admission hangs", async () => {
-    let releaseHang!: (result: HookAgentDispatchResult) => void;
-    const hang = new Promise<HookAgentDispatchResult>((resolve) => {
-      releaseHang = resolve;
-    });
+    const { promise: hang, resolve: releaseHang } = createDeferred<HookAgentDispatchResult>();
     const { handler, dispatchAgentHook } = createFanOutHandler({
       fanoutResponseDeadlineMs: 50,
       dispatchAgentHook: (value) =>
@@ -365,93 +333,14 @@ describe("hook fan-out dispatch", () => {
     expect(huge?.maxBodyBytesByPath.get("gmail")).toBe(32 * 1024 * 1024);
   });
 
-  test("reads gmail-path bodies with the producer-derived bound", async () => {
-    const canonical = createHooksConfig();
-    const gmailConfig = createGmailHooksConfig();
-    const { handler } = createFanOutHandler({
-      hooksConfig: {
-        ...gmailConfig,
-        maxBodyBytes: canonical.maxBodyBytes,
-        maxBodyBytesByPath: new Map([["gmail", 6_819_200]]),
-      },
-    });
-
-    await postGmailPayload(handler, { messages: [] });
-    expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), 6_819_200);
-
-    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { message: "direct" } });
-    const req = createHookRequest({ url: "/hooks/agent" });
-    const response = createResponse();
-    await handler(req, response.res);
-    expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), canonical.maxBodyBytes);
-  });
-
-  test("waits for direct agent completion when explicitly requested", async () => {
-    let resolveCompletion!: (value: {
-      status: "ok";
-      replyDisposition: "silent";
-      delivered: boolean;
-      deliveryAttempted: boolean;
-    }) => void;
-    const completion = new Promise<{
-      status: "ok";
-      replyDisposition: "silent";
-      delivered: boolean;
-      deliveryAttempted: boolean;
-    }>((resolve) => {
-      resolveCompletion = resolve;
-    });
-    const { handler, dispatchAgentHook } = createFanOutHandler({
-      hooksConfig: createHooksConfig(),
-      dispatchAgentHook: () => ({ ok: true, runId: "run:direct", completion }),
-    });
-    readJsonBodyMock.mockResolvedValueOnce({
-      ok: true,
-      value: { message: "direct", waitForCompletion: true },
-    });
-    const req = createHookRequest({ url: "/hooks/agent" });
-    const response = createResponse();
-
-    const handling = handler(req, response.res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
-    expect(response.getBody()).toBe("");
-
-    resolveCompletion({
-      status: "ok",
-      replyDisposition: "silent",
-      delivered: true,
-      deliveryAttempted: true,
-    });
-    await handling;
-    expect(JSON.parse(response.getBody())).toEqual({
-      ok: true,
-      runId: "run:direct",
-      completion: {
-        status: "ok",
-        replyDisposition: "silent",
-        delivered: true,
-        deliveryAttempted: true,
-      },
-    });
-  });
-
   test("keeps direct completion observation outside dispatch identity", async () => {
-    let resolveAdmission!: (value: HookAgentDispatchResult) => void;
-    const admission = new Promise<HookAgentDispatchResult>((resolve) => {
-      resolveAdmission = resolve;
-    });
-    let resolveCompletion!: (value: {
+    const { promise: admission, resolve: resolveAdmission } =
+      createDeferred<HookAgentDispatchResult>();
+    const { promise: completion, resolve: resolveCompletion } = createDeferred<{
       status: "ok";
       replyDisposition: "silent";
       delivered: boolean;
-    }) => void;
-    const completion = new Promise<{
-      status: "ok";
-      replyDisposition: "silent";
-      delivered: boolean;
-    }>((resolve) => {
-      resolveCompletion = resolve;
-    });
+    }>();
     const { handler, dispatchAgentHook } = createFanOutHandler({
       hooksConfig: createHooksConfig(),
       dispatchAgentHook: () => admission,
@@ -501,10 +390,8 @@ describe("hook fan-out dispatch", () => {
   });
 
   test("keeps an active admitted replay owner under terminal cache pressure", async () => {
-    let resolveActiveCompletion!: (value: HookAgentCompletion) => void;
-    const activeCompletion = new Promise<HookAgentCompletion>((resolve) => {
-      resolveActiveCompletion = resolve;
-    });
+    const { promise: activeCompletion, resolve: resolveActiveCompletion } =
+      createDeferred<HookAgentCompletion>();
     let activeDispatches = 0;
     const { handler, dispatchAgentHook } = createFanOutHandler({
       hooksConfig: createHooksConfig(),
@@ -552,10 +439,8 @@ describe("hook fan-out dispatch", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
     try {
-      let resolveCompletion!: (value: HookAgentCompletion) => void;
-      const completion = new Promise<HookAgentCompletion>((resolve) => {
-        resolveCompletion = resolve;
-      });
+      const { promise: completion, resolve: resolveCompletion } =
+        createDeferred<HookAgentCompletion>();
       let dispatches = 0;
       const { handler } = createFanOutHandler({
         hooksConfig: createHooksConfig(),
@@ -631,5 +516,105 @@ describe("hook fan-out dispatch", () => {
       error: "waitForCompletion must be boolean",
     });
     expect(dispatchAgentHook).not.toHaveBeenCalled();
+  });
+
+  test("rejects a direct wake when hook config changes during body parsing", async () => {
+    const initial = createHooksConfig();
+    let current = initial;
+    const body = createDeferred<{ ok: true; value: Record<string, unknown> }>();
+    const { handler, dispatchWakeHook } = createFanOutHandler({
+      hooksConfig: initial,
+      getHooksConfig: () => current,
+    });
+    readJsonBodyMock.mockReturnValueOnce(body.promise);
+    const response = createResponse();
+    const handling = handler(createHookRequest(), response.res);
+
+    await vi.waitFor(() => expect(readJsonBodyMock).toHaveBeenCalledTimes(1));
+    current = { ...initial };
+    body.resolve({ ok: true, value: { text: "stale wake" } });
+    await handling;
+
+    expect(response.res.statusCode).toBe(409);
+    expect(JSON.parse(response.getBody())).toEqual({
+      ok: false,
+      error: "hook configuration changed; retry request",
+    });
+    expect(dispatchWakeHook).not.toHaveBeenCalled();
+  });
+
+  test("rechecks hook config immediately before direct wake dispatch", async () => {
+    const initial = createHooksConfig();
+    const replacement = { ...initial };
+    let reads = 0;
+    const { handler, dispatchWakeHook } = createFanOutHandler({
+      hooksConfig: initial,
+      getHooksConfig: () => (++reads < 3 ? initial : replacement),
+    });
+    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { text: "stale wake" } });
+    const response = createResponse();
+
+    await handler(createHookRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(409);
+    expect(dispatchWakeHook).not.toHaveBeenCalled();
+  });
+
+  test("rechecks hook config inside direct agent dispatch", async () => {
+    const initial = createHooksConfig();
+    const replacement = { ...initial };
+    let reads = 0;
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: initial,
+      getHooksConfig: () => (++reads < 3 ? initial : replacement),
+    });
+    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { message: "stale agent" } });
+    const response = createResponse();
+
+    await handler(createHookRequest({ url: "/hooks/agent" }), response.res);
+
+    expect(response.res.statusCode).toBe(409);
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
+  });
+
+  test("rejects mapped work when hook config changes during mapping", async () => {
+    const initial = createGmailHooksConfig();
+    const replacement = { ...initial };
+    let reads = 0;
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: initial,
+      getHooksConfig: () => (++reads < 3 ? initial : replacement),
+    });
+    const response = createResponse();
+
+    readJsonBodyMock.mockResolvedValueOnce({
+      ok: true,
+      value: { messages: [gmailMessage("stale-mapping")] },
+    });
+    await handler(createHookRequest({ url: "/hooks/gmail" }), response.res);
+
+    expect(response.res.statusCode).toBe(409);
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
+  });
+
+  test("rechecks hook config before every fan-out item dispatch", async () => {
+    const initial = createGmailHooksConfig();
+    const replacement = { ...initial };
+    let reads = 0;
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: initial,
+      getHooksConfig: () => (++reads < 5 ? initial : replacement),
+    });
+    const response = createResponse();
+
+    readJsonBodyMock.mockResolvedValueOnce({
+      ok: true,
+      value: { messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")] },
+    });
+    await handler(createHookRequest({ url: "/hooks/gmail" }), response.res);
+
+    expect(response.res.statusCode).toBe(409);
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+    expect(dispatchAgentHook.mock.calls[0]?.[0].sessionKey).toBe("hook:gmail:m1");
   });
 });

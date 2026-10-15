@@ -1,8 +1,13 @@
 // Memory Core tests cover manager keyword retrieval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -23,6 +28,60 @@ describe("memory index", () => {
     trackManager,
   } = fixture;
 
+  it("scores a recovered keyword answer outside the top vector candidates", async () => {
+    await fs.rename(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      path.join(fixture.paths.memory, "answer.md"),
+    );
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "answer.md"),
+      "Alpha alpha alpha alpha beta. Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit.",
+    );
+    const manager = await getPersistentManager(createCfg({ minScore: 0.35, vectorEnabled: false }));
+    await manager.sync({ reason: "test" });
+    // Seed the candidate boundary directly; indexing 201 files adds no coverage
+    // of the score completion between keyword and vector retrieval.
+    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const insert = db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, 'memory/noise.md', 'memory', ?, ?, ?, 'mock-embed', ?, ?, 1)",
+    );
+    runSqliteImmediateTransactionSync(db, () => {
+      for (let index = 0; index < 201; index++) {
+        insert.run(
+          `noise-${index}`,
+          index + 1,
+          index + 1,
+          `noise-${index}`,
+          "Alpha annotated tag object hash created v0",
+          encodeMemoryEmbedding([1, 0, 0, 0]),
+        );
+      }
+    });
+    const embeddingBatches = providerFixture.embedBatchCalls;
+    const query = "Alpha: What is the annotated tag object hash created for v0.78.42.0?";
+    const results = await manager.search(query);
+    expect(results[0]?.path).toBe("memory/answer.md");
+    expect(results[0]?.vectorScore).toBeGreaterThan(0.9);
+    expect(results[0]?.textScore).toBeGreaterThan(0.5);
+    expect(providerFixture.embedBatchCalls).toBe(embeddingBatches);
+    const readVectors = memoryCpuWorkerRuntime.runMemoryVectorFallback;
+    const vectorSpy = vi
+      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+      .mockImplementation((...args) =>
+        args[1].candidateIds
+          ? Promise.reject(new Error("candidate score read failed"))
+          : readVectors(...args),
+      );
+    try {
+      const degraded = await manager.search(query);
+      expect(degraded.some((row) => row.path === "memory/noise.md" && row.vectorScore === 1)).toBe(
+        true,
+      );
+    } finally {
+      vectorSpy.mockRestore();
+    }
+  });
+
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
     providerFixture.forceNoProvider = true;
 
@@ -30,10 +89,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -51,6 +114,15 @@ describe("memory index", () => {
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
+    expect(Object.keys(results[0] ?? {}).slice(0, 7)).toEqual([
+      "path",
+      "startLine",
+      "endLine",
+      "score",
+      "textScore",
+      "snippet",
+      "source",
+    ]);
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
@@ -125,8 +197,13 @@ describe("memory index", () => {
   it("keeps the strict threshold for semantic-only hits with active projects", async () => {
     const manager = await getPersistentManager(createCfg({ minScore: 0.35 }));
     expect(manager.status().fts?.available).toBe(true);
+    await fs.writeFile(path.join(fixture.paths.memory, "2026-01-12.md"), "Beta unrelated detail.");
     await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "Alpha current detail.");
-    await fs.writeFile(path.join(fixture.paths.memory, "2000-01-01.md"), "Alpha archive detail.");
+    // Low relevance, not age, must keep this semantic match below the threshold.
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2000-01-01.md"),
+      "Alpha beta beta beta beta archive detail.",
+    );
     await manager.sync({ reason: "test" });
 
     // The fixture embeds the alpha substring, while FTS requires the complete alphabet token.
@@ -140,7 +217,7 @@ describe("memory index", () => {
         expect.arrayContaining([
           expect.objectContaining({
             path: "memory/2000-01-01.md",
-            vectorScore: 1,
+            vectorScore: expect.closeTo(1 / Math.sqrt(17), 5),
             textScore: 0,
           }),
         ]),
@@ -178,10 +255,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -287,10 +368,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -311,7 +396,7 @@ describe("memory index", () => {
     expect(results[0]?.path).toContain("memory/body-match.md");
   });
 
-  it("bounds the merged six-term fallback candidate set", async () => {
+  it("bounds the relaxed keyword candidate set", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
@@ -354,10 +439,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -405,10 +494,14 @@ describe("memory index", () => {
       extraPaths: [staleDir, freshDir],
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -442,10 +535,14 @@ describe("memory index", () => {
       extraPaths,
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -530,10 +627,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -572,10 +673,14 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
-    resetManagerForTest(manager);
+    await resetManagerForTest(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -597,51 +702,45 @@ describe("memory index", () => {
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
-    try {
-      const manager = await getFtsSessionManager({
-        stateDirName: ".state-session-ranking",
-      });
-      if (!manager) {
-        return;
-      }
-
-      const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
-      await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
-      const staleAt = new Date("2020-01-01T00:00:00.000Z");
-      await fs.utimes(memoryPath, staleAt, staleAt);
-
-      const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-ranking",
-        messages: [
-          {
-            role: "user",
-            timestamp: new Date(now - 30_000).toISOString(),
-            content: "What is the current Project Nebula codename?",
-          },
-          {
-            role: "assistant",
-            timestamp: new Date(now).toISOString(),
-            content: "The current Project Nebula codename is ORBIT-10.",
-          },
-        ],
-      });
-
-      await manager.sync({ reason: "test", force: true });
-      const results = await manager.search("current Project Nebula codename ORBIT-10", {
-        minScore: 0,
-        maxResults: 3,
-      });
-
-      expect(results[0]?.source).toBe("sessions");
-      expect(results[0]?.snippet).toContain("ORBIT-10");
-      expect(results[0]?.provenance).toMatchObject({
-        originClass: "untrusted",
-        sessionKind: "interactive",
-      });
-    } finally {
-      fixture.restoreStateDir();
+    const manager = await getFtsSessionManager();
+    if (!manager) {
+      return;
     }
+
+    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+    const staleAt = new Date("2020-01-01T00:00:00.000Z");
+    await fs.utimes(memoryPath, staleAt, staleAt);
+
+    const now = Date.parse("2026-04-07T15:25:04.113Z");
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-ranking",
+      messages: [
+        {
+          role: "user",
+          timestamp: new Date(now - 30_000).toISOString(),
+          content: "What is the current Project Nebula codename?",
+        },
+        {
+          role: "assistant",
+          timestamp: new Date(now).toISOString(),
+          content: "The current Project Nebula codename is ORBIT-10.",
+        },
+      ],
+    });
+
+    await manager.sync({ reason: "test", force: true });
+    const results = await manager.search("current Project Nebula codename ORBIT-10", {
+      minScore: 0,
+      maxResults: 3,
+    });
+
+    expect(results[0]?.source).toBe("sessions");
+    expect(results[0]?.snippet).toContain("ORBIT-10");
+    expect(results[0]?.provenance).toMatchObject({
+      originClass: "untrusted",
+      sessionKind: "interactive",
+    });
   });
 
   it.each([
@@ -677,6 +776,30 @@ describe("memory index", () => {
       expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
     },
   );
+
+  it("recalls an ASCII term embedded in an unspaced Chinese query", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        ftsTokenizer: "trigram",
+        minScore: 0,
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "deploy.md"),
+      "上周我们决定用React部署前端服务",
+    );
+    await fs.writeFile(path.join(fixture.paths.memory, "other.md"), "午饭吃了面条");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("用react部署方案", { maxResults: 5, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/deploy.md"]);
+  });
 
   it("keeps substring-only body ranking within an exact hybrid tier", async () => {
     const manager = await getPersistentManager(

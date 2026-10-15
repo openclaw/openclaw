@@ -9,6 +9,16 @@ const markdown = createDocsMarkdown({ html: false });
 const callouts = new Set(["Note", "Warning", "Tip", "Info", "Check", "Say", "Banner", "Update"]);
 const wrappers = new Set(["AccordionGroup", "Accordion", "details", ...callouts]);
 
+// Reviewed public navigation copy. Only the version varies; the mirror changes
+// this presentation paragraph without rewriting the release story below it.
+export function releaseDocsNavigation(version) {
+  requireVersion(version);
+  return {
+    docs: `AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/${version}.md).`,
+    markdown: `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).`,
+  };
+}
+
 function requireVersion(version) {
   if (
     typeof version !== "string" ||
@@ -188,7 +198,7 @@ function expandLinks(text, source) {
   return expanded;
 }
 
-export function flattenReleaseDocs(sourceText, source) {
+export function flattenReleaseDocs(sourceText, source, { version } = {}) {
   const { data, content } = parseFrontmatter(sourceText);
   if (
     /^---[ \t]*\r?\n/.test(sourceText.replace(/^\uFEFF/, "")) &&
@@ -199,6 +209,16 @@ export function flattenReleaseDocs(sourceText, source) {
     throw new Error(`${source}: unterminated frontmatter`);
   }
   const lines = content.split("\n");
+  if (version !== undefined) {
+    const navigation = releaseDocsNavigation(version);
+    let firstParagraph = lines.findIndex((line) => line.trim());
+    if (/^#\s/.test(lines[firstParagraph] ?? "")) {
+      firstParagraph = lines.findIndex((line, index) => index > firstParagraph && line.trim());
+    }
+    if (lines[firstParagraph] === navigation.docs && !lines[firstParagraph + 1]?.trim()) {
+      lines[firstParagraph] = navigation.markdown;
+    }
+  }
   const codeLines = new Set();
   const tokens = markdown.parse(content, {});
   for (const token of tokens) {
@@ -340,7 +360,9 @@ export function renderReleaseDocsMirror({ rootDir, version, sources }) {
   requireVersion(version);
   const entries = readSources(rootDir, sources);
   const metadata = { version, sources, sourceDigest: releaseDocsSourceDigest(entries) };
-  const body = entries.map(({ source, text }) => flattenReleaseDocs(text, source)).join("\n");
+  const body = entries
+    .map(({ source, text }) => flattenReleaseDocs(text, source, { version }))
+    .join("\n");
   return `<!-- ${releaseDocsMirrorMarker} ${JSON.stringify(metadata)} -->\n\n## ${version}\n\n${body}`;
 }
 

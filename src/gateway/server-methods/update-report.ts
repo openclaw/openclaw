@@ -2,7 +2,7 @@
 import {
   ErrorCodes,
   validateUpdateReportParams,
-  validateUpdateReportResult,
+  type UpdateReportResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -11,11 +11,10 @@ import {
   prepareUpdateFailureReport,
   submitUpdateFailureReport,
   type UpdateFailureReportInput,
-  type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
-import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
-import { refreshLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -55,19 +54,19 @@ function projectReportInput(payload: RestartSentinelPayload): UpdateFailureRepor
       ...(typeof stats.reason === "string" ? { reason: stats.reason } : {}),
       ...(readIdentity(stats.before) ? { before: readIdentity(stats.before) } : {}),
       ...(readIdentity(stats.after) ? { after: readIdentity(stats.after) } : {}),
-      steps: (stats.steps ?? []).map((step) => {
-        const projected: UpdateFailureReportInput["result"]["steps"][number] = {
-          name: step.name,
-          command: "",
-          cwd: "",
-          durationMs: step.durationMs ?? 0,
-          exitCode: step.log?.exitCode ?? null,
-        };
-        if (step.advisory) {
-          projected.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
-        }
-        return projected;
-      }),
+      steps: (stats.steps ?? []).map((step) =>
+        Object.assign(
+          {
+            name: step.name,
+            command: "",
+            cwd: "",
+            durationMs: step.durationMs ?? 0,
+            exitCode: step.log?.exitCode ?? null,
+            failureFacts: step.failureFacts,
+          },
+          step.advisory ? { advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } : {},
+        ),
+      ),
       durationMs: stats.durationMs ?? 0,
       ...(recovery ? { recovery } : {}),
     },
@@ -82,7 +81,8 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
   }
   // Match update.status authority, not a legacy sentinel's timestamp. Only
   // same-run evidence may enrich a ledger row; reads never create a store.
-  const run = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
+  const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+  const run = activeRun ?? lastRun;
   if (!run) {
     return sentinel ? projectReportInput(sentinel) : null;
   }
@@ -100,6 +100,7 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
     (run.target.channel ? `${run.target.channel} channel` : matching?.target);
   const input: UpdateFailureReportInput = {
     attemptId: run.runId,
+    recordedRun: run,
     ...(target ? { target } : {}),
     result: {
       status: "error",
@@ -108,48 +109,13 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
       before: readIdentity(run.before),
       after: readIdentity(run.after),
       durationMs: Math.max(0, (run.finishedAtMs ?? run.updatedAtMs) - run.createdAtMs),
-      steps: run.steps
-        .filter((step) => step.status === "failed")
-        .map((step) => ({
-          name: step.step,
-          command: "",
-          cwd: "",
-          durationMs: Math.max(0, (step.endedAtMs ?? 0) - (step.startedAtMs ?? 0)),
-          exitCode:
-            matching?.result.steps.find((entry) => !entry.advisory && entry.name === step.step)
-              ?.exitCode ?? null,
-        })),
+      steps: matching?.result.steps ?? [],
       // The ledger's rolled-back label is not a verification receipt. Only
       // the same failed attempt's final sentinel can supply rollback facts.
       ...(matching?.result.recovery ? { recovery: matching.result.recovery } : {}),
     },
   };
   return input;
-}
-
-function projectPublicSubmitResult(
-  result: Exclude<UpdateFailureReportSubmitResult, { status: "stale" }>,
-) {
-  if (result.status === "created") {
-    return {
-      status: result.status,
-      url: result.url,
-      ...(result.message ? { message: result.message } : {}),
-    };
-  }
-  if (result.status === "fallback") {
-    return {
-      status: result.status,
-      fallbackUrl: result.fallbackUrl,
-      message: result.message,
-    };
-  }
-  return {
-    status: result.status,
-    message: result.message,
-    ...(result.url ? { url: result.url } : {}),
-    ...(result.fallbackUrl ? { fallbackUrl: result.fallbackUrl } : {}),
-  };
 }
 
 function hasUpdateReportOwnerAuthority(
@@ -178,10 +144,13 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     });
     return;
   }
-  if (!hasUpdateReportOwnerAuthority(client)) {
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  const systemActor = client?.internal?.operatorRoleActor?.kind === "system";
+  const publicationMode = hasUpdateReportOwnerAuthority(client) ? "host" : "browser";
+  if (publicationMode === "browser" && !profileId?.trim()) {
     respond(false, undefined, {
       code: ErrorCodes.FORBIDDEN,
-      message: "Update failure reports require gateway-owner or system administrator authority.",
+      message: "Update failure reports require an identified administrator.",
     });
     return;
   }
@@ -193,7 +162,9 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     hasCurrentClientAuthority() &&
     (!runtimeIdentity ||
       context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) === true) &&
-    hasUpdateReportOwnerAuthority(client);
+    client?.authenticatedUserProfile?.profileId === profileId &&
+    (client?.internal?.operatorRoleActor?.kind === "system") === systemActor &&
+    (publicationMode === "browser" || hasUpdateReportOwnerAuthority(client));
   if (!hasCurrentReportAuthority()) {
     return;
   }
@@ -213,30 +184,31 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     if (!hasCurrentReportAuthority()) {
       return;
     }
-    let result;
+    let result: UpdateReportResult;
     if (params.action === "preview") {
-      if (!hasCurrentReportAuthority()) {
-        return;
-      }
       result = {
-        status: "ready" as const,
+        status: "ready",
         attemptId: prepared.attemptId,
         body: prepared.body,
         previewDigest: prepared.previewDigest,
         title: prepared.title,
       };
     } else {
-      const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
-        hasCurrentAuthority: hasCurrentReportAuthority,
-        validateCurrentAttempt: async () => {
-          const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
-          if (currentInput?.attemptId !== params.attemptId) {
-            return false;
-          }
-          const currentPrepared = await prepareUpdateFailureReport(currentInput);
-          return currentPrepared.previewDigest === prepared.previewDigest;
-        },
-      });
+      // Accepted publication and cleanup settle even when the connection retires during transport.
+      const submitted = await context.trackExecution(() =>
+        submitUpdateFailureReport(prepared, params.previewDigest, {
+          publicationMode,
+          hasCurrentAuthority: hasCurrentReportAuthority,
+          validateCurrentAttempt: async () => {
+            const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
+            if (currentInput?.attemptId !== params.attemptId) {
+              return false;
+            }
+            const currentPrepared = await prepareUpdateFailureReport(currentInput);
+            return currentPrepared.previewDigest === prepared.previewDigest;
+          },
+        }),
+      );
       if (submitted.status === "stale") {
         respond(false, undefined, {
           code: "INVALID_REQUEST",
@@ -244,13 +216,28 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         });
         return;
       }
-      result = projectPublicSubmitResult(submitted);
+      if (submitted.status === "created") {
+        result = {
+          status: submitted.status,
+          url: submitted.url,
+          ...(submitted.message ? { message: submitted.message } : {}),
+        };
+      } else if (submitted.status === "fallback") {
+        result = {
+          status: submitted.status,
+          fallbackUrl: submitted.fallbackUrl,
+          message: submitted.message,
+        };
+      } else {
+        result = {
+          status: submitted.status,
+          message: submitted.message,
+          ...(submitted.url ? { url: submitted.url } : {}),
+          ...(submitted.fallbackUrl ? { fallbackUrl: submitted.fallbackUrl } : {}),
+        };
+      }
     }
-    if (!validateUpdateReportResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update report status is temporarily unavailable",
-      });
+    if (!hasCurrentReportAuthority()) {
       return;
     }
     respond(true, result);

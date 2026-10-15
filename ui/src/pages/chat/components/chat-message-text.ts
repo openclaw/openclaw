@@ -1,161 +1,41 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
-import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { renderMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
+import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
+import {
+  prepareMessageMarkdown,
+  type DuplicateSuffix,
+  type MessageTextOptions,
+} from "./chat-message-text-preparation.ts";
 
-// The new-session preview shares text presentation without loading transcript actions or tools.
-type DuplicateSuffix = {
-  count: number;
-  label: string;
-};
-
-// Bound synchronous parsing so large JSON messages cannot freeze the render loop.
-const MAX_JSON_AUTOPARSE_CHARS = 20_000;
-
-export function detectJson(text: string): { parsed: unknown; text: string } | null {
-  const trimmed = text.trim();
-
-  if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
-    return null;
-  }
-
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      // Parsing is only for the summary; reserialization loses numeric precision and duplicate keys.
-      return { parsed, text: trimmed };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function jsonSummaryLabel(parsed: unknown): string {
-  if (Array.isArray(parsed)) {
-    return t(
-      parsed.length === 1 ? "chat.codeBlock.jsonArrayItem" : "chat.codeBlock.jsonArrayItems",
-      { count: String(parsed.length) },
-    );
-  }
-  if (parsed && typeof parsed === "object") {
-    const keys = Object.keys(parsed);
-    if (keys.length <= 4) {
-      return `{ ${keys.join(", ")} }`;
-    }
-    return t("chat.codeBlock.jsonObjectKeys", { count: String(keys.length) });
-  }
-  return t("chat.codeBlock.jsonBadge");
-}
-
-export function renderMessageJson(
-  result: NonNullable<ReturnType<typeof detectJson>>,
-  open = false,
-) {
-  return html`<details class="chat-json-collapse" ?open=${open}>
-    <summary class="chat-json-summary">
-      <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-      <span class="chat-json-label">${jsonSummaryLabel(result.parsed)}</span>
-    </summary>
-    <pre class="chat-json-content"><code>${result.text}</code></pre>
-  </details>`;
-}
-
-/** Keep internal oversized-history markers out of every user-visible text surface. */
-export function resolveMessageDisplayMarkdown(
-  message: unknown,
-  normalizedMessage: NormalizedMessage,
-): string {
-  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
-  if (metadata?.truncated === true && metadata.reason === "oversized") {
-    return t("chat.messages.tooLargeToDisplay");
-  }
-  const markdown = normalizedMessage.content
-    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
-    .join("\n");
-  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-    ? stripThinkingTags(markdown)
-    : markdown;
-}
-
-// Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
-const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
-
-function shouldCollapseUserMessage(markdown: string): boolean {
-  return (
-    markdown.length > USER_MESSAGE_COLLAPSED_CHAR_LIMIT ||
-    markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
-      USER_MESSAGE_COLLAPSED_LINE_LIMIT
-  );
-}
-
-function userMessageOverflowRef(expanded: boolean) {
-  let resizeObserver: ResizeObserver | null = null;
-  return (element: Element | undefined) => {
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const update = () => {
-      const disclosure = element.parentElement;
-      const toggle = disclosure?.querySelector<HTMLButtonElement>(
-        ":scope > .chat-message-disclosure__toggle",
-      );
-      if (!disclosure || !toggle) {
-        return;
-      }
-      const overflowing = expanded || element.scrollHeight > element.clientHeight + 1;
-      disclosure.classList.toggle("has-overflow", overflowing);
-      toggle.hidden = !overflowing;
-    };
-    // Lit resolves refs while siblings are still committing. Measure after the
-    // toggle exists so wrapped text can reveal its own disclosure control.
-    queueMicrotask(update);
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(update);
-      resizeObserver.observe(element);
-    }
-  };
-}
+registerChatMessageMetadataEnglish();
 
 export function renderMessageMarkdown(
   markdown: string,
   messageKey: string,
-  opts: {
-    role: string;
-    isStreaming: boolean;
-    isUserMessageExpanded?: (messageId: string) => boolean;
-    onToggleUserMessageExpanded?: (messageId: string) => void;
-    assistantMessageDisclosure?: AssistantMessageDisclosure;
-  },
+  opts: MessageTextOptions,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  media?: MarkdownMedia,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
-  const isAssistant = opts.role === "assistant";
-  const recoverFullMessage =
-    isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
-  const recovered = recoverFullMessage && disclosure?.expanded;
-  const text = renderMarkdownText(
-    recovered ? (disclosure.markdown ?? markdown) : markdown,
-    opts.isStreaming,
-    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
+  const { source, parts, recoverFullMessage } = prepareMessageMarkdown(
+    markdown,
+    messageKey,
+    opts,
+    markdownRenderOptions,
     duplicateSuffix,
-    isAssistant && opts.isStreaming ? messageKey : undefined,
   );
+  const content = renderMarkdownMedia({ messageKey, source, parts }, media);
+  const text = html`
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">${content}</div>
+  `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
     return html`
@@ -172,88 +52,48 @@ export function renderMessageMarkdown(
       </div>
     `;
   }
+  return renderMessageDisclosure(markdown, messageKey, opts, text, parts);
+}
+
+function renderMessageDisclosure(
+  source: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  text: ReturnType<typeof html>,
+  parts: readonly string[],
+) {
   if (
-    opts.role !== "user" ||
     !opts.onToggleUserMessageExpanded ||
-    !shouldCollapseUserMessage(markdown)
+    (opts.isForwarded
+      ? opts.isStreaming
+      : opts.role !== "user" || !shouldCollapseUserMessage(source))
   ) {
     return text;
   }
 
-  const disclosureId = `user-message:${messageKey}`;
+  const disclosureId = `${opts.isForwarded ? "forwarded" : "user"}-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
-      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
+    <div
+      class="chat-message-disclosure ${opts.isForwarded ? "chat-message-disclosure--forwarded" : ""} ${expanded ? "is-expanded" : ""}"
+    >
+      <div
+        class="chat-message-disclosure__content"
+        ${guard([...parts, expanded, opts.isForwarded], () =>
+          ref(messageOverflowRef(expanded, Boolean(opts.isForwarded))),
+        )}
+      >
         ${text}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
-        ?hidden=${!expanded}
-        aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
       >
+        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         ${expanded ? icons.chevronUp : icons.chevronDown}
       </button>
     </div>
   `;
-}
-
-export type AssistantMessageDisclosure = {
-  expanded: boolean;
-  markdown?: string;
-  /** Set when automatic full-message retries exhausted; invoking re-enters the loader. */
-  onRetryFullMessage?: () => void;
-};
-
-function renderMarkdownText(
-  markdown: string,
-  isStreaming: boolean,
-  markdownRenderOptions?: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-) {
-  const parts: [string, string] = isStreaming
-    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
-    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  // Separate Lit parts preserve completed code controls and diagrams while the
-  // streaming tail changes; the Markdown splitter still owns container boundaries.
-  const content = parts.map((part) => unsafeHTML(part));
-  return html` <div class="chat-text" dir="${detectTextDirection(markdown)}">${content}</div> `;
-}
-
-function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
-  const template = document.createElement("template");
-  template.innerHTML = rendered;
-  const terminalBlock = template.content.lastElementChild;
-  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
-
-  const badge = document.createElement("span");
-  badge.className = "chat-duplicate-count";
-  badge.setAttribute("aria-label", suffix.label);
-  badge.textContent = `×${suffix.count}`;
-  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-  return template.innerHTML;
-}
-
-function duplicateSuffixTextOwner(block: Element): Element | null {
-  if (/^(?:P|H[1-6])$/u.test(block.tagName)) {
-    return block;
-  }
-  if (!/^(?:BLOCKQUOTE|LI|OL|UL)$/u.test(block.tagName)) {
-    // Fences, details, raw blocks, and table shells own interactive or copied
-    // content. Keep the status marker after the whole terminal block.
-    return null;
-  }
-  const terminalChild = block.lastElementChild;
-  if (!terminalChild) {
-    return block.textContent?.trim() ? block : null;
-  }
-  return duplicateSuffixTextOwner(terminalChild);
 }

@@ -4,11 +4,12 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
+import { presentTranscriptSession } from "./read-live.js";
 import { projectTranscriptSession, projectTranscriptSource } from "./read.js";
 import { assertTranscriptByteCount, assertTranscriptByteLimit } from "./store-read.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "./store.js";
@@ -25,7 +26,7 @@ export async function readTranscriptLibraryStatus(
     config: cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  const registry = getActivePluginRegistry();
+  const registry = getPluginRegistryForContext();
   const providers = new Map<string, ProviderStatus>();
   const installed = new Map(metadata?.index.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const runtime = new Map(registry?.plugins.map((plugin) => [plugin.id, plugin]));
@@ -112,7 +113,7 @@ export async function readTranscriptLibraryStatus(
   for (const capture of selectedCaptures) {
     const entry = await store.readEntry(transcriptSessionSelector(capture.session));
     if (entry) {
-      const projected = projectTranscriptSession(entry, undefined, undefined, captures);
+      const projected = presentTranscriptSession(projectTranscriptSession(entry), captures);
       activeBytes += Buffer.byteLength(JSON.stringify(projected), "utf8");
       assertTranscriptByteCount(activeBytes);
       active.push(projected);
@@ -198,7 +199,7 @@ export async function readTranscriptLibraryStatus(
     configuredSources,
     active,
     latestTranscript: latest
-      ? projectTranscriptSession(latest, undefined, undefined, captures)
+      ? presentTranscriptSession(projectTranscriptSession(latest), captures)
       : null,
     omitted: {
       providers: Math.max(0, allProviders.length - TRANSCRIPTS_PAGE_MAX),

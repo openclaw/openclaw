@@ -10,6 +10,9 @@
     "onStartup": false
   },
   "channels": ["signal"],
+  "channelAccountKeyPolicies": {
+    "signal": { "canonicalAliasesRequireOwnField": "account" }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

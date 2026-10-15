@@ -24,6 +24,8 @@ Supported blocks:
 
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
 
+Component sends, edits, and native command replies wait for callback registration to finish. Consuming a single-use choice finishes removal of its sibling callbacks before another interaction can resolve them. If persistence is unavailable, OpenClaw reports the failure and keeps the in-memory fallback for the current process.
+
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). Unmatched users receive an ephemeral denial.
 
 Component callbacks expire after 30 minutes by default. Set `channels.discord.agentComponents.ttlMs` to change the callback registry lifetime for the default account, or `channels.discord.accounts.<accountId>.agentComponents.ttlMs` per account. The value is milliseconds, must be a positive integer, and is capped at `86400000` (24 hours). Longer TTLs suit review/approval workflows that need buttons to stay usable, but they extend the window in which an old Discord message can still trigger an action. Prefer the shortest TTL that fits, and keep the default when stale callbacks would be surprising.
@@ -124,7 +126,7 @@ OpenClaw uses Discord components v2 for exec approvals and cross-context markers
 
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
-    Discord renders the shared approval buttons used by other chat channels; the native Discord adapter mainly adds approver DM routing and channel fanout. When those buttons are present, they are the primary approval UX; OpenClaw should only include a manual `/approve` command when the tool result says chat approvals are unavailable or manual approval is the only path. If the Discord native approval runtime is not active, OpenClaw keeps the local deterministic `/approve <id> <decision>` prompt visible. If the runtime is active but a native card cannot be delivered to any target, OpenClaw sends a same-chat fallback notice with the exact `/approve` command from the pending approval.
+    Discord renders the shared approval buttons used by other chat channels; the native Discord adapter mainly adds approver DM routing and channel fanout. When those buttons are present, they are the primary approval UX; OpenClaw should only include a manual `/approve` command when the tool result says chat approvals are unavailable or manual approval is the only path. If the Discord native approval runtime is not active, OpenClaw keeps the local `/approve <id> <decision>` prompt visible. If the runtime is active but a native card cannot be delivered to any target, OpenClaw sends a same-chat fallback notice with the exact `/approve` command from the pending approval.
 
     Gateway auth and approval resolution follow the shared Gateway client contract (`plugin:` IDs resolve through `plugin.approval.resolve`; other IDs through `exec.approval.resolve`). Approvals expire after 30 minutes by default.
 

@@ -1,9 +1,9 @@
 // Agents directory tests cover agent-scoped skill directory discovery.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -12,17 +12,20 @@ import {
 } from "../test-support/home-env.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: () => [],
-}));
-
 const tempDirs = createTempDirTracker();
 
-function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
-  return buildSkillSnapshot(workspaceDir, {
-    managedSkillsDir: managedDir,
-    bundledSkillsDir: bundledDir,
-  }).prompt;
+async function buildSkillsPrompt(
+  workspaceDir: string,
+  managedDir: string,
+  bundledDir: string,
+): Promise<string> {
+  return (
+    await buildSkillSnapshot(workspaceDir, {
+      config: { plugins: { enabled: false } },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    })
+  ).prompt;
 }
 
 async function createWorkspaceSkillDirs() {
@@ -64,7 +67,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     });
 
     // project .agents/skills/ wins over managed
-    const prompt1 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    const prompt1 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt1).toContain("Project agents version");
     expect(prompt1).not.toContain("Managed version");
 
@@ -74,9 +77,9 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Workspace version",
     });
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await refreshSkillsDiscovery({ workspaceDir });
 
-    const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    const prompt2 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Workspace version");
     expect(prompt2).not.toContain("Project agents version");
   });
@@ -96,7 +99,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     });
 
     // personal wins over managed
-    const prompt1 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    const prompt1 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt1).toContain("Personal agents version");
     expect(prompt1).not.toContain("Managed version");
 
@@ -106,9 +109,9 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Project agents version",
     });
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await refreshSkillsDiscovery({ workspaceDir });
 
-    const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    const prompt2 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Project agents version");
     expect(prompt2).not.toContain("Personal agents version");
   });
@@ -122,10 +125,14 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     });
 
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, ".openclaw"));
-    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).toContain("personal-only");
+    expect(await buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).toContain(
+      "personal-only",
+    );
 
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, "scratch-state"));
-    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).not.toContain("personal-only");
+    expect(await buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).not.toContain(
+      "personal-only",
+    );
   });
 
   it("loads unique skills from all .agents/skills/ sources alongside others", async () => {
@@ -152,7 +159,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       description: "Workspace only skill",
     });
 
-    const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    const prompt = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt).toContain("managed-only");
     expect(prompt).toContain("personal-only");
     expect(prompt).toContain("project-only");

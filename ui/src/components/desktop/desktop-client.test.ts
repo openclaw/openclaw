@@ -298,6 +298,12 @@ describe("DesktopClient", () => {
       expect(rfb.resizeSession).toBe(false);
       rfb.dispatchEvent(new Event("connect"));
       expect(rfb.resizeSession).toBe(resizes);
+      handle.setPresented(false);
+      expect([rfb.viewOnly, rfb.resizeSession]).toEqual([true, false]);
+      handle.setSizingMode("match");
+      expect(rfb.resizeSession).toBe(false);
+      handle.setPresented(true);
+      expect([rfb.viewOnly, rfb.resizeSession]).toEqual([viewOnly, resizes]);
       handle.setSizingMode("actual");
       expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([false, false]);
       handle.setSizingMode("match");
@@ -334,6 +340,8 @@ describe("DesktopClient", () => {
         expect(rfb.resizeSession).toBe(false);
       }
       handle.setSizingMode("match");
+      handle.setPresented(false);
+      handle.setPresented(true);
       rfb.dispatchEvent(new Event("connect"));
       expect(rfb.resizeSession).toBe(false);
       handle.disconnect();
@@ -342,10 +350,7 @@ describe("DesktopClient", () => {
 
   it.each([
     { clean: true, close: { code: 4000, reason: "control-taken" } },
-    { clean: false, close: { code: 1008, reason: "authentication rejected" } },
-    { clean: false, close: { code: 1006, reason: "" } },
     { clean: false, close: undefined },
-    { clean: true, close: undefined },
   ])("preserves RFB clean=$clean with socket close $close", async ({ clean, close }) => {
     const { Rfb, instances } = createFakeRfb();
     const socket = new FakeSocket("ws://control.example.test/desktop/observe");

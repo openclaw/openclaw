@@ -1,8 +1,14 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import { stripEnvelope } from "../shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
-import { stripEnvelope } from "./chat-sanitize.js";
+import {
+  stripAssistantMediaDirectivesForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
+} from "./chat-display-projection.helpers.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
@@ -54,9 +60,20 @@ export function projectSessionDisplayMessage(
   if (role !== "user" && role !== "assistant") {
     return null;
   }
+  const projectedEntry =
+    role === "assistant" && options.view !== "model-context"
+      ? projectAssistantDisplayContent({ ...entry, role })
+      : entry;
   const extracted =
-    role === "assistant" ? extractAssistantPhaseText(entry) : extractUserText(entry);
-  let text = extracted?.trim();
+    role === "assistant" ? extractAssistantPhaseText(projectedEntry) : extractUserText(entry);
+  let text = extracted;
+  if (text && role === "assistant" && options.view !== "model-context") {
+    text = stripAssistantMediaDirectivesForDisplay(
+      text,
+      takeAssistantManagedMediaUrlsForDisplay(projectedEntry, role).urls,
+    );
+  }
+  text = text?.trim();
   if (!text || (role === "assistant" && isSuppressedControlReplyText(text))) {
     return null;
   }
@@ -78,4 +95,23 @@ export function projectSessionDisplayMessage(
     role,
     text: text.length <= limit ? text : `${truncateUtf16Safe(text, limit - 3)}...`,
   };
+}
+
+export function buildSessionPreviewItems(
+  messages: readonly unknown[],
+  maxItems: number,
+  maxChars: number,
+  view: "display" | "model-context" = "display",
+): SessionPreviewItem[] {
+  const items: SessionPreviewItem[] = [];
+  // Rejected rows do not consume the limit; older text cannot affect a full preview.
+  for (let index = messages.length - 1; index >= 0 && items.length < maxItems; index -= 1) {
+    const projected = projectSessionDisplayMessage(messages[index], { maxChars, view });
+    if (!projected) {
+      continue;
+    }
+    items.push(projected);
+  }
+
+  return items.toReversed();
 }

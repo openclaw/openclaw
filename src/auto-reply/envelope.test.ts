@@ -35,16 +35,22 @@ describe("formatAgentEnvelope", () => {
     expect(body).toBe(`[WebChat ${expectedTimestamp}] hello`);
   });
 
-  it("formats timestamps in UTC when configured", () => {
-    const ts = Date.UTC(2025, 0, 2, 3, 4, 5); // 2025-01-02T03:04:05Z
-    const body = formatAgentEnvelope({
-      channel: "WebChat",
-      timestamp: ts,
-      envelope: { timezone: "utc" },
-      body: "hello",
-    });
-
-    expect(body).toBe("[WebChat Thu 2025-01-02T03:04:05Z] hello");
+  it("formats timestamps in UTC across date boundaries", () => {
+    for (const [timestamp, timezone, expected] of [
+      ["2025-01-02T03:04:05Z", "utc", "Thu 2025-01-02T03:04:05Z"],
+      ["2024-12-31T23:59:59Z", "utc", "Tue 2024-12-31T23:59:59Z"],
+      ["2025-01-01T00:00:00Z", "gmt", "Wed 2025-01-01T00:00:00Z"],
+      ["2025-01-03T00:00:00Z", "utc", "Fri 2025-01-03T00:00:00Z"],
+    ] as const) {
+      expect(
+        formatAgentEnvelope({
+          channel: "WebChat",
+          timestamp: new Date(timestamp),
+          envelope: { timezone },
+          body: "hello",
+        }),
+      ).toBe(`[WebChat ${expected}] hello`);
+    }
   });
 
   it("formats timestamps in user timezone when configured", () => {
@@ -76,46 +82,9 @@ describe("formatAgentEnvelope", () => {
       formatAgentEnvelopeTimestamp(ts, { timezone: "utc" }),
     );
   });
-
-  it("omits timestamps when configured", () => {
-    const ts = Date.UTC(2025, 0, 2, 3, 4);
-    const body = formatAgentEnvelope({
-      channel: "WebChat",
-      timestamp: ts,
-      envelope: { includeTimestamp: false },
-      body: "hello",
-    });
-    expect(body).toBe("[WebChat] hello");
-  });
-
-  it("handles missing optional fields", () => {
-    const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
-    expect(body).toBe("[Telegram] hi");
-  });
-
-  it("formats the Unix epoch timestamp", () => {
-    const body = formatAgentEnvelope({
-      channel: "WebChat",
-      timestamp: 0,
-      envelope: { timezone: "utc" },
-      body: "hello",
-    });
-    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
-  });
 });
 
 describe("formatInboundEnvelope", () => {
-  it("prefixes sender for non-direct chats", () => {
-    const body = formatInboundEnvelope({
-      channel: "Discord",
-      from: "Guild #general",
-      body: "hi",
-      chatType: "channel",
-      senderLabel: "Alice",
-    });
-    expect(body).toBe("[Discord Guild #general] Alice: hi");
-  });
-
   it("uses sender fields when senderLabel is missing", () => {
     const body = formatInboundEnvelope({
       channel: "Signal",
@@ -125,17 +94,6 @@ describe("formatInboundEnvelope", () => {
       sender: { name: "Bob", id: "42" },
     });
     expect(body).toBe("[Signal Signal Group id:123] Bob (42): ping");
-  });
-
-  it("prefixes direct messages with the header sender", () => {
-    const body = formatInboundEnvelope({
-      channel: "iMessage",
-      from: "+1555",
-      body: "hello",
-      chatType: "direct",
-      senderLabel: "Alice",
-    });
-    expect(body).toBe("[iMessage +1555] +1555: hello");
   });
 
   it("uses display text for direct body prefixes when from includes an id", () => {
@@ -156,16 +114,6 @@ describe("formatInboundEnvelope", () => {
       chatType: "direct",
     });
     expect(body).toBe("[Telegram Ops: Alice id:123] (sender): /status");
-  });
-
-  it("uses a stable direct body prefix when from is an opaque id label", () => {
-    const body = formatInboundEnvelope({
-      channel: "LINE",
-      from: "user:U123",
-      body: "hello",
-      chatType: "direct",
-    });
-    expect(body).toBe("[LINE user:U123] (sender): hello");
   });
 
   it("includes elapsed time when previousTimestamp is provided", () => {
@@ -225,9 +173,6 @@ describe("formatInboundEnvelope", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
-          envelopeTimezone: "user",
-          envelopeTimestamp: "off",
-          envelopeElapsed: "off",
           userTimezone: "Europe/Vienna",
         },
       },

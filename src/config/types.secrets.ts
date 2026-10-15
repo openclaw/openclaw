@@ -1,31 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Defines secret reference and resolution configuration types.
-
-/** Supported secret reference backends in config. */
-export type SecretRefSource = "env" | "file" | "exec" | "store"; // pragma: allowlist secret
-
-/**
- * Stable identifier for a secret in a configured source.
- * Examples:
- * - env source: provider "default", id "OPENAI_API_KEY"
- * - file source: provider "mounted-json", id "/providers/openai/apiKey"
- * - exec source: provider "vault", id "openai/api-key"
- * - store source: provider "default", id "OPENAI_API_KEY"
- */
-export type SecretRef = {
-  source: SecretRefSource;
-  provider: string;
-  id: string;
-};
-
-/** Secret-bearing config input: either a literal string or a structured SecretRef. */
-export type SecretInput = string | SecretRef;
-/** Provider alias used when a SecretRef omits a source-specific provider. */
-export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
-/** Strict env-var id shape accepted for env-backed SecretRefs. */
-export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+import type { z } from "zod";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  ENV_SECRET_REF_ID_RE,
+  isSecretRef,
+  secretRefKey,
+  type SecretRef,
+  type SecretRefSource,
+} from "../secrets/ref-contract.js";
+import type { SecretProviderSchema, SecretsConfigSchema } from "./zod-schema.core.js";
+export {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  ENV_SECRET_REF_ID_RE,
+  isSecretRef,
+  isValidEnvSecretRefId,
+  type SecretInput,
+  type SecretRef,
+  type SecretRefSource,
+} from "../secrets/ref-contract.js";
 /** Legacy env SecretRef marker retained for config migration/read compatibility. */
 export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 /** Older env SecretRef marker retained for migration/read compatibility. */
@@ -39,43 +33,9 @@ export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
   | { status: "configured_unavailable"; value: undefined; ref: SecretRef }
   | { status: "missing"; value: undefined; ref: null };
-type SecretDefaults = {
-  /** Default provider alias for env SecretRefs. */
-  env?: string;
-  /** Default provider alias for file SecretRefs. */
-  file?: string;
-  /** Default provider alias for exec SecretRefs. */
-  exec?: string;
-  /** Default provider alias for shared-store SecretRefs. */
-  store?: string;
-};
+type SecretDefaults = SecretsConfig["defaults"];
 
-/** Return whether an env SecretRef id is a supported uppercase environment variable name. */
-export function isValidEnvSecretRefId(value: string): boolean {
-  return ENV_SECRET_REF_ID_RE.test(value);
-}
-
-/** Narrow a value to the canonical SecretRef object shape. */
-export function isSecretRef(value: unknown): value is SecretRef {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (Object.keys(value).length !== 3) {
-    return false;
-  }
-  return (
-    (value.source === "env" ||
-      value.source === "file" ||
-      value.source === "exec" ||
-      value.source === "store") &&
-    typeof value.provider === "string" &&
-    value.provider.trim().length > 0 &&
-    typeof value.id === "string" &&
-    value.id.trim().length > 0
-  );
-}
-
-function isLegacySecretRefWithoutProvider(
+export function isLegacySecretRefWithoutProvider(
   value: unknown,
 ): value is { source: SecretRefSource; id: string } {
   if (!isRecord(value)) {
@@ -89,6 +49,13 @@ function isLegacySecretRefWithoutProvider(
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
+  );
+}
+
+export function hasLegacySecretRefExtraFields(value: unknown): boolean {
+  return (
+    isLegacySecretRefWithoutProvider(value) &&
+    Object.keys(value).some((key) => key !== "source" && key !== "provider" && key !== "id")
   );
 }
 
@@ -110,28 +77,6 @@ export function parseEnvTemplateSecretRef(
     provider: provider.trim() || DEFAULT_SECRET_PROVIDER_ALIAS,
     id: expectDefined(match[1], "types.secrets regex capture 1"),
   };
-}
-
-/** Collect env ids from supported SecretRef shapes anywhere in a config tree. */
-export function collectEnvSecretRefIds(value: unknown): Set<string> {
-  const ids = new Set<string>();
-  const seen = new WeakSet<object>();
-  const visit = (candidate: unknown): void => {
-    const ref = coerceSecretRef(candidate);
-    if (ref?.source === "env" && isValidEnvSecretRefId(ref.id)) {
-      ids.add(ref.id);
-      return;
-    }
-    if (typeof candidate !== "object" || candidate === null || seen.has(candidate)) {
-      return;
-    }
-    seen.add(candidate);
-    for (const child of Array.isArray(candidate) ? candidate : Object.values(candidate)) {
-      visit(child);
-    }
-  };
-  visit(value);
-  return ids;
 }
 
 /** Detect retired env SecretRef marker strings for migration and explicit rejection. */
@@ -157,12 +102,7 @@ export function parseLegacySecretRefEnvMarker(
   const trimmed = value.trim();
   const prefix = trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX)
     ? LEGACY_SECRETREF_ENV_MARKER_PREFIX
-    : trimmed.startsWith(LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX)
-      ? LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX
-      : undefined;
-  if (!prefix) {
-    return null;
-  }
+    : LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX;
   const id = trimmed.slice(prefix.length);
   if (!ENV_SECRET_REF_ID_RE.test(id)) {
     return null;
@@ -174,12 +114,13 @@ export function parseLegacySecretRefEnvMarker(
   };
 }
 
-/** Coerce canonical and env-shorthand secret inputs into a SecretRef.
- * Retired string markers are parsed only by doctor migration above. */
+/** Parse current structured refs and supported env shorthand without legacy normalization. */
+export function parseSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
+  return isSecretRef(value) ? value : parseEnvTemplateSecretRef(value, defaults?.env);
+}
+
+/** Public SDK input adapter; persisted config and state are normalized by Doctor. */
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
-  if (isSecretRef(value)) {
-    return value;
-  }
   if (isLegacySecretRefWithoutProvider(value)) {
     const provider = defaults?.[value.source] ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     return {
@@ -188,11 +129,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
       id: value.id,
     };
   }
-  const envTemplate = parseEnvTemplateSecretRef(value, defaults?.env);
-  if (envTemplate) {
-    return envTemplate;
-  }
-  return null;
+  return parseSecretRef(value, defaults);
 }
 
 /** Return whether a value contains either a literal secret string or resolvable SecretRef shape. */
@@ -208,10 +145,6 @@ export function normalizeSecretInputString(value: unknown): string | undefined {
   return normalizeOptionalString(value);
 }
 
-function formatSecretRefLabel(ref: SecretRef): string {
-  return `${ref.source}:${ref.provider}:${ref.id}`;
-}
-
 /** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */
 export class UnresolvedSecretInputError extends Error {
   readonly path: string;
@@ -219,7 +152,7 @@ export class UnresolvedSecretInputError extends Error {
 
   constructor(params: { path: string; ref: SecretRef }) {
     super(
-      `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+      `${params.path}: unresolved SecretRef "${secretRefKey(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
     );
     this.name = "UnresolvedSecretInputError";
     this.path = params.path;
@@ -232,26 +165,15 @@ export function isUnresolvedSecretInputError(value: unknown): value is Unresolve
   return value instanceof UnresolvedSecretInputError;
 }
 
-function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef }): Error {
-  return new UnresolvedSecretInputError(params);
-}
-
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */
-export function assertSecretInputResolved(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): void {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    refValue: params.refValue,
-    defaults: params.defaults,
-  });
+export function assertSecretInputResolved(
+  params: Omit<Parameters<typeof resolveSecretInputString>[0], "mode">,
+): void {
+  const { ref } = resolveSecretInputRef(params);
   if (!ref) {
     return;
   }
-  throw createUnresolvedSecretInputError({ path: params.path, ref });
+  throw new UnresolvedSecretInputError({ path: params.path, ref });
 }
 
 /** Resolve a secret field to either a literal value, a configured-unavailable ref, or missing. */
@@ -262,11 +184,7 @@ export function resolveSecretInputString(params: {
   path: string;
   mode?: SecretInputStringResolutionMode;
 }): SecretInputStringResolution {
-  const { explicitRef, ref } = resolveSecretInputRef({
-    value: params.value,
-    refValue: params.refValue,
-    defaults: params.defaults,
-  });
+  const { explicitRef, ref } = resolveSecretInputRef(params);
   const normalized = normalizeSecretInputString(params.value);
   if (normalized && !explicitRef) {
     return {
@@ -283,7 +201,7 @@ export function resolveSecretInputString(params: {
     };
   }
   if ((params.mode ?? "strict") === "strict") {
-    throw createUnresolvedSecretInputError({ path: params.path, ref });
+    throw new UnresolvedSecretInputError({ path: params.path, ref });
   }
   return {
     status: "configured_unavailable",
@@ -293,20 +211,13 @@ export function resolveSecretInputString(params: {
 }
 
 /** Return a strict literal secret value, throwing if the field still points at a SecretRef. */
-export function normalizeResolvedSecretInputString(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): string | undefined {
-  const resolved = resolveSecretInputString({
+export function normalizeResolvedSecretInputString(
+  params: Parameters<typeof assertSecretInputResolved>[0],
+): string | undefined {
+  return resolveSecretInputString({
     ...params,
     mode: "strict",
-  });
-  if (resolved.status === "available") {
-    return resolved.value;
-  }
-  return undefined;
+  }).value;
 }
 
 /** Resolve explicit `refValue` before inline secret references embedded in `value`. */
@@ -329,68 +240,17 @@ export function resolveSecretInputRef(params: {
   };
 }
 
-export type EnvSecretProviderConfig = {
-  source: "env";
-  /** Optional env var allowlist (exact names). */
-  allowlist?: string[];
-};
+export type SecretProviderConfig = z.input<typeof SecretProviderSchema>;
 
-export type FileSecretProviderMode = "singleValue" | "json"; // pragma: allowlist secret
+export type FileSecretProviderConfig = Extract<SecretProviderConfig, { source: "file" }>;
 
-export type FileSecretProviderConfig = {
-  source: "file";
-  path: string;
-  mode?: FileSecretProviderMode;
-  timeoutMs?: number;
-  maxBytes?: number;
-};
+export type ExecSecretProviderConfig = Extract<SecretProviderConfig, { source: "exec" }>;
 
-export type ManualExecSecretProviderConfig = {
-  source: "exec";
-  command: string;
-  args?: string[];
-  timeoutMs?: number;
-  noOutputTimeoutMs?: number;
-  maxOutputBytes?: number;
-  jsonOnly?: boolean;
-  env?: Record<string, string>;
-  passEnv?: string[];
-  trustedDirs?: string[];
-};
+export type ManualExecSecretProviderConfig = Extract<ExecSecretProviderConfig, { command: string }>;
 
-export type PluginIntegrationSecretProviderConfig = {
-  source: "exec";
-  pluginIntegration: {
-    pluginId: string;
-    integrationId: string;
-  };
-};
+export type PluginIntegrationSecretProviderConfig = Exclude<
+  ExecSecretProviderConfig,
+  ManualExecSecretProviderConfig
+>;
 
-export type ExecSecretProviderConfig =
-  | ManualExecSecretProviderConfig
-  | PluginIntegrationSecretProviderConfig;
-
-export type StoreSecretProviderConfig = {
-  source: "store";
-};
-
-export type SecretProviderConfig =
-  | EnvSecretProviderConfig
-  | FileSecretProviderConfig
-  | ExecSecretProviderConfig
-  | StoreSecretProviderConfig;
-
-export type SecretsConfig = {
-  egressProxy?: {
-    enabled?: boolean;
-    allowedHosts?: string[];
-    bypassHosts?: string[];
-  };
-  providers?: Record<string, SecretProviderConfig>;
-  defaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-    store?: string;
-  };
-};
+export type SecretsConfig = NonNullable<z.input<typeof SecretsConfigSchema>>;

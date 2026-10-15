@@ -11,6 +11,9 @@ const POSIX_WORKER_ENV_KEYS = new Set([
   "LANG",
   "LANGUAGE",
   "TZ",
+  "DISPLAY",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "XDG_RUNTIME_DIR",
   "NODE_EXTRA_CA_CERTS",
   "NODE_USE_SYSTEM_CA",
   "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
@@ -66,6 +69,9 @@ export function snapshotNodeWorkerEnv(
     snapshot.HOME = homeDir;
     if (windows) {
       snapshot.USERPROFILE = homeDir;
+    }
+    if (process.platform === "linux") {
+      snapshot.PATH = path.join(homeDir, ".local", "bin") + path.delimiter + (snapshot.PATH ?? "");
     }
   }
   const hostCacheFenced =

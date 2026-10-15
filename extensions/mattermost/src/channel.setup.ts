@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "./channel-api.js";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   describeMattermostAccount,
   mattermostConfigAdapter,

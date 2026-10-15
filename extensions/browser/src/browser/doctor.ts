@@ -1,17 +1,10 @@
-/**
- * Browser doctor report builder.
- *
- * Turns BrowserStatus into profile-aware diagnostic checks and fix hints for
- * CLI, tool, and HTTP doctor responses.
- */
 import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
 import { formatBrowserGraphicsSummary } from "./chrome.graphics.js";
 import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
 
-/** One browser doctor check result. */
-export type BrowserDoctorCheck = {
+type BrowserDoctorCheck = {
   id: string;
   label: string;
   status: BrowserDoctorCheckStatus;
@@ -19,7 +12,6 @@ export type BrowserDoctorCheck = {
   fixHint?: string;
 };
 
-/** Browser doctor report returned by browser-control clients. */
 export type BrowserDoctorReport = {
   ok: boolean;
   profile: string;
@@ -42,7 +34,6 @@ function isChromeExtensionVersion(value: unknown): value is string {
   );
 }
 
-/** Build a browser doctor report from a status response and environment facts. */
 export function buildBrowserDoctorReport(params: {
   status: BrowserStatus;
   extensionVersion?: string;
@@ -152,12 +143,12 @@ export function buildBrowserDoctorReport(params: {
     const uid = params.uid ?? process.getuid?.();
     const missingDisplay =
       platform === "linux" && !status.headless && !env.DISPLAY && !env.WAYLAND_DISPLAY;
-    if (status.headlessSource === "linux-display-fallback") {
+    if (status.headless && status.headlessSource === "default") {
       checks.push({
         id: "headless-mode",
         label: "Headless mode",
         status: "pass",
-        summary: "Linux no-display fallback selected headless mode",
+        summary: "Managed browsers use headless mode by default",
       });
     }
     if (missingDisplay) {

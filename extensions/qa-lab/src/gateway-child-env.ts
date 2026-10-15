@@ -1,7 +1,8 @@
-// Qa Lab plugin module owns gateway child runtime environment behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SUPERVISOR_HINT_ENV_VARS } from "openclaw/plugin-sdk/process-runtime";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import type { QaProviderMode } from "./model-selection.js";
 import {
@@ -15,12 +16,20 @@ import {
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
 } from "./providers/live-frontier/auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
+
+const OPENCLAW_QA_CODEX_API_KEY_HANDOFF = "OPENCLAW_QA_CODEX_API_KEY_HANDOFF";
 
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
+  // QA owns this child; parent service and test-runner markers describe a different process.
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "VITEST",
+  "VITEST_POOL_ID",
+  "VITEST_WORKER_ID",
   "BASH_ENV",
   "BASHOPTS",
   "ENV",
+  OPENCLAW_QA_CODEX_API_KEY_HANDOFF,
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL",
@@ -40,15 +49,6 @@ function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       delete env[envKey];
     }
   }
-  return env;
-}
-
-function scrubQaGatewayChildTestRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  // The Gateway is a product child, not a nested Vitest worker. Leaking runner
-  // markers makes the dist launcher select test-only startup behavior.
-  delete env.VITEST;
-  delete env.VITEST_POOL_ID;
-  delete env.VITEST_WORKER_ID;
   if (env.NODE_ENV === "test") {
     delete env.NODE_ENV;
   }
@@ -83,7 +83,7 @@ export function buildQaRuntimeEnv(params: {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOME: forwardedHostHome ?? params.homeDir,
-    ...(provider?.appliesLiveEnvAliases
+    ...(provider?.kind === "live"
       ? resolveQaLiveCliAuthEnv(baseEnv, {
           forwardHostHomeForClaudeCli: params.forwardHostHomeForClaudeCli,
           claudeCliAuthMode: params.claudeCliAuthMode,
@@ -101,7 +101,6 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
-    OPENCLAW_QA_PARENT_PID: String(process.pid),
     OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
     ...(params.stagedBundledPluginsRoot
       ? { OPENCLAW_QA_STAGED_RUNTIME_ROOT: params.stagedBundledPluginsRoot }
@@ -122,7 +121,24 @@ export function buildQaRuntimeEnv(params: {
   // Test-runner skip flags are parent controls; each QA child declares its own runtime needs.
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
+  delete normalizedEnv.OPENCLAW_SKIP_CRON;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  const codexApiKeyHandoff =
+    params.providerMode === "live-frontier"
+      ? normalizedEnv[OPENCLAW_QA_CODEX_API_KEY_HANDOFF]?.trim()
+      : undefined;
+  if (codexApiKeyHandoff && !normalizedEnv.CODEX_API_KEY?.trim()) {
+    normalizedEnv.CODEX_API_KEY = codexApiKeyHandoff;
+  }
+  // Child scratch and default compiler caches share the Gateway's joined cleanup lifetime.
+  normalizedEnv.TMPDIR = params.tempRoot;
+  normalizedEnv.TMP = params.tempRoot;
+  normalizedEnv.TEMP = params.tempRoot;
+  // Path isolation alone still lets CLI bootstrap discover the operator's service.
+  normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
+    .update(params.tempRoot)
+    .digest("hex")
+    .slice(0, 24)}`;
   if (params.developmentSourceRoot === null) {
     delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
   } else {
@@ -132,11 +148,12 @@ export function buildQaRuntimeEnv(params: {
   // as the QA CLI; caller patches cannot disable either half of that contract.
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   normalizedEnv.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+  normalizedEnv.OPENCLAW_GATEWAY_HOST_LIFELINE = "stdin";
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+  return scrubQaGatewayChildEnv(normalizedEnv);
 }
 
 export async function stageQaCodexMockModelCatalog(params: {
@@ -169,6 +186,7 @@ export async function stageQaCodexMockModelCatalog(params: {
 
 export function buildQaForcedRuntimeEnvPatch(params: {
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
   codexModelCatalogPath?: string;
@@ -179,7 +197,9 @@ export function buildQaForcedRuntimeEnvPatch(params: {
   }
   const patch: NodeJS.ProcessEnv = {
     OPENCLAW_BUILD_PRIVATE_QA: "1",
-    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+    ...(params.runtimeSelection === "configured"
+      ? {}
+      : { OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime }),
   };
   if (params.forcedRuntime !== "codex") {
     return patch;

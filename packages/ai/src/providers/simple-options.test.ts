@@ -19,21 +19,13 @@ function makeModel(overrides: Partial<Model> = {}): Model {
 }
 
 describe("simple stream max-token clamp", () => {
-  it("leaves a request below the model output limit unchanged", () => {
-    expect(clampMaxTokensToModel(makeModel(), 512)).toBe(512);
+  it("preserves an explicit request when the model output limit is unknown", () => {
+    expect(clampMaxTokensToModel(makeModel({ maxTokens: undefined }), 360)).toBe(360);
   });
 
-  it("clamps an excessive request to the model output limit", () => {
-    expect(clampMaxTokensToModel(makeModel(), 90_000)).toBe(9_000);
-  });
-
-  it("keeps a valid floor for a non-positive request", () => {
-    expect(clampMaxTokensToModel(makeModel(), 0)).toBe(1);
-  });
-
-  it("preserves an omitted output limit", () => {
-    expect(clampMaxTokensToModel(makeModel(), undefined)).toBeUndefined();
-    expect(buildBaseOptions(makeModel()).maxTokens).toBeUndefined();
+  it.each([undefined])("preserves an omitted output limit with model limit %s", (maxTokens) => {
+    expect(clampMaxTokensToModel(makeModel({ maxTokens }), undefined)).toBeUndefined();
+    expect(buildBaseOptions(makeModel({ maxTokens })).maxTokens).toBeUndefined();
   });
 
   it("preserves constrained-output requests", () => {

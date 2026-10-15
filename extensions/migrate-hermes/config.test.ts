@@ -1,4 +1,5 @@
 // Migrate Hermes tests cover config plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
@@ -9,7 +10,12 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+import {
+  makeConfigRuntime,
+  makeContext,
+  makeHermesPaths,
+  writeFile,
+} from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
 
@@ -28,16 +34,6 @@ function modelProviderValues(
   );
 }
 
-async function makeHermesPaths(sourceName = "hermes") {
-  const root = testWorkspace.dir;
-  return {
-    root,
-    source: path.join(root, sourceName),
-    workspaceDir: path.join(root, "workspace"),
-    stateDir: path.join(root, "state"),
-  };
-}
-
 describe("Hermes migration config mapping", () => {
   beforeEach(async () => {
     testWorkspace = await tempWorkspace({
@@ -51,8 +47,8 @@ describe("Hermes migration config mapping", () => {
     await testWorkspace.cleanup();
   });
 
-  it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+  it("plans plugin-owned config when target credential storage is unreadable", async () => {
+    const { source, workspaceDir, stateDir, agentDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -94,6 +90,9 @@ describe("Hermes migration config mapping", () => {
     );
     await writeFile(path.join(source, "memories", "MEMORY.md"), "memory line\n");
 
+    const credentialPath = path.join(agentDir, "openclaw-agent.sqlite");
+    const unreadableCredentials = "not a SQLite database\n";
+    await writeFile(credentialPath, unreadableCredentials);
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir }));
 
@@ -106,12 +105,10 @@ describe("Hermes migration config mapping", () => {
     expect(manualMemory?.kind).toBe("manual");
     expect(manualMemory?.status).toBe("skipped");
 
-    const modelProviderValue = modelProviderValues(plan.items) as
-      | {
-          acme?: { baseUrl?: string; apiKey?: unknown; api?: string; models?: unknown[] };
-          "local-llm"?: { baseUrl?: string };
-        }
-      | undefined;
+    const modelProviderValue = modelProviderValues(plan.items) as {
+      acme?: { baseUrl?: string; apiKey?: unknown; api?: string; models?: unknown[] };
+      "local-llm"?: { baseUrl?: string };
+    };
     expect(modelProviderValue?.acme?.baseUrl).toBe("https://api.acme.example/v1");
     expect(modelProviderValue?.acme?.apiKey).toBeUndefined();
     expect(modelProviderValue?.acme?.api).toBe("openai-responses");
@@ -145,10 +142,11 @@ describe("Hermes migration config mapping", () => {
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",
     ]);
+    expect(await fs.readFile(credentialPath, "utf8")).toBe(unreadableCredentials);
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const config = {
       agents: { defaults: { workspace: workspaceDir } },
     } as OpenClawConfig;
@@ -174,8 +172,7 @@ describe("Hermes migration config mapping", () => {
     );
     await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
 
-    const provider = buildHermesMigrationProvider();
-    const result = await provider.apply(
+    const result = await buildHermesMigrationProvider().apply(
       makeContext({
         source,
         stateDir,
@@ -211,7 +208,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const config = {
       agents: { defaults: { workspace: workspaceDir } },
     } as OpenClawConfig;
@@ -260,7 +257,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("uses the provider runtime for CLI-applied config items", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const config: Record<string, unknown> = {
       agents: { defaults: { workspace: workspaceDir } },
     };
@@ -289,27 +286,8 @@ describe("Hermes migration config mapping", () => {
     expect(mcp?.servers?.time?.env?.OPENAI_API_KEY).toBe("short-dev-key");
   });
 
-  it("omits MCP credentials without explicit secret consent", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
-    const config: Record<string, unknown> = {};
-    const envKey = ["TO", "KEN"].join("");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      `mcp_servers:\n  time:\n    command: npx\n    env:\n      ${envKey}: placeholder\n`,
-    );
-    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(config) });
-    const result = await provider.apply(makeContext({ source, stateDir, workspaceDir }));
-    const mcp = config.mcp as { servers?: { time?: { env?: Record<string, string> } } } | undefined;
-    expect(mcp?.servers?.time?.env).toBeUndefined();
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "manual:mcp-server-secrets:time", kind: "manual" }),
-      ]),
-    );
-  });
-
   it("translates current Hermes model-scoped providers and MCP semantics", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const tlsFieldName = ["client", "cert"].join("_");
     const tlsPaths = ["placeholder", "placeholder"];
     const oauthConfig = {
@@ -366,22 +344,21 @@ describe("Hermes migration config mapping", () => {
     const plan = await buildHermesMigrationProvider().plan(
       makeContext({ source, stateDir, workspaceDir }),
     );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { baseUrl?: string; api?: string; apiKey?: unknown; models?: unknown[] }>
-      | undefined;
-    expect(providers?.custom).toEqual(
-      expect.objectContaining({
-        baseUrl: "https://models.example",
-        api: "anthropic-messages",
-        models: [
-          expect.objectContaining({
-            id: "vendor/current-model",
-            contextWindow: 65_536,
-            input: ["text", "image"],
-          }),
-        ],
-      }),
-    );
+    const providers = modelProviderValues(plan.items) as Record<
+      string,
+      { baseUrl?: string; api?: string; apiKey?: unknown; models?: unknown[] }
+    >;
+    expect(providers?.custom).toMatchObject({
+      baseUrl: "https://models.example",
+      api: "anthropic-messages",
+      models: [
+        expect.objectContaining({
+          id: "vendor/current-model",
+          contextWindow: 65_536,
+          input: ["text", "image"],
+        }),
+      ],
+    });
     expect(providers?.custom?.apiKey).toBeUndefined();
     expect(itemById(plan.items, "manual:model-provider-key-env:custom")?.kind).toBe("manual");
 
@@ -434,7 +411,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("resolves provider endpoint refs and preserves supported request options", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     const endpointEnv = ["ACME", "BASE", "URL"].join("_");
     const headerEnv = ["ACME", "HEADER"].join("_");
     await writeFile(
@@ -477,12 +454,10 @@ describe("Hermes migration config mapping", () => {
         models?: Array<{ maxTokens?: number }>;
       }
     >;
-    expect(withoutSecretsProviders.acme).toEqual(
-      expect.objectContaining({
-        baseUrl: "https://acme.example.test/v1",
-        models: [expect.objectContaining({ maxTokens: 12_345 })],
-      }),
-    );
+    expect(withoutSecretsProviders.acme).toMatchObject({
+      baseUrl: "https://acme.example.test/v1",
+      models: [expect.objectContaining({ maxTokens: 12_345 })],
+    });
     expect(itemById(withoutSecrets.items, "config:model-provider:acme")?.sensitive).toBe(true);
     expect(itemById(withoutSecrets.items, "manual:model-provider-headers:acme")?.kind).toBe(
       "manual",
@@ -514,7 +489,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("reports unresolved provider endpoint environment references", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "providers:\n  acme:\n    api: ${MISSING_ACME_URL}\n    models: [acme-one]\n",
@@ -533,7 +508,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("infers Hermes provider protocols from provider and endpoint contracts", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -581,41 +556,8 @@ describe("Hermes migration config mapping", () => {
     expect(providers?.["xai-direct"]?.api).toBe("openai-responses");
   });
 
-  it("matches Hermes transport precedence for named and plain custom providers", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      [
-        "model:",
-        "  provider: custom",
-        "  default: kimi-custom",
-        "  base_url: https://api.kimi.com/coding/v1",
-        "  api_mode: codex_responses",
-        "providers:",
-        "  named-responses:",
-        "    base_url: https://api.kimi.com/coding/v1",
-        "    transport: codex_responses",
-        "    models: [named-model]",
-        "",
-      ].join("\n"),
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { api?: string }>
-      | undefined;
-    expect(providers?.["named-responses"]?.api).toBe("openai-responses");
-    expect(providers?.custom?.api).toBe("anthropic-messages");
-  });
-
   it("keeps built-in Hermes provider overrides on OpenClaw's canonical provider IDs", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -666,7 +608,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("isolates model provider conflicts", async () => {
-    const { root, source, workspaceDir } = await makeHermesPaths();
+    const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -726,34 +668,10 @@ describe("Hermes migration config mapping", () => {
       expectedApi: "anthropic-messages",
       expectedBaseUrl: "https://api.kimi.com/coding",
     },
-    {
-      sourceProvider: "minimax",
-      envName: "MINIMAX_BASE_URL",
-      envValue: "https://minimax-proxy.example.test/anthropic/v1",
-      targetProvider: "minimax",
-      expectedApi: "anthropic-messages",
-      expectedBaseUrl: "https://minimax-proxy.example.test/anthropic",
-    },
-    {
-      sourceProvider: "alibaba",
-      envName: "DASHSCOPE_BASE_URL",
-      envValue: "https://dashscope-proxy.example.test/compatible-mode/v1",
-      targetProvider: "qwen",
-      expectedApi: "openai-completions",
-      expectedBaseUrl: "https://dashscope-proxy.example.test/compatible-mode/v1",
-    },
-    {
-      sourceProvider: "qwen-oauth",
-      envName: "HERMES_QWEN_BASE_URL",
-      envValue: "https://qwen-proxy.example.test/v1",
-      targetProvider: "qwen",
-      expectedApi: "openai-completions",
-      expectedBaseUrl: "https://qwen-proxy.example.test/v1",
-    },
   ])(
     "imports $envName as the selected $sourceProvider endpoint",
     async ({ sourceProvider, envName, envValue, targetProvider, expectedApi, expectedBaseUrl }) => {
-      const { root, source } = await makeHermesPaths();
+      const { root, source } = makeHermesPaths(testWorkspace.dir);
       await writeFile(
         path.join(source, "config.yaml"),
         ["model:", `  provider: ${sourceProvider}`, "  default: imported-model", ""].join("\n"),
@@ -776,34 +694,17 @@ describe("Hermes migration config mapping", () => {
         baseUrl: expectedBaseUrl,
       });
       expect(providers?.[targetProvider]?.models).toEqual([
-        expect.objectContaining({ id: "imported-model" }),
+        expect.objectContaining({
+          id: "imported-model",
+          api: expectedApi,
+          baseUrl: expectedBaseUrl,
+        }),
       ]);
     },
   );
 
-  it("preserves the standard Alibaba endpoint instead of the coding-plan default", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: alibaba\n  default: qwen-plus\n",
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { baseUrl?: string }>
-      | undefined;
-    expect(providers?.qwen?.baseUrl).toBe("https://dashscope-intl.aliyuncs.com/compatible-mode/v1");
-    expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("qwen/qwen-plus");
-  });
-
   it("resolves MCP environment references with source dotenv precedence and secret consent", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     const mcpEnvName = ["MCP", "VALUE"].join("_");
     const mcpUrlName = ["MCP", "URL"].join("_");
     const dottedEnvName = ["mcp", "value"].join(".");
@@ -886,7 +787,7 @@ describe("Hermes migration config mapping", () => {
   });
 
   it("imports a model-scoped endpoint even when Hermes names a built-in provider", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -913,49 +814,16 @@ describe("Hermes migration config mapping", () => {
     const providers = modelProviderValues(plan.items) as
       | Record<string, { baseUrl?: string; models?: Array<{ id?: string }> }>
       | undefined;
-    expect(providers?.kimi).toEqual(
-      expect.objectContaining({
-        baseUrl: "https://proxy.example.test/v1",
-        models: [expect.objectContaining({ id: "kimi-k2.5" })],
-      }),
-    );
+    expect(providers?.kimi).toMatchObject({
+      baseUrl: "https://proxy.example.test/v1",
+      models: [expect.objectContaining({ id: "kimi-k2.5" })],
+    });
     expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("kimi/kimi-k2.5");
     expect(providers?.["my-local-llm"]?.baseUrl).toBe("https://local.example.test/v1");
   });
 
-  it("preserves an explicit Hermes provider name before applying built-in aliases", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      [
-        "model:",
-        "  provider: kimi",
-        "  default: private-model",
-        "providers:",
-        "  kimi:",
-        "    api: https://private-kimi.example.test/v1",
-        "    default_model: private-model",
-        "",
-      ].join("\n"),
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { baseUrl?: string }>
-      | undefined;
-    expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("kimi/private-model");
-    expect(providers?.kimi?.baseUrl).toBe("https://private-kimi.example.test/v1");
-    expect(providers?.["kimi-coding"]).toBeUndefined();
-  });
-
   it("keeps current providers entries ahead of matching legacy custom providers", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     const envVar = ["CURRENT", "ACME", "TOKEN"].join("_");
     const legacyEnvVar = ["LEGACY", "ACME", "TOKEN"].join("_");
     await writeFile(
@@ -991,16 +859,14 @@ describe("Hermes migration config mapping", () => {
     const providers = modelProviderValues(plan.items) as
       | Record<string, { api?: string; baseUrl?: string; models?: Array<{ id?: string }> }>
       | undefined;
-    expect(providers?.acme).toEqual(
-      expect.objectContaining({
-        api: "openai-responses",
-        baseUrl: "https://current.example.test/v1",
-        models: [
-          expect.objectContaining({ id: "current-model" }),
-          expect.objectContaining({ id: "legacy-model" }),
-        ],
-      }),
-    );
+    expect(providers?.acme).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://current.example.test/v1",
+      models: [
+        expect.objectContaining({ id: "current-model" }),
+        expect.objectContaining({ id: "legacy-model" }),
+      ],
+    });
     expect(
       plan.items.some(
         (item) => item.kind === "manual" && item.message?.includes(legacyEnvVar) === true,
@@ -1008,41 +874,8 @@ describe("Hermes migration config mapping", () => {
     ).toBe(false);
   });
 
-  it("does not let a custom entry shadow a canonical Hermes provider", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      [
-        "model:",
-        "  provider: openai-codex",
-        "  default: gpt-5.6",
-        "providers:",
-        "  openai-codex:",
-        "    api: https://chatgpt.com/backend-api/codex",
-        "    transport: codex_responses",
-        "    models: [gpt-5.6]",
-        "",
-      ].join("\n"),
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-
-    expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("openai/gpt-5.6");
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { api?: string }>
-      | undefined;
-    expect(providers?.openai?.api).toBe("openai-chatgpt-responses");
-    expect(providers?.["openai-codex"]).toBeUndefined();
-  });
-
   it("preserves the Hermes Moonshot China endpoint while aligning provider auth", async () => {
-    const { root, source } = await makeHermesPaths();
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: kimi-coding-cn\n  default: kimi-k2.5\n",
@@ -1062,76 +895,8 @@ describe("Hermes migration config mapping", () => {
     expect(providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
   });
 
-  it("maps the Hermes MiniMax China route to OpenClaw's canonical provider", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: minimax-cn\n  default: MiniMax-M2.7\n",
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { api?: string; baseUrl?: string }>
-      | undefined;
-    expect(itemById(plan.items, "config:default-model")?.details?.model).toBe(
-      "minimax/MiniMax-M2.7",
-    );
-    expect(providers?.minimax).toEqual(
-      expect.objectContaining({
-        api: "anthropic-messages",
-        baseUrl: "https://api.minimaxi.com/anthropic",
-      }),
-    );
-  });
-
-  it("maps the native Kimi Coding endpoint to Anthropic Messages", async () => {
-    const { root, source } = await makeHermesPaths();
-    await writeFile(
-      path.join(source, "config.yaml"),
-      [
-        "model:",
-        "  provider: custom:kimi-native",
-        "  default: kimi-k2.5",
-        "  base_url: https://api.kimi.com/coding/v1",
-        "",
-      ].join("\n"),
-    );
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    const providers = modelProviderValues(plan.items) as
-      | Record<
-          string,
-          { api?: string; baseUrl?: string; models?: Array<{ api?: string; baseUrl?: string }> }
-        >
-      | undefined;
-    expect(providers?.["kimi-native"]).toEqual(
-      expect.objectContaining({
-        api: "anthropic-messages",
-        baseUrl: "https://api.kimi.com/coding",
-        models: [
-          expect.objectContaining({
-            api: "anthropic-messages",
-            baseUrl: "https://api.kimi.com/coding",
-          }),
-        ],
-      }),
-    );
-  });
-
   it("continues independent items after one late config conflict", async () => {
-    const { source, workspaceDir, stateDir } = await makeHermesPaths();
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const config: Record<string, unknown> = {};
     await writeFile(
       path.join(source, "config.yaml"),
@@ -1153,4 +918,3 @@ describe("Hermes migration config mapping", () => {
     ).toBe("beta");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

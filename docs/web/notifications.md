@@ -36,6 +36,8 @@ The Control UI asks for notification permission automatically the first time you
 
 Behind the scenes, enabling creates a push subscription in this browser and registers its endpoint and keys with the Gateway. The Gateway binds the subscription to the browser's paired device and, when operator roles are enabled, its authenticated user profile. The Gateway keeps browser subscriptions and its VAPID signing key in `state/openclaw.sqlite` — there is no `openclaw.json` key to edit. When the Control UI reconnects, existing subscriptions are reconciled with the Gateway automatically.
 
+Browser registration and notification settings reads do not wait for background notifications to load conversation access data. The Gateway still rechecks current access before sending each notification.
+
 Approval notifications use generic lock-screen text. Command, working-directory, prompt, and plugin details stay out of the push payload. Selecting the notification opens the authenticated `/approve/<approvalId>` page. Before each send, the Gateway rechecks the paired device's current approval scopes, operator role, user profile, and approval visibility. A revoked or downgraded browser stops receiving approval pushes without needing to unsubscribe first.
 
 ### Choose what reaches each device
@@ -123,6 +125,22 @@ The Control UI waits up to 10 seconds for its service worker. If that times out 
 ### Web Push asks for a Doctor migration
 
 Run `openclaw doctor --fix` with the Gateway stopped. Web Push refuses to use the retired JSON stores until Doctor imports them into SQLite.
+
+### An enabled notification does not arrive
+
+Check the Gateway's `gateway/web-push` logs. Preparation failures include the
+category, stage (`subscriptions`, `sender`, or `authority`), error class, cause,
+and stack. Push-service failures include the subscription ID, endpoint host,
+HTTP status, response body, and whether the subscription will be pruned or
+retained. These diagnostics are written raw to local logs; review them before
+sharing.
+
+HTTP 404 and 410 responses remove the dead subscription unless a newer
+registration has replaced it. Re-enable notifications in that browser to
+subscribe again. Other failures retain the subscription. Failed events are not
+automatically retried; `retry=false` records that decision. A cleanup warning
+means removal failed, so the stale subscription may be attempted on the next
+event. Correct the reported storage problem before testing again.
 
 ### Tests arrive but approval requests do not
 

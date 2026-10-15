@@ -44,6 +44,7 @@ paths:
   - src/plugins/runtime
   - src/plugins/runtime-state.ts
   - src/plugins/runtime.ts
+  - src/plugins/sdk-alias-normalization.ts
   - src/plugins/sdk-alias.ts
   - src/plugins/types.ts
   - src/plugins/validation-diagnostics.ts

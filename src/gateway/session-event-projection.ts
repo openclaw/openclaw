@@ -1,0 +1,192 @@
+import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
+import { prepareSessionAncestor } from "./session-ancestor-references.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import { prepareSessionRowPublication, serializeSessionRow } from "./session-row-presentation.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+
+/** Bind prepared rows without exposing their implementation to transport contracts. */
+export function prepareSessionEventProjection(
+  projection: SessionRowProjection,
+  read?: SessionRowReadView,
+  prepared?: {
+    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** The transcript publisher owns the message graph for synchronous fanout. */
+    encodeMessage?: true;
+  },
+): PrepareSessionEventProjection {
+  return (event, payload, eventScope, connection) => {
+    if (!connection.isCurrentProjection(projection)) {
+      return () => undefined;
+    }
+    if ((event !== "sessions.changed" && event !== "session.message") || !isRecord(payload)) {
+      return undefined;
+    }
+    const source = payload;
+    if (source.reason === "delete" || typeof source.sessionKey !== "string") {
+      connection.forgetAncestors(
+        typeof source.sessionKey === "string" ? source.sessionKey : undefined,
+      );
+      return undefined;
+    }
+    const scope = connection.resolveAgentScope(
+      source.sessionKey,
+      typeof source.agentId === "string" ? source.agentId : eventScope.agentId,
+    );
+    if (!scope?.[1] || (!scope[0] && !scope[2] && !parseAgentSessionKey(source.sessionKey))) {
+      return undefined;
+    }
+    const query = { key: source.sessionKey, agentId: scope[1] };
+    const rows = read ?? projection;
+    const record = rows.describe(query);
+    if (
+      !record ||
+      (typeof source.sessionId === "string" && source.sessionId !== record.entry.sessionId)
+    ) {
+      return () => undefined;
+    }
+    const base = isRecord(source.session)
+      ? source
+      : {
+          ...buildGatewaySessionSnapshot({
+            sessionRow: rows.present(record),
+            agentId: scope[0],
+            includeSession: true,
+          }),
+          ...source,
+        };
+    const sourceRow = base.session;
+    if (
+      !isRecord(sourceRow) ||
+      sourceRow.sessionId !== record.entry.sessionId ||
+      (sourceRow.lifecycleRevision !== undefined &&
+        sourceRow.lifecycleRevision !== record.entry.lifecycleRevision)
+    ) {
+      return () => undefined;
+    }
+    // Transcript producers publish one message; only the recipient envelope varies.
+    let messageBytes: Buffer | undefined;
+    const serializeMessage =
+      event === "session.message" && prepared?.encodeMessage
+        ? () => {
+            if (!messageBytes) {
+              const field = JSON.stringify({ message: base.message }).slice(1, -1);
+              messageBytes = Buffer.from(field ? `${field},` : "");
+            }
+            return messageBytes;
+          }
+        : undefined;
+    const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
+    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
+    const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
+    const ancestorRevision = randomUUID();
+    const audiences = new Map<
+      string,
+      {
+        row: NonNullable<ReturnType<ReturnType<typeof presentRecipient>["present"]>>;
+        ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
+        hiddenAncestors: string[];
+        payloads: Map<string | undefined, Record<string, unknown>>;
+      }
+    >();
+    let revision = projection.state.revision;
+    let accessRevision = readGatewayAccessRevision();
+    let runProjector = connection.getRunProjector();
+    return (client) => {
+      if (!connection.isCurrentProjection(projection) || !projection.isCurrent(record)) {
+        return undefined;
+      }
+      const currentRunProjector = connection.getRunProjector();
+      const currentAccessRevision = readGatewayAccessRevision();
+      if (
+        revision !== projection.state.revision ||
+        accessRevision !== currentAccessRevision ||
+        runProjector !== currentRunProjector
+      ) {
+        audiences.clear();
+        revision = projection.state.revision;
+        accessRevision = currentAccessRevision;
+        runProjector = currentRunProjector;
+      }
+      // Resolve each recipient's live authority before reusing this synchronous publication.
+      const presentation = presentRecipient(client, runProjector);
+      const audienceKey = presentation.audienceKey;
+      let audience = audiences.get(audienceKey);
+      if (!audience) {
+        const row = presentation.present(record, enrichment);
+        if (!row) {
+          return undefined;
+        }
+        const hiddenAncestors: string[] = [];
+        const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
+          ? ancestors.flatMap((ancestor) => {
+              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+                hiddenAncestors.push(ancestor.key);
+                return [];
+              }
+              const presented = presentation.present(ancestor, enrichment);
+              return presented ? [prepareSessionAncestor(presented)] : [];
+            })
+          : undefined;
+        audience = { row, ancestors: ancestorRows, hiddenAncestors, payloads: new Map() };
+        audiences.set(audienceKey, audience);
+      }
+      const { row } = audience;
+      const references = connection.references(client);
+      for (const key of audience.hiddenAncestors) {
+        references.forget(key);
+      }
+      const ancestorDelivery =
+        audience.ancestors && references.prepare(audience.ancestors, ancestorRevision);
+      if (!ancestorDelivery) {
+        connection.forgetConnectionAncestors(client);
+      }
+      const deliveryKey = ancestorDelivery?.deliveryKey;
+      let projected = audience.payloads.get(deliveryKey);
+      if (!projected) {
+        projected = {
+          ...base,
+          session: row,
+          fastMode: row.fastMode,
+          effectiveFastMode: row.effectiveFastMode,
+          ancestorSessions: ancestorDelivery?.ancestorSessions,
+          ancestorSessionRefs: ancestorDelivery?.ancestorSessionRefs,
+          visibility: row.visibility,
+          sharingRole: row.sharingRole,
+          ...(isRecord(base.activitySummary) && row.activitySummary
+            ? {
+                activitySummary: {
+                  ...base.activitySummary,
+                  canEnsure: row.activitySummary.canEnsure,
+                },
+              }
+            : {}),
+        };
+        if (Object.hasOwn(projected, "childSessions")) {
+          projected.childSessions = row.childSessions;
+        }
+        audience.payloads.set(deliveryKey, projected);
+      }
+      return {
+        payload: projected,
+        serializeSession: () => serializeSessionRow(row),
+        serializeMessage,
+        delivered: () => {
+          references.forget(row.key);
+          if (event === "sessions.changed" && source.reason === "activity-summary") {
+            // Rosters skip recaps, so a full recap row cannot certify a later reference.
+            for (const ancestor of ancestorDelivery?.ancestorSessions ?? []) {
+              references.forget(ancestor.key);
+            }
+          } else {
+            ancestorDelivery?.delivered();
+          }
+        },
+      };
+    };
+  };
+}

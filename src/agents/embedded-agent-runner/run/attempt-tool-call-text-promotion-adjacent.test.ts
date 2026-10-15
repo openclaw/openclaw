@@ -2,39 +2,12 @@
 
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  collectStreamEvents,
+  createFakeStream,
+  type FakeWrappedStream,
+} from "./attempt-stream.test-helpers.js";
 import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
-
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
-}
-
-async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
-  // Drain streams to inspect generated tool-call events after wrapper mutation.
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -248,7 +221,6 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
           id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
           name: expectedToolName,
           arguments: expectedArguments,
-          partialArgs: JSON.stringify(expectedArguments),
         },
       ];
 
@@ -262,6 +234,9 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       expect(requireRecord(events[2], "toolcall delta").delta).toBe(
         JSON.stringify(expectedArguments),
       );
+      expect(requireRecord(events[2], "toolcall delta").partial).toMatchObject({
+        content: [{ partialJson: JSON.stringify(expectedArguments) }],
+      });
       const doneEvent = requireRecord(events[4], "done event");
       expect(doneEvent.reason).toBe("toolUse");
       expect(requireRecord(doneEvent.message, "done message").content).toEqual(expectedContent);

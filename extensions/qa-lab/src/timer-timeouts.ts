@@ -1,8 +1,6 @@
-// Qa Lab plugin module implements timer timeouts behavior.
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
-  MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 
@@ -13,9 +11,6 @@ export function resolveQaGatewayTimeoutWithGraceMs(
   const timeout = clampPositiveTimerTimeoutMs(timeoutMs);
   if (timeout === undefined) {
     return undefined;
-  }
-  if (timeout >= MAX_TIMER_TIMEOUT_MS) {
-    return MAX_TIMER_TIMEOUT_MS;
   }
   const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
   return addTimerTimeoutGraceMs(timeout, grace);

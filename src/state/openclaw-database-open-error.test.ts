@@ -12,6 +12,7 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -88,3 +89,43 @@ it.each(["state", "agent"] as const)(
     }
   },
 );
+
+it("returns doctor repair warnings when rollback cleanup already closed the state database", () => {
+  const env = { OPENCLAW_STATE_DIR: roots.make("state-repair-rollback-cleanup-") };
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
+  const primary = new Error("synthetic repair transaction lost its transaction");
+  let intercepted = 0;
+  const transaction = vi
+    .spyOn(transactions, "runSqliteImmediateTransactionSync")
+    .mockImplementation((db, operation, transactionOptions) => {
+      if (db.location() !== pathname) {
+        return runTransaction(db, operation, transactionOptions);
+      }
+      intercepted += 1;
+      observed.add(db);
+      return runTransaction(
+        db,
+        () => {
+          expect(db.isTransaction).toBe(true);
+          db.exec("ROLLBACK");
+          throw primary;
+        },
+        transactionOptions,
+      );
+    });
+  try {
+    const result = repairOpenClawStateDatabaseSchema({ env });
+    expect(intercepted).toBe(1);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    expect(result.warnings[0]).toContain("synthetic repair transaction lost its transaction");
+    const [failedDb] = observed;
+    assert(failedDb);
+    expect(failedDb.isOpen).toBe(false);
+  } finally {
+    transaction.mockRestore();
+  }
+});

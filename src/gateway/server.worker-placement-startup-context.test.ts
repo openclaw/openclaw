@@ -1,46 +1,90 @@
-import { afterEach, expect, test } from "vitest";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { afterEach, expect, test, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
+import {
+  connectOk,
+  createGatewaySuiteHarness,
+  installGatewayTestHooks,
+  rpcReq,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let harness: GatewayServerHarness | undefined;
-
-afterEach(async () => {
-  await harness?.close();
-  harness = undefined;
-});
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
 
 test(
   "profiles-disabled startup exposes core worker placement through real session RPCs",
   { timeout: 30_000 },
-  async () => {
-    // Minimal Gateway mode intentionally omits worker ownership; this exercises production startup
-    // with no configured cloud profiles, where the core device provider still owns placement.
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    harness = await startGatewayServerHarness();
-    const { ws } = await harness.openClient();
-    const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
-      agentId: "main",
-      key: "startup-placement-local",
-    });
-    expect(created).toMatchObject({ ok: true });
-    const sessionKey = created.payload?.key;
-    if (!sessionKey) {
-      throw new Error("session creation did not return a key");
-    }
+  ({ signal }) =>
+    fixture.run(async () => {
+      // Minimal Gateway mode intentionally omits worker ownership; this exercises production startup
+      // with no configured cloud profiles, where the core device provider still owns placement.
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+      const harness = await startGatewayServerHarness();
+      try {
+        // A Vitest timeout leaves acquisition running; teardown must join and close its late result.
+        signal.throwIfAborted();
+        const { ws } = await harness.openClient();
+        const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
+          agentId: "main",
+          key: "startup-placement-local",
+        });
+        expect(created).toMatchObject({ ok: true });
+        const sessionKey = created.payload?.key;
+        if (!sessionKey) {
+          throw new Error("session creation did not return a key");
+        }
 
-    const dispatch = await rpcReq(ws, "sessions.dispatch", {
-      key: sessionKey,
-      deviceId: "missing-device",
-    });
-    expect(dispatch.ok).toBe(false);
-    expect(dispatch.error?.message).toBe("device worker is not a paired node host: missing-device");
+        const dispatch = await rpcReq(ws, "sessions.dispatch", {
+          key: sessionKey,
+          deviceId: "missing-device",
+        });
+        expect(dispatch.ok).toBe(false);
+        expect(dispatch.error?.message).toBe(
+          "device worker is not a paired node host: missing-device",
+        );
 
-    const reset = await rpcReq(ws, "sessions.reset", { key: sessionKey });
-    expect(reset).toMatchObject({ ok: true, payload: { key: sessionKey } });
-    const deleted = await rpcReq(ws, "sessions.delete", { key: sessionKey });
-    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-    ws.close();
-  },
+        const reset = await rpcReq(ws, "sessions.reset", { key: sessionKey });
+        expect(reset).toMatchObject({ ok: true, payload: { key: sessionKey } });
+        const deleted = await rpcReq(ws, "sessions.delete", { key: sessionKey });
+        expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+        ws.close();
+      } finally {
+        await fixture.verifyCleanup(() => harness.close());
+      }
+    }),
 );
+
+test("an ordinary token client keeps issuing requests across an unrelated config write", ({
+  signal,
+}) =>
+  fixture.run(async () => {
+    // Config writes must reach the managed reloader, which minimal startup omits.
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    const token = "policy-currency-fixture-token";
+    const gateway = await createGatewaySuiteHarness({
+      serverOptions: { bind: "loopback", auth: { mode: "token", token } },
+    });
+    try {
+      signal.throwIfAborted();
+      await gateway.server.startupSettled;
+      const ws = await gateway.openWs();
+      await connectOk(ws, { token, scopes: ["operator.admin"] });
+      expect(await rpcReq(ws, "agents.list", {})).toMatchObject({ ok: true });
+      const configIO = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      const config = configIO.getRuntimeConfig();
+      await configIO.writeConfigFile({
+        ...config,
+        messages: { ...config.messages, ackReactionScope: "group-all" },
+      });
+      expect(await rpcReq(ws, "config.get", {})).toMatchObject({
+        ok: true,
+        payload: { config: { messages: { ackReactionScope: "group-all" } } },
+      });
+      expect(await rpcReq(ws, "agents.list", {})).toMatchObject({ ok: true });
+      ws.close();
+    } finally {
+      await fixture.verifyCleanup(() => gateway.server.close({ drainTimeoutMs: 0 }));
+    }
+  }));

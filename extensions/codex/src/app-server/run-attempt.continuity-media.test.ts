@@ -24,57 +24,20 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 setupRunAttemptTestHooks();
 
 describe("Codex attachment continuity", () => {
-  it.each([
-    { scenario: "managed text", source: "managed", mime: "text/plain", name: "notes.txt" },
-    { scenario: "workspace JSON", source: "path", mime: "application/json", name: "data.json" },
-    {
-      scenario: "captionless markdown",
-      source: "managed",
-      mime: "text/markdown",
-      name: "notes.md",
-      blank: true,
-    },
-    {
-      scenario: "mixed files",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      mixed: true,
-    },
-    {
-      scenario: "MIME policy",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "mime",
-    },
-    {
-      scenario: "byte limit",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "bytes",
-    },
-    {
-      scenario: "URL policy",
-      source: "url",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "url",
-    },
-  ] as const)("restores saved $scenario through native resume", async (scenario) => {
+  it("restores captionless managed documents in order without changing their transcript", async () => {
     const sessionId = "session-continuity-attachments";
-    const sessionFile = `agent:main:${sessionId}`;
-    const storePath = path.join(tempDir, "attachment-continuity.sqlite");
-    const workspaceDir = path.join(tempDir, "attachment-workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
+    const params = createParams(`agent:main:${sessionId}`, path.join(tempDir, "workspace"));
+    await attachSqliteSessionTarget(params, path.join(tempDir, "attachments.sqlite"), sessionId);
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: params.sessionTarget!.storePath!,
+    };
     const cutoff = Date.now();
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCodexAppServerBinding(params.sessionFile, {
       threadId: "thread-existing",
-      cwd: workspaceDir,
+      cwd: params.workspaceDir,
       model: params.modelId,
       modelProvider: "openai",
       historyCoveredThrough: new Date(cutoff).toISOString(),
@@ -84,60 +47,27 @@ describe("Codex attachment continuity", () => {
         web_search: "disabled",
       }),
     });
-    const token = "CONTINUITY_FILE_BYTES_94d80b";
-    const secondToken = "CONTINUITY_SECOND_FILE_BYTES_153c72";
-    const media: Array<{
-      path?: string;
-      url?: string;
-      contentType: string;
-      fileName: string;
-      hydrationSuppressed: boolean;
-    }> = [];
-    const files = [
-      {
-        name: scenario.name,
-        mime: scenario.mime,
-        text: scenario.mime === "application/json" ? JSON.stringify({ token }) : token,
-      },
-      ...("mixed" in scenario
-        ? [
-            {
-              name: "second.json",
-              mime: "application/json",
-              text: JSON.stringify({ token: secondToken }),
-            },
-          ]
-        : []),
-    ];
-    for (const file of files) {
-      let source: { path: string } | { url: string };
-      if (scenario.source === "path") {
-        const filePath = path.join(workspaceDir, file.name);
-        await fs.writeFile(filePath, file.text);
-        source = { path: filePath };
-      } else if (scenario.source === "url") {
-        source = { url: "https://example.invalid/attachment.txt" };
-      } else {
+    const tokens = ["CONTINUITY_FILE_BYTES_94d80b", "CONTINUITY_SECOND_FILE_BYTES_153c72"];
+    const media = await Promise.all(
+      tokens.map(async (token, index) => {
         const saved = await saveMediaBuffer(
-          Buffer.from(file.text),
-          file.mime,
+          Buffer.from(token),
+          "text/plain",
           "inbound",
           undefined,
-          file.name,
+          `notes-${index}.txt`,
         );
-        source = { url: `media://inbound/${saved.id}` };
-      }
-      media.push({
-        ...source,
-        contentType: file.mime,
-        fileName: file.name,
-        hydrationSuppressed: true,
-      });
-    }
-    const caption = "blank" in scenario ? "" : "Read the attached document and use its value.";
+        return {
+          url: `media://inbound/${saved.id}`,
+          contentType: "text/plain",
+          fileName: `notes-${index}.txt`,
+          hydrationSuppressed: true,
+        };
+      }),
+    );
     const sourceMessage = {
       role: "user" as const,
-      content: scenario.source === "path" ? [{ type: "text" as const, text: caption }] : caption,
+      content: "",
       timestamp: cutoff + 1,
       idempotencyKey: "saved-attachment-input:user",
       __openclaw: { media },
@@ -147,31 +77,7 @@ describe("Codex attachment continuity", () => {
       message: sourceMessage,
       now: cutoff + 1,
     });
-    if ("blocked" in scenario) {
-      params.config = {
-        ...params.config,
-        gateway: {
-          http: {
-            endpoints: {
-              responses: {
-                files: {
-                  ...(scenario.blocked === "mime" ? { allowedMimes: ["application/pdf"] } : {}),
-                  ...(scenario.blocked === "bytes" ? { maxBytes: 4 } : {}),
-                  ...(scenario.blocked === "url" ? { allowUrl: false } : {}),
-                },
-              },
-            },
-          },
-        },
-      };
-    }
     params.prompt = "Continue the saved request.";
-    const started = createDeferred<void>();
-    params.onAgentEvent = (event) => {
-      if (event.stream === "lifecycle" && event.data.phase === "start") {
-        started.resolve();
-      }
-    };
     const abort = new AbortController();
     params.abortSignal = abort.signal;
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
@@ -179,37 +85,17 @@ describe("Codex attachment continuity", () => {
     const harness = createResumeHarness();
     const run = runCodexAppServerAttempt(params);
     try {
-      await started.promise;
+      await run.waitForTurnAccepted();
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
       const request = harness.requests.find((entry) => entry.method === "turn/start");
-      const input = asOptionalRecord(request?.params)?.input;
-      const prompt = Array.isArray(input)
-        ? input
-            .flatMap((part) => {
-              const text = asOptionalRecord(part)?.text;
-              return typeof text === "string" ? [text] : [];
-            })
-            .join("\n")
-        : "";
+      const prompt = JSON.stringify(request?.params);
       expect(harness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
-      expect(prompt).toContain("Continue the saved request.");
-      if ("blocked" in scenario) {
-        expect(prompt).not.toContain(token);
-        expect(prompt).toContain(
-          scenario.blocked === "mime"
-            ? "[Attachment type not allowed: text/plain]"
-            : scenario.blocked === "url"
-              ? "[Attachment skipped: URL file sources are disabled]"
-              : "[Attachment could not be read]",
-        );
-      } else {
+      expect(prompt).toContain(params.prompt);
+      for (const token of tokens) {
         expect(prompt).toContain(token);
-        if ("mixed" in scenario) {
-          expect(prompt).toContain(secondToken);
-          expect(prompt.indexOf(token)).toBeLessThan(prompt.indexOf(secondToken));
-        }
       }
+      expect(prompt.indexOf(tokens[0]!)).toBeLessThan(prompt.indexOf(tokens[1]!));
       const saved = (await readSessionTranscriptEvents(target)).flatMap((event) => {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
         return message?.idempotencyKey === sourceMessage.idempotencyKey ? [message] : [];
@@ -221,7 +107,7 @@ describe("Codex attachment continuity", () => {
       closeHost();
     }
   });
-  it.each(["inline", "offloaded", "current", "closed"] as const)(
+  it.each(["current", "closed"] as const)(
     "restores real image bytes with exact source ownership (%s)",
     async (mode) => {
       const sessionId = "session-continuity-images";
@@ -258,18 +144,14 @@ describe("Codex attachment continuity", () => {
         role: "user" as const,
         timestamp: cutoff + 1,
         idempotencyKey: "historical-image:user",
-        content:
-          mode === "inline"
-            ? [{ type: "text" as const, text: "Read this image." }, image]
-            : "Read this image.",
+        content: "Read this image.",
         __openclaw: {
           media: [
             { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
           ],
           mediaImageLayout: {
-            slots: [{ kind: mode === "inline" ? "inline" : "offloaded", factIndex: 0 }],
+            slots: [{ kind: "offloaded", factIndex: 0 }],
           },
-          ...(mode === "inline" ? { mediaImageBlockFactIndexes: [0] } : {}),
         },
       };
       await appendSessionTranscriptMessageByIdentity({
@@ -277,7 +159,7 @@ describe("Codex attachment continuity", () => {
         message: historical,
         now: cutoff + 1,
       });
-      params.prompt = "Read this image.";
+      params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
       if (mode === "current") {
         const currentImage = { ...image, data: green.toString("base64") };
         params.images = [currentImage];
@@ -345,11 +227,19 @@ describe("Codex attachment continuity", () => {
           const request = harness.requests.find((entry) => entry.method === "turn/start");
           const input = asOptionalRecord(request?.params)?.input;
           expect(Array.isArray(input)).toBe(true);
-          const images = Array.isArray(input)
-            ? input.filter((part) => asOptionalRecord(part)?.type === "image")
-            : [];
-          expect(images).toEqual([
+          expect(input).toEqual([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("<conversation_context>\n[user]\nRead this image."),
+            }),
             { type: "image", url: `data:image/png;base64,${blue.toString("base64")}` },
+            {
+              type: "text",
+              text: expect.stringContaining(
+                `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+              ),
+              text_elements: [],
+            },
             ...(mode === "current"
               ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
               : []),

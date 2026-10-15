@@ -7,44 +7,34 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
-  activityPersonFromPath,
   agentRouteFromPath,
   canonicalPluginTabLocation,
-  INTERNAL_ACTIVITY_PATH_PARAM,
-  INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_MEMORY_PATH_PARAM,
-  INTERNAL_PLUGIN_PATH_PARAM,
-  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
-  INTERNAL_PLUGINS_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
-  INTERNAL_TERMINAL_PATH_PARAM,
-  INTERNAL_WORKBOARD_PATH_PARAM,
-  isLegacyPluginsDiscoveryPath,
+  dynamicRouteFromPath,
   isSessionRouteId,
-  memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
+  locationForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
-  sessionRouteNamespaceFromPath,
   setPluginTabSlugs,
-  workboardBoardIdFromPath,
-  terminalSessionIdFromPath,
+  sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
+import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
+import { page as agentsHomePage } from "./pages/agents-home/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
+import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
@@ -69,19 +59,31 @@ import { page as pluginPage } from "./pages/plugin/route.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
-import { page as tasksPage } from "./pages/tasks/route.ts";
+import { page as systemsPage } from "./pages/systems/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+type AppRouteModule = (
+  | {
+      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+      renderSolid?: never;
+    }
+  | {
+      render?: never;
+      /** Mounted once per route renderer; props follow the current loader and presentation. */
+      renderSolid: (props: SolidRouteProps) => JSX.Element;
+    }
+) & {
+  /** Optional lower-sidebar content owned by the same route and loader as the page. */
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
@@ -89,13 +91,8 @@ type AppRouteModule = {
   ) => string | undefined;
 };
 
-export type ApplicationRouter = Router<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
-type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+export type ApplicationRouter = Router<RouteId, ApplicationContext, AppRouteModule, unknown>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
   ...chatPages,
@@ -107,6 +104,7 @@ const APP_ROUTE_TREE = [
   dashboardsPage,
   appsPage,
   portalsPage,
+  agentsHomePage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -123,7 +121,9 @@ const APP_ROUTE_TREE = [
   workboardPage,
   worktreesPage,
   sessionsPage,
+  systemsPage,
   secretsPage,
+  searchPage,
   usagePage,
   debugPage,
   logsPage,
@@ -131,7 +131,6 @@ const APP_ROUTE_TREE = [
   ...skillsPages,
   ...pluginsPages,
   cronPage,
-  tasksPage,
   devicePage,
   devicePermissionsPage,
   devicesPage,
@@ -167,7 +166,7 @@ function canonicalRouteLocation(
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext, AppRouteModule>({
     routes: appRoutes,
   });
   // The shared router intentionally matches exact paths only. People, Workboard
@@ -175,51 +174,18 @@ export function createApplicationRouter(): ApplicationRouter {
   return {
     ...router,
     navigate: (routeId, context, options, location) =>
-      router.navigate(
-        routeId,
-        context,
-        options,
-        location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-      ),
+      context.nativeConversation?.interceptNavigation(
+        location ?? locationForRoute(routeId, context.basePath),
+      )
+        ? Promise.resolve()
+        : router.navigate(
+            routeId,
+            context,
+            options,
+            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
+          ),
     routeIdFromPath,
   };
-}
-
-type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
-
-function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
-  if (terminalSessionIdFromPath(pathname, basePath)) {
-    return ["terminal", INTERNAL_TERMINAL_PATH_PARAM, pathname];
-  }
-  if (pluginTabSlugFromPath(pathname, basePath)) {
-    return ["plugin", INTERNAL_PLUGIN_PATH_PARAM, pathname];
-  }
-  if (activityPersonFromPath(pathname, basePath)) {
-    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
-  }
-  const agentRoute = agentRouteFromPath(pathname, basePath);
-  if (agentRoute) {
-    return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];
-  }
-  const boardId = workboardBoardIdFromPath(pathname, basePath);
-  if (boardId) {
-    return ["workboard", INTERNAL_WORKBOARD_PATH_PARAM, pathname];
-  }
-  const memoryTab = memoryTabFromPath(pathname, basePath);
-  if (memoryTab && memoryTab !== "overview") {
-    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
-  }
-  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginCatalogIdFromPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginSettingsIdFromPath(pathname, basePath)) {
-    return ["plugin-settings", INTERNAL_PLUGIN_SETTINGS_PATH_PARAM, pathname];
-  }
-  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
-  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
 }
 
 function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
@@ -235,12 +201,6 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
     pathname: pathForRoute(routeId, basePath),
     search: `?${search.toString()}`,
   };
-}
-
-export function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
-  return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
-  );
 }
 
 function isRouteNotFound(error: unknown): error is RouteNotFound {
@@ -264,7 +224,7 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();
@@ -305,12 +265,69 @@ export async function startApplicationRouter(
     listen: (listener) => {
       let listening = true;
       let recoveryQueued = false;
+      let lastHello = context.gateway.snapshot.hello;
       let interrupted:
-        | { controller: AbortController; scope: ReturnType<typeof gatewayPresentationScope> }
+        | {
+            controller: AbortController;
+            scope: ReturnType<typeof gatewayPresentationScope>;
+            verifySession: boolean;
+          }
         | undefined;
       const currentTarget = () => {
         const state = router.getState();
         return state.pendingMatches[0] ?? state.matches[0];
+      };
+      const verifyReconnectedSession = async (
+        target: NonNullable<ReturnType<typeof currentTarget>>,
+        verifySession: boolean,
+      ) => {
+        // SAFETY: The caller accepts only chat/dashboard matches, both loaded by loadChatRoute.
+        const data = target.data as ChatRouteData | undefined;
+        if (data?.kind !== "session" || (!verifySession && !data.sessionResolutionFromCache)) {
+          return;
+        }
+        const { client, hello } = context.gateway.snapshot;
+        const scope = gatewayPresentationScope(context.gateway);
+        const current = () =>
+          listening &&
+          context.gateway.snapshot.phase === "connected" &&
+          context.gateway.snapshot.client === client &&
+          context.gateway.snapshot.hello === hello &&
+          gatewayPresentationScope(context.gateway) === scope &&
+          currentTarget()?.abortController === target.abortController &&
+          router.getState().pendingMatches.length === 0;
+        try {
+          const { sessionRouteTargetFromLocation } = await import("./pages/chat/route-loader.ts");
+          if (!current()) {
+            return;
+          }
+          const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
+          // Home and explicit literal creation routes need not exist in storage.
+          if (
+            !reference ||
+            !(
+              reference.kind === "short" ||
+              (reference.kind === "literal" && reference.slugCandidate)
+            )
+          ) {
+            return;
+          }
+          const { querySessionReference } =
+            await import("./pages/chat/route-loader-session-reference.ts");
+          if (!current()) {
+            return;
+          }
+          const resolution = await querySessionReference(
+            context,
+            { key: data.sessionKey, agentId: reference.agentId },
+            target.abortController.signal,
+          );
+          if (resolution?.kind === "not-found" && current()) {
+            await router.revalidate(context, target.routeId);
+          }
+        } catch {
+          // Failed discovery is not deletion; keep the established conversation.
+        }
       };
       const recoverSessionRoute = () => {
         const target = currentTarget();
@@ -326,13 +343,30 @@ export async function startApplicationRouter(
           return;
         }
         if (context.gateway.snapshot.phase !== "connected") {
-          if (target.status === "pending" || target.isFetching === "loader") {
-            interrupted = { controller: target.abortController, scope };
+          if (
+            target.status === "pending" ||
+            target.status === "success" ||
+            target.isFetching === "loader"
+          ) {
+            interrupted = {
+              controller: target.abortController,
+              scope,
+              // The first pending loader owns startup discovery; only interrupted
+              // connections or data already presented offline need another lookup.
+              verifySession:
+                interrupted?.verifySession === true ||
+                lastHello !== null ||
+                target.data !== undefined,
+            };
           }
           return;
         }
         if (target.status === "success" && !target.isFetching) {
+          const pendingVerification = interrupted;
           interrupted = undefined;
+          if (pendingVerification) {
+            void verifyReconnectedSession(target, pendingVerification.verifySession);
+          }
         }
         if (!interrupted || recoveryQueued || target.status !== "error") {
           return;
@@ -370,7 +404,6 @@ export async function startApplicationRouter(
         });
       };
       const stopSessionRecovery = router.subscribe(recoverSessionRoute);
-      let lastHello = context.gateway.snapshot.hello;
       const stopGateway = context.gateway.subscribe((snapshot) => {
         recoverSessionRoute();
         if (lastHello === snapshot.hello) {
@@ -406,6 +439,13 @@ export async function startApplicationRouter(
         });
       });
       const stopHistory = history.listen((next) => {
+        if (context.nativeConversation?.interceptNavigation(next)) {
+          const current = router.getState().location;
+          if (current) {
+            history.replace(current);
+          }
+          return;
+        }
         const canonical = canonicalRouteLocation(
           routeIdFromPath(next.pathname, basePath),
           next,

@@ -1,3 +1,4 @@
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -11,7 +12,8 @@ import {
   resolveMigrationProviderPublicArtifacts,
   type MigrationProviderArtifactPlugin,
 } from "./migration-provider-public-artifacts.js";
-import { getPluginValueInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -86,13 +88,22 @@ function resolveMigrationProviderPluginResolution(params: {
 }
 
 function mergeMigrationProviders(
-  left: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
-  right: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
+  ...registries: Array<
+    | {
+        plugins?: PluginRegistry["plugins"];
+        migrationProviders: ReadonlyArray<{ pluginId: string; provider: MigrationProviderPlugin }>;
+      }
+    | undefined
+  >
 ): MigrationProviderPlugin[] {
   const merged = new Map<string, MigrationProviderPlugin>();
-  for (const entry of [...left, ...right]) {
-    if (!merged.has(entry.provider.id)) {
-      merged.set(entry.provider.id, entry.provider);
+  for (const registry of registries) {
+    for (const { pluginId, provider } of registry?.migrationProviders ?? []) {
+      if (!merged.has(provider.id)) {
+        const record = registry?.plugins?.find((entry) => entry.id === pluginId);
+        const instance = record && getPluginInstance(record);
+        merged.set(provider.id, instance?.wrap(provider) ?? provider);
+      }
     }
   }
   return [...merged.values()].toSorted((a, b) => a.id.localeCompare(b.id));
@@ -108,68 +119,81 @@ export async function withPluginMigrationProviders<T>(
   },
   run: (providers: MigrationProviderPlugin[]) => Promise<T>,
 ): Promise<T> {
-  const activeRegistry = getLoadedRuntimePluginRegistry();
-  const activeProviders = activeRegistry?.migrationProviders ?? [];
-  if (
-    params.providerId &&
-    activeProviders.some(({ provider }) => provider.id === params.providerId)
-  ) {
-    return await run(mergeMigrationProviders(activeProviders, []));
-  }
-  const resolution = resolveMigrationProviderPluginResolution(params);
-  if (params.providerId) {
-    const providers = resolveMigrationProviderPublicArtifacts({
-      plugins: resolution.publicPlugins,
-      providerId: params.providerId,
-    });
-    if (providers.length > 0) {
-      return await run(mergeMigrationProviders(activeProviders, providers));
-    }
-  }
-  if (
-    resolution.pluginIds.length === 0 ||
-    getLoadedRuntimePluginRegistry({ requiredPluginIds: resolution.pluginIds })
-  ) {
-    return await run(mergeMigrationProviders(activeProviders, []));
-  }
-  const compatConfig = withBundledPluginEnablementCompat({
-    config: params.cfg,
-    pluginIds: resolution.bundledCompatPluginIds,
+  return await runWithLocalStateOwner({
+    method: "migrate",
+    params: {},
+    target: params.providerId ?? "migration providers",
+    onForeignOwner: "refuse",
+    runLocal: async (scope) => {
+      const { assertCurrent } = scope;
+      assertCurrent();
+      const config = params.cfg ?? scope.config;
+      const consume = async (providers: MigrationProviderPlugin[]) => {
+        assertCurrent();
+        return await run(providers);
+      };
+      const activeRegistry = getLoadedRuntimePluginRegistry();
+      const activeProviders = activeRegistry?.migrationProviders ?? [];
+      if (
+        params.providerId &&
+        activeProviders.some(({ provider }) => provider.id === params.providerId)
+      ) {
+        return await consume(mergeMigrationProviders(activeRegistry));
+      }
+      const resolution = resolveMigrationProviderPluginResolution({ ...params, cfg: config });
+      if (params.providerId) {
+        const providers = resolveMigrationProviderPublicArtifacts({
+          plugins: resolution.publicPlugins,
+          providerId: params.providerId,
+        });
+        if (providers.length > 0) {
+          return await consume(
+            mergeMigrationProviders(activeRegistry, { migrationProviders: providers }),
+          );
+        }
+      }
+      if (
+        resolution.pluginIds.length === 0 ||
+        getLoadedRuntimePluginRegistry({ requiredPluginIds: resolution.pluginIds })
+      ) {
+        return await consume(mergeMigrationProviders(activeRegistry));
+      }
+      const compatConfig = withBundledPluginEnablementCompat({
+        config,
+        pluginIds: resolution.bundledCompatPluginIds,
+      });
+      const acquisition = await acquirePluginRegistryForInspection({
+        ...(compatConfig === undefined ? {} : { config: compatConfig }),
+        onlyPluginIds: resolution.pluginIds,
+      });
+      let result: T;
+      try {
+        result = await consume(mergeMigrationProviders(activeRegistry, acquisition.registry));
+      } catch (error) {
+        const failures = [error];
+        try {
+          await acquisition.release();
+        } catch (disposalError) {
+          failures.push(disposalError);
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            "Migration failed and its plugin resources could not be disposed",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      try {
+        await acquisition.release();
+      } catch (error) {
+        if (!params.onCleanupError) {
+          throw error;
+        }
+        await params.onCleanupError(error);
+      }
+      return result;
+    },
   });
-  const acquisition = await acquirePluginRegistryForInspection({
-    ...(compatConfig === undefined ? {} : { config: compatConfig }),
-    onlyPluginIds: resolution.pluginIds,
-  });
-  const providers = mergeMigrationProviders(
-    activeProviders,
-    acquisition.registry.migrationProviders,
-  ).map((provider) => getPluginValueInstance(provider)?.wrap(provider) ?? provider);
-  let result: T;
-  try {
-    result = await run(providers);
-  } catch (error) {
-    const failures = [error];
-    try {
-      await acquisition.release();
-    } catch (disposalError) {
-      failures.push(disposalError);
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(
-        failures,
-        "Migration failed and its plugin resources could not be disposed",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  try {
-    await acquisition.release();
-  } catch (error) {
-    if (!params.onCleanupError) {
-      throw error;
-    }
-    await params.onCleanupError(error);
-  }
-  return result;
 }

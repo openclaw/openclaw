@@ -1,5 +1,5 @@
-// Clipboard copy helper shared by chat copy affordances.
-//
+import { resolveTransientContainer } from "../components/transient-container.ts";
+
 // The async Clipboard API is only exposed in secure contexts (HTTPS or
 // localhost). On plain-HTTP deployments (e.g. LAN access) `navigator.clipboard`
 // is undefined, so calling it throws synchronously rather than rejecting. Guard
@@ -44,14 +44,20 @@ function copyWithExecCommand(text: string): boolean {
   // Keep the scratch node off-screen so the selection does not scroll or flash.
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
+  // Outside an active modal the document is inert, so its selection cannot be copied.
+  const layers = [...(document.openClawModalLayers ?? [])].filter((modal) => modal.isConnected);
+  const container = resolveTransientContainer(layers.toReversed(), document);
+  if (!container) {
+    return false;
+  }
+  container.appendChild(textarea);
   textarea.select();
   try {
     return document.execCommand("copy");
   } catch {
     return false;
   } finally {
-    document.body.removeChild(textarea);
+    textarea.remove();
     if (previouslyFocused?.isConnected) {
       // Deferred focus must retain its document after that environment's globals retire.
       const ownerDocument = textarea.ownerDocument;

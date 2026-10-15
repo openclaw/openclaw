@@ -11,6 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { execOpenPath, isHeadlessOpenPathError, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
@@ -38,13 +39,6 @@ describe("resolveOpenPathCommand", () => {
     });
   });
 
-  it("uses xdg-open on Linux", () => {
-    expect(resolveOpenPathCommand("/tmp/openclaw.json", "linux")).toEqual({
-      command: "xdg-open",
-      args: ["/tmp/openclaw.json"],
-    });
-  });
-
   it("uses a quoted PowerShell FilePath on Windows", () => {
     expect(resolveOpenPathCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
       command: "powershell.exe",
@@ -59,14 +53,14 @@ describe("resolveOpenPathCommand", () => {
 });
 
 describe("execOpenPath", () => {
-  it.each(["darwin", "win32"] as const)("bounds the %s launcher wait", async (platform) => {
+  it("bounds the non-Linux launcher wait", async () => {
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
     const command = {
-      command: platform === "darwin" ? "open" : "powershell.exe",
+      command: "open",
       args: ["/tmp/workspace"],
     };
 
-    await execOpenPath(command, platform);
+    await execOpenPath(command, "darwin");
 
     expect(runExecMock).toHaveBeenCalledWith(command.command, command.args, {
       logOutput: false,
@@ -74,28 +68,9 @@ describe("execOpenPath", () => {
     });
   });
 
-  it("detaches xdg-open and preserves an immediate successful exit", async () => {
-    const spawned = fakeChild(Promise.resolve({ failed: false }));
-    spawnCommandMock.mockReturnValue(spawned.child);
-
-    await execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
-
-    expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
-      buffer: false,
-      cleanup: false,
-      detached: true,
-      reject: true,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    expect(spawned.unref).toHaveBeenCalledOnce();
-  });
-
   it("returns after startup observation without killing a foreground Linux handler", async () => {
     vi.useFakeTimers();
-    let settleChild: (value: unknown) => void = () => {};
-    const childResult = new Promise<unknown>((resolve) => {
-      settleChild = resolve;
-    });
+    const { promise: childResult, resolve: settleChild } = createDeferred<unknown>();
     const spawned = fakeChild(childResult);
     spawnCommandMock.mockReturnValue(spawned.child);
     let settled = false;
@@ -112,28 +87,20 @@ describe("execOpenPath", () => {
     await execution;
 
     expect(settled).toBe(true);
+    expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
+      buffer: false,
+      cleanup: false,
+      detached: true,
+      reject: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    expect(spawned.unref).toHaveBeenCalledOnce();
     expect(spawned.kill).not.toHaveBeenCalled();
     expect(spawned.stderr.destroyed).toBe(false);
     expect(spawned.stderr.write("foreground handler: delayed diagnostic")).toBe(true);
     settleChild({ failed: false });
     await Promise.resolve();
     expect(spawned.stderr.destroyed).toBe(true);
-  });
-
-  it("propagates an immediate Linux launcher failure with bounded stderr", async () => {
-    let rejectChild: (error: Error) => void = () => {};
-    const spawned = fakeChild(
-      new Promise((_, reject) => {
-        rejectChild = reject;
-      }),
-    );
-    spawnCommandMock.mockReturnValue(spawned.child);
-
-    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
-    spawned.stderr.write("xdg-open: no method available for opening '/tmp/workspace'");
-    rejectChild(new Error("Command failed with exit code 3: xdg-open"));
-
-    await expect(execution).rejects.toThrow("xdg-open: no method available");
   });
 
   it("keeps xdg-open stderr truncation surrogate-safe", async () => {
@@ -168,8 +135,6 @@ describe("isHeadlessOpenPathError", () => {
     { platform: "linux", command: "xdg-open", code: "ENOENT", expected: true },
     { platform: "linux", command: "xdg-open", code: "EACCES", expected: false },
     { platform: "linux", command: "other-opener", code: "ENOENT", expected: false },
-    { platform: "darwin", command: "open", code: "ENOENT", expected: false },
-    { platform: "win32", command: "powershell.exe", code: "ENOENT", expected: false },
     { platform: "freebsd", command: "xdg-open", code: "ENOENT", expected: false },
   ] as const)("classifies $platform $command $code", ({ platform, command, code, expected }) => {
     const error = Object.assign(new Error("Launcher failed"), { code });

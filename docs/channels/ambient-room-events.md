@@ -52,7 +52,7 @@ Two settings silently disable ambient room events even when `unmentionedInbound:
 }
 ```
 
-Check the effective surface with `openclaw agents list` and a probe turn rather than assuming the profile includes it.
+Check the effective surface with `openclaw agents list` and a test conversation rather than assuming the profile includes it.
 
 After saving the config, the Gateway hot-applies `messages` settings. With `gateway.reload.mode: "off"`, restart manually to apply the change.
 
@@ -184,7 +184,6 @@ Use an agent override when several agents share the same room but only one shoul
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           unmentionedInbound: "room_event",
           mentionPatterns: ["@openclaw", "openclaw"],
@@ -201,7 +200,7 @@ The agent-specific `agents.entries.*.groupChat.unmentionedInbound` value overrid
 
 `messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when final assistant text should post visibly without an explicit message-tool call.
 
-For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` is still recommended, especially with latest-generation, tool-reliable models such as GPT-5.6 Sol. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed-delivery metadata.
+For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` is still recommended with models that reliably use tools. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed-delivery metadata.
 
 Room events stay strict even when other group requests use automatic replies. Unmentioned ambient room events always require `message(action=send)` for visible output.
 

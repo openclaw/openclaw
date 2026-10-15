@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;
@@ -25,15 +26,25 @@ export function createStubSessionHarness(): {
   session: EmbeddedAgentSession;
   emit: (evt: unknown) => void;
 } {
-  let handler: ((evt: unknown) => void) | undefined;
+  let handlers: Array<(evt: unknown) => void> = [];
   const session = {
+    sessionManager: { [sessionManagerReadTranscriptStart]: () => null },
     subscribe: (fn: (evt: unknown) => void) => {
-      handler = fn;
-      return () => {};
+      handlers = [...handlers, fn];
+      return () => {
+        handlers = handlers.filter((handler) => handler !== fn);
+      };
     },
   } as unknown as EmbeddedAgentSession;
 
-  return { session, emit: (evt: unknown) => handler?.(evt) };
+  return {
+    session,
+    emit: (evt: unknown) => {
+      for (const handler of handlers) {
+        handler(evt);
+      }
+    },
+  };
 }
 
 export function createSubscribedSessionHarness(
@@ -236,4 +247,27 @@ export function expectSingleAgentEventText(calls: Array<unknown[]>, text: string
   expect(payloads).toHaveLength(1);
   expect(payloads[0]?.text).toBe(text);
   expect(payloads[0]?.delta).toBe(text);
+}
+
+export function emitToolRun(params: {
+  emit: (evt: unknown) => void;
+  toolName: string;
+  toolCallId: string;
+  args?: Record<string, unknown>;
+  isError: boolean;
+  result: unknown;
+}): void {
+  params.emit({
+    type: "tool_execution_start",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    args: params.args,
+  });
+  params.emit({
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    isError: params.isError,
+    result: params.result,
+  });
 }

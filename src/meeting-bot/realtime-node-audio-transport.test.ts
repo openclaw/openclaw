@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
@@ -117,12 +118,14 @@ describe("node meeting realtime audio transport", () => {
     }
     await transport.writeOutput(output);
     const health = transport.getHealth?.();
-    transport.startInput(() => {});
+    const onAudio = vi.fn();
+    transport.startInput(onAudio);
     await transport.stop();
     pendingPull.resolve({ base64: output.toString("base64") });
     await setImmediate();
 
     expect(transport.getHealth?.()).toEqual(health);
+    expect(onAudio).not.toHaveBeenCalled();
   });
 
   it("fences output writes across clear and stop", async () => {
@@ -170,11 +173,13 @@ describe("node meeting realtime audio transport", () => {
   });
 
   it("serializes output commands for legacy node hosts", async () => {
+    const pushStarted = createDeferredCore();
     let releasePush: (() => void) | undefined;
     const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
       if (params.action === "pushAudio") {
         await new Promise<void>((resolve) => {
           releasePush = resolve;
+          pushStarted.resolve();
         });
       }
       return { ok: true };
@@ -183,9 +188,10 @@ describe("node meeting realtime audio transport", () => {
 
     const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
     const clearing = transport.clearOutput();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -246,11 +252,13 @@ describe("node meeting realtime audio transport", () => {
   });
 
   it("stops a legacy node host without waiting for blocked output", async () => {
+    const pushStarted = createDeferredCore();
     let releasePush: (() => void) | undefined;
     const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
       if (params.action === "pushAudio") {
         await new Promise<void>((resolve) => {
           releasePush = resolve;
+          pushStarted.resolve();
         });
       } else if (params.action === "stop") {
         releasePush?.();
@@ -261,9 +269,10 @@ describe("node meeting realtime audio transport", () => {
 
     const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
     const clearing = transport.clearOutput();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
     await transport.stop();
     await Promise.all([pushing, clearing]);
 

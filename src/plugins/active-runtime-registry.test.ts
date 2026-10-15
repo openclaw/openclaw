@@ -387,9 +387,7 @@ it("does not reuse a different explicitly selected bundled entry", () => {
   const runtime = writePlugin({
     id: "entry-fixture",
     filename: "index.cjs",
-    body: `module.exports = { id: "entry-fixture", register(api) {
-      api.registerProvider({ id: "entry-provider", label: "Old", auth: [] });
-    }};`,
+    registration: `api.registerProvider({ id: "entry-provider", label: "Old", auth: [] });`,
   });
   const selectedSource = path.join(runtime.dir, "selected.cjs");
   writeFileSync(

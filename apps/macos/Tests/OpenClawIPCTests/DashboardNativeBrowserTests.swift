@@ -134,6 +134,7 @@ struct DashboardNativeBrowserContractTests {
     }
 
     @Test func `state uses the web contract keys and preserves creation order and opener provenance`() throws {
+        let favicon = "data:image/png;base64,AQID"
         let state = DashboardBrowserState(revision: 7, tabs: [
             .init(
                 id: "mac-first",
@@ -144,7 +145,8 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: true,
                 canGoForward: false,
                 openedBy: "web",
-                openerTabId: nil),
+                openerTabId: nil,
+                favicon: nil),
             .init(
                 id: "mac-second",
                 sessionKey: "session-a",
@@ -154,7 +156,8 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: false,
                 canGoForward: false,
                 openedBy: "native",
-                openerTabId: "mac-first"),
+                openerTabId: "mac-first",
+                favicon: favicon),
         ])
         let encoded = try JSONEncoder().encode(state)
         let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
@@ -181,6 +184,7 @@ struct DashboardNativeBrowserContractTests {
                     "canGoForward": false,
                     "openedBy": "native",
                     "openerTabId": "mac-first",
+                    "favicon": favicon,
                 ],
             ],
         ]
@@ -198,7 +202,8 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: false,
                 canGoForward: false,
                 openedBy: "web",
-                openerTabId: nil)])
+                openerTabId: nil,
+                favicon: nil)])
             let encoded = try JSONEncoder().encode(state)
             let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
             let tabs = try #require(actual["tabs"] as? [[String: Any]])
@@ -208,21 +213,43 @@ struct DashboardNativeBrowserContractTests {
         }
     }
 
+    @Test func `favicon results accept only bounded image data URLs`() {
+        let prefix = "data:image/png;base64,"
+        let maximum = prefix + String(repeating: "A", count: 98304 - prefix.utf8.count)
+        for favicon in [prefix + "AQID", "data:image/SVG+xml;base64,AQID", maximum] {
+            #expect(DashboardNativeBrowserHost.acceptedFavicon(favicon) == favicon)
+        }
+        let invalid: [Any?] = [
+            nil, NSNull(), 42, false,
+            "https://example.test/favicon.ico",
+            "data:text/plain;base64,AQID",
+            "data:image/svg+xml;charset=utf-8;base64,AQID",
+            "data:image/png;base64,",
+            "data:image/png;base64,???",
+            "data:image/ſvg+xml;base64,AQID",
+            "data:image/png;base64,KQID",
+            maximum + "A",
+        ]
+        for value in invalid {
+            #expect(DashboardNativeBrowserHost.acceptedFavicon(value) == nil)
+        }
+    }
+
     @MainActor
     @Test func `new windows route HTTP reading links and ignore blank popups`() throws {
         let url = try #require(URL(string: "https://example.test/new"))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: true) == .openTab(url))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: false) == .openExternal(url))
         for sourceIsNativeReadingTab in [false, true] {
             for address in ["about:blank", "file:///tmp/private", "mailto:reader@example.test"] {
                 let target = try #require(URL(string: address))
-                #expect(DashboardWindowController.newWindowAction(
+                #expect(ControlUIDocumentHost.newWindowAction(
                     for: target,
                     sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
             }
-            #expect(DashboardWindowController.newWindowAction(
+            #expect(ControlUIDocumentHost.newWindowAction(
                 for: nil, sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
         }
     }
@@ -231,12 +258,12 @@ struct DashboardNativeBrowserContractTests {
     @Test func `reading browser navigation reserves auxiliary schemes for subframes`() throws {
         let webURL = try #require(URL(string: "https://example.test/"))
         let blankURL = try #require(URL(string: "about:blank"))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
+        #expect(!ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
         for address in ["file:///tmp/private", "mailto:reader@example.test"] {
-            #expect(try !DashboardWindowController.shouldAllowBrowserNavigation(
+            #expect(try !ControlUIDocumentHost.shouldAllowBrowserNavigation(
                 to: #require(URL(string: address)), isMainFrame: false))
         }
     }
@@ -251,20 +278,20 @@ struct DashboardNativeBrowserContractTests {
             (false, false, .cancel),
         ]
         for testCase in cases {
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: false,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == testCase.expected)
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: true,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == .allow)
         }
         for address in ["file:///private/download", "mailto:reader@example.test", "about:blank"] {
             let target = try #require(URL(string: address))
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: target, canShowMIMEType: false,
                 isMainFrame: true, userActivated: true) == .cancel)
         }
-        #expect(DashboardWindowController.browserResponseAction(
+        #expect(ControlUIDocumentHost.browserResponseAction(
             for: nil, canShowMIMEType: false, isMainFrame: true, userActivated: true) == .cancel)
     }
 
@@ -287,6 +314,23 @@ struct DashboardNativeBrowserContractTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardNativeBrowserHostTests {
+    @Test func `navigation clears only the navigating tab's favicon from state`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let blank = try #require(URL(string: "about:blank"))
+        let favicon = "data:image/png;base64,AQID"
+        for tabId in ["mac-first", "mac-second"] {
+            try fixture.host.open(tabId: tabId, url: blank, sessionKey: "")
+            let webView = try #require(fixture.host.webView(for: tabId))
+            let browser = try #require(fixture.host.browserTab(for: webView))
+            browser.favicon = favicon
+        }
+        #expect(fixture.host.state.tabs.map(\.favicon) == [favicon, favicon])
+        let first = try #require(fixture.host.webView(for: "mac-first"))
+        try fixture.host.navigationWillStart(#require(URL(string: "https://example.test/next")), in: first)
+        #expect(fixture.host.state.tabs.map(\.favicon) == [nil, favicon])
+    }
+
     @Test func `releasing a presentation keeps window tabs alive and closing removes only its tab`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }

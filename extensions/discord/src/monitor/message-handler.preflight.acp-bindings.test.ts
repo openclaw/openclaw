@@ -1,26 +1,9 @@
-// Discord tests cover message handler.preflight.acp bindings plugin behavior.
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
-  const { createConfiguredBindingConversationRuntimeModuleMock } =
-    await import("../test-support/configured-binding-runtime.js");
-  return await createConfiguredBindingConversationRuntimeModuleMock(
-    {
-      ensureConfiguredBindingRouteReadyMock,
-      resolveConfiguredBindingRouteMock,
-    },
-    () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
-        "openclaw/plugin-sdk/conversation-binding-runtime",
-      ),
-  );
-});
-
 import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
@@ -30,47 +13,46 @@ import {
   DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
 
+const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
+  const { createConfiguredBindingConversationRuntimeModuleMock } =
+    await import("../test-support/configured-binding-runtime.js");
+  return await createConfiguredBindingConversationRuntimeModuleMock(
+    { ensureConfiguredBindingRouteReadyMock, resolveConfiguredBindingRouteMock },
+    () =>
+      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
+        "openclaw/plugin-sdk/conversation-binding-runtime",
+      ),
+  );
+});
+
 const GUILD_ID = "guild-1";
 const CHANNEL_ID = "channel-1";
-
-function createConfiguredDiscordBinding() {
-  return {
-    spec: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: CHANNEL_ID,
-      agentId: "codex",
-      mode: "persistent",
-    },
-    record: {
-      bindingId: "config:acp:discord:default:channel-1",
-      targetSessionKey: "agent:codex:acp:binding:discord:default:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: CHANNEL_ID,
-      },
-      status: "active",
-      boundAt: 0,
-      metadata: {
-        source: "config",
-        mode: "persistent",
-        agentId: "codex",
-      },
-    },
-  } as const;
-}
+const SESSION_KEY = "agent:codex:acp:binding:discord:default:abc123";
+const AUTHOR = { id: "user-1", bot: false, username: "alice" };
 
 function createConfiguredDiscordRoute() {
-  const configuredBinding = createConfiguredDiscordBinding();
+  const conversation = { channel: "discord", accountId: "default", conversationId: CHANNEL_ID };
+  const record = {
+    bindingId: "config:acp:discord:default:channel-1",
+    targetSessionKey: SESSION_KEY,
+    targetKind: "session",
+    conversation,
+    status: "active",
+    boundAt: 0,
+    metadata: { source: "config", mode: "persistent", agentId: "codex" },
+  } as const;
+  const statefulTarget = {
+    kind: "stateful",
+    driverId: "acp",
+    sessionKey: SESSION_KEY,
+    agentId: "codex",
+  } as const;
   return {
     bindingResolution: {
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: CHANNEL_ID,
-      },
+      conversation,
       compiledBinding: {
         channel: "discord",
         accountPattern: "default",
@@ -80,52 +62,29 @@ function createConfiguredDiscordRoute() {
           match: {
             channel: "discord",
             accountId: "default",
-            peer: {
-              kind: "channel",
-              id: CHANNEL_ID,
-            },
+            peer: { kind: "channel", id: CHANNEL_ID },
           },
         },
         bindingConversationId: CHANNEL_ID,
-        target: {
-          conversationId: CHANNEL_ID,
-        },
+        target: { conversationId: CHANNEL_ID },
         agentId: "codex",
         provider: {
           compileConfiguredBinding: () => ({ conversationId: CHANNEL_ID }),
           matchInboundConversation: () => ({ conversationId: CHANNEL_ID }),
         },
-        targetFactory: {
-          driverId: "acp",
-          materialize: () => ({
-            record: configuredBinding.record,
-            statefulTarget: {
-              kind: "stateful",
-              driverId: "acp",
-              sessionKey: configuredBinding.record.targetSessionKey,
-              agentId: configuredBinding.spec.agentId,
-            },
-          }),
-        },
+        targetFactory: { driverId: "acp", materialize: () => ({ record, statefulTarget }) },
       },
-      match: {
-        conversationId: CHANNEL_ID,
-      },
-      record: configuredBinding.record,
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: configuredBinding.record.targetSessionKey,
-        agentId: configuredBinding.spec.agentId,
-      },
+      match: { conversationId: CHANNEL_ID },
+      record,
+      statefulTarget,
     },
-    configuredBinding,
-    boundSessionKey: configuredBinding.record.targetSessionKey,
+    configuredBinding: { spec: { ...conversation, agentId: "codex", mode: "persistent" }, record },
+    boundSessionKey: SESSION_KEY,
     route: {
       agentId: "codex",
       accountId: "default",
       channel: "discord",
-      sessionKey: configuredBinding.record.targetSessionKey,
+      sessionKey: SESSION_KEY,
       mainSessionKey: "agent:codex:main",
       matchedBy: "binding.channel",
       lastRoutePolicy: "bound",
@@ -133,97 +92,28 @@ function createConfiguredDiscordRoute() {
   } as const;
 }
 
-function createBasePreflightParams(overrides?: Record<string, unknown>) {
-  const message = createDiscordMessage({
-    id: "m-1",
-    channelId: CHANNEL_ID,
-    content: "<@bot-1> hello",
-    mentionedUsers: [{ id: "bot-1" }],
-    author: {
-      id: "user-1",
-      bot: false,
-      username: "alice",
-    },
-  });
-
+function preflightParams(
+  message: ReturnType<typeof createDiscordMessage>,
+  enabled: boolean,
+  client = createGuildTextClient(CHANNEL_ID),
+) {
   return {
     ...createDiscordPreflightArgs({
       cfg: DEFAULT_PREFLIGHT_CFG,
-      discordConfig: {
-        allowBots: true,
-      } as NonNullable<
-        import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
-      >["discord"],
+      discordConfig: { allowBots: true },
       data: createGuildEvent({
         channelId: CHANNEL_ID,
         guildId: GUILD_ID,
         author: message.author,
         message,
       }),
-      client: createGuildTextClient(CHANNEL_ID),
+      client,
       botUserId: "bot-1",
     }),
-    discordConfig: {
-      allowBots: true,
-    } as NonNullable<
-      import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
-    >["discord"],
-    ...overrides,
-  } satisfies Parameters<typeof preflightDiscordMessage>[0];
-}
-
-function createAllowedGuildEntries(requireMention = false) {
-  return {
-    [GUILD_ID]: {
-      id: GUILD_ID,
-      channels: {
-        [CHANNEL_ID]: {
-          enabled: true,
-          requireMention,
-        },
-      },
+    guildEntries: {
+      [GUILD_ID]: { id: GUILD_ID, channels: { [CHANNEL_ID]: { enabled, requireMention: false } } },
     },
   };
-}
-
-function createHydratedGuildClient(restPayload: Record<string, unknown>) {
-  const restGet = vi.fn(async () => restPayload);
-  const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
-    rest: {
-      get: restGet,
-    },
-  }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
-  return { client, restGet };
-}
-
-async function runRestHydrationPreflight(params: {
-  messageId: string;
-  restPayload: Record<string, unknown>;
-}) {
-  const message = createDiscordMessage({
-    id: params.messageId,
-    channelId: CHANNEL_ID,
-    content: "",
-    author: {
-      id: "user-1",
-      bot: false,
-      username: "alice",
-    },
-  });
-  const { client, restGet } = createHydratedGuildClient(params.restPayload);
-  const result = await preflightDiscordMessage(
-    createBasePreflightParams({
-      client,
-      data: createGuildEvent({
-        channelId: CHANNEL_ID,
-        guildId: GUILD_ID,
-        author: message.author,
-        message,
-      }),
-      guildEntries: createAllowedGuildEntries(false),
-    }),
-  );
-  return { result, restGet };
 }
 
 describe("preflightDiscordMessage configured ACP bindings", () => {
@@ -242,133 +132,39 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        guildEntries: {
-          [GUILD_ID]: {
-            id: GUILD_ID,
-            channels: {
-              [CHANNEL_ID]: {
-                enabled: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(result).toBeNull();
+    const message = createDiscordMessage({
+      id: "m-1",
+      channelId: CHANNEL_ID,
+      content: "<@bot-1> hello",
+      mentionedUsers: [{ id: "bot-1" }],
+      author: AUTHOR,
+    });
+    expect(await preflightDiscordMessage(preflightParams(message, false))).toBeNull();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
-  it("initializes configured ACP bindings only after preflight accepts the message", async () => {
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        guildEntries: {
-          [GUILD_ID]: {
-            id: GUILD_ID,
-            channels: {
-              [CHANNEL_ID]: {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
-  });
-
-  it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
+  it("hydrates sticker-only guild messages before admitting the configured ACP route", async () => {
     const message = createDiscordMessage({
-      id: "m-no-mention",
+      id: "1002",
       channelId: CHANNEL_ID,
-      content: "hello",
-      mentionedUsers: [],
-      author: {
-        id: "user-1",
-        bot: false,
-        username: "alice",
-      },
+      content: "",
+      author: AUTHOR,
     });
-
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        data: createGuildEvent({
-          channelId: CHANNEL_ID,
-          guildId: GUILD_ID,
-          author: message.author,
-          message,
-        }),
-        guildEntries: createAllowedGuildEntries(false),
-      }),
-    );
-
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
-  });
-
-  it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
-    const { result, restGet } = await runRestHydrationPreflight({
-      messageId: "m-rest",
-      restPayload: {
-        id: "m-rest",
-        content: "hello from rest",
-        attachments: [],
-        embeds: [],
-        mentions: [],
-        mention_roles: [],
-        mention_everyone: false,
-        author: {
-          id: "user-1",
-          username: "alice",
-        },
-      },
-    });
-
-    expect(restGet).toHaveBeenCalledTimes(1);
-    expect(result?.messageText).toBe("hello from rest");
-    expect(result?.data.message.content).toBe("hello from rest");
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("hydrates sticker-only guild message payloads from REST before ensuring configured ACP bindings", async () => {
-    const { result, restGet } = await runRestHydrationPreflight({
-      messageId: "m-rest-sticker",
-      restPayload: {
-        id: "m-rest-sticker",
-        content: "",
-        attachments: [],
-        embeds: [],
-        mentions: [],
-        mention_roles: [],
-        mention_everyone: false,
-        sticker_items: [
-          {
-            id: "sticker-1",
-            name: "wave",
-          },
-        ],
-        author: {
-          id: "user-1",
-          username: "alice",
-        },
-      },
-    });
-
+    const restGet = vi.fn(async () => ({
+      ...message.rawData,
+      sticker_items: [{ id: "sticker-1", name: "wave" }],
+    }));
+    const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
+      rest: { get: restGet },
+    }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+    const result = await preflightDiscordMessage(preflightParams(message, true, client));
     expect(restGet).toHaveBeenCalledTimes(1);
     expect(result?.messageText).toBe("");
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(result?.boundSessionKey).toBe(SESSION_KEY);
+    expect(result?.boundAgentId).toBe("codex");
+    expect(result?.route.sessionKey).toBe(SESSION_KEY);
+    expect(result?.route.agentId).toBe("codex");
   });
 });

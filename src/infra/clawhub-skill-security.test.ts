@@ -10,6 +10,7 @@ vi.mock("./clawhub-skills.js", () => ({
   fetchClawHubSkillVerification: mocks.fetchClawHubSkillVerification,
 }));
 
+import { createDeferred } from "../../test/helpers/promise.js";
 import { fetchExactClawHubSkillSecurityVerdicts } from "./clawhub-skill-security.js";
 
 describe("fetchExactClawHubSkillSecurityVerdicts", () => {
@@ -98,10 +99,7 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
   it("bounds concurrent exact verify fallbacks on older registries", async () => {
     let activeFallbacks = 0;
     let maxActiveFallbacks = 0;
-    let releaseFallbacks: (() => void) | undefined;
-    const fallbackGate = new Promise<void>((resolve) => {
-      releaseFallbacks = resolve;
-    });
+    const { promise: fallbackGate, resolve: releaseFallbacks } = createDeferred();
     mocks.fetchClawHubSkillSecurityVerdicts.mockImplementation(
       async ({ items }: { items: Array<{ slug: string; version: string }> }) => ({
         schema: "clawhub.skill.security-verdicts.v1",

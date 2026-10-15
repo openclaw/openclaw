@@ -1,4 +1,5 @@
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
   toInternalMessageReceivedContext,
@@ -7,7 +8,6 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { createInternalHookEvent, triggerInternalHook } from "./dispatch-from-config.runtime.js";
 
 type MessageReceivedHookContext = ReturnType<typeof deriveInboundMessageHookContext>;
 

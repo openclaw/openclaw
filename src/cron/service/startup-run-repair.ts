@@ -3,11 +3,9 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
-import type { CronJob, CronRunStatus } from "../types.js";
-import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
-import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -16,14 +14,6 @@ import {
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
-export type InterruptedStartupRun = {
-  jobId: string;
-  taskRunId?: string;
-  runAtMs: number;
-  durationMs: number;
-  replacementAtMs?: number;
-};
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {
@@ -39,36 +29,30 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
 }
 
 export function markInterruptedStartupRun(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
-  taskRunId?: string;
   runningAtMs: number;
+  preservedOccurrenceAtMs?: number;
   nowMs: number;
-  recoverInterruptedOneShot?: boolean;
-  deferredNotifications?: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
-  const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
-  // A persisted running marker means the gateway stopped mid-run; mark it as a
-  // normal failed run so retries, alerts, and run logs all see one outcome.
-  const previousErrors =
-    typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
-      ? Math.max(0, Math.floor(job.state.consecutiveErrors))
-      : 0;
-
+  const replacementAtMs =
+    params.preservedOccurrenceAtMs ?? resolveOneShotReplacementAtMs(job, runningAtMs);
+  // An interrupted run remains visible, but is not a failure of the job itself.
   params.state.deps.log.warn(
     { jobId: job.id, runningAtMs },
     "cron: marking interrupted running job failed on startup",
   );
 
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.state.lastRunAtMs = runningAtMs;
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";
   job.state.lastError = STARTUP_INTERRUPTED_ERROR;
   job.state.lastErrorReason = undefined;
   job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
-  job.state.consecutiveErrors = previousErrors + 1;
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
@@ -80,45 +64,13 @@ export function markInterruptedStartupRun(params: {
   job.state.startupCatchupAtMs = undefined;
   job.updatedAtMs = nowMs;
 
-  const alertConfig = resolveFailureAlert(params.state, job);
-  const autoDisableNotificationOwnsFailure = maybeAutoDisableCronJobAfterRunFailure({
-    state: params.state,
-    job,
-    atMs: nowMs,
-    deferredNotifications: params.deferredNotifications,
-  });
-  if (autoDisableNotificationOwnsFailure) {
-    params.state.deps.log.error(
-      { jobId: job.id, name: job.name, consecutiveErrors: job.state.consecutiveErrors },
-      "cron: auto-disabled interrupted job after consecutive run failures",
-    );
-  }
-  finalizeCronFailureNotifications(params.state, {
-    job,
-    alertConfig,
-    result: {
-      status: "error",
-      error: STARTUP_INTERRUPTED_ERROR,
-      startedAt: runningAtMs,
-    },
-    completionFailed: false,
-    autoDisableNotificationOwnsFailure,
-    deferredNotifications: params.deferredNotifications,
-  });
-
-  // Live owner reclamation consumes an already-started one-shot. Only startup
-  // recovery may replay it; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
+  // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
+  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
   }
 
   return {
     jobId: job.id,
-    ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
@@ -126,14 +78,15 @@ export function markInterruptedStartupRun(params: {
 }
 
 export function restoreFinalizedStartupRun(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   runningAtMs: number;
+  preservedOccurrenceAtMs?: number;
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
   triggerStateRetired?: boolean;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): { shouldDelete: boolean; replacementAtMs?: number } | undefined {
   const { state, job, runningAtMs, entry } = params;
   const triggerOwnership = params.triggerStateRetired ? "stale" : "current";
@@ -146,13 +99,19 @@ export function restoreFinalizedStartupRun(params: {
     );
     return undefined;
   }
-  const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
+  const replacementAtMs =
+    (entry.nextRunAtMs === params.preservedOccurrenceAtMs
+      ? params.preservedOccurrenceAtMs
+      : undefined) ?? resolveOneShotReplacementAtMs(job, startedAt);
   const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
-  // Finalization writes history first, so a later one-shot slot or disable in
-  // the job row owns lifecycle state when startup replays that older history.
+  // Committed edits own scheduling even if the clock repeats or moves back.
+  // Legacy split-write finalization can leave a newer retry deadline in the job row.
   const scheduleOwnership =
-    job.schedule.kind === "at" &&
-    (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt))
+    typeof job.state.runningScheduleChangeId === "string" ||
+    (job.schedule.kind === "at" &&
+      (!job.enabled ||
+        replacementAtMs !== undefined ||
+        (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt)))
       ? "stale"
       : "current";
   // A once result can record no next run before a later edit retires its
@@ -171,6 +130,7 @@ export function restoreFinalizedStartupRun(params: {
       {
         scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
         triggerOwnership,
+        replay: true,
         deferredNotifications: params.deferredNotifications,
       },
     );
@@ -179,18 +139,19 @@ export function restoreFinalizedStartupRun(params: {
       ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
     };
   }
+  const completionStatus =
+    entry.completionStatus ??
+    resolveCronCompletionStatus({
+      status: entry.status,
+      delivered: entry.delivered,
+      deliveryStatus: entry.deliveryStatus,
+    });
   const shouldDelete = applyJobResult(
     state,
     job,
     {
       ...entry,
-      completionStatus:
-        entry.completionStatus ??
-        resolveCronCompletionStatus({
-          status: entry.status,
-          delivered: entry.delivered,
-          deliveryStatus: entry.deliveryStatus,
-        }),
+      completionStatus,
       // Recovery uses the finished run's fact, never the job's possibly edited route.
       deliveryState: {
         delivered: entry.delivered,
@@ -220,9 +181,10 @@ export function restoreFinalizedStartupRun(params: {
     job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery.status;
     job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery.error;
     const lastAlert = job.state.lastFailureAlertAtMs;
-    // Recorded alert intent owns its cooldown even if today's route/policy changed.
+    // Failure alert intent owns its cooldown; a recorded recovery notice does not reopen it.
     if (
       entry.failureNotificationDelivery.status !== "not-requested" &&
+      completionStatus !== "succeeded" &&
       (lastAlert === undefined || lastAlert < endedAt || lastAlert > state.deps.nowMs())
     ) {
       job.state.lastFailureAlertAtMs = endedAt;
@@ -250,7 +212,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
-    "cron: restored finalized task-ledger run on startup",
+    "cron: restored finalized run history on startup",
   );
   return {
     shouldDelete,

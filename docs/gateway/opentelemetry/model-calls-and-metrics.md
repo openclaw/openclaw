@@ -29,6 +29,11 @@ request latency separate from full-turn latency. OpenClaw's OTEL model-call
 metrics also include `openclaw.model_call.observation_unit`; the Prometheus
 model-call metrics expose the equivalent `observation_unit` label.
 
+Request-level telemetry also covers native background completions, including
+session titles, Activity recaps, and plugin `runtime.llm.complete` calls.
+Each request records a start and one completion or error with its duration;
+token and cost accounting remains separate in `model.usage`.
+
 ## Claude Code CLI model-call fidelity
 
 Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`
@@ -103,7 +108,7 @@ bounds; content remains off by default.
 
 ### Gateway RPC
 
-Authenticated Gateway WebSocket requests emit these metrics while diagnostics
+Authenticated Gateway WebSocket requests, including dedicated worker RPCs, emit these metrics while diagnostics
 and an interested exporter are enabled. They exclude the connection handshake,
 malformed request frames, and HTTP routes.
 
@@ -113,19 +118,30 @@ malformed request frames, and HTTP routes.
 | `openclaw.gateway.rpc.first_response_ms` | histogram | Receipt through the first successfully sent response              |
 | `openclaw.gateway.rpc.handler_ms`        | histogram | Actual handler invocation through return or throw                 |
 | `openclaw.gateway.rpc.admission_ms`      | histogram | Receipt through actual handler invocation                         |
-| `openclaw.gateway.rpc.queue_wait_ms`     | histogram | Wait for operator request start permission, when applicable       |
+| `openclaw.gateway.rpc.queue_wait_ms`     | histogram | Operator start-queue or worker frame-queue wait, when applicable  |
 | `openclaw.gateway.rpc.outcomes`          | counter   | Observations by phase and outcome                                 |
 
-Request and timing metrics have only `openclaw.gateway.rpc.method`: a canonical
-core method name, `other` for plugin methods, or `unknown`. Outcome metrics have
+Request and timing metrics have only `openclaw.gateway.rpc.method`: an exact
+core, worker, or registered plugin method name, `other` for unregistered generic
+requests, or `unknown` for unrecognized dedicated worker RPCs. Outcome metrics have
 only `openclaw.gateway.rpc.phase` and `openclaw.gateway.rpc.outcome`, so errors do
 not multiply every method's series. No request, connection, session, or trace IDs
 appear in metric attributes.
 
-Admission includes authorization, lazy router and handler loading, and operator
-start-queue wait. Queue wait is a subset of admission for handlers that start; it is separate
-from command/session lane `openclaw.queue.wait_ms`. Handler and admission samples
-exist only for invoked handlers. Queue wait is recorded when dispatch settles.
+Operator admission includes authorization, lazy router and handler loading, and
+start-queue wait. Worker admission includes the socket FIFO wait and outer frame
+validation. Worker handler duration includes method validation and service invocation.
+Worker timing starts at the JavaScript socket callback, excluding network delay
+and event-loop delay before that callback. Queue wait is a subset of admission
+for handlers that start, separate from command/session lane `openclaw.queue.wait_ms`.
+Handler and admission samples exist only for invoked handlers. Queue wait is
+recorded when dispatch settles.
+
+Worker inference-start timing measures acceptance and setup, not provider completion.
+Long worker computer and session operations retain their handler timing after
+releasing the socket FIFO. Worker dispatch outcomes describe return or throw.
+Connection closure can suppress a response after successful execution and does
+not by itself prove execution cancellation.
 
 A sent response means the WebSocket sender accepted the frame, not that the
 client received it. Early acknowledgments count as the first response; later
@@ -265,6 +281,10 @@ see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-w
 - `openclaw.tool.execution.duration_ms` (histogram, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, plus `openclaw.errorCategory` on errors)
 - `openclaw.tool.execution.blocked` (counter, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, `openclaw.deniedReason`)
 - `openclaw.tool.loop` (counter, attrs: `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`; emitted when a repetitive tool-call loop is detected)
+
+Exact string and array parameter lengths are recorded on tool spans, not metric
+labels. This keeps cumulative tool metrics from retaining a separate series for
+every observed length.
 
 ### Exec
 

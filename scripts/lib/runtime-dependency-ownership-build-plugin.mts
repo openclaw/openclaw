@@ -4,7 +4,7 @@ import type { TsdownPlugin } from "tsdown";
 import {
   RUNTIME_DEPENDENCY_OWNERSHIP_ASSET_NAME,
   type RuntimeDependencyOwnership,
-} from "./runtime-dependency-ownership-contract.mts";
+} from "../../src/infra/runtime-dependency-ownership.ts";
 
 export function createRuntimeDependencyOwnershipBuildPlugin(rootDir = process.cwd()): TsdownPlugin {
   return {

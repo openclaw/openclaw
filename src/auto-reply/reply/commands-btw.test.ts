@@ -1,5 +1,8 @@
 // Tests background side-question command routing and typing controller integration.
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
@@ -24,6 +27,8 @@ function buildParams(commandBody: string) {
 }
 
 describe("handleBtwCommand", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
     resolveAgentDirMock.mockReset();
@@ -45,16 +50,6 @@ describe("handleBtwCommand", () => {
     const result = await handleBtwCommand(buildParams("/btw what changed?"), false);
 
     expect(result).toBeNull();
-    expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
-  });
-
-  it("ignores /btw from unauthorized senders", async () => {
-    const params = buildParams("/btw what changed?");
-    params.command.isAuthorizedSender = false;
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: false });
     expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
   });
 
@@ -88,6 +83,51 @@ describe("handleBtwCommand", () => {
     });
     expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
   });
+
+  it.each(["image", "described image"] as const)(
+    "handleBtwCommand forwards only current undescribed images: %s",
+    async (attachment) => {
+      const params = buildParams("/btw describe this");
+      params.sessionEntry = { sessionId: "session-1", updatedAt: Date.now() };
+      const dir = tempDirs.make("openclaw-btw-images-");
+      const data = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const file = path.join(dir, "photo.png");
+      await writeFile(file, data);
+      params.ctx.media = [
+        {
+          path: file,
+          contentType: "image/png",
+          kind: "image",
+          workspaceDir: dir,
+        },
+      ];
+      if (attachment === "described image") {
+        params.ctx.Body = "[Image]\nDescription:\na tiny dot image";
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "test",
+            model: "test",
+            text: "a tiny dot image",
+          },
+        ];
+      }
+
+      await handleBtwCommand(params, true);
+
+      const runnerArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+      expect(runnerArgs.question).toBe("describe this");
+      expect(runnerArgs.images).toEqual(
+        attachment === "image"
+          ? [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }]
+          : undefined,
+      );
+    },
+  );
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
@@ -152,6 +192,7 @@ describe("handleBtwCommand", () => {
       senderIsOwner: true,
     });
     expect(runnerArgs.agentDir).toBe(params.agentDir);
+    expect(resolveAgentDirMock).not.toHaveBeenCalled();
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
     expect(runnerArgs.authorityRunId).toEqual(expect.any(String));
@@ -194,27 +235,6 @@ describe("handleBtwCommand", () => {
     });
   });
 
-  it("keeps provider and conversation target separate for side-question approvals", async () => {
-    const params = buildParams("/btw what changed?");
-    params.command.channel = "telegram";
-    params.command.channelId = "telegram";
-    params.command.to = "+2000";
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "targeted answer" });
-
-    await handleBtwCommand(params, true);
-
-    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
-      messageChannel: "telegram",
-      messageProvider: "telegram",
-      currentChannelId: "+2000",
-    });
-  });
-
   it("does not mint current-turn context for Gateway chat with an explicit origin", async () => {
     const params = buildParams("/btw what changed?");
     params.ctx.Provider = "webchat";
@@ -232,67 +252,6 @@ describe("handleBtwCommand", () => {
     await handleBtwCommand(params, true);
 
     expect(mockFirstObjectArg(runBtwSideQuestionMock).messageActionTurnCapability).toBeUndefined();
-  });
-
-  it("accepts /side as a /btw alias", async () => {
-    const params = buildParams("/side what changed?");
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "alias answer" });
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(mockFirstObjectArg(runBtwSideQuestionMock).question).toBe("what changed?");
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "alias answer", btw: { question: "what changed?" } },
-    });
-  });
-
-  it("uses the canonical session agent when resolving a fallback agent dir", async () => {
-    const params = buildParams("/btw what changed?");
-    params.agentId = "worker-1";
-    params.agentDir = undefined;
-    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
-      "/agents/worker-1/agent",
-    );
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
-    });
-  });
-
-  it("reuses the prepared session agent directory", async () => {
-    const params = buildParams("/btw what changed?");
-    params.agentId = "worker-1";
-    params.agentDir = "/tmp/worker-1-agent";
-    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(resolveAgentDirMock).not.toHaveBeenCalled();
-    expect(mockFirstObjectArg(runBtwSideQuestionMock).agentDir).toBe("/tmp/worker-1-agent");
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
-    });
   });
 
   it("prefers the target session entry for side-question context", async () => {

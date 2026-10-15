@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -320,12 +321,9 @@ describe("public GPT-Live WebRTC broker", () => {
   );
 
   it("hangs up a session allocated after cancellation without attaching its sideband", async () => {
-    let finishCreation!: (response: Response) => void;
-    const creation = new Promise<Response>((resolve) => {
-      finishCreation = resolve;
-    });
+    const creation = createDeferred<Response>();
     const fetchImpl = vi.fn<typeof fetch>(async (url) =>
-      url === HANGUP_URL ? new Response(null, { status: 204 }) : creation,
+      url === HANGUP_URL ? new Response(null, { status: 204 }) : creation.promise,
     );
     const fixture = createBroker({ fetchImpl });
     try {
@@ -338,7 +336,7 @@ describe("public GPT-Live WebRTC broker", () => {
       await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
       const canceling = fixture.realtime.broker.cancelBrowserSession(reservation);
       expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-      finishCreation(liveResponse());
+      creation.resolve(liveResponse());
       await Promise.all([handling, canceling]);
 
       expect(response.res.statusCode).toBe(502);
@@ -354,7 +352,7 @@ describe("public GPT-Live WebRTC broker", () => {
         reservations: 0,
       });
     } finally {
-      finishCreation(liveResponse());
+      creation.resolve(liveResponse());
       await fixture.realtime.cleanup();
     }
   });

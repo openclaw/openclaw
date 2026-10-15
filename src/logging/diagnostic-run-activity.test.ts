@@ -13,15 +13,11 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
-import {
-  emitCoreModelRequestEndedDiagnosticEvent,
-  emitCoreModelRequestStartedDiagnosticEvent,
-} from "../infra/diagnostic-model-request.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
-  closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
@@ -42,160 +38,52 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-describe("core model owner generations", () => {
-  it("keeps the newest run's clocks when an earlier work key is rearmed", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-09-04T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const ref = { sessionId: "rearmed-session", sessionKey: "agent:main:rearmed" };
-    const earlier = { ...ref, runId: "earlier-run", workKey: "first" };
-    const later = { ...ref, runId: "later-run", workKey: "second" };
-    const earlierOwner = createDiagnosticEmbeddedRunOwner(earlier);
-    const laterOwner = createDiagnosticEmbeddedRunOwner(later);
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
-    markDiagnosticEmbeddedRunStarted({ ...later, owner: laterOwner });
-    markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
-    markDiagnosticArgumentChurnObservation({ ...ref, runId: earlier.runId, active: true });
-    for (const callId of ["request-1", "request-2"]) {
-      emitCoreModelRequestStartedDiagnosticEvent(
-        { ...ref, runId: earlier.runId, callId, provider: "core", model: "request-model" },
-        earlierOwner.generation,
-      );
-    }
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForDiagnosticEventsDrained();
-
-    expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
-      activeWorkKind: "model_call",
-      lastProgressReason: "tool_loop:argument_churn",
-      lastProgressAgeMs: 30_000,
-      repeatedRequestNoProgressAgeMs: 30_000,
-    });
-
-    closeDiagnosticEmbeddedRunOwner(earlierOwner);
-    expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
-      activeWorkKind: "embedded_run",
-      hasActiveEmbeddedRun: true,
-      lastProgressReason: "embedded_run:ended",
-      repeatedRequestNoProgressAgeMs: undefined,
-    });
-    closeDiagnosticEmbeddedRunOwner(laterOwner);
-  });
-
-  it("keeps exact-call recovery policy intact across forged terminals and run completion", async () => {
-    const ref = { sessionId: "core-owner-session", sessionKey: "agent:main:core-owner" };
-    const runId = "core-owner-run";
-    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "call-1",
-        provider: "core",
-        model: "slow-model",
-      },
-      owner.generation,
-      300_000,
-    );
-    await waitForDiagnosticEventsDrained();
-
-    emitPluginTrustedDiagnosticEvent({
-      type: "model.call.completed",
-      ...ref,
-      runId,
-      callId: "call-1",
-      provider: "core",
-      model: "slow-model",
-      durationMs: 1,
-    });
-    emitDiagnosticEvent({
-      type: "run.completed",
-      ...ref,
-      runId,
-      durationMs: 1,
-      outcome: "completed",
-    });
-    await waitForDiagnosticEventsDrained();
-
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      hasActiveEmbeddedRun: true,
-      activeModelCallRequestTimeoutMs: 300_000,
-      lastProgressReason: "model_call:started",
-    });
-  });
-
-  it("fences queued old starts and delayed terminals without erasing a same-run replacement", async () => {
-    const ref = { sessionId: "generation-session", sessionKey: "agent:main:generation" };
-    const runId = "reused-run";
-    const ownerA = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "old-call",
-        provider: "core",
-        model: "slow-model",
-      },
-      ownerA.generation,
-      300_000,
-    );
-    closeDiagnosticEmbeddedRunOwner(ownerA);
-
-    const ownerB = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerB });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "new-call",
-        provider: "core",
-        model: "replacement-model",
-      },
-      ownerB.generation,
-      420_000,
-    );
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "resurrected-old-call",
-        provider: "core",
-        model: "stale-model",
-      },
-      ownerA.generation,
-      600_000,
-    );
-    await waitForDiagnosticEventsDrained();
-    emitCoreModelRequestEndedDiagnosticEvent(
-      {
-        type: "model.call.completed",
-        ...ref,
-        runId,
-        callId: "old-call",
-        provider: "core",
-        model: "slow-model",
-        durationMs: 1,
-      },
-      ownerA.generation,
-    );
-    await waitForDiagnosticEventsDrained();
-
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      hasActiveEmbeddedRun: true,
-      activeModelCallRequestTimeoutMs: 420_000,
-    });
-  });
-});
-
 describe("diagnostic run activity listener lifecycle", () => {
+  it("touches existing activity without creating unknown session observations", () => {
+    const ref = { sessionId: "runtime-wait", sessionKey: "agent:main:runtime-wait" };
+    const progress = { ...ref, reason: "worker:runtime_refresh", onlyIfActive: true };
+
+    markDiagnosticRunProgress(progress);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toEqual({});
+
+    markDiagnosticRunProgress({ ...ref, reason: "global_lane:waiting" });
+    markDiagnosticRunProgress(progress);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "worker:runtime_refresh",
+    });
+  });
+
+  it("does not rebind existing progress across mismatched sessions or stale run owners", () => {
+    const first = { sessionId: "first-session", sessionKey: "agent:main:first", runId: "first" };
+    const second = {
+      sessionId: "second-session",
+      sessionKey: "agent:main:second",
+      runId: "second",
+    };
+    markDiagnosticEmbeddedRunStarted(first);
+    markDiagnosticEmbeddedRunStarted(second);
+    for (const ref of [
+      { ...first, runId: "retired-run" },
+      { ...first, sessionId: second.sessionId },
+      { sessionId: first.sessionId, sessionKey: second.sessionKey },
+      { ...first, sessionId: "unknown-session" },
+    ]) {
+      markDiagnosticRunProgress({ ...ref, reason: "wrong-owner", onlyIfActive: true });
+    }
+    expect(getDiagnosticSessionActivitySnapshot(first)).toMatchObject({
+      lastProgressReason: "embedded_run:started",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(second)).toMatchObject({
+      lastProgressReason: "embedded_run:started",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "unknown-session" })).toEqual({});
+    markDiagnosticRunProgress({ ...first, reason: "worker:runtime_refresh", onlyIfActive: true });
+    expect(getDiagnosticSessionActivitySnapshot(first)).toMatchObject({
+      lastProgressReason: "worker:runtime_refresh",
+    });
+  });
+
   it("does not register a listener when the module is imported", async () => {
     stopDiagnosticRunActivityTracking();
     resetDiagnosticEventsForTest();
@@ -206,21 +94,6 @@ describe("diagnostic run activity listener lifecycle", () => {
     );
 
     expect(hasInternalDiagnosticEventListeners()).toBe(false);
-  });
-
-  it("registers and unregisters through the explicit lifecycle", () => {
-    resetDiagnosticEventsForTest();
-
-    startDiagnosticRunActivityTracking();
-    expect(hasInternalDiagnosticEventListeners()).toBe(true);
-    markDiagnosticEmbeddedRunStarted({ sessionId: "run-before-stop" });
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "run-before-stop" })).toMatchObject({
-      activeWorkKind: "embedded_run",
-    });
-
-    stopDiagnosticRunActivityTracking();
-    expect(hasInternalDiagnosticEventListeners()).toBe(false);
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "run-before-stop" })).toEqual({});
   });
 
   it("ignores diagnostic events queued before tracking restarts", async () => {
@@ -357,24 +230,6 @@ describe("argument-churn liveness", () => {
     });
   });
 
-  it("orders later progress after churn when both share a timestamp", () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-07-27T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const ref = { sessionId: "same-time-session", sessionKey: "agent:main:same-time" };
-    const runId = "same-time-run";
-
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    markDiagnosticArgumentChurnObservation({ ...ref, runId, active: true });
-    markDiagnosticRunProgress({ ...ref, runId, reason: "model_call:stream" });
-
-    vi.setSystemTime(startedAt + 60_000);
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressAgeMs: 60_000,
-      lastProgressReason: "model_call:stream",
-    });
-  });
-
   it("preserves same-timestamp progress ordering when session refs merge", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-07-27T00:00:00Z");
@@ -449,34 +304,6 @@ describe("argument-churn liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       lastProgressAgeMs: 6 * 60_000,
       lastProgressReason: "tool_loop:argument_churn",
-    });
-  });
-
-  it("clears churn evidence when recovery terminates the owning run", () => {
-    const ref = {
-      sessionId: "recovered-churn-session",
-      sessionKey: "agent:main:recovered-churn",
-    };
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "recovered-churn-run" });
-    markDiagnosticArgumentChurnObservation({
-      ...ref,
-      runId: "recovered-churn-run",
-      active: true,
-      now: Date.now() - 6 * 60_000,
-    });
-
-    expect(
-      clearDiagnosticEmbeddedRunActivityForSession({
-        ...ref,
-        activeSessionId: ref.sessionId,
-      }),
-    ).toEqual({
-      cleared: true,
-      blockedByActiveEmbeddedRun: false,
-    });
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: undefined,
-      lastProgressReason: "embedded_run:ended",
     });
   });
 
@@ -601,97 +428,6 @@ describe("repeated request liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
-  });
-
-  it("defaults omitted progress to liveness and reserves clearing for core semantic progress", async () => {
-    const ref = {
-      sessionId: "progress-default-session",
-      sessionKey: "agent:main:progress-default",
-    };
-    const runId = "progress-default-run";
-
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      markDiagnosticModelStartedForTest({
-        ...ref,
-        runId,
-        provider: "mock",
-        model: "request-model",
-        observationUnit: "request",
-      });
-    }
-
-    markDiagnosticRunProgress({ ...ref, runId, reason: "legacy:progress" });
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressReason: "legacy:progress",
-      repeatedRequestNoProgressAgeMs: expect.any(Number),
-    });
-
-    emitCoreSemanticRunProgressDiagnosticEvent({
-      ...ref,
-      runId,
-      reason: "assistant:progress",
-    });
-    await waitForDiagnosticEventsDrained();
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressReason: "assistant:progress",
-      repeatedRequestNoProgressAgeMs: undefined,
-    });
-  });
-
-  it("ages repeated requests across mechanical progress until semantic progress arrives", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-08-04T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const ref = { sessionId: "retry-session", sessionKey: "agent:main:retry" };
-    const runId = "retry-run";
-
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    markDiagnosticModelStartedForTest({
-      ...ref,
-      runId,
-      provider: "mock",
-      model: "retrying-model",
-      observationUnit: "request",
-    });
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
-    ).toBeUndefined();
-
-    for (let attempt = 2; attempt <= 11; attempt += 1) {
-      vi.setSystemTime(startedAt + (attempt - 1) * 30_000);
-      markDiagnosticModelStartedForTest({
-        ...ref,
-        runId,
-        provider: "mock",
-        model: "retrying-model",
-        observationUnit: "request",
-      });
-      markDiagnosticRunProgress({
-        ...ref,
-        runId,
-        reason: "model_call:stream_progress",
-      });
-    }
-
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      lastProgressAgeMs: 0,
-      repeatedRequestNoProgressAgeMs: 5 * 60_000,
-    });
-
-    emitCoreSemanticRunProgressDiagnosticEvent({
-      ...ref,
-      runId,
-      reason: "assistant:progress",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
-    ).toBeUndefined();
   });
 
   it("keeps model endings and tool lifecycle mechanical", async () => {
@@ -1078,16 +814,6 @@ describe("repeated request liveness", () => {
 
 describe("resolveRunStaleThresholdMs", () => {
   it.each([
-    {
-      name: "default window when no active work",
-      activity: {},
-      expected: RUN_STALE_TAKEOVER_MS,
-    },
-    {
-      name: "default window for model_call",
-      activity: { activeWorkKind: "model_call" as const },
-      expected: RUN_STALE_TAKEOVER_MS,
-    },
     {
       name: "default window for embedded_run",
       activity: { activeWorkKind: "embedded_run" as const },

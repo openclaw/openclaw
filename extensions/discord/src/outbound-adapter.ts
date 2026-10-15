@@ -1,4 +1,3 @@
-// Discord plugin module implements outbound adapter behavior.
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
@@ -15,6 +14,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createDiscordActionGate } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
+import { resolveDiscordAttachedOutboundTarget } from "./channel.conversation.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import {
   discordInboundEventDelivery,
@@ -32,7 +32,6 @@ import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
   resolveDiscordFormattingOptions,
-  resolveDiscordOutboundTarget,
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
@@ -108,21 +107,17 @@ async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageC
   const send =
     resolveOutboundSendDep<DiscordSendFn>(params.deps, "discord") ??
     (await loadDiscordSendRuntime()).sendMessageDiscord;
-  const reply = resolveDiscordReplyReference({
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
-    replyToMode: params.replyToMode,
-  });
+  const reply = resolveDiscordReplyReference(params);
   return {
     send,
-    target: resolveDiscordOutboundTarget({ to: params.to, threadId: params.threadId }),
+    target: resolveDiscordAttachedOutboundTarget(params),
     options: {
       verbose: false as const,
       reply,
       accountId: params.accountId ?? undefined,
       silent: params.silent ?? undefined,
       cfg: params.cfg,
-      ...resolveDiscordFormattingOptions({ formatting: params.formatting }),
+      ...resolveDiscordFormattingOptions(params),
       ...resolveDiscordDeliveryOptions(params),
     },
   };
@@ -151,12 +146,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
-  renderPresentation: async ({ payload, presentation }) => {
-    return await buildDiscordPresentationPayload({
-      payload,
-      presentation,
-    });
-  },
+  renderPresentation: buildDiscordPresentationPayload,
   resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({
@@ -249,7 +239,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       if (!createDiscordActionGate({ cfg, accountId })("polls")) {
         throw new Error("Discord polls are disabled.");
       }
-      const outboundTo = resolveDiscordOutboundTarget({ to, threadId });
+      const outboundTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
       const result = await (
         await loadDiscordSendRuntime()
       ).sendPollDiscord(outboundTo, poll, {
@@ -277,7 +267,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
-      to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
+      to: resolveDiscordAttachedOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
     const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
@@ -286,7 +276,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
     );
     const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
     if (questionId && result && componentSpec) {
-      const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      const to = resolveDiscordAttachedOutboundTarget({ to: target.to, threadId: target.threadId });
       const channelId = result.target?.kind === "channel" ? result.target.id : to;
       questionGatewayRuntime.registerChannelDelivery({
         questionId,
@@ -320,6 +310,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
     if (!manager?.getByThreadId(threadId)) {
       return;
     }
-    manager.touchThread({ threadId });
+    await manager.touchThread({ threadId });
   },
 };

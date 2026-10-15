@@ -211,7 +211,9 @@ describe("web channel package-root monitor", () => {
         { pluginRegistry: first.registry, isWebchatConnect: () => false },
         () => retainedMonitor("stale"),
       ),
-    ).rejects.toThrow(/reloaded|disabled|retiring/);
+    ).rejects.toThrow(
+      "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
+    );
     expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 

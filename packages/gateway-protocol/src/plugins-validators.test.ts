@@ -1,27 +1,69 @@
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-  PluginsListResultSchema,
-  PluginsInspectResultSchema,
   buildCapabilityConsentErrorDetails,
   readCapabilityConsentErrorDetails,
   readInstallPolicyWarningErrorDetails,
   validateCapabilityConsentErrorDetails,
-  validatePluginsInspectParams,
   validatePluginsInstallParams,
-  validatePluginsListParams,
-  validatePluginsRefreshParams,
-  validatePluginsSearchParams,
-  validatePluginsCatalogBrowseParams,
+  validatePluginsReloadParams,
   validatePluginsCatalogGetParams,
   validatePluginsSetEnabledParams,
-  validatePluginsUninstallParams,
   type InstallPolicyWarningErrorDetails,
 } from "./index.js";
 
 describe("plugin lifecycle protocol validators", () => {
+  it("accepts one bounded batch of exact installed owners for reload", () => {
+    const target = { pluginId: "alpha", installHash: "a".repeat(64) };
+    expect(validatePluginsReloadParams({ plugins: [target] })).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: Array.from({ length: 64 }, (_, index) => ({
+          ...target,
+          pluginId: `plugin-${index}`,
+        })),
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }],
+      }),
+    ).toBe(true);
+    for (const request of [
+      { plugins: [] },
+      {
+        plugins: Array.from({ length: 65 }, (_, index) => ({
+          ...target,
+          pluginId: `plugin-${index}`,
+        })),
+      },
+      { plugins: [target, target] },
+      { plugins: [{ ...target, installHash: "" }] },
+      { plugins: [{ ...target, installHash: "A".repeat(64) }] },
+      { plugins: [{ ...target, sourceDigests: { alpha: "not-a-digest" } }] },
+      { plugins: [target], pluginId: "alpha" },
+      { plugins: [{ ...target, trusted: true }] },
+    ]) {
+      expect(validatePluginsReloadParams(request)).toBe(false);
+    }
+  });
+
+  it.each([{ source: "npm", spec: "example-plugin@1.2.3", pin: true, mode: "update" }])(
+    "accepts the CLI's $source install intent without caller trust metadata",
+    (request) => {
+      expect(validatePluginsInstallParams(request)).toBe(true);
+      expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
+      for (const trust of [
+        { trustedSourceLinkedOfficialInstall: true },
+        { bundledOrigin: true },
+        { clawManaged: true },
+      ]) {
+        expect(validatePluginsInstallParams({ ...request, ...trust })).toBe(false);
+      }
+    },
+  );
+
   it("exports install policy warning details from the package root", () => {
     const details: InstallPolicyWarningErrorDetails = {
       installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
@@ -68,148 +110,6 @@ describe("plugin lifecycle protocol validators", () => {
     });
     expect(validateCapabilityConsentErrorDetails(whitespaceDetails)).toBe(true);
     expect(readCapabilityConsentErrorDetails(whitespaceDetails)).toEqual(whitespaceDetails);
-  });
-
-  it("validates plugin metadata refresh params", () => {
-    expect(validatePluginsRefreshParams({})).toBe(true);
-    expect(validatePluginsRefreshParams({ unexpected: true })).toBe(false);
-  });
-
-  it("keeps list params closed", () => {
-    expect(validatePluginsListParams({})).toBe(true);
-    expect(validatePluginsListParams({ unexpected: true })).toBe(false);
-  });
-
-  it("accepts the owner-projected needs-setup catalog state", () => {
-    const result = {
-      plugins: [
-        {
-          id: "needs-config",
-          name: "Needs Config",
-          installed: true,
-          enabled: false,
-          state: "needs-setup",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-
-    expect(Value.Check(PluginsListResultSchema, result)).toBe(true);
-    expect(
-      Value.Check(PluginsListResultSchema, {
-        ...result,
-        plugins: [{ ...result.plugins[0], state: "setup-maybe" }],
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts ordered plugin categories while retaining the primary compatibility field", () => {
-    const result = {
-      plugins: [
-        {
-          id: "memory-tools",
-          name: "Memory Tools",
-          installed: true,
-          enabled: true,
-          state: "enabled",
-          categories: ["memory", "tools"],
-          category: "memory",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-
-    expect(Value.Check(PluginsListResultSchema, result)).toBe(true);
-    expect(
-      Value.Check(PluginsListResultSchema, {
-        ...result,
-        plugins: [{ ...result.plugins[0], categories: ["memory", ""] }],
-      }),
-    ).toBe(false);
-  });
-
-  it("requires exactly one non-empty plugin id for inspection", () => {
-    expect(validatePluginsInspectParams({ pluginId: "workboard" })).toBe(true);
-    expect(validatePluginsInspectParams({ pluginId: "" })).toBe(false);
-    expect(validatePluginsInspectParams({})).toBe(false);
-    expect(validatePluginsInspectParams({ pluginId: "workboard", unexpected: true })).toBe(false);
-  });
-
-  it("requires inspection review tokens and complete declared contract surfaces", () => {
-    const result = {
-      ok: true,
-      plugin: { id: "workboard", name: "Workboard", installed: true, enabled: false },
-      reviewToken: "surface-sha256",
-      declared: {
-        channels: [],
-        providers: [],
-        tools: [],
-        contracts: ["workerProviders: worker"],
-        hooks: [],
-        mcpServers: [],
-        cliCommands: [],
-        cliBackends: [],
-        skills: [],
-        dangerousConfigFlags: [],
-      },
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: true },
-          allowConversationAccess: { effective: false },
-        },
-      },
-      components: {
-        mapped: ["skills", "mcpServers", "commands", "hooks", "lspServers"],
-        skills: ["triage"],
-        mcpServers: ["notion"],
-        commands: ["search"],
-        hooks: ["SessionStart"],
-        lspServers: ["typescript"],
-        unavailable: {
-          capabilities: ["agents"],
-          mcpServers: ["remote-only"],
-          lspServers: [],
-        },
-      },
-    };
-
-    expect(Value.Check(PluginsInspectResultSchema, result)).toBe(true);
-    expect(Value.Check(PluginsInspectResultSchema, { ...result, reviewToken: "" })).toBe(false);
-    expect(
-      Value.Check(PluginsInspectResultSchema, {
-        ...result,
-        components: { ...result.components, unexpected: [] },
-      }),
-    ).toBe(false);
-    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
-    expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
-    const { contracts: _contracts, ...withoutContracts } = result.declared;
-    expect(Value.Check(PluginsInspectResultSchema, { ...result, declared: withoutContracts })).toBe(
-      false,
-    );
-  });
-
-  it("validates bounded plugin search requests", () => {
-    expect(validatePluginsSearchParams({ query: "memory", limit: 20 })).toBe(true);
-    expect(validatePluginsSearchParams({ query: "memory", limit: 101 })).toBe(false);
-  });
-
-  it("validates bounded plugin catalog browse requests", () => {
-    expect(
-      validatePluginsCatalogBrowseParams({
-        query: "memory",
-        intent: "official",
-        category: "memory",
-        cursor: "opaque-cursor",
-        pageSize: 20,
-      }),
-    ).toBe(true);
-    expect(validatePluginsCatalogBrowseParams({ intent: "featured", pageSize: 6 })).toBe(true);
-    expect(validatePluginsCatalogBrowseParams({ pageSize: 101 })).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ cursor: "x".repeat(4097) })).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ intent: "popular" })).toBe(false);
   });
 
   it("accepts only URL-safe plugin discovery ids", () => {
@@ -270,13 +170,44 @@ describe("plugin lifecycle protocol validators", () => {
     ).toBe(false);
   });
 
-  it("validates uninstall requests", () => {
-    expect(validatePluginsUninstallParams({ pluginId: "memory-plus" })).toBe(true);
-    expect(validatePluginsUninstallParams({ pluginId: "" })).toBe(false);
-    expect(validatePluginsUninstallParams({})).toBe(false);
+  it("keeps targeted reload and its capability acknowledgment closed", () => {
+    expect(validatePluginsReloadParams({ plugins: [{ pluginId: "notes" }] })).toBe(true);
+    expect(
+      validatePluginsReloadParams({
+        plugins: [{ pluginId: "notes", installHash: "a".repeat(64) }],
+        acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
+      }),
+    ).toBe(true);
+    for (const request of [
+      {},
+      { pluginId: "notes" },
+      { plugins: [{ pluginId: "" }] },
+      { plugins: [{ pluginId: "notes", enabled: true }] },
+      { plugins: [{ pluginId: "notes" }], acknowledgeCapabilities: true },
+      { plugins: [{ pluginId: "notes" }], acknowledgeCapabilities: { reviewToken: "" } },
+      {
+        plugins: [{ pluginId: "notes" }],
+        acknowledgeCapabilities: { reviewToken: "reviewed", extra: true },
+      },
+    ]) {
+      expect(validatePluginsReloadParams(request)).toBe(false);
+    }
   });
 
   it("validates enablement mutations", () => {
+    expect(
+      validatePluginsSetEnabledParams({
+        pluginId: "workboard",
+        enabled: true,
+        allowlistPolicy: "preserve",
+      }),
+    ).toBe(true);
+    for (const allowlistPolicy of ["widen", "", true, {}]) {
+      expect(
+        validatePluginsSetEnabledParams({ pluginId: "workboard", enabled: true, allowlistPolicy }),
+      ).toBe(false);
+    }
+
     expect(validatePluginsSetEnabledParams({ pluginId: "workboard", enabled: true })).toBe(true);
     expect(
       validatePluginsSetEnabledParams({

@@ -1,37 +1,24 @@
-// Msteams plugin module implements graph chat behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildFileInfoCard } from "./file-consent.js";
 import type { DriveItemProperties } from "./graph-upload.js";
 
-export function buildTeamsFileInfoCard(file: DriveItemProperties): {
-  contentType: string;
-  contentUrl: string;
-  name: string;
-  content: {
-    uniqueId: string;
-    fileType: string;
-  };
-} {
-  // Extract unique ID from eTag (remove quotes, braces, and version suffix)
-  // Example eTag formats: "{GUID},version" or "\"{GUID},version\""
+export function buildTeamsFileInfoCard(file: DriveItemProperties) {
+  // SharePoint eTags wrap the driveItem GUID in quotes/braces and append a version.
   const rawETag = file.eTag;
   const uniqueId =
     rawETag
-      .replace(/^["']|["']$/g, "") // Remove outer quotes
-      .replace(/[{}]/g, "") // Remove curly braces
-      .split(",")[0] ?? rawETag; // Take the GUID part before comma
+      .replace(/^["']|["']$/g, "")
+      .replace(/[{}]/g, "")
+      .split(",")[0] ?? rawETag;
 
-  // Extract file extension from filename
   const lastDot = file.name.lastIndexOf(".");
   const fileType =
     lastDot >= 0 ? normalizeLowercaseStringOrEmpty(file.name.slice(lastDot + 1)) : "";
 
-  return {
-    contentType: "application/vnd.microsoft.teams.card.file.info",
+  return buildFileInfoCard({
+    filename: file.name,
     contentUrl: file.webDavUrl,
-    name: file.name,
-    content: {
-      uniqueId,
-      fileType,
-    },
-  };
+    uniqueId,
+    fileType,
+  });
 }

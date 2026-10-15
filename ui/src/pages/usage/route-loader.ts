@@ -5,6 +5,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { createDefaultUsageDateRange } from "./helpers.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./types.ts";
 
@@ -20,15 +21,13 @@ function errorMessage(error: unknown): string {
 }
 
 export async function loadUsageRouteData(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "gateway" | "agentSelection">,
   options: RouteLoaderOptions,
   snapshot: UsageRouteSnapshot,
 ): Promise<UsageRouteData> {
   const { gateway, gatewaySnapshot, agentId, date } = snapshot;
-  const startDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const query: UsageRouteData["query"] = {
-    startDate,
-    endDate: startDate,
+    ...createDefaultUsageDateRange(date),
     scope: "family",
     timeZone: "local",
     agentId,
@@ -64,9 +63,10 @@ export async function loadUsageRouteData(
       options.signal,
     );
     return result.ok
-      ? { ...pending, ...result.value, loadedAtMs: Date.now() }
+      ? { ...pending, ...result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
       : {
           ...pending,
+          gatewaySnapshot: current,
           providerUsage: result.error.providerUsage,
           error: errorMessage(result.error.cause),
         };

@@ -1,9 +1,42 @@
+import { digestClawValue } from "./digest.js";
 import {
   clawPackageRemovalSelector,
   type ClawPackageInspection,
   type ClawPackageRemovalDecision,
   type ClawReferencedCleanup,
 } from "./package-remove.js";
+import type { PersistedClawInstall } from "./provenance.js";
+
+export function orderClawPackageRemovals(decisions: ClawPackageRemovalDecision[]) {
+  return decisions.toSorted(
+    (left, right) =>
+      Number(left.packageRef.relationship === "referenced") -
+      Number(right.packageRef.relationship === "referenced"),
+  );
+}
+
+/** Omitted cleanup options and their defaults must have the same identity across JSON RPC. */
+export function normalizeClawPackageCleanup(cleanup?: ClawReferencedCleanup) {
+  return {
+    mode: cleanup?.mode ?? "retain",
+    selected: [...(cleanup?.selected ?? [])],
+    allowConflicts: cleanup?.allowConflicts === true,
+  };
+}
+
+export function digestClawPackageRemovalPlan(
+  decisions: ClawPackageRemovalDecision[],
+  cleanup: ClawReferencedCleanup,
+): string {
+  return digestClawValue({
+    decisions: orderClawPackageRemovals(decisions),
+    cleanup: normalizeClawPackageCleanup(cleanup),
+  });
+}
+
+export function digestClawRemovalInstall(install: PersistedClawInstall | undefined): string {
+  return digestClawValue(install ?? null);
+}
 
 type PackageRemoveAction = {
   kind: "packageRef";

@@ -202,6 +202,8 @@ openclaw googlemeet export --conference-record conferenceRecords/abc123 \
   --include-doc-bodies --dry-run
 ```
 
+For `artifacts` and `attendance`, `--output <path>` writes the selected format, including the default summary, to a file. Without `--output`, the report goes to stdout.
+
 `artifacts` returns conference record metadata plus participant, recording, transcript, structured transcript-entry, and smart-note resource metadata when Google exposes it. `--no-transcript-entries` skips entry lookup for large meetings. `attendance` expands participants into participant-session rows with first/last seen times, total session duration, late/early-leave flags, and duplicate participant resources merged by signed-in user or display name; `--no-merge-duplicates` keeps raw resources separate, `--late-after-minutes`/`--early-before-minutes` tune the thresholds.
 
 `export` writes a folder with `summary.md`, `attendance.csv`, `transcript.md`, `artifacts.json`, `attendance.json`, and `manifest.json`. `manifest.json` records the chosen input, export options, conference records, output files, counts, token source, any Calendar event used, and partial-retrieval warnings. `--zip` also writes a portable archive next to the folder. `--include-doc-bodies` exports linked transcript/smart-note Google Docs text through Drive `files.export` (requires the Drive Meet readonly scope); without it, exports include Meet metadata and structured transcript entries only. A partial artifact failure (smart-note listing, transcript-entry, or document-body error) keeps the warning in the summary/manifest instead of failing the whole export. `--dry-run` fetches the same data and prints the manifest JSON without creating the folder or ZIP.

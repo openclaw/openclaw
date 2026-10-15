@@ -21,31 +21,20 @@ export function base64FromDataUrl(value: string): string | undefined {
   return trimmed.slice(commaIndex + 1);
 }
 
-function isBase64Whitespace(value: string): boolean {
-  return value === " " || value === "\n" || value === "\r" || value === "\t";
-}
-
-function isArtifactBase64DataChar(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    value === "+" ||
-    value === "/" ||
-    value === "-" ||
-    value === "_"
-  );
-}
-
-function normalizeArtifactBase64Char(value: string): string {
-  if (value === "-") {
-    return "+";
+function normalizeArtifactBase64Alphabet(value: string): string {
+  if (!/[-_]/.test(value)) {
+    return value;
   }
-  if (value === "_") {
-    return "/";
+  // A byte buffer avoids per-character string allocations for large URL-safe payloads.
+  const bytes = Buffer.from(value, "ascii");
+  for (let index = 0; index < bytes.length; index++) {
+    if (bytes[index] === 0x2d) {
+      bytes[index] = 0x2b;
+    } else if (bytes[index] === 0x5f) {
+      bytes[index] = 0x2f;
+    }
   }
-  return value;
+  return bytes.toString("ascii");
 }
 
 export function readArtifactBase64Payload(
@@ -55,38 +44,31 @@ export function readArtifactBase64Payload(
   if (value === undefined) {
     return undefined;
   }
-  let encodedLength = 0;
-  let padding = 0;
-  let sawPadding = false;
-  let data = opts.includeData ? "" : undefined;
-  for (const char of value) {
-    if (isBase64Whitespace(char)) {
-      continue;
-    }
-    if (char === "=") {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
+  if (/[^A-Za-z0-9+/_= \n\r\t-]/.test(value)) {
+    return undefined;
+  }
+  const paddingStart = value.indexOf("=");
+  if (paddingStart >= 0 && !/^(?:=[ \n\r\t]*){1,2}$/.test(value.slice(paddingStart))) {
+    return undefined;
+  }
+  const padding = paddingStart < 0 ? 0 : value.lastIndexOf("=") === paddingStart ? 1 : 2;
+  const hasWhitespace = /[ \n\r\t]/.test(value);
+  let encodedLength = value.length;
+  if (hasWhitespace) {
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index);
+      if (code === 0x20 || code === 0x0a || code === 0x0d || code === 0x09) {
+        encodedLength -= 1;
       }
-      sawPadding = true;
-      encodedLength += 1;
-      if (data !== undefined) {
-        data += char;
-      }
-      continue;
-    }
-    if (sawPadding || !isArtifactBase64DataChar(char)) {
-      return undefined;
-    }
-    encodedLength += 1;
-    if (data !== undefined) {
-      data += normalizeArtifactBase64Char(char);
     }
   }
   const remainder = encodedLength % 4;
   if ((padding > 0 && remainder !== 0) || remainder === 1) {
     return undefined;
   }
+  let data = opts.includeData
+    ? normalizeArtifactBase64Alphabet(hasWhitespace ? value.replace(/[ \n\r\t]/g, "") : value)
+    : undefined;
   if (data !== undefined && padding === 0 && remainder > 0) {
     data += "=".repeat(4 - remainder);
   }

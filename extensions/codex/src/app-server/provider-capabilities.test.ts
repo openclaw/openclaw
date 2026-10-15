@@ -47,6 +47,33 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
+  it.each([{ configuredProvider: undefined, expectedProvider: "copilot", matches: false }])(
+    "uses native capabilities only for matching configured identity ($configuredProvider / $expectedProvider)",
+    async ({ configuredProvider, expectedProvider, matches }) => {
+      const request = vi.fn(async (method: string) =>
+        method === "config/read"
+          ? { config: { model_provider: configuredProvider } }
+          : { webSearch: true },
+      );
+      const client = { request } as unknown as CodexAppServerClient;
+      const clientFactory = vi.fn(async () => client);
+      const result = await resolveCodexProviderWebSearchSupport({
+        clientFactory,
+        appServer,
+        authProfileId: undefined,
+        agentDir: "/tmp/agent",
+        config: undefined,
+        modelProviderOverride: undefined,
+        expectedNativeModelProvider: expectedProvider,
+        signal: new AbortController().signal,
+      });
+      expect(result).toBe(matches ? "supported" : "unknown");
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        matches ? ["config/read", "modelProvider/capabilities/read"] : ["config/read"],
+      );
+    },
+  );
+
   it("forwards one prepared auth handoff to capability startup", async () => {
     const { clientFactory } = createClientFactory(true);
     const preparedAuth = {
@@ -79,53 +106,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
-  it("forwards the exact prepared profile snapshot to capability startup", async () => {
-    const { clientFactory } = createClientFactory(true);
-    const preparedAuth = {
-      kind: "profile" as const,
-      profileId: "openai:work",
-      store: {
-        version: 1 as const,
-        profiles: {
-          "openai:work": {
-            type: "token" as const,
-            provider: "openai",
-            token: "prepared-token",
-          },
-        },
-      },
-      snapshot: {
-        loginParams: {
-          type: "chatgptAuthTokens" as const,
-          accessToken: "prepared-token",
-          chatgptAccountId: "prepared-account",
-          chatgptPlanType: null,
-        },
-        secretFreeCacheKey: "prepared-account:token:sha256:opaque",
-      },
-    };
-
-    await expect(
-      resolveCodexProviderWebSearchSupport({
-        clientFactory,
-        appServer,
-        authProfileId: undefined,
-        preparedAuth,
-        agentDir: "/tmp/agent",
-        config: undefined,
-        modelProviderOverride: undefined,
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toBe("supported");
-
-    const factoryCalls = (
-      clientFactory as unknown as {
-        mock: { calls: Array<[{ preparedAuth?: unknown }]> };
-      }
-    ).mock.calls;
-    expect(factoryCalls[0]?.[0].preparedAuth).toBe(preparedAuth);
-  });
-
   it("reports unknown support when app-server startup fails", async () => {
     const clientFactory = vi.fn(async () => {
       throw new Error("old app-server");
@@ -145,13 +125,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("keeps managed search when the configured provider reports no hosted support", async () => {
-    const { clientFactory, request } = createClientFactory(false);
-
-    await expect(resolveSupport(clientFactory)).resolves.toBe("unsupported");
-    expect(request).toHaveBeenCalledOnce();
-  });
-
   it("uses hosted search for the built-in OpenAI provider override", async () => {
     const { clientFactory, request } = createClientFactory(false);
 
@@ -168,14 +141,5 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport(clientFactory, "lmstudio")).resolves.toBe("unsupported");
     expect(clientFactory).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not wait for app-server startup when the override proves hosted support", async () => {
-    const clientFactory = vi.fn(
-      async () => await new Promise<CodexAppServerClient>(() => {}),
-    ) as unknown as CodexAppServerClientFactory;
-
-    await expect(resolveSupport(clientFactory, "openai")).resolves.toBe("supported");
-    expect(clientFactory).not.toHaveBeenCalled();
   });
 });

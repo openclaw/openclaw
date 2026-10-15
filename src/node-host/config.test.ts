@@ -1,18 +1,25 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
-  readConfigMachineState,
-  readConfigMachineStateWithMetadata,
-} from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { logInfo } from "../logger.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,
@@ -23,6 +30,8 @@ import {
 
 const fixtureDigest = ["fixture", "digest"].join("-");
 const fixture = createFixtureLifetime();
+
+vi.mock("../logger.js", () => ({ logInfo: vi.fn() }));
 
 async function runConcurrentImplicitConfigures(
   stateDir: string,
@@ -65,23 +74,18 @@ async function runConcurrentImplicitConfigures(
       }),
     );
     return {
-      ready: Promise.race([
+      ready: awaitGateBeforeSettlement(
         ready.promise,
-        outcome.then(() => {
-          throw new Error("configure worker exited before the start barrier");
-        }),
-      ]),
+        outcome,
+        "configure worker exited before the start barrier",
+      ),
       outcome,
     };
   });
 
   try {
     // Both real processes must finish imports before either can choose its implicit id.
-    const children = await withTestTimeout(
-      Promise.all(workers.map(({ ready }) => ready)),
-      15_000,
-      "timed out waiting for concurrent configure workers",
-    );
+    const children = await withinTest(Promise.all(workers.map(({ ready }) => ready)), signal);
     for (const child of children) {
       child.send("start");
     }
@@ -100,6 +104,7 @@ async function runConcurrentImplicitConfigures(
 
 describe("node-host SQLite config", () => {
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fixture.cleanup();
   });
@@ -162,7 +167,7 @@ describe("node-host SQLite config", () => {
       1_234,
     );
     expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -187,12 +192,67 @@ describe("node-host SQLite config", () => {
       nowMs: 2,
     });
     expect(enabled.installedAppsSharing).toBe(true);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
+  it("normalizes command restrictions and preserves them across reopen and endpoint updates", async () => {
+    const { env } = makeTestEnv();
+    await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {},
+      commands: [" fixture.read ", "fixture.list", "fixture.read"],
+      env,
+    });
+    await closeOpenClawStateDatabaseAsync();
+    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({
+      commands: ["fixture.list", "fixture.read"],
+    });
+    await expect(
+      configureNodeHost({ fallbackDisplayName: "node", gateway: { host: "new.example" }, env }),
+    ).resolves.toMatchObject({ commands: ["fixture.list", "fixture.read"] });
+    await configureNodeHost({ fallbackDisplayName: "node", gateway: {}, commands: [], env });
+    await closeOpenClawStateDatabaseAsync();
+    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ commands: [] });
+  });
+
+  it("removes a saved command allowlist durably when all commands are selected", async () => {
+    vi.mocked(logInfo).mockClear();
+    const { env } = makeTestEnv();
+    const params = { fallbackDisplayName: "node", gateway: {}, env };
+    const restricted = await configureNodeHost({ ...params, commands: ["fixture.read"] });
+    const cleared = await configureNodeHost({ ...params, allCommands: true });
+    expect(cleared).not.toHaveProperty("commands");
+    expect(cleared.nodeId).toBe(restricted.nodeId);
+    await closeOpenClawStateDatabaseAsync();
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("commands");
+    await expect(loadNodeHostConfig(env)).resolves.not.toHaveProperty("commands");
+    await expect(configureNodeHost(params)).resolves.not.toHaveProperty("commands");
+    await configureNodeHost({ ...params, allCommands: true });
+    expect(logInfo).toHaveBeenCalledExactlyOnceWith(
+      "node-host: cleared saved command allowlist; advertising the full default command surface",
+    );
+  });
+
+  it.each([{ commands: "fixture.read" }, { commands: [""] }, { commands: [42] }])(
+    "rejects corrupt command restrictions rather than exposing the full host: $commands",
+    async ({ commands }) => {
+      const { env } = makeTestEnv();
+      writeConfigMachineState(
+        NODE_HOST_CONFIG_KEY,
+        { version: 1, nodeId: "node", commands },
+        { env },
+      );
+      await expect(loadNodeHostConfig(env)).rejects.toThrow("invalid node-host commands");
+    },
+  );
+
   it("keeps the first committed implicit node id across processes", async ({ signal }) => {
     const { env, stateDir } = makeTestEnv();
+    // Finish exclusive schema initialization before racing the first node-config writes.
+    openOpenClawStateDatabase({ env });
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     const [first, second] = await fixture.run(() =>
       runConcurrentImplicitConfigures(stateDir, signal),
     );

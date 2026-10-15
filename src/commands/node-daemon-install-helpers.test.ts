@@ -1,5 +1,6 @@
 // Node daemon install helper tests cover node daemon install plans and runtime warnings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as NodeHostConfigModule from "../node-host/config.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePreferredBunPath: vi.fn(),
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildNodeServiceEnvironment: vi.fn(),
+  loadNodeHostConfig: vi.fn(async () => null),
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -24,6 +26,10 @@ vi.mock("../daemon/program-args.js", () => ({
 
 vi.mock("../daemon/service-env.js", () => ({
   buildNodeServiceEnvironment: mocks.buildNodeServiceEnvironment,
+}));
+vi.mock("../node-host/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof NodeHostConfigModule>()),
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 import { buildNodeInstallPlan } from "./node-daemon-install-helpers.js";
@@ -73,7 +79,7 @@ describe("buildNodeInstallPlan", () => {
     });
   });
 
-  it("resolves and forwards Bun for a managed node-host install plan", async () => {
+  it("resolves Bun and forwards command restrictions for a managed node-host install plan", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
     mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
     mocks.resolveNodeProgramArguments.mockResolvedValue({
@@ -86,6 +92,7 @@ describe("buildNodeInstallPlan", () => {
       host: "127.0.0.1",
       port: 18789,
       runtime: "bun",
+      commands: ["fixture.read"],
     });
 
     expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
@@ -93,7 +100,7 @@ describe("buildNodeInstallPlan", () => {
       runtime: "bun",
     });
     expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({ runtime: "bun", runtimePath: bunPath }),
+      expect.objectContaining({ runtime: "bun", runtimePath: bunPath, commands: ["fixture.read"] }),
     );
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -133,7 +140,26 @@ describe("buildNodeInstallPlan", () => {
     });
   });
 
+  it("carries the full-surface reset into the managed node command", async () => {
+    mocks.resolveNodeProgramArguments.mockResolvedValue({
+      programArguments: ["node", "node-host"],
+    });
+    mocks.buildNodeServiceEnvironment.mockReturnValue({});
+    await buildNodeInstallPlan({
+      env: {},
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+      runtimePath: "/custom/node/bin/node",
+      allCommands: true,
+    });
+    expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ allCommands: true, commands: undefined }),
+    );
+  });
+
   it("marks node gateway credentials as file-backed service env", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/usr/bin/node");
     mocks.resolveNodeProgramArguments.mockResolvedValue({
       programArguments: ["node", "node-host"],
       workingDirectory: "/Users/me",

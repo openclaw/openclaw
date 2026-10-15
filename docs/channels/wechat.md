@@ -56,14 +56,12 @@ Manual install:
 
 ```bash
 openclaw plugins install "@tencent-weixin/openclaw-weixin"
-openclaw config set plugins.entries.openclaw-weixin.enabled true
+openclaw plugins enable openclaw-weixin
 ```
 
-Restart the Gateway after install:
-
-```bash
-openclaw gateway restart
-```
+The plugin commands apply changes to a running Gateway. Check the
+[application result](/plugins/manage-plugins#apply-changes-and-inspect); start the
+Gateway if it is offline.
 
 ## Login
 
@@ -95,8 +93,8 @@ SQLite pairing store. When that list is empty, it falls back to the QR scanner's
 saved user ID. If neither provides a user ID, its sender check admits any sender
 whose message reaches the plugin.
 
-On current OpenClaw, startup migration and `openclaw doctor --fix` import legacy
-approvals into SQLite and remove the source file. Previously approved secondary
+On current OpenClaw, `openclaw doctor --fix` imports legacy approvals into SQLite
+and removes the source file. Previously approved secondary
 senders can therefore lose access in version `2.4.8`. Revoking an approval in
 SQLite does not revoke access granted by the plugin's legacy file or scanner
 fallback.
@@ -132,7 +130,6 @@ exported, update to plugin 2.4.8, which uses the available SDK path:
 
 ```bash
 openclaw plugins update @tencent-weixin/openclaw-weixin@2.4.8
-openclaw gateway restart
 ```
 
 ## Sidecar process
@@ -156,12 +153,12 @@ openclaw channels status --probe
 openclaw --version
 ```
 
-If the channel shows as installed but does not connect, confirm that the plugin is
-enabled and restart:
+If the channel shows as installed but does not connect, enable it and inspect the
+running plugin:
 
 ```bash
-openclaw config set plugins.entries.openclaw-weixin.enabled true
-openclaw gateway restart
+openclaw plugins enable openclaw-weixin
+openclaw plugins inspect openclaw-weixin --runtime --json
 ```
 
 If the Gateway restarts repeatedly after enabling WeChat, update both OpenClaw and
@@ -181,8 +178,7 @@ publisher ships a fixed package, or temporarily disable/uninstall the plugin.
 Temporary disable:
 
 ```bash
-openclaw config set plugins.entries.openclaw-weixin.enabled false
-openclaw gateway restart
+openclaw plugins disable openclaw-weixin
 ```
 
 ## Related docs

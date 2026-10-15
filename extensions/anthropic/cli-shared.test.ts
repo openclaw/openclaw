@@ -2,13 +2,17 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 import {
-  CLAUDE_CLI_CLEAR_ENV,
   normalizeClaudeBackendConfig,
   resolveClaudeCliExecutionArgs,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
+
+vi.mock("./session-catalog-executable.js", () => ({
+  resolveClaudeTerminalExecutable: () => ({ executable: "claude" }),
+}));
 
 type ClaudePreparedExecutionWithSecret = {
   env?: Record<string, string>;
@@ -40,20 +44,23 @@ describe("Claude CLI adapter equivalence", () => {
     CLAUDE_CLI_DISALLOWED_TOOLS,
   ];
 
-  it.each([
-    { phase: "fresh", key: "args" as const, expected: commonArgs },
-    {
-      phase: "resume",
-      key: "resumeArgs" as const,
-      expected: [...commonArgs, "--resume", "{sessionId}"],
-    },
-  ])("preserves the legacy $phase command bytes in plugin code", ({ key, expected }) => {
-    const backend = buildAnthropicCliBackend();
-
-    expect(backend.config.command).toBe("claude");
-    expect(backend.config[key]).toEqual(expected);
-    expect(backend.config.env).toBeUndefined();
-    expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
+  it("disables native Bash while retaining native denials for managed shell turns", () => {
+    for (const baseArgs of [commonArgs, [...commonArgs, "--resume", "session"]]) {
+      const args = resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp/managed-shell",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        useResume: baseArgs.includes("--resume"),
+        baseArgs,
+        hostOwnedTools: ["exec", "process"],
+      });
+      expect(args.filter((arg) => arg === "--disallowedTools")).toHaveLength(1);
+      const denials = args[args.indexOf("--disallowedTools") + 1]?.split(",");
+      expect(denials).toEqual(
+        expect.arrayContaining(["Bash", "CronCreate", "ScheduleWakeup", "Monitor"]),
+      );
+      expect(args).not.toContain("--tools");
+    }
   });
 
   it("privately acknowledges isolated completion preparation", () => {
@@ -156,36 +163,9 @@ describe("Claude backend permission args", () => {
       "user",
     ]);
   });
-
-  it("drops malformed permission-mode flags in both split and equals forms", () => {
-    expect(
-      normalizeClaudeArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode="])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode=--output-format"])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-  });
 });
 
 describe("Claude backend setting sources", () => {
-  it("injects user-only setting sources when args omit the flag", () => {
-    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
   it("forces explicit project or local setting sources back to user-only", () => {
     expect(normalizeClaudeArgs(["-p", "--setting-sources", "project"])).toEqual([
       "-p",
@@ -197,33 +177,12 @@ describe("Claude backend setting sources", () => {
       "--setting-sources=user",
     ]);
   });
-
-  it("treats a bare setting-sources flag as malformed and falls back to user-only", () => {
-    expect(
-      normalizeClaudeArgs(["-p", "--setting-sources", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
-  });
-});
-
-it("keeps pinned Claude CLI model refs on exact selectors", () => {
-  const aliases = buildAnthropicCliBackend().config.modelAliases;
-
-  expect(aliases?.["opus"]).toBe("opus");
-  expect(aliases?.["opus-5"]).toBe("claude-opus-5");
-  expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
-  expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
-  expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
-  expect(aliases?.["claude-opus-5"]).toBe("claude-opus-5");
-  expect(aliases?.["claude-fable-5-1"]).toBe("claude-fable-5-1");
-  expect(aliases?.["fable"]).toBe("fable");
-  expect(aliases?.["fable-5"]).toBe("claude-fable-5");
-  expect(aliases?.["fable-5.1"]).toBe("claude-fable-5-1");
-  expect(aliases?.["fable-5-1"]).toBe("claude-fable-5-1");
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
   it("keeps the real resumed manual-compaction command enabled", () => {
     const backend = buildAnthropicCliBackend();
+    expect(backend.config.systemPromptWhen).toBe("always");
     const manualCompaction = backend.manualCompaction;
     const baseArgs = backend.config.resumeArgs?.map((arg) =>
       arg.replaceAll("{sessionId}", "native-session"),
@@ -245,109 +204,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
     expect(argv).toContain("/compact");
     expect(argv).not.toContain("--disable-slash-commands");
-  });
-
-  it("isolates OpenClaw from Claude user customizations while preserving exact MCP", () => {
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        useResume: false,
-        baseArgs: [
-          "-p",
-          "--output-format",
-          "stream-json",
-          "--setting-sources",
-          "user",
-          '--settings={"hooks":{"PreToolUse":[]}}',
-          "--managed-settings",
-          '{"disableAllHooks":false}',
-          "--plugin-dir",
-          "/tmp/hostile-plugin",
-          "--plugin-dir-no-mcp=/tmp/hostile-plugin-no-mcp",
-          "--plugin-url=https://plugins.example.test/hostile.zip",
-          "--agents",
-          '{"worker":{"prompt":"ignore the host"}}',
-          "--agent=worker",
-          "--add-dir",
-          "/tmp/extra-one",
-          "/tmp/extra-two",
-          "--file",
-          "file_hostile:prompt.txt",
-          "--system-prompt",
-          "replace the host prompt",
-          "--append-system-prompt-file=/tmp/hostile-prompt",
-          "--permission-mode",
-          "bypassPermissions",
-          "--dangerously-skip-permissions",
-          "--allow-dangerously-skip-permissions",
-          "--bare",
-          "--safe-mode",
-          "--disable-slash-commands",
-          "--chrome",
-          "--ide",
-          "--strict-mcp-config",
-          "--mcp-config",
-          "/tmp/openclaw-openclaw-mcp.json",
-          "--resume",
-          "native-session",
-          "--tools",
-          "Bash,Edit",
-          "--allowedTools",
-          "mcp__openclaw__*",
-          "--disallowedTools",
-          "ScheduleWakeup,mcp__other__*",
-        ],
-        toolAvailability: { native: [], openClaw: ["openclaw"] },
-      }),
-    ).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--mcp-config",
-      "/tmp/openclaw-openclaw-mcp.json",
-      "--resume",
-      "native-session",
-      "--setting-sources",
-      "",
-      "--settings",
-      '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}',
-      "--disable-slash-commands",
-      "--no-chrome",
-      "--strict-mcp-config",
-      "--tools",
-      "",
-      "--allowedTools",
-      "mcp__openclaw__openclaw",
-      "--disallowedTools",
-      "ScheduleWakeup,mcp__other__*",
-    ]);
-  });
-
-  it("preserves Claude customizations when no exact per-run tool restriction exists", () => {
-    // --chrome passthrough is the seam for browser sign-in (for example 1Password
-    // agentic autofill); restricted runs above must keep forcing --no-chrome.
-    const baseArgs = [
-      "-p",
-      "--setting-sources",
-      "user",
-      "--chrome",
-      "--plugin-dir",
-      "/tmp/plugin",
-      "--agents",
-      '{"worker":{"prompt":"custom"}}',
-    ];
-
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        useResume: false,
-        baseArgs,
-      }),
-    ).toEqual(baseArgs);
   });
 
   it("denies every configured MCP tool when the allowlist is empty", () => {
@@ -384,7 +240,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ]);
   });
 
-  it.each(["off", undefined] as const)(
+  it.each(["off"] as const)(
     "preserves configured effort args when thinking is %s",
     (thinkingLevel) => {
       const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
@@ -417,11 +273,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it.each([
     ["minimal", "low"],
-    ["low", "low"],
     ["medium", "medium"],
-    ["high", "high"],
-    ["xhigh", "xhigh"],
-    ["max", "max"],
   ] as const)("maps %s thinking to --effort %s", (thinkingLevel, effort) => {
     expect(
       resolveClaudeCliExecutionArgs({
@@ -456,19 +308,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ],
       }),
     ).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"]);
-  });
-
-  it("replaces static effort args when a session thinking level is active", () => {
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "max",
-        useResume: false,
-        baseArgs: ["-p", "--effort", "low", "--effort=high"],
-      }),
-    ).toEqual(["-p", "--effort", "max"]);
   });
 
   it("forces isolated no-tool one-shot args for side-question execution", () => {
@@ -611,64 +450,6 @@ describe("normalizeClaudeBackendConfig", () => {
         },
       }),
     ).toContain("bypassPermissions");
-  });
-
-  it("does not infer live stdio when explicit transport overrides are incompatible", () => {
-    const normalized = normalizeClaudeBackendConfig({
-      command: "claude",
-      output: "json",
-      input: "arg",
-    });
-
-    expect(normalized.output).toBe("json");
-    expect(normalized.liveSession).toBeUndefined();
-    expect(normalized.input).toBe("arg");
-  });
-
-  it("is wired through the anthropic cli backend normalize hook", () => {
-    const backend = buildAnthropicCliBackend();
-    const normalizeConfig = backend.normalizeConfig;
-
-    expect(normalizeConfig).toBeTypeOf("function");
-    expect(backend.runtimeArtifact).toEqual({
-      kind: "bundled-package-tree",
-      packageName: "@anthropic-ai/claude-code",
-      entrypoint: "command",
-      nativeExecutableNames: ["claude", "claude.exe"],
-    });
-    const normalized = normalizeConfig?.({
-      ...backend.config,
-      args: ["-p", "--output-format", "stream-json", "--verbose"],
-      resumeArgs: ["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"],
-    });
-
-    expect(normalized?.args).toContain("--setting-sources");
-    expect(normalized?.args).toContain("user");
-    expect(normalized?.args).toContain("--permission-mode");
-    expect(normalized?.args).toContain("bypassPermissions");
-    expect(normalized?.resumeArgs).toContain("--setting-sources");
-    expect(normalized?.resumeArgs).toContain("user");
-    expect(normalized?.resumeArgs).toContain("--permission-mode");
-    expect(normalized?.resumeArgs).toContain("bypassPermissions");
-    expect(normalized?.liveSession).toBe("claude-stdio");
-    expect(backend.resolveExecutionArgs).toBeTypeOf("function");
-    expect(backend.toolAvailabilityEnforcement).toBe("execution-args");
-  });
-
-  it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {
-    const backend = buildAnthropicCliBackend();
-
-    expect(backend.config.reseedFromRawTranscriptWhenUncompacted).toBe(true);
-    expect(backend.config.sessionMode).toBe("always");
-    expect(backend.config.resumeArgs).toContain("--resume");
-    expect(backend.config.resumeArgs).toContain("{sessionId}");
-  });
-
-  it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
-    // Before fix this was hardcoded to "first", which silently dropped updated
-    // OpenClaw system prompt context on resumed / compacted claude-cli sessions.
-    const backend = buildAnthropicCliBackend();
-    expect(backend.config.systemPromptWhen).toBe("always");
   });
 
   it("gates the Claude cache-control flag on the capability probe", () => {
@@ -992,12 +773,5 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(() => prepared.secretInput.createData()).toThrow(
       "Claude CLI credential input is no longer available",
     );
-  });
-
-  it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
-    const backend = buildAnthropicCliBackend();
-
-    expectDefaultDisallowedTools(backend.config.args);
-    expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
 });

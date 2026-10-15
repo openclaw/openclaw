@@ -1,10 +1,12 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logWarn } from "../logger.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  peekSessionMcpRuntimeManager,
+  releaseSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager-cleanup.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
@@ -15,50 +17,59 @@ import type {
   SessionMcpRuntimeLease,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
 
-function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
-  return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
+function getSessionMcpRuntimeManager() {
+  const manager = peekSessionMcpRuntimeManager();
+  if (!manager) {
+    throw new Error("Session MCP runtime scheduler has not been bound by its lifecycle owner");
+  }
+  return manager;
 }
 
-function peekSessionMcpRuntimeManager(): SessionMcpRuntimeManager | undefined {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  return Object.hasOwn(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY)
-    ? (globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as SessionMcpRuntimeManager)
-    : undefined;
+export function setSessionMcpRuntimeScheduler(scheduler: GatewayScheduler): Promise<void> {
+  return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, () =>
+    createSessionMcpRuntimeManager({ scheduler }),
+  ).setScheduler(scheduler);
 }
 
-export async function acquireSessionMcpRuntime(params: {
-  sessionId: string;
-  sessionKey?: string;
-  workspaceDir: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  requesterSenderId?: string | null;
-  agentAccountId?: string | null;
-  messageChannel?: string | null;
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): Promise<SessionMcpRuntimeLease> {
-  return await getSessionMcpRuntimeManager().acquire(params);
+async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefined>(
+  acquire: (manager: SessionMcpRuntimeManager) => Promise<T>,
+): Promise<T> {
+  const host = getBoundLegacyPluginSdkResourceHost();
+  const scheduler = host?.scheduler;
+  if (scheduler) {
+    await setSessionMcpRuntimeScheduler(scheduler);
+    host?.assertOpen();
+    scheduler.signal.throwIfAborted();
+  }
+  const lease = await acquire(getSessionMcpRuntimeManager());
+  try {
+    host?.assertOpen();
+    scheduler?.signal.throwIfAborted();
+    return lease;
+  } catch (error) {
+    if (lease) {
+      await releaseSessionMcpRuntime(lease);
+    }
+    throw error;
+  }
+}
+
+export function acquireSessionMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
+): Promise<SessionMcpRuntimeLease> {
+  return acquireManagedRuntime((manager) => manager.acquire(params));
 }
 
 /**
  * Requester-scoped MCP runtime only (no static partition).
  * Shared-thread harnesses use this so static MCP stays harness-native.
  */
-export async function acquireRequesterScopedMcpRuntime(params: {
-  sessionId: string;
-  sessionKey?: string;
-  workspaceDir: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  requesterSenderId?: string | null;
-  agentAccountId?: string | null;
-  messageChannel?: string | null;
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
-  return await getSessionMcpRuntimeManager().acquireRequesterScoped(params);
+export function acquireRequesterScopedMcpRuntime(
+  params: Parameters<SessionMcpRuntimeManager["acquireRequesterScoped"]>[0],
+): Promise<RequesterScopedMcpRuntimeHandle | undefined> {
+  return acquireManagedRuntime((manager) => manager.acquireRequesterScoped(params));
 }
 
 export function rememberAdvertisedScopedMcpCatalog(
@@ -69,7 +80,7 @@ export function rememberAdvertisedScopedMcpCatalog(
 }
 
 export function getAdvertisedScopedMcpCatalog(sessionId: string): McpToolCatalog | null {
-  return getSessionMcpRuntimeManager().getAdvertisedScopedCatalog(sessionId);
+  return peekSessionMcpRuntimeManager()?.getAdvertisedScopedCatalog(sessionId) ?? null;
 }
 
 /** Looks up an existing session MCP runtime without creating it or connecting transports. */
@@ -96,7 +107,10 @@ export async function retireSessionMcpRuntime(params: {
   if (!sessionId) {
     return false;
   }
-  const manager = getSessionMcpRuntimeManager();
+  const manager = peekSessionMcpRuntimeManager();
+  if (!manager) {
+    return true;
+  }
   try {
     if (
       params.preserveActiveLeases === true &&
@@ -114,24 +128,6 @@ export async function retireSessionMcpRuntime(params: {
   }
 }
 
-/** Releases an acquisition after its consumer has taken ownership, or after failure. */
-export async function releaseSessionMcpRuntime(lease: {
-  runtime: SessionMcpRuntime;
-  releaseLease?: () => void;
-}): Promise<void> {
-  lease.releaseLease?.();
-  await completeDeferredSessionMcpRuntimeRetirement(lease.runtime).catch((error: unknown) => {
-    logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
-  });
-}
-
-/** Completes deferred retirement after its final run, view, or request lease releases. */
-export async function completeDeferredSessionMcpRuntimeRetirement(
-  runtime: SessionMcpRuntime,
-): Promise<boolean> {
-  return await getSessionMcpRuntimeManager().completeDeferredRetirement(runtime.sessionId, runtime);
-}
-
 export async function retireSessionMcpRuntimeForSessionKey(params: {
   sessionKey?: string | null;
   reason: string;
@@ -142,7 +138,7 @@ export async function retireSessionMcpRuntimeForSessionKey(params: {
   if (!sessionKey) {
     return false;
   }
-  const sessionId = getSessionMcpRuntimeManager().resolveSessionId(sessionKey);
+  const sessionId = peekSessionMcpRuntimeManager()?.resolveSessionId(sessionKey);
   return await retireSessionMcpRuntime({
     sessionId,
     reason: params.reason,
@@ -152,11 +148,21 @@ export async function retireSessionMcpRuntimeForSessionKey(params: {
 }
 
 export async function reloadSessionMcpRuntimes(params: SessionMcpConfigReload): Promise<void> {
-  await peekSessionMcpRuntimeManager()?.reloadConfig(params);
+  const manager = peekSessionMcpRuntimeManager();
+  if (manager) {
+    await manager.reloadConfig(params);
+  } else {
+    resetMcpStartupBackoff();
+  }
 }
 
 export async function disposeAllSessionMcpRuntimes(): Promise<void> {
-  await getSessionMcpRuntimeManager().disposeAll();
+  const manager = peekSessionMcpRuntimeManager();
+  if (manager) {
+    await manager.disposeAll();
+  } else {
+    resetMcpStartupBackoff();
+  }
 }
 
 export function getSessionMcpRuntimeManagerForTesting(): SessionMcpRuntimeManager {

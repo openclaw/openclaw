@@ -16,7 +16,8 @@ OpenClaw assembles its own system prompt on every run. It includes:
 - Tool list + short descriptions
 - Skills list (metadata only; instructions load on demand with `read`). Native
   Codex turns on the managed bundled app-server get the compact skills block
-  in parent-local model request instructions; other harnesses get it in the normal prompt surface.
+  in parent-local model request instructions. Connections without that relay use
+  thread developer instructions; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
@@ -166,6 +167,13 @@ reports a billed amount. This gives `/usage cost` and
 transcript-backed session status a stable source even after the live
 runtime state is gone.
 
+If a stream is interrupted before its final usage report, token and cost
+accounting are unavailable. Intermediate token snapshots do not count as complete
+usage, and `/status` clears the previous response's counters instead of showing
+them for the interrupted response. Usage cost summaries retain known amounts
+from completed responses and label the aggregate incomplete. A provider-reported
+terminal zero remains a measured zero; an initialized zero is not a measurement.
+
 OpenClaw keeps provider usage accounting separate from the current context
 snapshot. Provider `usage.total` can include cached input, output, and
 multiple tool-loop model calls, so it is useful for cost and telemetry but
@@ -220,12 +228,18 @@ Pricing updates ship in the hosted model catalog alongside model metadata. Its
 publisher reads public pricing sources, including OpenCode's official catalog
 and Venice's public model API when the provider declares the native source.
 Base rates and context tiers come from the same source; usage rendering makes no
-network requests. Hosted updates activate after
-the next Gateway restart. Set `models.catalogRefresh.enabled: false` to disable
+network requests. Hosted updates activate with the Gateway's next prepared
+catalog generation, without restarting. Each estimation operation captures one
+pricing context, so a publication cannot change its rates halfway through.
+Set `models.catalogRefresh.enabled: false` to disable
 hosted catalog traffic on offline or restricted networks; bundled pricing still
 works. Agent-local `models.json` prices take precedence over explicit
 `models.providers.*.models[].cost` entries, and both override catalog estimates,
 including explicit flat and zero rates.
+
+When the Gateway writes updated agent-local `models.json` prices, subsequent
+local estimates use those rates without a restart. Recorded per-call costs keep
+their original amounts.
 
 OpenRouter `:nitro` and `:floor` routing shortcuts use the base model's catalog
 estimate when the exact shortcut has no price. Recorded costs and explicit

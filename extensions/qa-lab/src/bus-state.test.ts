@@ -1,6 +1,5 @@
 // Qa Lab tests cover bus state plugin behavior.
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
 describe("qa-bus state", () => {
@@ -513,29 +512,6 @@ describe("qa-bus state", () => {
     await expect(pending).resolves.toMatchObject({ id: replacement.id, direction: "outbound" });
   });
 
-  it("caps oversized wait timers", async () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const state = createQaBusState();
-      const pendingMessage = state.waitFor({
-        kind: "message-text",
-        textIncludes: "missing",
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      });
-      const pendingCursor = state.waitForCursorAdvance(0, Number.MAX_SAFE_INTEGER);
-
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      expect(timeoutSpy).toHaveBeenCalledTimes(2);
-
-      pendingMessage.catch(() => undefined);
-      pendingCursor.catch(() => undefined);
-    } finally {
-      timeoutSpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps account-scoped cursor waits blocked on unrelated account traffic", async () => {
     const state = createQaBusState();
     const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
@@ -618,7 +594,7 @@ describe("qa-bus state", () => {
     expect(byAltText.map((message) => message.id)).toContain(outbound.id);
   });
 
-  it("preserves sanitized tool-call traces on bus messages", () => {
+  it("preserves tool-call argument text and returns isolated copies", () => {
     const state = createQaBusState();
 
     const outbound = state.addOutboundMessage({
@@ -626,22 +602,24 @@ describe("qa-bus state", () => {
       text: "used a tool",
       toolCalls: [
         {
-          name: "exec",
+          name: " exec ",
           arguments: {
             command: "pwd",
             apiToken: "secret-token",
+            omitted: undefined,
           },
         },
       ],
     });
 
     const readback = state.readMessage({ messageId: outbound.id });
+    // Payload text stays intact; secret masking belongs to diagnostic output.
     expect(readback.toolCalls).toEqual([
       {
         name: "exec",
         arguments: {
-          command: "[redacted]",
-          apiToken: "[redacted]",
+          command: "pwd",
+          apiToken: "secret-token",
         },
       },
     ]);
@@ -655,7 +633,7 @@ describe("qa-bus state", () => {
     }
     readbackArguments.command = "mutated";
     expect(state.readMessage({ messageId: outbound.id }).toolCalls?.[0]?.arguments?.command).toBe(
-      "[redacted]",
+      "pwd",
     );
   });
 });

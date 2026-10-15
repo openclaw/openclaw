@@ -1,0 +1,74 @@
+.assistant-panel > openclaw-assistant-panel-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+}
+
+openclaw-assistant-panel-content[hidden] {
+  display: none;
+}
+
+openclaw-assistant-panel-content > openclaw-custodian-surface,
+openclaw-assistant-panel-content > openclaw-home-session {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.assistant-panel .custodian-surface {
+  width: 100%;
+  min-height: 0;
+  padding: 0 12px 12px;
+}
+
+.assistant-panel .custodian__messages {
+  padding-block: 16px;
+}
+
+.assistant-panel .custodian__option-card {
+  margin-right: 0;
+  margin-left: 42px;
+}
+
+openclaw-assistant-panel-content,
+openclaw-assistant-panel-content > openclaw-home-session {
+  flex-direction: column;
+  min-width: 0;
+}
+
+openclaw-home-session > openclaw-chat-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.assistant-panel-context {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0 12px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-panel-context details {
+  min-width: 0;
+  flex: 1;
+}
+
+.assistant-panel-context summary {
+  overflow: hidden;
+  padding-block: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-panel-context pre {
+  max-height: 160px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

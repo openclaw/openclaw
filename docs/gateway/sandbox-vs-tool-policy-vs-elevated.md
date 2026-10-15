@@ -40,7 +40,7 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.
 
 An operator role with `sandbox: "required"` overrides agent mode, cannot be
-escaped through elevated execution or host overrides, and fails closed when its
+escaped through elevated execution or host overrides, and blocks execution when its
 sandbox cannot be provisioned. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
@@ -106,7 +106,7 @@ Available groups:
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`, `computer`
 - `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`
-- `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
+- `group:media`: `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`
 - `group:openclaw`: most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)
 - `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
 

@@ -1,8 +1,15 @@
 // Covers same-process scheduling for durable session delivery retries.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { drainPendingSessionDelivery } from "./session-delivery-queue-recovery.js";
 import {
   schedulePendingSessionDeliveries,
@@ -23,150 +30,223 @@ const logger = {
   error: vi.fn(),
 };
 
+function agentTurn(messageId = "artifact:ready") {
+  return {
+    kind: "agentTurn" as const,
+    sessionKey: "agent:main:main",
+    message: "generated artifact ready",
+    messageId,
+  };
+}
+
+type StartRuntimeForTest = (
+  params: Omit<Parameters<typeof startSessionDeliveryRuntime>[0], "queueContext" | "scheduler">,
+) => ReturnType<typeof startSessionDeliveryRuntime>;
+
 async function withRuntime(
-  run: (start: typeof startSessionDeliveryRuntime) => Promise<void>,
+  run: (
+    start: StartRuntimeForTest,
+    queueContext: OpenClawStateWorkerContext,
+    time: ReturnType<typeof createRuntimeClock>,
+  ) => Promise<void>,
 ): Promise<void> {
   await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+      const queueContext = captureOpenClawStateWorkerContext();
+      const time = createRuntimeClock();
       let stop: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
       try {
-        await run((params) => (stop = startSessionDeliveryRuntime(params)));
+        await run(
+          (params) =>
+            (stop = startSessionDeliveryRuntime({
+              ...params,
+              queueContext,
+              scheduler: time.scheduler,
+            })),
+          queueContext,
+          time,
+        );
       } finally {
         // Retire and join the owner before restoring its environment or removing its queue.
         await stop?.();
+        await time.scheduler.stop();
+        await closeOpenClawStateDatabaseByPathAsync(queueContext.admission.databasePath);
       }
     });
   });
 }
 
+function createRuntimeClock() {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  return {
+    clock,
+    scheduler,
+    advanceBy: clock.advanceBy,
+  };
+}
+
+async function drainAtPersistedAttemptTime(
+  params: Parameters<typeof drainPendingSessionDelivery>[0],
+  time: ReturnType<typeof createRuntimeClock>,
+) {
+  const pending = await drainPendingSessionDelivery(params);
+  if (pending?.lastAttemptAt === undefined) {
+    throw new Error("Expected a persisted retry timestamp before rearming the scheduler");
+  }
+  time.clock.setTime(pending.lastAttemptAt);
+  return pending;
+}
+
 afterEach(() => {
-  vi.useRealTimers();
   logger.info.mockClear();
   logger.warn.mockClear();
   logger.error.mockClear();
 });
 
 describe("session delivery queue runtime", () => {
-  it("drains a newly scheduled durable entry", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-1:agent-loop",
-      });
-      const deliver = vi.fn(async () => {});
-      const onSettled = vi.fn(async () => {});
-      const stop = startRuntime({ deliver, log: logger, onSettled });
-
-      await expect(scheduleSessionDelivery(id)).resolves.toBe(true);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "recovered");
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-      await stop();
-    });
-  });
-
-  it("drains one scheduled id without parsing unrelated pending entries", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "target delivery",
-        messageId: "target:agent-loop",
-      });
+  it("drains one scheduled id without requesting the pending inventory", async () => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const id = await enqueueSessionDelivery(agentTurn(), queueContext);
+      const unrelatedIds: string[] = [];
       for (let index = 0; index < 8; index += 1) {
-        await enqueueSessionDelivery({
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: `unrelated delivery ${index}`,
-          messageId: `unrelated:${index}:agent-loop`,
-        });
+        unrelatedIds.push(
+          await enqueueSessionDelivery(agentTurn(`unrelated:${index}`), queueContext),
+        );
       }
       const deliver = vi.fn(async () => {});
-      startRuntime({ deliver, log: logger });
-      const parseSpy = vi.spyOn(JSON, "parse");
-
-      try {
-        await expect(scheduleSessionDelivery(id)).resolves.toBe(true);
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(deliver).toHaveBeenCalledTimes(1);
-        expect(parseSpy.mock.calls.length).toBeLessThanOrEqual(8);
-      } finally {
-        parseSpy.mockRestore();
-      }
-    });
-  });
-
-  it("retries a transient initial queue lookup failure", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-initial-load:agent-loop",
+      const reloadPending = vi.fn(loadPendingSessionDelivery);
+      const listPending = vi.fn(loadPendingSessionDeliveries);
+      const drain = vi.fn(drainPendingSessionDelivery);
+      const onSettled = vi.fn(async () => {});
+      const stop = startRuntime({
+        deliver,
+        reloadPending,
+        listPending,
+        drain,
+        onSettled,
+        log: logger,
       });
-      const deliver = vi.fn(async () => {});
-      const reloadPending = vi
-        .fn<typeof loadPendingSessionDelivery>()
-        .mockRejectedValueOnce(new Error("database busy"))
-        .mockImplementation((entryId) => loadPendingSessionDelivery(entryId));
-      startRuntime({ deliver, log: logger, reloadPending });
 
-      await expect(scheduleSessionDelivery(id)).resolves.toBe(true);
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to load"));
-      expect(deliver).not.toHaveBeenCalled();
+      await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
+      expect(reloadPending).toHaveBeenCalledExactlyOnceWith(id, queueContext);
+      await time.advanceBy(0);
+      await stop();
 
-      await vi.advanceTimersByTimeAsync(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-    });
-  });
-
-  it("holds a claimed entry until release then rearms it immediately", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-15T00:00:00.000Z"));
-    await withRuntime(async (startRuntime) => {
-      const { id } = await enqueueClaimedSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-lease:agent-loop",
-          idempotencyKey: "image:task-lease:agent-loop",
-        },
-        60_000,
+      expect(listPending).not.toHaveBeenCalled();
+      expect(drain).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id, queueContext }));
+      expect(deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), {
+        queueContext,
+      });
+      expect(onSettled).toHaveBeenCalledWith(
+        expect.objectContaining({ id }),
+        "recovered",
+        queueContext,
       );
-      const deliver = vi.fn(async () => {});
-      startRuntime({ deliver, log: logger });
-
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(deliver).not.toHaveBeenCalled();
-
-      await releaseSessionDeliveryClaim(id);
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      expect(await loadPendingSessionDelivery(id, queueContext)).toBeNull();
+      const pending = await loadPendingSessionDeliveries(queueContext);
+      expect(pending.map((entry) => entry.id).toSorted()).toEqual(unrelatedIds.toSorted());
     });
   });
+
+  it.each(["lookup failure", "drain failure", "unchanged row"] as const)(
+    "backs off after a transient %s without losing the durable entry",
+    async (mode) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const id = await enqueueSessionDelivery(agentTurn(), queueContext);
+        const deliver = vi.fn(async () => {});
+        const reloadPending = vi.fn(loadPendingSessionDelivery);
+        const drain = vi.fn(drainPendingSessionDelivery);
+        if (mode === "lookup failure") {
+          reloadPending.mockRejectedValueOnce(new Error("database busy"));
+        } else if (mode === "drain failure") {
+          drain.mockRejectedValueOnce(new Error("database scan failed"));
+        } else {
+          drain.mockImplementationOnce((params) =>
+            loadPendingSessionDelivery(params.id, params.queueContext),
+          );
+        }
+        const stop = startRuntime({ deliver, reloadPending, drain, log: logger });
+
+        await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
+        await time.advanceBy(0);
+        if (mode === "lookup failure") {
+          expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to load"));
+        } else if (mode === "drain failure") {
+          await expect(drain.mock.results[0]?.value).rejects.toThrow("database scan failed");
+          expect(logger.error).toHaveBeenCalledWith(
+            expect.stringContaining("runtime drain failed"),
+          );
+        } else {
+          await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 0 });
+        }
+        expect(deliver).not.toHaveBeenCalled();
+        await time.advanceBy(999);
+        expect(deliver).not.toHaveBeenCalled();
+        await time.advanceBy(1);
+        await stop();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      });
+    },
+  );
+
+  it.each(["steady", "rollback", "forward jump"] as const)(
+    "rearms a released claim immediately after a %s clock",
+    async (mode) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const { id } = await enqueueClaimedSessionDelivery(
+          { ...agentTurn(), idempotencyKey: "artifact:ready" },
+          60_000,
+          queueContext,
+        );
+        const claimed = await loadPendingSessionDelivery(id, queueContext);
+        if (claimed?.availableAt === undefined) {
+          throw new Error("Expected a durable claim deadline");
+        }
+        const entered = createDeferredCore();
+        const deliver = vi.fn(async () => {
+          entered.resolve();
+        });
+        const stop = startRuntime({ deliver, log: logger });
+        if (mode === "rollback") {
+          time.clock.setTime(claimed.availableAt);
+        }
+        await scheduleSessionDelivery(id, queueContext);
+        if (mode === "steady") {
+          await time.advanceBy(30_000);
+          expect(deliver).not.toHaveBeenCalled();
+        } else if (mode === "forward jump") {
+          time.clock.setTime(time.scheduler.now() + 24 * 60 * 60 * 1_000);
+        }
+        await releaseSessionDeliveryClaim(id, queueContext);
+        const released = await loadPendingSessionDelivery(id, queueContext);
+        if (released?.availableAt === undefined) {
+          throw new Error("Expected the worker to persist the released claim time");
+        }
+        if (mode === "rollback") {
+          expect(released.availableAt).toBeLessThan(claimed.availableAt);
+        }
+        if (mode !== "forward jump") {
+          time.clock.setTime(released.availableAt);
+        }
+        await scheduleSessionDelivery(id, queueContext);
+        if (mode === "forward jump") {
+          expect(time.scheduler.nextWakeAtMs).toBeLessThanOrEqual(time.scheduler.now());
+          expect(time.clock.wakes.at(-1)?.delayMs).toBe(0);
+        }
+        await time.advanceBy(0);
+        await entered.promise;
+        await stop();
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      });
+    },
+  );
 
   it("recomputes a future claim timer after the wall clock jumps forward", async () => {
-    vi.useFakeTimers();
-    const initialTime = new Date("2026-07-15T00:00:00.000Z");
     const dayMs = 24 * 60 * 60 * 1_000;
-    vi.setSystemTime(initialTime);
-    await withRuntime(async (startRuntime) => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
       const { id } = await enqueueClaimedSessionDelivery(
         {
           kind: "agentTurn",
@@ -176,295 +256,263 @@ describe("session delivery queue runtime", () => {
           idempotencyKey: "image:task-future-clock-jump:agent-loop",
         },
         2 * dayMs,
+        queueContext,
       );
       const deliver = vi.fn(async () => {});
-      startRuntime({ deliver, log: logger });
+      const stop = startRuntime({ deliver, log: logger });
 
-      await scheduleSessionDelivery(id);
-      vi.setSystemTime(new Date(initialTime.getTime() + dayMs));
-      await scheduleSessionDelivery(id);
+      const claimed = await loadPendingSessionDelivery(id, queueContext);
+      if (claimed?.availableAt === undefined) {
+        throw new Error("Expected a durable claim deadline");
+      }
+      time.clock.setTime(claimed.availableAt - 2 * dayMs);
+      await scheduleSessionDelivery(id, queueContext);
+      time.clock.setTime(claimed.availableAt - dayMs);
+      await scheduleSessionDelivery(id, queueContext);
+      expect(time.clock.wakes.at(-1)?.delayMs).toBe(dayMs);
 
-      await vi.advanceTimersByTimeAsync(dayMs - 1);
+      await time.advanceBy(dayMs - 1);
       expect(deliver).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
+      await time.advanceBy(1);
+      await stop();
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
     });
   });
 
-  it("preempts a released claim after the wall clock jumps past its lease", async () => {
-    const initialTime = Date.now();
-    const wallClock = vi.spyOn(Date, "now").mockReturnValue(initialTime);
-    try {
-      await withRuntime(async (startRuntime) => {
-        const { id } = await enqueueClaimedSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey: "agent:main:main",
-            message: "generated image ready",
-            messageId: "image:task-expired-clock-jump:agent-loop",
-            idempotencyKey: "image:task-expired-clock-jump:agent-loop",
-          },
-          60_000,
-        );
-        const deliver = vi.fn(async () => {});
-        startRuntime({ deliver, log: logger });
+  it("drains an eligible entry after its armed wall deadline moves into the future", async () => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const id = await enqueueSessionDelivery(
+        { kind: "systemEvent", sessionKey: "agent:main:main", text: "ready before rollback" },
+        queueContext,
+      );
+      const deliver = vi.fn(async () => {});
+      const stop = startRuntime({ deliver, log: logger });
 
-        await scheduleSessionDelivery(id);
-        wallClock.mockReturnValue(initialTime + 24 * 60 * 60 * 1_000);
-        await releaseSessionDeliveryClaim(id);
-        await scheduleSessionDelivery(id);
+      time.clock.setTime(10_000);
+      await scheduleSessionDelivery(id, queueContext);
+      time.clock.setTime(5_000);
+      await time.advanceBy(0);
+      await stop();
 
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-      });
-    } finally {
-      wallClock.mockRestore();
-    }
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+    });
+  });
+
+  it("keeps a released entry due when an older lookup settles after a clock rollback", async () => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const { id } = await enqueueClaimedSessionDelivery(
+        { kind: "systemEvent", sessionKey: "agent:main:main", text: "released claim" },
+        60_000,
+        queueContext,
+      );
+      const claimed = await loadPendingSessionDelivery(id, queueContext);
+      if (!claimed?.availableAt) {
+        throw new Error("Expected a durable claim deadline");
+      }
+      const staleRead = createDeferredCore<typeof claimed>();
+      const reloadPending = vi
+        .fn(loadPendingSessionDelivery)
+        .mockImplementationOnce(() => staleRead.promise);
+      const deliver = vi.fn(async () => {});
+      const stop = startRuntime({ deliver, reloadPending, log: logger });
+      const staleScheduling = scheduleSessionDelivery(id, queueContext);
+      try {
+        await releaseSessionDeliveryClaim(id, queueContext);
+        const released = await loadPendingSessionDelivery(id, queueContext);
+        if (!released?.availableAt) {
+          throw new Error("Expected the released claim's persisted deadline");
+        }
+        time.clock.setTime(released.availableAt + 5_000);
+        await scheduleSessionDelivery(id, queueContext);
+        time.clock.setTime(released.availableAt);
+        staleRead.resolve(claimed);
+        await staleScheduling;
+        await time.advanceBy(0);
+        await stop();
+
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      } finally {
+        staleRead.resolve(claimed);
+        await staleScheduling;
+      }
+    });
   });
 
   it("coalesces duplicate schedules and joins the active drain on stop", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-in-flight:agent-loop",
-      });
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const id = await enqueueSessionDelivery(
+        agentTurn("image:task-in-flight:agent-loop"),
+        queueContext,
+      );
       const delivery = createDeferredCore();
-      const deliver = vi.fn(() => delivery.promise);
+      const entered = createDeferredCore();
+      const deliver = vi.fn(() => {
+        entered.resolve();
+        return delivery.promise;
+      });
       let stopping: Promise<void> | undefined;
+      const wakes: Promise<void>[] = [];
       const stop = startRuntime({ deliver, log: logger });
+      const sibling = vi.fn();
+      time.scheduler.schedule({ id: "unrelated-owner", delayMs: 1, run: sibling });
 
       try {
-        await scheduleSessionDelivery(id);
-        vi.advanceTimersByTime(0);
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+        await scheduleSessionDelivery(id, queueContext);
+        wakes.push(Promise.resolve(time.clock.advanceBy(0)));
+        await entered.promise;
+        expect(deliver).toHaveBeenCalledTimes(1);
 
-        await scheduleSessionDelivery(id);
-        await vi.advanceTimersByTimeAsync(0);
+        await scheduleSessionDelivery(id, queueContext);
+        wakes.push(Promise.resolve(time.clock.advanceBy(0)));
         expect(deliver).toHaveBeenCalledTimes(1);
 
         let stopped = false;
         stopping = Promise.resolve(stop()).then(() => {
           stopped = true;
         });
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
         expect(stopped).toBe(false);
-        await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
+        await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(false);
 
+        await time.advanceBy(1);
+        expect(sibling).toHaveBeenCalledOnce();
         delivery.resolve();
         await stopping;
-        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
         const cleanup = stop();
         delivery.resolve();
         await cleanup;
         await stopping;
+        await Promise.all(wakes);
       }
     });
   });
 
-  it("retries a failed agent turn after durable backoff", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated video ready",
-        messageId: "video:task-1:agent-loop",
+  it.each([false, true])(
+    "retries a failed agent turn after durable backoff (final lookup failure: %s)",
+    async (lookupFailure) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const id = await enqueueSessionDelivery(agentTurn(), queueContext);
+        const deliver = vi
+          .fn<() => Promise<void>>()
+          .mockRejectedValueOnce(new Error("session locked"))
+          .mockResolvedValueOnce();
+        const drain = vi.fn(drainPendingSessionDelivery).mockImplementationOnce(async (params) => {
+          const pending = await drainAtPersistedAttemptTime(params, time);
+          if (lookupFailure) {
+            throw new Error("database busy");
+          }
+          return pending;
+        });
+        const stop = startRuntime({ deliver, drain, log: logger });
+
+        await scheduleSessionDelivery(id, queueContext);
+        await time.advanceBy(0);
+        if (lookupFailure) {
+          await expect(drain.mock.results[0]?.value).rejects.toThrow("database busy");
+          expect(logger.error).toHaveBeenCalledWith(
+            expect.stringContaining("runtime drain failed"),
+          );
+        } else {
+          await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 1 });
+        }
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
+          expect.objectContaining({ id, retryCount: 1, lastError: "session locked" }),
+        ]);
+        const attemptedAt = time.scheduler.now();
+        if (lookupFailure) {
+          await time.advanceBy(1_000);
+          await expect(drain.mock.results[1]?.value).resolves.toMatchObject({ id, retryCount: 1 });
+        }
+        await time.advanceBy(lookupFailure ? 3_999 : 4_999);
+        expect(time.scheduler.now() - attemptedAt).toBe(4_999);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        await time.advanceBy(1);
+        await stop();
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
       });
-      const deliver = vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(new Error("session locked"))
-        .mockResolvedValueOnce();
-      startRuntime({ deliver, log: logger });
-
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toEqual([
-        expect.objectContaining({ id, retryCount: 1, lastError: "session locked" }),
-      ]);
-
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(deliver).toHaveBeenCalledTimes(2);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-    });
-  });
-
-  it("rearms a pending entry after a transient final-state lookup failure", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-15T00:00:00.000Z"));
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated video ready",
-        messageId: "video:task-reload:agent-loop",
-      });
-      const deliver = vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(new Error("session locked"))
-        .mockResolvedValueOnce();
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockImplementationOnce(async (params) => {
-          await drainPendingSessionDelivery(params);
-          throw new Error("database busy");
-        })
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("runtime drain failed"));
-
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(deliver).toHaveBeenCalledTimes(2);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-    });
-  });
-
-  it("backs off after a drain-level failure leaves retry metadata unchanged", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated video ready",
-        messageId: "video:task-drain:agent-loop",
-      });
-      const deliver = vi.fn(async () => {});
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockRejectedValueOnce(new Error("database scan failed"))
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("runtime drain failed"));
-      expect(deliver).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-    });
-  });
-
-  it("backs off after a no-op drain leaves an immediately due row pending", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated video ready",
-        messageId: "video:task-owned-elsewhere:agent-loop",
-      });
-      const deliver = vi.fn(async () => {});
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockImplementationOnce((params) => loadPendingSessionDelivery(params.id, params.stateDir))
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(deliver).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
-    });
-  });
+    },
+  );
 
   it("reschedules pending entries after the runtime owner restarts", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated music ready",
-        messageId: "music:task-1:agent-loop",
-      });
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const id = await enqueueSessionDelivery(agentTurn("music:task-1:agent-loop"), queueContext);
       const oldDeliver = vi.fn(async () => {});
       const stopOldRuntime = startRuntime({ deliver: oldDeliver, log: logger });
-      await scheduleSessionDelivery(id);
+      await scheduleSessionDelivery(id, queueContext);
       await stopOldRuntime();
-      await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
-      await vi.advanceTimersByTimeAsync(0);
+      await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(false);
+      await time.advanceBy(0);
       expect(oldDeliver).not.toHaveBeenCalled();
-      expect(await loadPendingSessionDeliveries()).toEqual([expect.objectContaining({ id })]);
+      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
+        expect.objectContaining({ id }),
+      ]);
       const resumedDeliver = vi.fn(async () => {});
-      startRuntime({ deliver: resumedDeliver, log: logger });
+      const stopResumedRuntime = startRuntime({ deliver: resumedDeliver, log: logger });
       await stopOldRuntime();
 
       await schedulePendingSessionDeliveries();
-      await vi.advanceTimersByTimeAsync(0);
+      await time.advanceBy(0);
+      await stopResumedRuntime();
 
       expect(oldDeliver).not.toHaveBeenCalled();
       expect(resumedDeliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
     });
   });
 
   it("joins only the retired owner's drains after a runtime replacement", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
       const oldDelivery = createDeferredCore();
       const newDelivery = createDeferredCore();
-      const oldDeliver = vi.fn(() => oldDelivery.promise);
-      const newDeliver = vi.fn(() => newDelivery.promise);
-      const oldId = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "old owner delivery",
-        messageId: "old-owner-delivery",
+      const oldEntered = createDeferredCore();
+      const newEntered = createDeferredCore();
+      const oldDeliver = vi.fn(() => {
+        oldEntered.resolve();
+        return oldDelivery.promise;
       });
-      const newId = await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "new owner delivery",
-        messageId: "new-owner-delivery",
+      const newDeliver = vi.fn(() => {
+        newEntered.resolve();
+        return newDelivery.promise;
       });
+      const oldId = await enqueueSessionDelivery(agentTurn("old-owner-delivery"), queueContext);
+      const newId = await enqueueSessionDelivery(agentTurn("new-owner-delivery"), queueContext);
       const stopOld = startRuntime({ deliver: oldDeliver, log: logger });
       let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
+      const wakes: Promise<void>[] = [];
       try {
-        await scheduleSessionDelivery(oldId);
-        await vi.advanceTimersByTimeAsync(0);
+        await scheduleSessionDelivery(oldId, queueContext);
+        wakes.push(Promise.resolve(time.clock.advanceBy(0)));
+        await oldEntered.promise;
         expect(oldDeliver).toHaveBeenCalledOnce();
         stopNew = startRuntime({ deliver: newDeliver, log: logger });
-        await scheduleSessionDelivery(newId);
-        await vi.advanceTimersByTimeAsync(0);
+        await scheduleSessionDelivery(newId, queueContext);
+        wakes.push(Promise.resolve(time.clock.advanceBy(0)));
+        await newEntered.promise;
         expect(newDeliver).toHaveBeenCalledOnce();
 
         let stopped = false;
         const stopping = Promise.resolve(stopOld()).then(() => {
           stopped = true;
         });
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
         expect(stopped).toBe(false);
         oldDelivery.resolve();
         await stopping;
-        expect(await loadPendingSessionDelivery(oldId)).toBeNull();
-        expect(await loadPendingSessionDelivery(newId)).not.toBeNull();
-        await expect(scheduleSessionDelivery(newId)).resolves.toBe(true);
+        expect(await loadPendingSessionDelivery(oldId, queueContext)).toBeNull();
+        expect(await loadPendingSessionDelivery(newId, queueContext)).not.toBeNull();
+        await expect(scheduleSessionDelivery(newId, queueContext)).resolves.toBe(true);
       } finally {
         oldDelivery.resolve();
         newDelivery.resolve();
-        await Promise.all([stopOld(), stopNew?.()]);
+        await Promise.all([stopOld(), stopNew?.(), ...wakes]);
       }
     });
   });
@@ -475,13 +523,15 @@ describe("session delivery queue runtime", () => {
     { mode: "scan", failure: false },
     { mode: "scan", failure: true },
   ])("joins a retired owner's delayed $mode (failure: $failure)", async ({ mode, failure }) => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      const id = await enqueueSessionDelivery({
-        kind: "systemEvent",
-        sessionKey: "agent:main:main",
-        text: "delivery awaiting queue lookup",
-      });
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "delivery awaiting queue lookup",
+        },
+        queueContext,
+      );
       const oldRead = createDeferredCore();
       const newRead = createDeferredCore();
       const deliver = vi.fn(async () => {});
@@ -496,15 +546,17 @@ describe("session delivery queue runtime", () => {
         log: logger,
         reloadPending: async (entryId) => {
           await waitForOldRead();
-          return loadPendingSessionDelivery(entryId);
+          return loadPendingSessionDelivery(entryId, queueContext);
         },
         listPending: async () => {
           await waitForOldRead();
-          return loadPendingSessionDeliveries();
+          return loadPendingSessionDeliveries(queueContext);
         },
       });
       const scheduling =
-        mode === "lookup" ? scheduleSessionDelivery(id) : schedulePendingSessionDeliveries();
+        mode === "lookup"
+          ? scheduleSessionDelivery(id, queueContext)
+          : schedulePendingSessionDeliveries();
       let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
       let newScheduling: Promise<void> | undefined;
       try {
@@ -512,16 +564,16 @@ describe("session delivery queue runtime", () => {
         const stopping = stopOld().then(() => {
           stopped = true;
         });
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
         expect(stopped).toBe(false);
-        await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
+        await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(false);
 
         stopNew = startRuntime({
           deliver,
           log: logger,
           listPending: async () => {
             await newRead.promise;
-            return loadPendingSessionDeliveries();
+            return loadPendingSessionDeliveries(queueContext);
           },
         });
         newScheduling = schedulePendingSessionDeliveries();
@@ -529,15 +581,16 @@ describe("session delivery queue runtime", () => {
         await scheduling;
         await stopping;
         expect(logger.error).toHaveBeenCalledTimes(failure ? 1 : 0);
-        await vi.advanceTimersByTimeAsync(1_000);
+        await time.clock.advanceBy(1_000);
         expect(deliver).not.toHaveBeenCalled();
-        expect(await loadPendingSessionDelivery(id)).not.toBeNull();
+        expect(await loadPendingSessionDelivery(id, queueContext)).not.toBeNull();
 
         newRead.resolve();
         await newScheduling;
-        await vi.advanceTimersByTimeAsync(0);
+        await time.advanceBy(0);
+        await stopNew();
         expect(deliver).toHaveBeenCalledOnce();
-        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
       } finally {
         oldRead.resolve();
         newRead.resolve();
@@ -546,32 +599,31 @@ describe("session delivery queue runtime", () => {
     });
   });
 
-  it("retries a transient startup pending-entry scan failure", async () => {
-    vi.useFakeTimers();
-    await withRuntime(async (startRuntime) => {
-      await enqueueSessionDelivery({
-        kind: "agentTurn",
-        sessionKey: "agent:main:main",
-        message: "generated music ready",
-        messageId: "music:task-scan:agent-loop",
-      });
+  it("keeps the earliest retry after repeated startup pending-entry scan failures", async () => {
+    await withRuntime(async (startRuntime, queueContext, time) => {
+      await enqueueSessionDelivery(agentTurn("music:task-scan:agent-loop"), queueContext);
       const deliver = vi.fn(async () => {});
       const listPending = vi
         .fn<typeof loadPendingSessionDeliveries>()
         .mockRejectedValueOnce(new Error("database busy"))
-        .mockImplementation(() => loadPendingSessionDeliveries());
-      startRuntime({ deliver, log: logger, listPending });
+        .mockRejectedValueOnce(new Error("database still busy"))
+        .mockImplementation(() => loadPendingSessionDeliveries(queueContext));
+      const stop = startRuntime({ deliver, log: logger, listPending });
 
       await schedulePendingSessionDeliveries();
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to scan"));
       expect(deliver).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(999);
+      await time.advanceBy(500);
+      await schedulePendingSessionDeliveries();
+      await time.advanceBy(499);
       expect(deliver).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.runOnlyPendingTimersAsync();
+      await time.advanceBy(1);
+      await expect(listPending.mock.results[2]?.value).resolves.toHaveLength(1);
+      await time.advanceBy(0);
+      await stop();
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
     });
   });
 });

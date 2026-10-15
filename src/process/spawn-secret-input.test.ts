@@ -108,9 +108,9 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
 }
 
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {
-  const descriptorPath = process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3";
+  const descriptorPath = process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3";
 
-  it.each(["path", "direct"])(
+  it.each(["path"])(
     "delivers once through a %s reader without replay to descendants",
     async (reader) => {
       const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];

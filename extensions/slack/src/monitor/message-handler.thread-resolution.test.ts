@@ -2,7 +2,6 @@ import { App } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { resolveSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackMonitorContext } from "./context.js";
 
@@ -98,7 +97,6 @@ describe("Slack message handler thread resolution", () => {
             typingReaction: "",
             mediaMaxBytes: 20 * 1024 * 1024,
           }),
-          account: resolveSlackAccount({ cfg: {}, accountId: "thread-test" }),
         });
         const message: SlackMessageEvent = {
           type: "message",

@@ -14,12 +14,8 @@ export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
   timeoutMs?: number;
 }): Promise<void> {
   await runAgentCleanupStep({
-    runId: params.runId,
-    sessionId: params.sessionId,
+    ...params,
     step: "openclaw-trajectory-flush",
-    log: params.log,
-    env: params.env,
-    timeoutMs: params.timeoutMs,
     getTimeoutDetails: () => params.trajectoryRecorder?.describeFlushState(),
     cleanup: async () => {
       await params.trajectoryRecorder?.flush();

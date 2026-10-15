@@ -89,11 +89,13 @@ suite.define(() => {
       await page.keyboard.press("Control+Backquote");
       await dock.locator(".tp-host canvas").waitFor();
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-      expect(await dock.locator(".tabstrip-tab").count()).toBe(1);
-      expect(await dock.locator(".tabstrip-tab").textContent()).not.toContain("codex");
+      const terminalTab = page.locator('[data-region-header="side"] .tabstrip-tab.is-live');
+      await terminalTab.waitFor();
+      expect(await terminalTab.count()).toBe(1);
+      expect(await terminalTab.locator(".tabstrip-tab__label").textContent()).toBe("zsh");
       expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
       await page.keyboard.press("Control+Backquote");
-      await dock.locator(".tp-header").waitFor({ state: "hidden" });
+      await terminalTab.waitFor({ state: "hidden" });
 
       await page.goBack();
       await page.waitForURL(`${suite.server.baseUrl}terminal/native-cli`);
@@ -159,7 +161,10 @@ suite.define(() => {
         await row.getByRole("link").click();
       } else {
         await row.click({ button: "right" });
-        await page.locator('wa-dropdown-item[value="terminal"]').click();
+        await page
+          .locator("openclaw-catalog-session-menu")
+          .getByRole("menuitem", { name: "Open in terminal", exact: true })
+          .click();
       }
       await page.waitForURL(
         `${suite.server.baseUrl}terminal?catalog=codex&host=gateway%3Alocal&thread=resume-thread`,
@@ -275,6 +280,15 @@ suite.define(() => {
       const folder = page.getByRole("textbox", { name: "Existing absolute folder on this node" });
       await folder.waitFor();
       expect(await folder.inputValue()).toBe("");
+      await page.setViewportSize({ width: 320, height: 700 });
+      await folder.fill("/workspace/native-project");
+      await page.locator(".shell--mobile-nav").waitFor();
+      await folder.click({ trial: true });
+      const folderBox = await folder.boundingBox();
+      expect(folderBox).not.toBeNull();
+      expect(folderBox!.width).toBeGreaterThan(80);
+      expect(folderBox!.x).toBeGreaterThanOrEqual(0);
+      expect(folderBox!.x + folderBox!.width).toBeLessThanOrEqual(320);
       expect(await page.getByRole("combobox", { name: "Where", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
     } finally {

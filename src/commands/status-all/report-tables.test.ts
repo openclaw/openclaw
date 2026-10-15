@@ -1,11 +1,6 @@
 // Status-all report table tests cover agent, channel detail, and overview row construction.
 import { describe, expect, it } from "vitest";
-import {
-  buildStatusAgentTableRows,
-  buildStatusChannelDetailSections,
-  statusAgentsTableColumns,
-  statusOverviewTableColumns,
-} from "./report-tables.js";
+import { buildStatusAgentTableRows, buildStatusChannelDetailSections } from "./report-tables.js";
 
 describe("status-all report tables", () => {
   it("builds agent rows with bootstrap semantics", () => {
@@ -75,17 +70,31 @@ describe("status-all report tables", () => {
     });
   });
 
-  it("exports stable shared columns", () => {
-    expect(statusOverviewTableColumns).toEqual([
-      { key: "Item", header: "Item", minWidth: 10 },
-      { key: "Value", header: "Value", flex: true, minWidth: 24 },
-    ]);
-    expect(statusAgentsTableColumns).toEqual([
-      { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
-      { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
-      { key: "Active", header: "Active", minWidth: 10 },
-      { key: "Store", header: "Store", flex: true, minWidth: 34 },
-    ]);
+  it("shows a refused agent and repair guidance without claiming its session count is known", () => {
+    const [row] = buildStatusAgentTableRows({
+      agentStatus: {
+        agents: [
+          {
+            id: "cleaner",
+            status: "degraded",
+            sessionsCount: 0,
+            sessionsPath: "/synthetic/cleaner.sqlite",
+            admissionRefusal: {
+              reason: "Database belongs to main.",
+              repairHint: "Quarantine the cleaner copy and restart.",
+            },
+          },
+        ],
+      },
+      ok: (value) => value,
+      warn: (value) => value,
+    });
+    expect(row).toMatchObject({
+      Agent: "cleaner (degraded)",
+      Sessions: "unavailable",
+      Active: "refused",
+    });
+    expect(row?.Store).toContain("Database belongs to main.");
+    expect(row?.Store).toContain("Quarantine the cleaner copy and restart.");
   });
 });

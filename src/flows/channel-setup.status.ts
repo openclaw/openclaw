@@ -1,9 +1,7 @@
-// Channel setup status helpers format channel setup progress and docs links.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
@@ -29,22 +27,11 @@ import {
   type BundledPluginSource,
 } from "../plugins/bundled-sources.js";
 import { t, wizardT } from "../wizard/i18n/index.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import type { FlowContribution } from "./types.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 type ChannelStatusSummary = {
-  installedPlugins: ChannelSetupPlugin[];
-  catalogEntries: ChannelPluginCatalogEntry[];
-  installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
-};
-
-type ChannelSetupSelectionContribution = FlowContribution & {
-  kind: "channel";
-  surface: "setup";
-  channel: ChannelChoice;
-  source: "catalog" | "core" | "plugin";
 };
 
 type ChannelSetupSelectionEntry = {
@@ -92,29 +79,9 @@ const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
 
-function buildChannelSetupSelectionContribution(params: {
-  channel: ChannelChoice;
-  label: string;
-  hint?: string;
-  source: "catalog" | "core" | "plugin";
-}): ChannelSetupSelectionContribution {
-  return {
-    id: `channel:setup:${params.channel}`,
-    kind: "channel",
-    surface: "setup",
-    channel: params.channel,
-    option: {
-      value: params.channel,
-      label: params.label,
-      ...(params.hint ? { hint: params.hint } : {}),
-    },
-    source: params.source,
-  };
-}
-
-function formatSetupSelectionLabel(label: string, fallback: string): string {
+function formatSetupSelectionLabel(label: string | undefined, fallback = ""): string {
   return (
-    sanitizeTerminalText(label).trim() ||
+    sanitizeTerminalText(label ?? "").trim() ||
     sanitizeTerminalText(fallback).trim() ||
     "<invalid channel>"
   );
@@ -127,21 +94,12 @@ function formatSetupSelectionHint(hint: string | undefined): string | undefined 
   return sanitizeTerminalText(hint) || undefined;
 }
 
-function formatSetupDisplayText(value: string | undefined, fallback = ""): string {
-  return (
-    sanitizeTerminalText(value ?? "").trim() ||
-    sanitizeTerminalText(fallback).trim() ||
-    "<invalid channel>"
-  );
-}
-
 function formatSetupFreeText(value: string | undefined): string {
   return sanitizeTerminalText(value ?? "").trim();
 }
 
 function formatSetupOptionalDisplayText(value: string | undefined): string | undefined {
-  const safe = sanitizeTerminalText(value ?? "").trim();
-  return safe || undefined;
+  return formatSetupFreeText(value) || undefined;
 }
 
 function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
@@ -154,8 +112,8 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
   const { selectionDocsPrefix, ...displayMeta } = meta;
-  const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
-  const safeLabel = formatSetupDisplayText(meta.label, safeId);
+  const safeId = formatSetupSelectionLabel(meta.id, "<invalid channel>");
+  const safeLabel = formatSetupSelectionLabel(meta.label, safeId);
   const safeSelectionDocsPrefix =
     selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
@@ -163,9 +121,9 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
     ...displayMeta,
     id: safeId,
     label: safeLabel,
-    selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
-    docsPath: formatSetupDisplayText(meta.docsPath, "/"),
-    ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
+    selectionLabel: formatSetupSelectionLabel(meta.selectionLabel, safeLabel),
+    docsPath: formatSetupSelectionLabel(meta.docsPath, "/"),
+    ...(meta.docsLabel ? { docsLabel: formatSetupSelectionLabel(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
     ...(safeSelectionDocsPrefix !== undefined
       ? { selectionDocsPrefix: safeSelectionDocsPrefix }
@@ -192,76 +150,46 @@ function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
   return formatted;
 }
 
+const CHANNEL_STATUS_LABEL_KEYS: ReadonlyMap<string, string> = new Map([
+  ["configured", "wizard.channels.statusConfigured"],
+  ["not configured", "wizard.channels.statusNotConfigured"],
+  ["configured (plugin disabled)", "wizard.channels.statusConfiguredPluginDisabled"],
+  ["installed", "wizard.channels.statusInstalled"],
+  ["installed (plugin disabled)", "wizard.channels.statusInstalledPluginDisabled"],
+  ["bundled · enable to use", "wizard.channels.statusBundledEnable"],
+  ["install plugin to enable", "wizard.channels.statusInstallPluginEnable"],
+  ["needs app credentials", "wizard.channels.statusNeedsAppCredentials"],
+  ["needs app creds", "wizard.channels.statusNeedsAppCreds"],
+  ["needs auth", "wizard.channels.statusNeedsAuth"],
+  ["needs host + nick", "wizard.channels.statusNeedsHostNick"],
+  ["needs private key", "wizard.channels.statusNeedsPrivateKey"],
+  ["needs QR login", "wizard.channels.statusNeedsQrLogin"],
+  ["needs service account", "wizard.channels.statusNeedsServiceAccount"],
+  ["needs setup", "wizard.channels.statusNeedsSetup"],
+  ["needs token", "wizard.channels.statusNeedsToken"],
+  ["needs tokens", "wizard.channels.statusNeedsTokens"],
+  ["needs token + incoming webhook", "wizard.channels.statusNeedsTokenIncomingWebhook"],
+  ["needs token + secret", "wizard.channels.statusNeedsTokenSecret"],
+  ["needs token + url", "wizard.channels.statusNeedsTokenUrl"],
+  ["needs username, token, and clientId", "wizard.channels.statusNeedsUsernameTokenClientId"],
+  ["linked", "wizard.channels.statusLinked"],
+  ["logged in", "wizard.channels.statusLoggedIn"],
+  ["not linked", "wizard.channels.statusNotLinked"],
+  ["recommended · configured", "wizard.channels.statusRecommendedConfigured"],
+  ["recommended · logged in", "wizard.channels.statusRecommendedLoggedIn"],
+  ["recommended · newcomer-friendly", "wizard.channels.statusRecommendedNewcomerFriendly"],
+  ["recommended · QR login", "wizard.channels.statusRecommendedQrLogin"],
+  ["self-hosted chat", "wizard.channels.statusSelfHostedChat"],
+  ["signal-cli found", "wizard.channels.statusSignalCliFound"],
+  ["signal-cli missing", "wizard.channels.statusSignalCliMissing"],
+  ["urbit messenger", "wizard.channels.statusUrbitMessenger"],
+  ["configured (connection not verified)", "wizard.channels.statusConfiguredConnectionNotVerified"],
+]);
+
 function localizeChannelStatusLabel(label: string): string {
-  switch (label) {
-    case "configured":
-      return t("wizard.channels.statusConfigured");
-    case "not configured":
-      return t("wizard.channels.statusNotConfigured");
-    case "configured (plugin disabled)":
-      return t("wizard.channels.statusConfiguredPluginDisabled");
-    case "installed":
-      return t("wizard.channels.statusInstalled");
-    case "installed (plugin disabled)":
-      return t("wizard.channels.statusInstalledPluginDisabled");
-    case "bundled · enable to use":
-      return t("wizard.channels.statusBundledEnable");
-    case "install plugin to enable":
-      return t("wizard.channels.statusInstallPluginEnable");
-    case "needs app credentials":
-      return t("wizard.channels.statusNeedsAppCredentials");
-    case "needs app creds":
-      return t("wizard.channels.statusNeedsAppCreds");
-    case "needs auth":
-      return t("wizard.channels.statusNeedsAuth");
-    case "needs host + nick":
-      return t("wizard.channels.statusNeedsHostNick");
-    case "needs private key":
-      return t("wizard.channels.statusNeedsPrivateKey");
-    case "needs QR login":
-      return t("wizard.channels.statusNeedsQrLogin");
-    case "needs service account":
-      return t("wizard.channels.statusNeedsServiceAccount");
-    case "needs setup":
-      return t("wizard.channels.statusNeedsSetup");
-    case "needs token":
-      return t("wizard.channels.statusNeedsToken");
-    case "needs tokens":
-      return t("wizard.channels.statusNeedsTokens");
-    case "needs token + incoming webhook":
-      return t("wizard.channels.statusNeedsTokenIncomingWebhook");
-    case "needs token + secret":
-      return t("wizard.channels.statusNeedsTokenSecret");
-    case "needs token + url":
-      return t("wizard.channels.statusNeedsTokenUrl");
-    case "needs username, token, and clientId":
-      return t("wizard.channels.statusNeedsUsernameTokenClientId");
-    case "linked":
-      return t("wizard.channels.statusLinked");
-    case "logged in":
-      return t("wizard.channels.statusLoggedIn");
-    case "not linked":
-      return t("wizard.channels.statusNotLinked");
-    case "recommended · configured":
-      return t("wizard.channels.statusRecommendedConfigured");
-    case "recommended · logged in":
-      return t("wizard.channels.statusRecommendedLoggedIn");
-    case "recommended · newcomer-friendly":
-      return t("wizard.channels.statusRecommendedNewcomerFriendly");
-    case "recommended · QR login":
-      return t("wizard.channels.statusRecommendedQrLogin");
-    case "self-hosted chat":
-      return t("wizard.channels.statusSelfHostedChat");
-    case "signal-cli found":
-      return t("wizard.channels.statusSignalCliFound");
-    case "signal-cli missing":
-      return t("wizard.channels.statusSignalCliMissing");
-    case "urbit messenger":
-      return t("wizard.channels.statusUrbitMessenger");
-    case "configured (connection not verified)":
-      return t("wizard.channels.statusConfiguredConnectionNotVerified");
-    default:
-      break;
+  const key = CHANNEL_STATUS_LABEL_KEYS.get(label);
+  if (key) {
+    return t(key);
   }
   const connectedAsPrefix = "connected as ";
   if (label.startsWith(connectedAsPrefix)) {
@@ -293,21 +221,7 @@ function localizeChannelSetupStatus<T extends { selectionHint?: string; statusLi
   };
 }
 
-/**
- * Hint shown next to an installable channel option in the selection menu when
- * we don't yet have a runtime-collected status. Mirrors the "configured" /
- * "installed" affordance other channels get so users can see "download from
- * <npm-spec>" before committing to install.
- *
- * Bundled channels (the plugin lives under `extensions/<id>` in the host
- * repo, e.g. Signal / Tlon / Twitch / Slack) are NOT downloaded from npm —
- * they ship with the host. Even when their `package.json` declares an
- * `npmSpec` (or the catalog falls back to the package name), surfacing
- * "download from <npm-spec>" misleads users into believing the plugin is
- * missing. For bundled channels we suppress the npm hint entirely so the
- * menu shows the same neutral "plugin · install" affordance used when no
- * npm source is known.
- */
+// Bundled plugins already ship with the host, so only external sources show download hints.
 export function resolveCatalogChannelSelectionHint(
   entry: { install?: { npmSpec?: string } },
   options?: { bundledLocalPath?: string | null },
@@ -319,13 +233,6 @@ export function resolveCatalogChannelSelectionHint(
   return "";
 }
 
-/**
- * Look up the bundled-source entry for a catalog channel, regardless of
- * whether the catalog refers to it by `pluginId` or `npmSpec`. We use this
- * to detect bundled channels in the selection menu so we can suppress the
- * misleading "download from <npm-spec>" hint for plugins that already ship
- * with the host (Signal / Tlon / Twitch / Slack ...).
- */
 export function findBundledSourceForCatalogChannel(params: {
   bundled: ReadonlyMap<string, BundledPluginSource>;
   entry: { id: string; pluginId?: string; install?: { npmSpec?: string } };
@@ -443,9 +350,6 @@ export async function collectChannelStatus(params: {
     const bundledLocalPath =
       findBundledSourceForCatalogChannel({ bundled: bundledSources, entry })?.localPath ?? null;
     const isBundled = Boolean(bundledLocalPath);
-    // For bundled channels we already have the plugin code on disk; the user
-    // just needs to enable + configure it. Reflect that in the status line so
-    // it does not read like a fresh "install plugin to enable" download flow.
     const statusLabel = isBundled ? "bundled · enable to use" : "install plugin to enable";
     return {
       channel: entry.id,
@@ -464,32 +368,9 @@ export async function collectChannelStatus(params: {
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
-    installedPlugins,
-    catalogEntries: installableCatalogEntries,
-    installedCatalogEntries,
     statusByChannel: mergedStatusByChannel,
     statusLines,
   };
-}
-
-export async function noteChannelStatus(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  options?: SetupChannelsOptions;
-  accountOverrides?: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
-}): Promise<void> {
-  const { statusLines } = await collectChannelStatus({
-    cfg: params.cfg,
-    options: params.options,
-    accountOverrides: params.accountOverrides ?? {},
-    installedPlugins: params.installedPlugins,
-    resolveAdapter: params.resolveAdapter,
-  });
-  if (statusLines.length > 0) {
-    await params.prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
-  }
 }
 
 export async function noteChannelPrimer(
@@ -565,25 +446,27 @@ export function resolveChannelSelectionNoteLines(params: {
     .filter((line): line is string => Boolean(line));
 }
 
-export function resolveChannelSetupSelectionContributions(params: {
+export function resolveChannelSetupSelectionOptions(params: {
   entries: ChannelSetupSelectionEntry[];
   statusByChannel: Map<ChannelChoice, { selectionHint?: string }>;
   resolveDisabledHint: (channel: ChannelChoice) => string | undefined;
-}): ChannelSetupSelectionContribution[] {
-  const bundledChannelIds = new Set(listChatChannels().map((channel) => channel.id));
+}): WizardSelectOption<ChannelChoice>[] {
   return params.entries
     .filter((entry) => shouldShowChannelInSetup(entry.meta))
     .toSorted((left, right) => compareChannelSetupSelectionEntries(left, right))
     .map((entry) => {
       const disabledHint = params.resolveDisabledHint(entry.id);
       const statusHint = params.statusByChannel.get(entry.id)?.selectionHint;
-      const hint = [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined;
-      return buildChannelSetupSelectionContribution({
-        channel: entry.id,
-        label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
-        hint: formatSetupSelectionHint(hint),
-        source: bundledChannelIds.has(entry.id) ? "core" : "plugin",
-      });
+      const hint = formatSetupSelectionHint(
+        [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined,
+      );
+      return Object.assign(
+        {
+          value: entry.id,
+          label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
+        },
+        hint ? { hint } : undefined,
+      );
     });
 }
 

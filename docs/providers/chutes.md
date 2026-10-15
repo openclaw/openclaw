@@ -26,8 +26,10 @@ OpenAI-compatible API. OpenClaw supports both browser OAuth and API-key auth.
 
 ```bash
 openclaw plugins install @openclaw/chutes-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -94,8 +96,8 @@ OpenClaw registers two convenience aliases for the Chutes catalog:
 
 ## Built-in starter catalog
 
-The bundled fallback catalog contains these current starter models plus two
-compatible prior-generation refs that remain selectable but are hidden from
+The bundled fallback catalog contains these current starter models plus one
+compatible prior-generation ref that remains selectable but is hidden from
 pickers:
 
 | Model ref                              | Picker status |
@@ -103,9 +105,7 @@ pickers:
 | `chutes/zai-org/GLM-5.2-TEE`           | Visible       |
 | `chutes/deepseek-ai/DeepSeek-V3.2-TEE` | Visible       |
 | `chutes/moonshotai/Kimi-K2.6-TEE`      | Visible       |
-| `chutes/MiniMaxAI/MiniMax-M2.5-TEE`    | Visible       |
 | `chutes/Qwen/Qwen3.6-27B-TEE`          | Visible       |
-| `chutes/moonshotai/Kimi-K2.5-TEE`      | Hidden        |
 | `chutes/Qwen/Qwen3.5-397B-A17B-TEE`    | Hidden        |
 
 Run `openclaw models list --all --provider chutes` for the full list.

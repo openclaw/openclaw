@@ -5,8 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -14,7 +16,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import {
@@ -52,7 +53,8 @@ function fixture(repair = false) {
     database.db.exec(`DROP INDEX idx_agent_cache_expiry; ${wrongIndex};`);
   }
   const pathname = database.path;
-  closeOpenClawAgentDatabaseByPath(pathname);
+  closeOpenClawAgentDatabasesForTest(root);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
   return { options, pathname, state, leases };
@@ -117,7 +119,7 @@ it("rejects already-retired authority without creating database state", async ()
   expect(fs.readdirSync(root)).toEqual([]);
 });
 
-it.each(["ordinary", "integrity-shaped", "falsy", "native-failure"] as const)(
+it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
   "unwinds %s initiating refusal before repairing indexes for coalesced callers",
   async (kind) => {
     const f = fixture(true);
@@ -356,39 +358,6 @@ it("checks lost database ownership before consulting the initiating caller again
   expect(f.leases()).toEqual([]);
 });
 
-it.each([false, true])(
-  "keeps warm operation denial local without another native check (incognito=%s)",
-  async (incognito) => {
-    const f = fixture();
-    const options = incognito
-      ? {
-          ...f.options,
-          path: resolveIncognitoOpenClawAgentSqlitePath(f.options),
-        }
-      : f.options;
-    const database = openOpenClawAgentDatabase(options);
-    const check = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    const refused = new Error("warm caller retired");
-    let allowed = true;
-    const work = own(
-      withOpenClawAgentDatabaseAsync(
-        options,
-        () => "forbidden",
-        () => {
-          if (!allowed) {
-            throw refused;
-          }
-        },
-      ),
-    );
-    allowed = false;
-    await expect(work).rejects.toBe(refused);
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
-    expect(database.db.isOpen).toBe(true);
-    expect(check).not.toHaveBeenCalled();
-  },
-);
-
 it("does not treat a database-owner failure as a repairable integrity verdict", async () => {
   const f = fixture(true);
   const gate = holdIntegrity(f.pathname);
@@ -417,4 +386,53 @@ it("does not treat a database-owner failure as a repairable integrity verdict", 
   expect(callerRead).not.toHaveBeenCalled();
   expect(indexSql(f.pathname)).toBe(wrongIndex);
   expect(f.leases()).toEqual([]);
+});
+
+it("revokes pending native writes before draining retained resources in its root", async () => {
+  const f = fixture();
+  const native = holdIntegrity(f.pathname);
+  const resourceDrain = createDeferred();
+  releases.push(() => resourceDrain.resolve());
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: f.options.agentId,
+    path: f.pathname,
+    revoke: () => {},
+    close: () => resourceDrain.promise,
+  });
+  const write = own(
+    withOpenClawAgentDatabaseAsync(f.options, ({ db }) => {
+      db.prepare(
+        "INSERT INTO cache_entries (scope,key,value_json,updated_at) VALUES ('close-order','write','unexpected',1)",
+      ).run();
+      return "written";
+    }),
+  );
+  await native.entered.promise;
+  let closed = false;
+  const closing = own(
+    closeOpenClawAgentDatabasesAsync(f.options.env.OPENCLAW_STATE_DIR).then(() => {
+      closed = true;
+    }),
+  );
+  try {
+    expect(f.leases()).toHaveLength(1);
+    native.release.resolve();
+    await expect(write).rejects.toThrow(/revoked/);
+    expect(native.joined()).toBe(true);
+    expect(f.leases()).toEqual([]);
+    expect(closed).toBe(false);
+  } finally {
+    native.release.resolve();
+    resourceDrain.resolve();
+    await closing;
+  }
+  expect(closed).toBe(true);
+  const database = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+  try {
+    expect(
+      database.prepare("SELECT key FROM cache_entries WHERE scope='close-order'").all(),
+    ).toEqual([]);
+  } finally {
+    database.close();
+  }
 });

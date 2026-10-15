@@ -5,9 +5,11 @@ import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -22,6 +24,7 @@ const cleanupDirs: string[] = [];
 afterEach(() => {
   closeDebugProxyCaptureStore();
   closeOpenClawStateDatabaseForTest();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   cleanupTempDirs(cleanupDirs);
 });
@@ -83,9 +86,10 @@ describe("DebugProxyCaptureStore", () => {
             ...event,
           });
         }
-        const prepare = store.db.prepare.bind(store.db);
+        const db = requireNativeSqliteDatabase(store.db);
+        const prepare = db.prepare.bind(db);
         const materializations: MockInstance[] = [];
-        vi.spyOn(store.db, "prepare").mockImplementation((sql) => {
+        vi.spyOn(db, "prepare").mockImplementation((sql) => {
           const statement = prepare(sql);
           materializations.push(vi.spyOn(statement, "all"));
           return statement;
@@ -157,6 +161,50 @@ describe("DebugProxyCaptureStore", () => {
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
   });
+
+  it.each(["quiet", "active"] as const)(
+    "retains %s capture through idle expiry and releases its native handle after close",
+    (activity) => {
+      const options = { env: makeStateEnv("openclaw-proxy-capture-idle-") };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const store = getDebugProxyCaptureStore(options);
+      const intervals =
+        activity === "quiet"
+          ? [SQLITE_IDLE_HANDLE_TTL_MS + 1]
+          : [SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1, SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1];
+      try {
+        for (const [index, interval] of intervals.entries()) {
+          vi.advanceTimersByTime(interval);
+          store.recordEvent({
+            sessionId: "retained-capture",
+            ts: index,
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+            protocol: "https",
+            direction: "outbound",
+            kind: "request",
+            flowId: `retained-${index}`,
+          });
+        }
+        expect(store.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+          intervals.map((_, index) => `retained-${index}`).toReversed(),
+        );
+        store.close();
+        expect(store.db.isOpen).toBe(true);
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+        expect(store.db.isOpen).toBe(true);
+        vi.advanceTimersByTime(1);
+        expect(store.db.isOpen).toBe(false);
+
+        const reopened = getDebugProxyCaptureStore(options);
+        expect(reopened.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+          intervals.map((_, index) => `retained-${index}`).toReversed(),
+        );
+      } finally {
+        store.close();
+      }
+    },
+  );
 
   it("rebinds a cached shared store after the state database closes underneath it", () => {
     const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };
@@ -325,6 +373,7 @@ describe("DebugProxyCaptureStore", () => {
         ? acquireDebugProxyCaptureStore(dbPath, blobDir)
         : acquireDebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
     const sessionId = "rollback-session";
+    const db = requireNativeSqliteDatabase(lease.store.db);
 
     try {
       lease.store.upsertSession({
@@ -355,7 +404,7 @@ describe("DebugProxyCaptureStore", () => {
         operation === "deleteSessions"
           ? lease.store.deleteSessions([sessionId])
           : lease.store.purgeAll();
-      lease.store.db.setAuthorizer((action, table) =>
+      db.setAuthorizer((action, table) =>
         action === constants.SQLITE_DELETE && table === deniedTable
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
@@ -365,7 +414,7 @@ describe("DebugProxyCaptureStore", () => {
         expect(() => lease.store.deleteSessions(["missing"])).toThrow(/not authorized/u);
       }
       expect(cleanup).toThrow(/not authorized/u);
-      lease.store.db.setAuthorizer(null);
+      db.setAuthorizer(null);
       expect(lease.store.listSessions()).toHaveLength(1);
       expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
       expect(lease.store.readBlob(blob.blobId)).toBe("rollback payload");
@@ -382,7 +431,7 @@ describe("DebugProxyCaptureStore", () => {
       }
       expect(cleanup()).toEqual({ sessions: 0, events: 0, blobs: 0 });
     } finally {
-      lease.store.db.setAuthorizer(null);
+      db.setAuthorizer(null);
       lease.release();
     }
   });
@@ -422,6 +471,7 @@ describe("DebugProxyCaptureStore", () => {
               path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
               path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
             );
+      const db = requireNativeSqliteDatabase(lease.store.db);
       const event = {
         sessionId: "rejected-event",
         ts: 7,
@@ -440,13 +490,13 @@ describe("DebugProxyCaptureStore", () => {
         metaJson: '{"fixture":true}',
       } as const;
       try {
-        lease.store.db.setAuthorizer((action, table) =>
+        db.setAuthorizer((action, table) =>
           action === constants.SQLITE_INSERT && table === "capture_events"
             ? constants.SQLITE_DENY
             : constants.SQLITE_OK,
         );
         expect(() => lease.store.recordEvent(event)).toThrow(/not authorized/u);
-        lease.store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         expect(lease.store.listSessions()).toEqual([]);
         expect(lease.store.getSessionEvents(event.sessionId)).toEqual([]);
 
@@ -457,7 +507,7 @@ describe("DebugProxyCaptureStore", () => {
         ]);
         expect(lease.store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
       } finally {
-        lease.store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         lease.release();
       }
     },
@@ -559,6 +609,7 @@ describe("DebugProxyCaptureStore", () => {
               path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
               path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
             );
+      const db = requireNativeSqliteDatabase(store.db);
       const record = (overrides: Partial<CaptureEventRecord>) =>
         store.recordEvent({
           sessionId: "captured",
@@ -643,10 +694,23 @@ describe("DebugProxyCaptureStore", () => {
             eventCount: 0,
           },
         ]);
+        for (const id of ["empty-z", "empty-a"]) {
+          store.upsertSession({
+            id,
+            startedAt: 2,
+            mode: "test",
+            sourceScope: "openclaw",
+            sourceProcess: "test",
+          });
+        }
+        expect(store.listSessions(2).map(({ id, eventCount }) => ({ id, eventCount }))).toEqual([
+          { id: "empty", eventCount: 0 },
+          { id: "empty-a", eventCount: 0 },
+        ]);
         expect(store.listSessions(0)).toEqual([]);
-        expect(store.listSessions(-1)).toHaveLength(3);
+        expect(store.listSessions(-1)).toHaveLength(5);
 
-        store.db.setAuthorizer((action, table) =>
+        db.setAuthorizer((action, table) =>
           action === constants.SQLITE_READ && table === "capture_events"
             ? constants.SQLITE_DENY
             : constants.SQLITE_OK,
@@ -656,14 +720,14 @@ describe("DebugProxyCaptureStore", () => {
         }
         expect(() => store.listSessions()).toThrow(/prohibited/u);
         expect(store.db.isOpen).toBe(true);
-        store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         expect(
           Object.fromEntries(
             presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
           ),
         ).toEqual(results);
       } finally {
-        store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         store.close();
       }
     },

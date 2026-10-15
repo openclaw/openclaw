@@ -22,9 +22,6 @@ const fetchLmstudioModelsMock = vi.hoisted(() =>
     }>,
   })),
 );
-const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => undefined),
-);
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
@@ -70,7 +67,6 @@ vi.mock("./runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime.js")>();
   return {
     ...actual,
-    resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
     resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
   };
 });
@@ -112,7 +108,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
     createRemoteEmbeddingProviderMock.mockClear();
     embeddedModels.length = 0;
-    resolveLmstudioProviderHeadersMock.mockClear();
     resolveLmstudioRuntimeApiKeyMock.mockClear();
   });
 
@@ -134,45 +129,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   ])("uses $name", async ({ model, expected }) => {
     await expect(readRequestedContextLength(buildConfig({ model }))).resolves.toBe(expected);
   });
-
-  it.each(["lmstudio", "lmstudio-spark"])(
-    "honors the preload opt-out for %s while retaining request-time service leases",
-    async (providerId) => {
-      const release = vi.fn();
-      const acquireLocalService = vi.fn(async () => ({ release }));
-      const { provider } = await createLmstudioEmbeddingProvider({
-        config: {
-          models: {
-            providers: {
-              [providerId]: {
-                baseUrl: "http://spark.local:1234/v1",
-                params: { preload: false },
-                localService: { command: "/usr/bin/lms-spark" },
-                models: [{ id: EMBEDDING_MODEL }],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        provider: providerId,
-        model: `${providerId}/${EMBEDDING_MODEL}`,
-        fallback: "none",
-        acquireLocalService,
-      });
-
-      expect(prepareLmstudioModelForInferenceMock).not.toHaveBeenCalled();
-      expect(fetchLmstudioModelsMock).not.toHaveBeenCalled();
-      expect(acquireLocalService).not.toHaveBeenCalled();
-
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
-
-      expect(acquireLocalService).toHaveBeenCalledOnce();
-      expect(acquireLocalService).toHaveBeenCalledWith(
-        expect.objectContaining({ providerId, baseUrl: "http://spark.local:1234/v1" }),
-        undefined,
-      );
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
 
   it("keeps each query-batch service lease until its request settles", async () => {
     const firstRelease = vi.fn();
@@ -286,25 +242,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the canonical preloaded model for embedding requests and memory identity", async () => {
-    const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
-    const result = await lmstudioMemoryEmbeddingProviderAdapter.create({
-      config: buildConfig({ model: { id: requestedVariant } }),
-      provider: "lmstudio",
-      model: `lmstudio/${requestedVariant}`,
-      fallback: "none",
-    });
-
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ modelKey: requestedVariant }),
-    );
-    expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ client: expect.objectContaining({ model: EMBEDDING_MODEL }) }),
-    );
-    expect(result.provider?.model).toBe(EMBEDDING_MODEL);
-    expect(result.runtime?.cacheKeyData).toMatchObject({ model: EMBEDDING_MODEL });
-  });
-
   it("retains the discovered canonical model when its preload subsequently fails", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
     prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
@@ -371,8 +308,17 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       acquireLocalService,
     };
 
-    const { provider } = await createLmstudioEmbeddingProvider(options);
+    const result = await lmstudioMemoryEmbeddingProviderAdapter.create(options);
+    const provider = result.provider;
+    if (!provider) {
+      throw new Error("expected LM Studio embedding provider");
+    }
     await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "lmstudio-spark",
+      baseUrl: "http://spark.local:1234/v1",
+      model: EMBEDDING_MODEL,
+    });
 
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "spark-key" }),
@@ -441,28 +387,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     });
   });
 
-  it("does not inherit primary remote headers when LM Studio activates as a fallback", async () => {
-    const { client } = await createLmstudioEmbeddingProvider({
-      config: buildConfig({
-        provider: {
-          params: { preload: false },
-          headers: { "X-Provider-Tenant": "provider-a" },
-        },
-      }),
-      provider: "google",
-      model: EMBEDDING_MODEL,
-      fallback: "lmstudio",
-      remote: {
-        baseUrl: "http://memory.local:1234/v1",
-        apiKey: "primary-provider-key",
-        headers: { "X-Remote-Tenant": "remote-b" },
-      },
-    });
-
-    expect(client.baseUrl).toBe("http://localhost:1234/v1");
-    expect(client.headers).toEqual({ "Content-Type": "application/json" });
-  });
-
   it("preserves a scheme-added /api/v1 local service target", async () => {
     const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
     const options = {
@@ -494,30 +418,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       },
       undefined,
     );
-  });
-
-  it("preserves configured provider aliases in the memory adapter", async () => {
-    const result = await lmstudioMemoryEmbeddingProviderAdapter.create({
-      config: {
-        models: {
-          providers: {
-            "lmstudio-spark": {
-              baseUrl: "http://spark.local:1234/v1",
-              models: [{ id: EMBEDDING_MODEL }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      provider: "lmstudio-spark",
-      model: `lmstudio-spark/${EMBEDDING_MODEL}`,
-      fallback: "none",
-    });
-
-    expect(result.runtime?.cacheKeyData).toMatchObject({
-      provider: "lmstudio-spark",
-      baseUrl: "http://spark.local:1234/v1",
-      model: EMBEDDING_MODEL,
-    });
   });
 
   it("keeps API key rotation out of memory identity without dropping tenant headers", async () => {

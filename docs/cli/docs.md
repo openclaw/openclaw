@@ -46,6 +46,8 @@ openclaw docs gateway token secretref
 
 In a rich (TTY) terminal, results render as a heading followed by a bullet list: page title, linked docs URL, and a short snippet on the next line. Empty results print "No results.".
 
+A response without a results array is malformed and fails the command; it is not treated as a successful search with no matches.
+
 In non-rich output (piped, `--no-color`, scripts), the same data renders as Markdown:
 
 ```markdown
@@ -59,6 +61,9 @@ With `--json`, stdout contains one object with the normalized query and result
 list. With no query, `query` is `null`, `url` is the docs entrypoint, and
 `results` is empty. Styling and headings are suppressed; request diagnostics
 stay on stderr so stdout can be piped directly to a JSON parser.
+
+On failure, `--json` emits the [CLI JSON failure envelope](/cli#json-failures) on stdout
+while retaining the error message on stderr.
 
 ## Exit codes
 

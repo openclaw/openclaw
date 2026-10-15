@@ -49,7 +49,12 @@ describe("plugin board widget registry", () => {
     expect(isPassiveBoardWidget(widget, active)).toBe(true);
     expect(isPassiveBoardWidget(widget, [])).toBe(false);
     expect(isPassiveBoardWidget({ ...widget, frameUrl: "/widget.html" }, active)).toBe(false);
-    for (const kind of ["session:progress", "custom:report"]) {
+    for (const kind of [
+      "session:progress",
+      "session:website",
+      "browser:dashboard",
+      "custom:report",
+    ]) {
       expect(
         isPassiveBoardWidget({ ...widget, pluginKind: kind }, [
           { pluginId: kind.split(":")[0]!, kind, label: "Widget" },

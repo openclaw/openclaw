@@ -8,8 +8,8 @@ title: "StepFun"
 
 StepFun ships as an external official plugin (`@openclaw/stepfun-provider`) with two provider ids:
 
-- `stepfun` for the standard endpoint
-- `stepfun-plan` for the Step Plan endpoint
+- `stepfun` for the standard endpoint (models.dev alias: `stepfun-ai`)
+- `stepfun-plan` for the Step Plan endpoint (models.dev alias: `stepfun-ai-step-plan`)
 
 <Warning>
 Standard and Step Plan are **separate providers** with different endpoints and model ref prefixes (`stepfun/...` vs `stepfun-plan/...`). Use a China key with the `.com` endpoints and a global key with the `.ai` endpoints.
@@ -19,8 +19,10 @@ Standard and Step Plan are **separate providers** with different endpoints and m
 
 ```bash
 openclaw plugins install @openclaw/stepfun-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Region and endpoint overview
 

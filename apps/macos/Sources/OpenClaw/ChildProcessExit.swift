@@ -4,19 +4,19 @@ import Foundation
 
 /// Observes one unreaped child until exit or cancellation; it never signals or reaps it.
 final class ChildProcessExit: @unchecked Sendable {
+    enum Outcome: Sendable, Equatable {
+        case exited
+        case timedOut
+    }
+
     private let lock = NSLock()
     private let processIdentifier: pid_t
-    private let source: DispatchSourceProcess?
+    private let source: DispatchSourceProcess
     private var continuation: CheckedContinuation<Void, Never>?
     private var finished = false
 
     init(processIdentifier: pid_t, queue: DispatchQueue = .global(qos: .utility)) {
         self.processIdentifier = processIdentifier
-        if Self.hasExited(processIdentifier) {
-            self.source = nil
-            self.finished = true
-            return
-        }
         let source = DispatchSource.makeProcessSource(
             identifier: processIdentifier,
             eventMask: .exit,
@@ -26,24 +26,33 @@ final class ChildProcessExit: @unchecked Sendable {
             self?.finish()
         }
         source.resume()
-        // The child can exit between the initial waitid probe and kqueue
-        // registration. Recheck after resume so that race cannot consume
-        // the full timeout when no NOTE_EXIT event is delivered.
+        // The owned child is still unreaped, so its PID cannot be reused.
+        // Check after registration to also cover exits before observer creation.
         if Self.hasExited(processIdentifier) {
             self.finish()
         }
     }
 
-    func wait() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.waitForSignal() }
-            group.addTask { await self.pollUntilExit() }
+    func wait(timeout: TimeInterval) async -> Outcome {
+        await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                await self.wait()
+                return .exited
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: .seconds(timeout))
+                    return .timedOut
+                } catch {
+                    return .exited
+                }
+            }
             defer { group.cancelAll() }
-            _ = await group.next()
+            return await group.next() ?? .exited
         }
     }
 
-    private func waitForSignal() async {
+    private func wait() async {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 self.lock.lock()
@@ -60,23 +69,15 @@ final class ChildProcessExit: @unchecked Sendable {
         }
     }
 
-    /// Recover missed NOTE_EXIT events without making launchers own a second observer.
-    private func pollUntilExit() async {
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: .milliseconds(50))
-            } catch {
-                return
-            }
-            if Self.hasExited(self.processIdentifier) {
-                self.finish()
-                return
-            }
-        }
-    }
-
     func hasExited() -> Bool {
         Self.hasExited(self.processIdentifier)
+    }
+
+    /// Retained callbacks lose authority before the observer releases its unreaped child.
+    var isRunning: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return !self.finished && !Self.hasExited(self.processIdentifier)
     }
 
     private func finish() {
@@ -89,7 +90,7 @@ final class ChildProcessExit: @unchecked Sendable {
         let continuation = self.continuation
         self.continuation = nil
         self.lock.unlock()
-        self.source?.cancel()
+        self.source.cancel()
         continuation?.resume()
     }
 

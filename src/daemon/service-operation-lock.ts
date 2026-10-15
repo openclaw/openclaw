@@ -4,15 +4,67 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import { getServiceInspectionClock } from "./service-inspection-budget.js";
+import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
-type Scope = { active: boolean; pending: Set<Promise<unknown>> };
+type Scope = {
+  active: boolean;
+  pending: Set<Promise<unknown>>;
+  systemdRead?: Promise<SystemdServiceReadBinding | undefined>;
+};
 const scopes = new AsyncLocalStorage<Map<string, Scope>>();
+
+/** A read borrows the existing lifetime; it never creates mutation custody. */
+export async function withSystemdServiceReadBinding<T>(
+  env: GatewayServiceEnv,
+  create: () => Promise<SystemdServiceReadBinding | undefined>,
+  read: (binding: SystemdServiceReadBinding | undefined) => Promise<T>,
+  deadline?: number,
+): Promise<T> {
+  const now = getServiceInspectionClock();
+  const expired = () => new Error("Original systemd read admission deadline expired.");
+  if (deadline !== undefined && now() >= deadline) {
+    throw expired();
+  }
+  const scope = scopes.getStore()?.get(resolveGatewayServiceOperationLockPath(env));
+  if (scope?.active) {
+    scope.systemdRead ??= create();
+    const retained = scope.systemdRead;
+    const work = Promise.resolve().then(async () => {
+      const binding = await awaitWithinDeadline(
+        () => retained,
+        deadline,
+        () => now(),
+      );
+      if (binding === ABSOLUTE_DEADLINE_EXPIRED) {
+        throw expired();
+      }
+      binding?.verify();
+      return await read(binding);
+    });
+    scope.pending.add(work);
+    try {
+      return await work;
+    } finally {
+      scope.pending.delete(work);
+    }
+  }
+  const binding = await create();
+  try {
+    if (deadline !== undefined && now() >= deadline) {
+      throw expired();
+    }
+    return await read(binding);
+  } finally {
+    await binding?.close();
+  }
+}
 
 /** Serialize native effects and original-file capture using the shipped file-lock
  * owner. This lock does not attest a stopped gateway or replace native identity
@@ -93,6 +145,12 @@ export async function withGatewayServiceOperationLock<T>(
         }
         // Close admission atomically with the final empty-pending observation.
         scope.active = false;
+        try {
+          const binding = await scope.systemdRead;
+          await binding?.close();
+        } catch (error) {
+          failures.push(error);
+        }
         if (failures.length) {
           throw new AggregateError(
             outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,

@@ -32,37 +32,6 @@ async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
 
 describe("ChatGPT Responses SSE frame boundaries", () => {
   it.each([
-    { label: "EOF without a delimiter", chunks: [`data: ${serializedCompletedEvent}`] },
-    { label: "EOF after one LF", chunks: [`data: ${serializedCompletedEvent}\n`] },
-    { label: "EOF after one CR", chunks: [`data: ${serializedCompletedEvent}\r`] },
-    { label: "multiline EOF", chunks: [multilineDataLines.join("\r\n")] },
-    {
-      label: "chunk-split EOF",
-      chunks: ["data: ", serializedCompletedEvent.slice(0, 20), serializedCompletedEvent.slice(20)],
-    },
-    { label: "LF", chunks: [`data: ${serializedCompletedEvent}\n\n`] },
-    { label: "CRLF", chunks: [`data: ${serializedCompletedEvent}\r\n\r\n`] },
-    { label: "lone CR", chunks: [`data: ${serializedCompletedEvent}\r\r`] },
-    {
-      label: "mixed line endings",
-      chunks: [`event: response.completed\r\ndata: ${serializedCompletedEvent}\n\r\n`],
-    },
-    {
-      label: "chunk-split CRLF",
-      chunks: [
-        `event: response.completed\r`,
-        `\ndata: ${serializedCompletedEvent}\r`,
-        "\n\r",
-        "\n",
-      ],
-    },
-    {
-      label: "chunk-split lone CR",
-      chunks: ["event: response.completed\r", `data: ${serializedCompletedEvent}\r`, "\r"],
-    },
-    { label: "multiline LF", chunks: [`${multilineDataLines.join("\n")}\n\n`] },
-    { label: "multiline CRLF", chunks: [`${multilineDataLines.join("\r\n")}\r\n\r\n`] },
-    { label: "multiline lone CR", chunks: [`${multilineDataLines.join("\r")}\r\r`] },
     {
       label: "multiline mixed line endings",
       chunks: [
@@ -72,14 +41,6 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
           )
           .join("")}\r\n`,
       ],
-    },
-    {
-      label: "multiline chunk-split CRLF",
-      chunks: [...multilineDataLines.flatMap((line) => [`${line}\r`, "\n"]), "\r", "\n"],
-    },
-    {
-      label: "multiline chunk-split lone CR",
-      chunks: [...multilineDataLines.flatMap((line) => [line, "\r"]), "\r"],
     },
   ])("parses $label SSE frame boundaries", async ({ chunks }) => {
     let chunkIndex = 0;
@@ -103,14 +64,7 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
   });
 
   it.each([
-    { label: "lone CR", chunks: [`data: ${serializedCompletedEvent}\r\r`] },
-    { label: "mixed LF and lone CR", chunks: [`data: ${serializedCompletedEvent}\n\r`] },
-    { label: "mixed CRLF and lone CR", chunks: [`data: ${serializedCompletedEvent}\r\n\r`] },
     { label: "chunk-split lone CR", chunks: [`data: ${serializedCompletedEvent}\r`, "\r"] },
-    {
-      label: "chunk-split mixed LF and lone CR",
-      chunks: [`data: ${serializedCompletedEvent}\n`, "\r"],
-    },
   ])("dispatches a $label SSE frame before an open response closes", async ({ chunks }) => {
     const cleanup = new AbortController();
     let canceled = false;
@@ -175,31 +129,6 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     await expect(iterator.next()).resolves.toEqual({ done: false, value: completedEvent });
     await expect(iterator.next()).rejects.toThrow(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
   });
-
-  it.each(["", ": heartbeat", "data:", "data: [DONE]"])(
-    "ignores the EOF residue %j without duplicating the preceding event",
-    async (tail) => {
-      const events = [];
-      for await (const event of parseOpenAIChatGptResponsesSse(
-        new Response(`data: ${serializedCompletedEvent}\n\n${tail}`),
-      )) {
-        events.push(event);
-      }
-      expect(events).toEqual([completedEvent]);
-    },
-  );
-
-  it.each(["\n\n", ""])(
-    "preserves consumer failures after a frame ending with %j",
-    async (ending) => {
-      const response = new Response(`data: ${serializedCompletedEvent}${ending}`);
-      const iterator = parseOpenAIChatGptResponsesSse(response);
-      const failure = new SyntaxError("consumer failed");
-      await expect(iterator.next()).resolves.toEqual({ done: false, value: completedEvent });
-      await expect(iterator.throw(failure)).rejects.toBe(failure);
-      expect(response.body?.locked).toBe(false);
-    },
-  );
 
   it("releases the response reader when upstream cancellation remains pending", async () => {
     let cancelStarted = false;

@@ -47,33 +47,24 @@ export function restoreTerminalState(
   // after the wizard is "done" (stdin_open: true), making installers appear hung.
   const resumeStdin = options.resumeStdinIfPaused ?? options.resumeStdin ?? false;
   const resetStream = options.resetStream ?? process.stdout;
-  try {
-    clearActiveProgressLine();
-  } catch (err) {
-    reportRestoreFailure("progress line", err, reason);
-  }
+  const restore = (scope: string, action: () => void) => {
+    try {
+      action();
+    } catch (err) {
+      reportRestoreFailure(scope, err, reason);
+    }
+  };
+  restore("progress line", clearActiveProgressLine);
 
   const stdin = process.stdin;
   if (stdin.isTTY && typeof stdin.setRawMode === "function") {
-    try {
-      stdin.setRawMode(false);
-    } catch (err) {
-      reportRestoreFailure("raw mode", err, reason);
-    }
+    restore("raw mode", () => stdin.setRawMode(false));
     if (resumeStdin && typeof stdin.isPaused === "function" && stdin.isPaused()) {
-      try {
-        stdin.resume();
-      } catch (err) {
-        reportRestoreFailure("stdin resume", err, reason);
-      }
+      restore("stdin resume", () => stdin.resume());
     }
   }
 
   if (resetStream.isTTY) {
-    try {
-      resetStream.write(RESET_SEQUENCE);
-    } catch (err) {
-      reportRestoreFailure("terminal reset", err, reason);
-    }
+    restore("terminal reset", () => resetStream.write(RESET_SEQUENCE));
   }
 }

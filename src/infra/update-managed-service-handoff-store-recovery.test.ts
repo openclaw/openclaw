@@ -88,7 +88,7 @@ unix("recovers a store owned by another user without adopting it", async () => {
   vi.spyOn(fs, "lstatSync").mockImplementation(((target: fs.PathLike, ...rest: never[]) => {
     const stat = realLstatSync(target, ...rest);
     // Keep the Stats prototype so isFile()/isSymbolicLink() stay real.
-    return stat.ino === foreignIno
+    return stat?.ino === foreignIno
       ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { uid: stat.uid + 1 })
       : stat;
   }) as typeof fs.lstatSync);

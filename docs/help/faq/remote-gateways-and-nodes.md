@@ -23,7 +23,7 @@ read_when:
 
     1. Run the Gateway on the always-on host (VPS/home server).
     2. Put the Gateway host and your computer on the same tailnet.
-    3. Ensure the Gateway WS is reachable (tailnet bind or SSH tunnel).
+    3. Check that the Gateway WS is reachable (tailnet bind or SSH tunnel).
     4. Open the macOS app locally and connect in **Remote over SSH** mode (or direct tailnet) so it registers as a node.
     5. Approve the node:
        ```bash
@@ -92,7 +92,9 @@ read_when:
   <Accordion title="Do nodes run a gateway service?">
     No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect to the gateway (iOS/Android nodes, or macOS "node mode" in the menubar app). For headless node hosts and CLI control, see [Node host CLI](/cli/node).
 
-    A full restart is required for `gateway`, `discovery`, and hosted plugin surface changes.
+    Gateway bind, port, and other startup settings require a full restart.
+    Hosted plugin surfaces can update through plugin hot reload. See
+    [Config hot reload](/gateway/configuration/hot-reload) for the per-setting rules.
 
   </Accordion>
 

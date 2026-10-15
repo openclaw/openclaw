@@ -44,11 +44,16 @@ openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot@0.1.4"
 
 Use the exact pinned version so OpenClaw verifies the package against the catalog integrity hash during install.
 
-### 2. Enable the plugin in config
+<a id="2-enable-the-plugin-in-config" />
+
+### 2. Enable the plugin
 
 ```bash
-openclaw config set plugins.entries.openclaw-zaloclawbot.enabled true
+openclaw plugins enable openclaw-zaloclawbot
 ```
+
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect)
+before logging in. Reinstallation preserves a plugin you explicitly disabled.
 
 ### 3. Generate a QR code and log in
 
@@ -58,11 +63,18 @@ openclaw channels login --channel openclaw-zaloclawbot
 
 Scan the terminal-rendered QR code with the Zalo mobile app, accept the Terms of Use inside the Zalo Mini App, and authorize the session.
 
-### 4. Restart the gateway
+<a id="4-restart-the-gateway" />
+
+### 4. Verify the channel
 
 ```bash
-openclaw gateway restart
+openclaw channels status --probe
 ```
+
+Start the Gateway if it is offline. Config changes follow
+[hot reload](/gateway/configuration/hot-reload).
+If the running channel has not picked up the saved login, run
+`openclaw plugins reload openclaw-zaloclawbot`, then check its status again.
 
 ## How it works
 

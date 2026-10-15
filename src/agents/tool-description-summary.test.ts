@@ -86,6 +86,28 @@ describe("tool description summaries", () => {
     expect(summarizeToolDescriptionText(params)).toBe(expected);
   });
 
+  it.each(["{ schema: true }", "[schema]", "- action"])(
+    "excludes %j from paragraph summaries, fallback lines, and verbose descriptions",
+    (excluded) => {
+      expect(
+        summarizeToolDescriptionText({
+          rawDescription: `${excluded}\nEarlier detail.\n\nVisible summary.`,
+        }),
+      ).toBe("Visible summary.");
+      expect(
+        summarizeToolDescriptionText({
+          rawDescription: `ACTIONS:\n${excluded}\nVisible fallback.`,
+        }),
+      ).toBe("Visible fallback.");
+      expect(
+        describeToolForVerbose({
+          rawDescription: `Visible detail.\n${excluded}\nHidden detail.`,
+          fallback: "Tool",
+        }),
+      ).toBe("Visible detail.");
+    },
+  );
+
   it("keeps compact summaries UTF-16 safe at truncation boundaries", () => {
     const summary = summarizeToolDescriptionText({
       displaySummary: "abcd😀 efgh",

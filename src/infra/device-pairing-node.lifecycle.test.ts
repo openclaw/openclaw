@@ -1,10 +1,8 @@
 // Capability approvals follow the paired-device lifecycle, not the device-auth request TTL.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
@@ -43,7 +41,7 @@ describe("node surface approval lifetime", () => {
   });
   afterAll(async () => {
     for (const databasePath of databasePaths) {
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
     await tempDirs.cleanup();
   });
@@ -83,7 +81,7 @@ describe("node surface approval lifetime", () => {
             .toMatchObject(expectedPending);
           expect.soft((await listNodePairing(baseDir)).pending).toEqual([request]);
           await updatePairedDeviceMetadata("node-1", { displayName: "Still connected" }, baseDir);
-          expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
           expect
             .soft((await getPairedDevice("node-1", baseDir))?.pendingNodeSurface)
             .toMatchObject(expectedPending);
@@ -155,7 +153,7 @@ describe("node surface approval lifetime", () => {
           const database = openOpenClawStateDatabase({
             env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
           });
-          expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
           const device = await getPairedDevice("node-1", baseDir);
           expect(device?.pendingNodeSurface).toBeUndefined();
           if (resolution === "node-role removal") {
@@ -206,7 +204,7 @@ describe("node surface approval lifetime", () => {
         const database = openOpenClawStateDatabase({
           env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
         });
-        expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+        expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
         expect((await listNodePairing(baseDir)).pending).toEqual([request]);
       } finally {
         now.mockRestore();

@@ -1,8 +1,9 @@
 // Discovers and copies static assets declared by bundled extension packages.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { parseDockerSelectedPluginBuildIdFilter } from "./bundled-plugin-build-entries.mjs";
+import { collectTrackedBundledPluginSourceCandidates } from "./bundled-plugin-source-utils.mts";
 import { isRecord } from "./record-shared.mjs";
 
 type StaticExtensionAsset = {
@@ -19,6 +20,12 @@ type StaticExtensionAssetParams = {
   assets?: StaticExtensionAsset[];
   warn?: (message: string) => void;
 };
+
+export function shouldCopyStaticExtensionAssets(
+  params: Pick<StaticExtensionAssetParams, "env"> = {},
+) {
+  return (params.env ?? process.env).OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
+}
 
 function toPosixPath(value: unknown) {
   return (typeof value === "string" ? value : "").replaceAll("\\", "/");
@@ -55,59 +62,22 @@ function listTrackedExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
   if (fsImpl !== fs) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", ":(glob)extensions/*/package.json"], {
-    cwd: rootDir,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const deletedResult = spawnSync(
-    "git",
-    ["ls-files", "--deleted", "--", ":(glob)extensions/*/package.json"],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    },
+  return collectTrackedBundledPluginSourceCandidates(rootDir)?.flatMap(
+    ({ dirName, pluginDir, packageJsonPath }) =>
+      packageJsonPath
+        ? [{ dirName, hasPackageJson: true, packageDir: pluginDir, packageJsonPath }]
+        : [],
   );
-  if (deletedResult.status !== 0) {
-    return null;
-  }
-  const deletedPaths = new Set(
-    deletedResult.stdout.split("\n").map((line) => toPosixPath(line.trim())),
-  );
-  return result.stdout
-    .split("\n")
-    .map((line) => toPosixPath(line.trim()))
-    .filter((line) => line.length > 0 && !deletedPaths.has(line))
-    .flatMap((line) => {
-      const match = /^extensions\/([^/]+)\/package\.json$/u.exec(line);
-      if (!match?.[1]) {
-        return [];
-      }
-      const packageDir = path.join(rootDir, "extensions", match[1]);
-      return [
-        {
-          dirName: match[1],
-          hasPackageJson: true,
-          packageDir,
-          packageJsonPath: path.join(packageDir, "package.json"),
-        },
-      ];
-    })
-    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
-function listFilesystemExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
-  const extensionsRoot = path.join(rootDir, "extensions");
+function listFilesystemExtensionPackageDirs(rootDir: string, fsImpl: typeof fs, dist = false) {
+  const extensionsRoot = path.join(rootDir, dist ? "dist/extensions" : "extensions");
   if (!fsImpl.existsSync(extensionsRoot)) {
     return [];
   }
   return fsImpl
     .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && (!dist || entry.name !== "node_modules"))
     .map((entry) => ({
       dirName: entry.name,
       hasPackageJson: undefined,
@@ -124,21 +94,6 @@ function listExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
   );
 }
 
-function listDistExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
-  const extensionsRoot = path.join(rootDir, "dist", "extensions");
-  if (!fsImpl.existsSync(extensionsRoot)) {
-    return [];
-  }
-  return fsImpl
-    .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
-    .map((entry) => ({
-      dirName: entry.name,
-      packageDir: path.join(extensionsRoot, entry.name),
-    }))
-    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
-}
-
 function readPackageStaticAssetEntries(packageJson: Record<string, unknown>) {
   const entries = readPackageSection(packageJson, "build").staticAssets;
   return Array.isArray(entries) ? entries.filter(isRecord) : [];
@@ -151,6 +106,28 @@ export function resolvePackageStaticAssetEntries(packageJson: Record<string, unk
     const output = normalizePackageRelativePath(entry.output);
     return source && output ? [{ source, output }] : [];
   });
+}
+
+export function resolvePackageStaticAssetSource(
+  packageDir: string,
+  source: string,
+  fsImpl: typeof fs = fs,
+) {
+  const parts = toPosixPath(source).split("/");
+  if (parts[0] !== "node_modules") {
+    return path.join(packageDir, source);
+  }
+  const packageEnd = parts[1]?.startsWith("@") ? 3 : 2;
+  const dependency = parts.slice(1, packageEnd).join("/");
+  // Declarations name physical files, not export-map subpaths. Select the
+  // dependency first so a missing asset cannot borrow another version.
+  const dependencyDir = createRequire(path.resolve(packageDir, "package.json"))
+    .resolve.paths(`${dependency}/package.json`)
+    ?.map((dir) => path.join(dir, dependency))
+    .find((dir) => fsImpl.existsSync(path.join(dir, "package.json")));
+  return dependencyDir
+    ? path.join(dependencyDir, ...parts.slice(packageEnd))
+    : path.join(packageDir, source);
 }
 
 function hasPackageAssetBuild(packageJson: Record<string, unknown>) {
@@ -216,8 +193,11 @@ function discoverStaticExtensionRuntimeOverlayAssets(params: StaticExtensionAsse
     discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env })) {
     assetsByDest.set(asset.dest, asset);
   }
-  for (const { dirName, packageDir } of listDistExtensionPackageDirs(rootDir, fsImpl)) {
-    const packageJsonPath = path.join(packageDir, "package.json");
+  for (const { dirName, packageJsonPath } of listFilesystemExtensionPackageDirs(
+    rootDir,
+    fsImpl,
+    true,
+  )) {
     if (!fsImpl.existsSync(packageJsonPath)) {
       continue;
     }
@@ -242,9 +222,8 @@ export function listPackagedStaticExtensionAssetOutputs(
 ) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  return listDistExtensionPackageDirs(rootDir, fsImpl)
-    .flatMap(({ dirName, packageDir }) => {
-      const packageJsonPath = path.join(packageDir, "package.json");
+  return listFilesystemExtensionPackageDirs(rootDir, fsImpl, true)
+    .flatMap(({ dirName, packageJsonPath }) => {
       if (!fsImpl.existsSync(packageJsonPath)) {
         return [];
       }
@@ -305,21 +284,54 @@ export function listGeneratedExtensionAssetSources(params: StaticExtensionAssetP
   return [...sources].toSorted((left, right) => left.localeCompare(right));
 }
 
-/**
- * Copies declared static extension assets from source packages into root dist.
- */
-export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {}) {
+export function resolveStaticExtensionAssetSource(
+  rootDir: string,
+  asset: StaticExtensionAsset,
+  fsImpl: typeof fs,
+) {
+  const packageDir = asset.pluginDir ? path.join(rootDir, "extensions", asset.pluginDir) : rootDir;
+  return resolvePackageStaticAssetSource(
+    packageDir,
+    path.relative(packageDir, path.join(rootDir, asset.src)),
+    fsImpl,
+  );
+}
+
+function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runtimeRoot?: string) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
+  if (runtimeRoot !== undefined && !fsImpl.existsSync(path.join(runtimeRoot, "extensions"))) {
+    return;
+  }
   const assets =
-    params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env });
+    runtimeRoot === undefined
+      ? (params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env }))
+      : discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
   const warn = params.warn ?? console.warn;
-  for (const { src, dest } of assets) {
-    const srcPath = path.join(rootDir, src);
-    const destPath = path.join(rootDir, dest);
-    if (fsImpl.existsSync(srcPath)) {
+  for (const asset of assets) {
+    const { src, dest } = asset;
+    const normalizedDest = toPosixPath(dest);
+    if (runtimeRoot !== undefined && !normalizedDest.startsWith("dist/extensions/")) {
+      continue;
+    }
+    const srcPath = resolveStaticExtensionAssetSource(rootDir, asset, fsImpl);
+    const copySourcePath =
+      runtimeRoot !== undefined && !fsImpl.existsSync(srcPath) ? path.join(rootDir, dest) : srcPath;
+    const destPath =
+      runtimeRoot === undefined
+        ? path.join(rootDir, dest)
+        : path.join(runtimeRoot, normalizedDest.slice("dist/".length));
+    if (fsImpl.existsSync(copySourcePath)) {
       fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
-      fsImpl.copyFileSync(srcPath, destPath);
+      // Staging links target the final location, so replace the link instead of
+      // following it into the live output while materializing a static asset.
+      if (
+        runtimeRoot !== undefined &&
+        fsImpl.lstatSync(destPath, { throwIfNoEntry: false })?.isSymbolicLink()
+      ) {
+        fsImpl.unlinkSync(destPath);
+      }
+      fsImpl.copyFileSync(copySourcePath, destPath);
     } else {
       warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }
@@ -327,31 +339,18 @@ export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {
 }
 
 /**
- * Copies static assets into the dist-runtime overlay from source or root dist.
+ * Copies declared static extension assets from source packages into root dist.
  */
-export function copyStaticExtensionAssetsToRuntimeOverlay(params: StaticExtensionAssetParams = {}) {
-  const rootDir = params.rootDir ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
-  const assets = discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
-  const runtimeExtensionsRoot = path.join(rootDir, "dist-runtime", "extensions");
-  if (!fsImpl.existsSync(runtimeExtensionsRoot)) {
-    return;
-  }
-  const warn = params.warn ?? console.warn;
-  for (const { src, dest } of assets) {
-    const normalizedDest = toPosixPath(dest);
-    if (!normalizedDest.startsWith("dist/extensions/")) {
-      continue;
-    }
-    const srcPath = path.join(rootDir, src);
-    const distPath = path.join(rootDir, dest);
-    const copySourcePath = fsImpl.existsSync(srcPath) ? srcPath : distPath;
-    const destPath = path.join(rootDir, "dist-runtime", normalizedDest.slice("dist/".length));
-    if (fsImpl.existsSync(copySourcePath)) {
-      fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
-      fsImpl.copyFileSync(copySourcePath, destPath);
-    } else {
-      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
-    }
-  }
+export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {}) {
+  copyStaticExtensionAssetFiles(params);
+}
+
+/** Copies static assets into the dist-runtime overlay from source or root dist. */
+export function copyStaticExtensionAssetsToRuntimeOverlay(
+  params: StaticExtensionAssetParams & { runtimeRoot?: string } = {},
+) {
+  copyStaticExtensionAssetFiles(
+    params,
+    params.runtimeRoot ?? path.join(params.rootDir ?? process.cwd(), "dist-runtime"),
+  );
 }

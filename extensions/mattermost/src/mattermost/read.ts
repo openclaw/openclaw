@@ -1,8 +1,6 @@
-// Mattermost plugin module implements guarded channel-history reads.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { resolveAllowlistProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -30,19 +28,10 @@ function parseMattermostChannelTarget(rawTarget: string): string | undefined {
 }
 
 function isCurrentMattermostReadTarget(params: {
-  accountId: string;
   channelId: string;
   context: ReadContext;
 }): boolean {
   const toolContext = params.context.toolContext;
-  const requesterAccountId = params.context.requesterAccountId?.trim();
-  if (
-    normalizeLowercaseStringOrEmpty(toolContext?.currentChannelProvider) !== "mattermost" ||
-    !requesterAccountId ||
-    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return false;
-  }
   const nativeChannelId = toolContext?.currentChannelId;
   if (typeof nativeChannelId === "string" && nativeChannelId.trim()) {
     // Mattermost DMs route outbound messages via `user:<peerId>`, while the
@@ -103,15 +92,9 @@ export async function readMattermostMessages(params: {
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
-  const directOperator = params.context.conversationReadOrigin === "direct-operator";
-  const currentConversation = isCurrentMattermostReadTarget({
-    accountId: account.accountId,
-    channelId: params.channelId,
-    context: params.context,
-  });
-  if (!directOperator && !currentConversation) {
+  if (params.context.conversationReadOrigin !== "direct-operator") {
     const requesterAccountId = params.context.requesterAccountId?.trim();
     const sameProvider =
       normalizeLowercaseStringOrEmpty(params.context.toolContext?.currentChannelProvider) ===
@@ -123,12 +106,14 @@ export async function readMattermostMessages(params: {
       throw new Error("Mattermost delegated reads require the current Mattermost account.");
     }
 
-    const channel = await fetchMattermostChannel(client, params.channelId);
-    if (
-      (channel.type !== "O" && channel.type !== "P") ||
-      !isConfiguredMattermostReadTarget({ cfg: params.cfg, account, channelId: params.channelId })
-    ) {
-      throw new Error("Mattermost read target channel is not allowed.");
+    if (!isCurrentMattermostReadTarget(params)) {
+      const channel = await fetchMattermostChannel(client, params.channelId);
+      if (
+        (channel.type !== "O" && channel.type !== "P") ||
+        !isConfiguredMattermostReadTarget({ cfg: params.cfg, account, channelId: params.channelId })
+      ) {
+        throw new Error("Mattermost read target channel is not allowed.");
+      }
     }
   }
 

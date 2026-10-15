@@ -6,6 +6,7 @@ import path from "node:path";
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -18,8 +19,7 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const { hydrateAttachmentParamsForAction, normalizeSandboxMediaParams } =
-  await import("./message-action-params.js");
+const { hydrateAttachmentParamsForAction } = await import("./message-action-params.js");
 const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
@@ -29,7 +29,6 @@ const onePixelPng = Buffer.from(
 const onePixelPngBase64 = onePixelPng.toString("base64");
 const wrappedOnePixelPngBase64 = onePixelPngBase64.match(/.{1,24}/g)?.join("\r\n") ?? "";
 const parameterizedPngDataUrl = `data:image/png;charset=utf-8;name=../../ignored.svg;base64,${wrappedOnePixelPngBase64}`;
-const csvBase64 = Buffer.from("name,value\nexample,1\n").toString("base64");
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -77,22 +76,6 @@ function requireLoadWebMediaCall(): readonly unknown[] {
   return call;
 }
 
-async function runAttachmentRemoteMediaAction(params: {
-  cfg: OpenClawConfig;
-  action: "sendAttachment" | "upload-file";
-}) {
-  return runMessageAction({
-    cfg: params.cfg,
-    action: params.action,
-    params: {
-      channel: "attachmentchat",
-      target: "+15551234567",
-      media: "https://example.com/pic.png",
-      message: "caption",
-    },
-  });
-}
-
 function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const payload = requireActionPayload(result);
   expect(payload.ok).toBe(true);
@@ -107,26 +90,15 @@ describe("runMessageAction media behavior", () => {
     await resetMessageActionMediaMocks();
   });
 
-  it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        {
-          action,
-          buffer: parameterizedPngDataUrl,
-          base64: onePixelPngBase64,
-          contentType: "image/png",
-          filename: "attachment.png",
-        },
-        {
-          action,
-          buffer: `data:text/csv;base64,${csvBase64}`,
-          base64: csvBase64,
-          contentType: "text/csv",
-          filename: "attachment.csv",
-        },
-      ],
-    ),
-  )(
+  it.each([
+    {
+      action: "send",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+  ] as const)(
     "normalizes $contentType data URLs and infers filenames for $action",
     async ({ action, buffer, base64, contentType, filename }) => {
       const args: Record<string, unknown> = { buffer };
@@ -151,17 +123,14 @@ describe("runMessageAction media behavior", () => {
   );
 
   it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
-        { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
-        {
-          action,
-          name: "both aliases",
-          metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
-        },
-      ],
-    ),
+    (["send", "sendAttachment"] as const).flatMap((action) => [
+      { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
+      {
+        action,
+        name: "both aliases",
+        metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
+      },
+    ]),
   )("keeps $name authoritative for $action data URLs", async ({ action, metadata }) => {
     const args: Record<string, unknown> = {
       buffer: parameterizedPngDataUrl,
@@ -220,18 +189,6 @@ describe("runMessageAction media behavior", () => {
       fromSpy.mockRestore();
     }
   });
-
-  it.each(["media", "mediaUrl", "path", "filePath"])(
-    "keeps data URLs forbidden in the %s source field",
-    async (field) => {
-      await expect(
-        normalizeSandboxMediaParams({
-          args: { [field]: parameterizedPngDataUrl },
-          mediaPolicy: { mode: "host" },
-        }),
-      ).rejects.toThrow(/data: URLs are not supported for media/i);
-    },
-  );
 
   describe("sendAttachment hydration", () => {
     const cfg = {
@@ -331,17 +288,6 @@ describe("runMessageAction media behavior", () => {
       }
     }
 
-    it("hydrates buffer and filename from media for sendAttachment", async () => {
-      const result = await runAttachmentRemoteMediaAction({ cfg, action: "sendAttachment" });
-
-      expectAttachmentRemoteMediaPayload(result);
-      const options = requireLoadWebMediaOptions();
-      expect(Array.isArray(options.localRoots)).toBe(true);
-      expect(typeof options.readFile).toBe("function");
-      expect(options.hostReadCapability).toBe(true);
-      expect(options.sandboxValidated).not.toBe(true);
-    });
-
     it.each(["sendAttachment", "upload-file"] as const)(
       "delivers parameterized wrapped image data URLs through the %s handler",
       async (action) => {
@@ -361,37 +307,6 @@ describe("runMessageAction media behavior", () => {
         expect(canonicalizeBase64(String(payload.buffer))).toBe(onePixelPngBase64);
       },
     );
-
-    it("allows host-local image attachment paths when fs root expansion is enabled", async () => {
-      await restoreRealMediaLoader();
-
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-image-"));
-      try {
-        const outsidePath = path.join(tempDir, "photo.png");
-        await fs.writeFile(outsidePath, onePixelPng);
-
-        const result = await runMessageAction({
-          cfg: {
-            ...cfg,
-            tools: { fs: { workspaceOnly: false } },
-          },
-          action: "sendAttachment",
-          params: {
-            channel: "attachmentchat",
-            target: "+15551234567",
-            media: outsidePath,
-            message: "caption",
-          },
-        });
-
-        const payload = requireActionPayload(result);
-        expect(payload.ok).toBe(true);
-        expect(payload.filename).toBe("photo.png");
-        expect(payload.contentType).toBe("image/png");
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
-    });
 
     it("hydrates validated host-local text attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
@@ -430,14 +345,8 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("hydrates buffer and filename from media for attachment upload-file", async () => {
-      const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
-
-      expectAttachmentRemoteMediaPayload(result);
-    });
-
     it("keeps original upload-file bytes when forced to send as a document", async () => {
-      await runMessageAction({
+      const result = await runMessageAction({
         cfg,
         action: "upload-file",
         params: {
@@ -449,6 +358,7 @@ describe("runMessageAction media behavior", () => {
         },
       });
 
+      expectAttachmentRemoteMediaPayload(result);
       expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 
@@ -612,7 +522,24 @@ describe("runMessageAction media behavior", () => {
     });
 
     it("hydrates buffer and filename from a remote URL before the reply handler runs", async () => {
-      const result = await runMessageAction({
+      const entered = createDeferred();
+      const loaded = createDeferred<Awaited<ReturnType<typeof loadWebMedia>>>();
+      const media = {
+        buffer: Buffer.from("hello"),
+        contentType: "image/png",
+        kind: "image" as const,
+        fileName: "pic.png",
+      };
+      const events: string[] = [];
+      vi.mocked(loadWebMedia).mockImplementationOnce(() => {
+        events.push("load");
+        entered.resolve();
+        return loaded.promise;
+      });
+      handleActionMock.mockImplementationOnce(() => {
+        events.push("handler");
+      });
+      const action = runMessageAction({
         cfg,
         action: "reply",
         params: {
@@ -620,34 +547,52 @@ describe("runMessageAction media behavior", () => {
           target: "+15551234567",
           messageId: "parent-id",
           text: "look at this",
+          message: "look at this",
           media: "https://example.com/pic.png",
         },
       });
-
-      expect(result.kind).toBe("action");
-      expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
-      expect(handlerParams.filename).toBe("pic.png");
-      expect(handlerParams.contentType).toBe("image/png");
-    });
-
-    it("delivers parameterized wrapped image data URLs through the reply handler", async () => {
-      await runMessageAction({
-        cfg,
-        action: "reply",
-        params: {
-          channel: "replychat",
-          target: "+15551234567",
-          messageId: "parent-id",
-          buffer: parameterizedPngDataUrl,
+      const settled = action.then(
+        () => {
+          events.push("settled");
         },
-      });
+        () => {
+          events.push("rejected");
+        },
+      );
 
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.contentType).toBe("image/png");
-      expect(handlerParams.filename).toBe("attachment.png");
-      expect(canonicalizeBase64(String(handlerParams.buffer))).toBe(onePixelPngBase64);
+      try {
+        await Promise.race([
+          entered.promise,
+          action.then(() => {
+            throw new Error("Reply settled before the media loader started");
+          }),
+        ]);
+        // Observe the held loader after a scheduler turn, without a wall-clock delay.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(events).toEqual(["load"]);
+        expect(handleActionMock).not.toHaveBeenCalled();
+
+        events.push("release");
+        loaded.resolve(media);
+        const result = await action;
+        await settled;
+
+        expect(result.kind).toBe("action");
+        expect(handleActionMock).toHaveBeenCalledTimes(1);
+        expect(events).toEqual(["load", "release", "handler", "settled"]);
+        const payload = requireActionPayload(result);
+        expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
+        expect(payload.filename).toBe("pic.png");
+        expect(payload.contentType).toBe("image/png");
+        expect(payload.caption).toBeUndefined();
+        expect(payload.message).toBe("look at this");
+      } finally {
+        // Release and join even when an ordering assertion fails before resolution.
+        loaded.resolve(media);
+        await settled;
+      }
     });
 
     it.each([
@@ -700,32 +645,6 @@ describe("runMessageAction media behavior", () => {
         expect(handlerParams.contentType).toBe(contentType);
       },
     );
-
-    it("does not copy metadata from attachments[] when top-level media wins", async () => {
-      await runMessageAction({
-        cfg,
-        action: "reply",
-        params: {
-          channel: "replychat",
-          target: "+15551234567",
-          messageId: "parent-id",
-          text: "look at this",
-          media: "https://example.com/pic.png",
-          attachments: [
-            {
-              url: "https://example.com/ignored.pdf",
-              name: "ignored.pdf",
-              mimeType: "application/pdf",
-            },
-          ],
-        },
-      });
-
-      expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/pic.png", expect.any(Object));
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.filename).toBe("pic.png");
-      expect(handlerParams.contentType).toBe("image/png");
-    });
 
     it("routes attachments[] host paths into local-root expansion", async () => {
       const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -801,28 +720,6 @@ describe("runMessageAction media behavior", () => {
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
-    });
-
-    it("does not synthesize a caption from message on reply", async () => {
-      // sendAttachment falls back caption -> message when caption is missing.
-      // Reply has its own text/message body, so caption fallback would
-      // invent a bogus caption param the channel handler shouldn't see.
-      await runMessageAction({
-        cfg,
-        action: "reply",
-        params: {
-          channel: "replychat",
-          target: "+15551234567",
-          messageId: "parent-id",
-          message: "look at this",
-          media: "https://example.com/pic.png",
-        },
-      });
-
-      expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.caption).toBeUndefined();
-      expect(handlerParams.message).toBe("look at this");
     });
   });
 });

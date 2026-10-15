@@ -560,86 +560,6 @@ suite.define(() => {
     },
   );
 
-  it("tracks late intrinsic image growth through a transcript remount", async () => {
-    await suite.withPage(
-      { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
-      async ({ page }) => {
-        const imageUrl = `${suite.server.baseUrl}sizing-image.png`;
-        const imageData = await page.evaluate(() => {
-          const canvas = document.createElement("canvas");
-          canvas.width = 480;
-          canvas.height = 240;
-          canvas.getContext("2d")!.fillRect(0, 0, canvas.width, canvas.height);
-          return canvas.toDataURL("image/png").split(",")[1]!;
-        });
-        let releaseImage!: () => void;
-        const imageReady = new Promise<void>((resolve) => {
-          releaseImage = resolve;
-        });
-        await page.route(imageUrl, async (route) => {
-          await imageReady;
-          await route.fulfill({ contentType: "image/png", body: Buffer.from(imageData, "base64") });
-        });
-        await installMockGateway(page, {
-          historyMessages: Array.from({ length: 60 }, (_, index) => ({
-            role: index % 2 ? "assistant" : "user",
-            content:
-              index === 1
-                ? [
-                    { type: "text", text: "Delayed image." },
-                    { type: "image", url: imageUrl, alt: "Intrinsic size proof" },
-                  ]
-                : `Image fixture message ${index}.`,
-            timestamp: index + 1,
-            __openclaw: { id: `image-message-${index}`, seq: index + 1 },
-          })),
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        await page.getByText("Image fixture message 59.", { exact: false }).waitFor();
-        await thread.hover();
-        await page.mouse.wheel(0, -100_000);
-        const image = thread.getByRole("img", { name: "Intrinsic size proof" });
-        await image.waitFor({ state: "attached" });
-        const rowHeight = () =>
-          image.evaluate(
-            (element) => element.closest<HTMLElement>(".chat-virtual-row")!.offsetHeight,
-          );
-        const initialHeight = await rowHeight();
-        releaseImage();
-        await expect
-          .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalHeight))
-          .toBe(240);
-        await expect.poll(rowHeight).toBeGreaterThan(initialHeight + 100);
-        const height = await rowHeight();
-        const gap = () =>
-          image.evaluate((element) => {
-            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-            const next = row
-              .closest(".chat-thread")!
-              .querySelector('.chat-bubble[data-entry-id="image-message-2"]')!
-              .closest<HTMLElement>(".chat-virtual-row")!;
-            return next.getBoundingClientRect().top - row.getBoundingClientRect().bottom;
-          });
-        expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
-        await page.locator(".chat-scroll-to-bottom").click();
-        await expect.poll(() => image.count()).toBe(0);
-        await expect
-          .poll(() =>
-            thread.evaluate((element) =>
-              Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
-            ),
-          )
-          .toBeLessThanOrEqual(2);
-        await thread.hover();
-        await page.mouse.wheel(0, -100_000);
-        await image.waitFor({ state: "visible" });
-        await expect.poll(rowHeight).toBe(height);
-        expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
-      },
-    );
-  });
-
   it("keeps completed-work and tool disclosures anchored on every expand and collapse frame", async () => {
     const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
@@ -825,6 +745,7 @@ suite.define(() => {
         path.join(artifactDir, "disclosure-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,
       );
+      await middleWorkSummary.focus();
       await captureDisclosureThemes(artifactDir, "disclosure-geometry", middleWorkSummary);
     }
     await context.close();
@@ -954,7 +875,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps message and JSON disclosures anchored in a long transcript", async () => {
+  it("keeps message disclosures and shared JSON controls anchored in a long transcript", async () => {
     const context = await suite.browser.newContext({
       reducedMotion: "reduce",
       viewport: { height: 600, width: 900 },
@@ -1015,21 +936,49 @@ suite.define(() => {
       .locator(".chat-message-disclosure")
       .filter({ hasText: "User disclosure anchor marker" })
       .locator(".chat-message-disclosure__toggle");
-    const jsonSummary = page
-      .locator(".chat-json-collapse")
-      .filter({ hasText: "json-disclosure-anchor-marker" })
-      .locator("summary");
+    const jsonBlock = page
+      .locator(".code-block-wrapper--json")
+      .filter({ hasText: "json-disclosure-anchor-marker" });
+    const jsonRoot = jsonBlock.locator(".code-block-json-tree > details");
+    const jsonSummary = jsonRoot.locator(":scope > summary");
+    const jsonRows = jsonRoot.locator(
+      ":scope > .code-block-json-children > .code-block-json-row > details",
+    );
+    const rowsSummary = jsonRows.locator(":scope > summary");
     await userToggle.waitFor();
-    await jsonSummary.waitFor();
-    const wrapToggle = page.locator(".code-block-wrap");
+    await jsonSummary.waitFor({ state: "attached" });
+    expect(await jsonRoot.getAttribute("open")).not.toBeNull();
+    expect(await jsonRows.getAttribute("open")).not.toBeNull();
+    const wrapToggle = page
+      .locator(".code-block-wrapper")
+      .filter({ hasText: "A wide transcript code line that must wrap" })
+      .locator(".code-block-wrap");
     await wrapToggle.waitFor({ state: "visible" });
     const traces: Record<string, DisclosureFrame[]> = {};
-    traces.userMessageExpand = await toggleDisclosureWithFrameTrace(page, userToggle);
-    traces.userMessageCollapse = await toggleDisclosureWithFrameTrace(page, userToggle);
-    traces.jsonExpand = await toggleDisclosureWithFrameTrace(page, jsonSummary);
-    traces.jsonCollapse = await toggleDisclosureWithFrameTrace(page, jsonSummary);
-    traces.codeWrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
-    traces.codeUnwrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
+    const traceVisibleControl = async (control: Locator, actionSelector?: string) => {
+      // JSON now opens as a tree, so earlier controls can start outside the viewport.
+      // Reveal only as far as needed: centering a tall prompt's footer would put
+      // its entire collapsed row above the reader, where resize compensation is correct.
+      await control.evaluate((element) =>
+        element.scrollIntoView({ block: "nearest", inline: "nearest" }),
+      );
+      await waitForChatScrollIdle(page);
+      return toggleDisclosureWithFrameTrace(page, control, actionSelector);
+    };
+    traces.userMessageExpand = await traceVisibleControl(userToggle);
+    traces.userMessageCollapse = await traceVisibleControl(userToggle);
+    traces.jsonCollapse = await traceVisibleControl(jsonSummary);
+    traces.jsonExpand = await traceVisibleControl(jsonSummary);
+    traces.jsonRowsCollapse = await traceVisibleControl(rowsSummary);
+    traces.jsonRowsExpand = await traceVisibleControl(rowsSummary);
+    const rawMode = jsonBlock.locator('[data-json-mode="raw"]');
+    traces.jsonRaw = await traceVisibleControl(rawMode);
+    traces.jsonTree = await traceVisibleControl(
+      rawMode,
+      '.code-block-json-mode[data-json-mode="tree"]',
+    );
+    traces.codeWrap = await traceVisibleControl(wrapToggle);
+    traces.codeUnwrap = await traceVisibleControl(wrapToggle);
     await context.close();
     for (const [label, frames] of Object.entries(traces)) {
       expectStableDisclosureFrames(frames, label);

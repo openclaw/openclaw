@@ -4,6 +4,7 @@ import type {
   UsersGitHubStatusResult,
   UsersGitHubAuthorizeStartResult,
 } from "../../../../packages/gateway-protocol/src/schema/users.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { GitHubIdentityController } from "./github-identity-controller.ts";
 
@@ -42,13 +43,6 @@ const system: UsersGitHubStatusResult["system"] = {
   oauthScopes: ["repo"],
   repositoryGrants: "unknown",
 };
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((fulfill) => {
-    resolve = fulfill;
-  });
-  return { promise, resolve };
-}
 function setup(respond: (method: string, params?: unknown) => Promise<unknown>) {
   const request = vi.fn(respond);
   const client = { request } as unknown as GatewayBrowserClient;

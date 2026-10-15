@@ -22,10 +22,13 @@ Requires OpenClaw 2026.4.10 or above. Check with `openclaw --version`; upgrade w
   `--token` uses colon-separated `appKey:appSecret`. Get these from the Yuanbao app by creating a bot in your application settings.
   </Step>
 
-  <Step title="Restart the gateway to apply the change">
+  <Step title="Verify the channel">
+  <a id="restart-the-gateway-to-apply-the-change" />
+  Config changes follow [hot reload](/gateway/configuration/hot-reload). Check that the channel is ready:
   ```bash
-  openclaw gateway restart
+  openclaw channels status --probe
   ```
+  Start the Gateway if it is offline.
   </Step>
 </Steps>
 
@@ -163,7 +166,7 @@ Yuanbao supports native slash-command menus; commands sync to the platform autom
 
 1. Reset the App Secret in the Yuanbao app
 2. Update the value in your config
-3. Restart the gateway: `openclaw gateway restart`
+3. Verify that [hot reload](/gateway/configuration/hot-reload) applied the new credentials with `openclaw channels status --probe`.
 
 ## Advanced configuration
 
@@ -283,8 +286,13 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       "agent-a": { workspace: "/home/user/agent-a" },
       "agent-b": { workspace: "/home/user/agent-b" },
     },
@@ -304,7 +312,9 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
         peer: { kind: "group", id: "group_zzz" },
       },
     },
+    { agentId: "main", match: { channel: "yuanbao", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 

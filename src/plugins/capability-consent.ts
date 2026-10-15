@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
@@ -107,7 +108,7 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
 
 function throwManagedPluginCapabilityConsentRequired(
   review: PluginCapabilityConsentReview,
-  recovery = `Run "openclaw plugins enable ${review.pluginId} --accept-capabilities" to accept its capabilities.`,
+  recovery = "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
 ): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
@@ -137,7 +138,10 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Record explicit acceptance even when official provenance permits activation. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -174,7 +178,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!manifest) {
       throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" has no installed manifest.`);
     }
-    if (manifest.trustedOfficialInstall) {
+    if (manifest.trustedOfficialInstall && !params.recordOfficialCapabilities) {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
@@ -195,6 +199,8 @@ export async function resolvePluginCapabilityConsent(params: {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
+    // Pure reload needs no write permission; newly accepted capabilities do.
+    assertConfigWriteAllowedInCurrentMode({ env });
     const acknowledgment = params.acknowledge ?? (await params.onCapabilityConsent?.(review));
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
@@ -221,12 +227,13 @@ export async function resolvePluginCapabilityConsent(params: {
     if (acknowledgment.reviewToken !== currentReview.reviewToken) {
       throwManagedPluginCapabilityConsentRequired(currentReview);
     }
+    params.beforePersistentApply?.();
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
         ...records,
         [installOwner]: acceptManagedPluginDeclaredSurface(persistedRecord, currentDeclared),
       },
-      { env, config: params.config, lease },
+      { env, config: params.config, lease, assertCurrent: params.beforePersistentApply },
     );
     pendingPluginCapabilityReviews.delete(pluginId);
   });
@@ -240,9 +247,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   artifactDir: string;
   currentArtifactDir?: string;
   env?: NodeJS.ProcessEnv;
-  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
@@ -263,15 +270,19 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       record: params.sourceRecord,
     });
   const official = isOfficialArtifact(manifest);
-  const officialExempt = official && !params.reviewOfficialArtifacts;
-  const review = buildPluginCapabilityConsentReview({
-    pluginId: params.pluginId,
-    manifest: manifest ?? { name: params.pluginId },
-    record: params.sourceRecord ?? params.record,
-    config: params.config,
-    declared,
-    ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-  });
+  const reviewArtifact = (
+    artifactDeclared: PluginAcceptedDeclaredSurface,
+    artifactManifest: typeof manifest,
+  ) =>
+    buildPluginCapabilityConsentReview({
+      pluginId: params.pluginId,
+      manifest: artifactManifest ?? { name: params.pluginId },
+      record: params.sourceRecord ?? params.record,
+      config: params.config,
+      declared: artifactDeclared,
+      ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
+    });
+  const review = reviewArtifact(declared, manifest);
   let acceptanceCurrent = false;
   if (params.mode === "update" && params.previousDeclared) {
     const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
@@ -284,7 +295,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
-    officialExempt || !params.enabled || acceptanceCurrent
+    (official && !params.recordOfficialCapabilities) || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -305,18 +316,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     (official && !isOfficialArtifact(finalManifest))
   ) {
     const finalReview =
-      finalToken === review.reviewToken
-        ? review
-        : buildPluginCapabilityConsentReview({
-            pluginId: params.pluginId,
-            manifest: finalManifest ?? {
-              name: params.pluginId,
-            },
-            record: params.sourceRecord ?? params.record,
-            config: params.config,
-            declared: finalDeclared,
-            ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-          });
+      finalToken === review.reviewToken ? review : reviewArtifact(finalDeclared, finalManifest);
     const outcome = params.currentArtifactDir ? "updated" : "installed";
     return throwManagedPluginCapabilityConsentRequired(
       finalReview,
@@ -325,7 +325,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.
-  return !officialExempt && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  return (!official || params.recordOfficialCapabilities) && (params.enabled || acceptanceCurrent)
+    ? finalDeclared
+    : undefined;
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -335,10 +337,10 @@ export function createManagedPluginArtifactConsentHandler(params: {
   env?: NodeJS.ProcessEnv;
   spec?: string;
   expectedIntegrity?: string;
-  /** Request operator consent for official artifacts instead of the provenance exemption. */
-  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Preserve official provenance while recording an explicit setup acceptance. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
@@ -402,9 +404,9 @@ export function createManagedPluginArtifactConsentHandler(params: {
           ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
         },
         sourceRecord: artifact.sourceRecord,
-        reviewOfficialArtifacts: params.reviewOfficialArtifacts,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        recordOfficialCapabilities: params.recordOfficialCapabilities,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),

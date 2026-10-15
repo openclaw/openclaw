@@ -1,4 +1,3 @@
-// Control UI module implements open external url behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const DATA_URL_PREFIX = "data:";
@@ -46,14 +45,8 @@ export function resolveSafeExternalUrl(
     return null;
   }
 
-  try {
-    const parsed = new URL(candidate, baseHref);
-    return ALLOWED_EXTERNAL_PROTOCOLS.has(normalizeLowercaseStringOrEmpty(parsed.protocol))
-      ? parsed.toString()
-      : null;
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(candidate, baseHref);
+  return parsed && ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
 }
 
 type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {

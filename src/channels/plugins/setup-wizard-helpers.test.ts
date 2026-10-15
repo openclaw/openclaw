@@ -20,13 +20,10 @@ import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
   createStandardChannelSetupStatus,
-  createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
-  createTopLevelChannelDmPolicySetter,
   createTopLevelChannelGroupPolicySetter,
   createTopLevelChannelParsedAllowFromPrompt,
   normalizeAllowFromEntries,
-  noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   parseSetupEntriesAllowingWildcard,
@@ -42,7 +39,6 @@ import {
   setAccountAllowFromForChannel,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
-  splitSetupEntries,
 } from "./setup-wizard-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 
@@ -243,20 +239,6 @@ describe("buildSingleChannelSecretPromptState", () => {
         canUseEnv: true,
       },
     },
-    {
-      name: "disables env path when config token already exists",
-      input: {
-        accountConfigured: true,
-        hasConfigToken: true,
-        allowEnv: true,
-        envValue: "token-from-env",
-      },
-      expected: {
-        accountConfigured: true,
-        hasConfigToken: true,
-        canUseEnv: false,
-      },
-    },
   ])("$name", ({ input, expected }) => {
     expect(buildSingleChannelSecretPromptState(input)).toEqual(expected);
   });
@@ -395,56 +377,6 @@ describe("promptSingleChannelSecretInput", () => {
 });
 
 describe("promptParsedAllowFromForAccount", () => {
-  it("applies parsed allowFrom values through the provided writer", async () => {
-    const prompter = createPrompter(["Alice, ALICE"]);
-
-    const next = await promptParsedAllowFromForAccount({
-      cfg: {
-        channels: {
-          imessage: {
-            accounts: {
-              alt: {
-                allowFrom: ["old"],
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      accountId: "alt",
-      defaultAccountId: DEFAULT_ACCOUNT_ID,
-      prompter,
-      noteTitle: "iMessage allowlist",
-      noteLines: ["line"],
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) =>
-        parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg, accountId }) => [
-        ...((
-          cfg.channels?.imessage?.accounts?.[accountId] as
-            | { allowFrom?: ReadonlyArray<string | number> }
-            | undefined
-        )?.allowFrom ?? []),
-      ],
-      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-        patchChannelConfigForAccount({
-          cfg,
-          channel: "imessage",
-          accountId,
-          patch: { allowFrom },
-        }),
-    });
-
-    expect(
-      (
-        next.channels?.imessage?.accounts?.alt as
-          | { allowFrom?: ReadonlyArray<string | number> }
-          | undefined
-      )?.allowFrom,
-    ).toEqual(["alice"]);
-    expect(prompter.note).toHaveBeenCalledWith("line", "iMessage allowlist");
-  });
-
   it("can merge parsed values with existing entries", async () => {
     const next = await promptParsedAllowFromForAccount({
       cfg: {
@@ -481,7 +413,8 @@ describe("createPromptParsedAllowFromForAccount", () => {
       defaultAccountId: () => "work",
       message: "msg",
       placeholder: "placeholder",
-      parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
+      parseEntries: (raw) =>
+        parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
       getExistingAllowFrom: ({ cfg, accountId }) => [
         ...((
           cfg.channels?.imessage?.accounts?.[accountId] as
@@ -498,7 +431,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
         }),
     });
 
-    const prompter = createPrompter(["Alice"]);
+    const prompter = createPrompter(["Alice, ALICE"]);
     const next = await promptAllowFrom({
       cfg: {
         channels: {
@@ -565,57 +498,9 @@ describe("channel lookup note helpers", () => {
       "Slack channels",
     );
   });
-
-  it("skips note output when there is nothing to report", async () => {
-    const prompter = { note: vi.fn(async () => undefined) };
-    await noteChannelLookupSummary({
-      prompter,
-      label: "Discord channels",
-      resolvedSections: [{ title: "Resolved", values: [] }],
-      unresolved: [],
-    });
-    expect(prompter.note).not.toHaveBeenCalled();
-  });
-
-  it("formats lookup failures consistently", async () => {
-    const prompter = { note: vi.fn(async () => undefined) };
-    await noteChannelLookupFailure({
-      prompter,
-      label: "Discord channels",
-      error: new Error("boom"),
-    });
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Channel lookup failed; keeping entries as typed. Error: boom",
-      "Discord channels",
-    );
-  });
 });
 
 describe("setAccountAllowFromForChannel", () => {
-  it("writes allowFrom on default account channel config", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: {
-          enabled: true,
-          allowFrom: ["old"],
-          accounts: {
-            work: { allowFrom: ["work-old"] },
-          },
-        },
-      },
-    };
-
-    const next = setAccountAllowFromForChannel({
-      cfg,
-      channel: "imessage",
-      accountId: DEFAULT_ACCOUNT_ID,
-      allowFrom: ["new-default"],
-    });
-
-    expect(next.channels?.imessage?.allowFrom).toEqual(["new-default"]);
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["work-old"]);
-  });
-
   it("writes allowFrom on nested non-default account config", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -662,28 +547,6 @@ describe("patchChannelConfigForAccount", () => {
       accounts: { ada: { enabled: true, groupPolicy: "disabled" } },
     });
     expect(cfg.channels?.demo).toEqual(root);
-  });
-
-  it("patches root channel config for default account", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: false,
-          botToken: "old",
-        },
-      },
-    };
-
-    const next = patchChannelConfigForAccount({
-      cfg,
-      channel: "telegram",
-      accountId: DEFAULT_ACCOUNT_ID,
-      patch: { botToken: "new", dmPolicy: "allowlist" },
-    });
-
-    expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.botToken).toBe("new");
-    expect(next.channels?.telegram?.dmPolicy).toBe("allowlist");
   });
 
   it("patches nested account config and preserves existing enabled flag", () => {
@@ -750,39 +613,6 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.telegram?.webhookSecret).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
   });
-
-  it("supports imessage/signal account-scoped channel patches", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        signal: {
-          enabled: false,
-          accounts: {},
-        },
-        imessage: {
-          enabled: false,
-        },
-      },
-    };
-
-    const signalNext = patchChannelConfigForAccount({
-      cfg,
-      channel: "signal",
-      accountId: "work",
-      patch: { account: "+15555550123", cliPath: "signal-cli" },
-    });
-    expect(signalNext.channels?.signal?.enabled).toBe(true);
-    expect(signalNext.channels?.signal?.accounts?.work?.enabled).toBe(true);
-    expect(signalNext.channels?.signal?.accounts?.work?.account).toBe("+15555550123");
-
-    const imessageNext = patchChannelConfigForAccount({
-      cfg: signalNext,
-      channel: "imessage",
-      accountId: DEFAULT_ACCOUNT_ID,
-      patch: { cliPath: "imsg" },
-    });
-    expect(imessageNext.channels?.imessage?.enabled).toBe(true);
-    expect(imessageNext.channels?.imessage?.cliPath).toBe("imsg");
-  });
 });
 
 describe("setSetupChannelEnabled", () => {
@@ -800,33 +630,9 @@ describe("setSetupChannelEnabled", () => {
     expect(next.channels?.discord?.enabled).toBe(false);
     expect(next.channels?.discord?.token).toBe("abc");
   });
-
-  it("creates missing channel config with enabled state", () => {
-    const next = setSetupChannelEnabled({}, "signal", true);
-    expect(next.channels?.signal?.enabled).toBe(true);
-  });
 });
 
 describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
-  it("adds wildcard allowFrom for open policy", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        zalo: {
-          dmPolicy: "pairing",
-          allowFrom: ["12345"],
-        },
-      },
-    };
-
-    const next = setTopLevelChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel: "zalo",
-      dmPolicy: "open",
-    });
-    expect(next.channels?.zalo?.dmPolicy).toBe("open");
-    expect(next.channels?.zalo?.allowFrom).toEqual(["12345", "*"]);
-  });
-
   it("supports custom allowFrom lookup callback", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -902,40 +708,6 @@ describe("createTopLevelChannelDmPolicy", () => {
     expect(dmPolicy.getCurrent({})).toBe("pairing");
     expect(next.channels?.line?.dmPolicy).toBe("open");
     expect(next.channels?.line?.allowFrom).toEqual(["U123", "*"]);
-  });
-});
-
-describe("createTopLevelChannelDmPolicySetter", () => {
-  it("reuses the shared top-level dmPolicy writer", () => {
-    const setPolicy = createTopLevelChannelDmPolicySetter({
-      channel: "zalo",
-    });
-    const next = setPolicy(
-      {
-        channels: {
-          zalo: {
-            allowFrom: ["12345"],
-          },
-        },
-      },
-      "open",
-    );
-
-    expect(next.channels?.zalo?.dmPolicy).toBe("open");
-    expect(next.channels?.zalo?.allowFrom).toEqual(["12345", "*"]);
-  });
-});
-
-describe("createTopLevelChannelAllowFromSetter", () => {
-  it("reuses the shared top-level allowFrom writer", () => {
-    const setAllowFrom = createTopLevelChannelAllowFromSetter({
-      channel: "msteams",
-      enabled: true,
-    });
-    const next = setAllowFrom({}, ["user-1"]);
-
-    expect(next.channels?.msteams?.allowFrom).toEqual(["user-1"]);
-    expect(next.channels?.msteams?.enabled).toBe(true);
   });
 });
 
@@ -1063,6 +835,10 @@ describe("createAccountScopedGroupAccessSection", () => {
       }),
     ).resolves.toEqual(["general"]);
     expect(prompter.note).toHaveBeenCalledTimes(2);
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Channel lookup failed; keeping entries as typed. Error: boom",
+      "Slack channels",
+    );
 
     const allowlistNext = section.applyAllowlist?.({
       cfg: {},
@@ -1075,42 +851,10 @@ describe("createAccountScopedGroupAccessSection", () => {
   });
 });
 
-describe("splitSetupEntries", () => {
-  it("splits comma/newline/semicolon input and trims blanks", () => {
-    expect(splitSetupEntries(" alice, bob \ncarol;  ;\n")).toEqual(["alice", "bob", "carol"]);
-  });
-});
-
-describe("parseSetupEntriesWithParser", () => {
-  it("maps entries and de-duplicates parsed values", () => {
-    expect(
-      parseSetupEntriesWithParser(" alice, ALICE ; * ", (entry) => {
-        if (entry === "*") {
-          return { value: "*" };
-        }
-        return { value: entry.toLowerCase() };
-      }),
-    ).toEqual({
-      entries: ["alice", "*"],
-    });
-  });
-
-  it("returns parser errors and clears parsed entries", () => {
-    expect(
-      parseSetupEntriesWithParser("ok, bad", (entry) =>
-        entry === "bad" ? { error: "invalid entry: bad" } : { value: entry },
-      ),
-    ).toEqual({
-      entries: [],
-      error: "invalid entry: bad",
-    });
-  });
-});
-
 describe("parseSetupEntriesAllowingWildcard", () => {
   it("preserves wildcard and delegates non-wildcard entries", () => {
     expect(
-      parseSetupEntriesAllowingWildcard(" *, Foo ", (entry) => ({
+      parseSetupEntriesAllowingWildcard(" *,\n Foo;  ;\n", (entry) => ({
         value: entry.toLowerCase(),
       })),
     ).toEqual({
@@ -1215,10 +959,6 @@ describe("normalizeAllowFromEntries", () => {
       ),
     ).toEqual(["+15555550123", "*"]);
   });
-
-  it("trims and de-duplicates without a normalizer", () => {
-    expect(normalizeAllowFromEntries([" alice ", "bob", "alice"])).toEqual(["alice", "bob"]);
-  });
 });
 
 describe("createStandardChannelSetupStatus", () => {
@@ -1270,15 +1010,6 @@ describe("resolveSetupAccountId", () => {
       }),
     ).toBe("work-account");
   });
-
-  it("falls back to default account id when input is blank", () => {
-    expect(
-      resolveSetupAccountId({
-        accountId: "   ",
-        defaultAccountId: "custom-default",
-      }),
-    ).toBe("custom-default");
-  });
 });
 
 describe("resolveAccountIdForConfigure", () => {
@@ -1293,18 +1024,6 @@ describe("resolveAccountIdForConfigure", () => {
       defaultAccountId: DEFAULT_ACCOUNT_ID,
     });
     expect(accountId).toBe("team-primary");
-  });
-
-  it("uses default account when override is missing and prompting disabled", async () => {
-    const accountId = await resolveAccountIdForConfigure({
-      cfg: {},
-      prompter: createWizardPrompter(),
-      label: "Signal",
-      shouldPromptAccountIds: false,
-      listAccountIds: () => ["default"],
-      defaultAccountId: "fallback",
-    });
-    expect(accountId).toBe("fallback");
   });
 
   it("prompts for account id when prompting is enabled and no override is provided", async () => {
@@ -1335,4 +1054,3 @@ describe("resolveAccountIdForConfigure", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -124,7 +124,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
   "src/commands/channel-test-registry.ts", // Test support.
   "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
-  "src/commands/doctor/cron/legacy-store-migration.ts", // Legacy loader carries partial rows in the canonical store envelope.
   "src/commands/doctor/cron/warnings.ts", // Doctor inspects partially parsed cron rows.
   "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
   "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.
@@ -132,7 +131,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/gateway/mcp-app-standalone-host.ts", // Generated standalone browser code bridges the DOM namespace.
   "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
   "src/gateway/test-http-response.ts", // Test support.
-  "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.
   "src/infra/diagnostic-trace-propagation.ts", // Global symbol registry crosses module copies.
   "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
   "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.

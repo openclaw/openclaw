@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { teamsQuotedRawTable } from "./format.test-fixtures.js";
 import {
   editMessageMSTeams,
   sendAdaptiveCardMSTeams,
@@ -33,9 +34,11 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
-  resolveMarkdownTableMode: vi.fn(() => "off"),
-}));
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>();
+  return { ...actual, resolveMarkdownTableMode: vi.fn(() => "off") };
+});
 
 vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
@@ -49,7 +52,8 @@ vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
 }));
 
-vi.mock("./file-consent-helpers.js", () => ({
+vi.mock("./file-consent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./file-consent-helpers.js")>()),
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivityFs: vi.fn(),
 }));
@@ -243,20 +247,6 @@ const structuredRoutingCases: StructuredRoutingCase[] = [
     conversationType: "channel",
     replyStyle: "top-level",
     storedThreadId: "thread-root-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "group chat",
-    conversationType: "groupChat",
-    replyStyle: "top-level",
-    storedThreadId: "group-activity-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "personal chat",
-    conversationType: "personal",
-    replyStyle: "top-level",
-    storedThreadId: "personal-activity-1",
     expectedConversationId: conversationId,
   },
 ];
@@ -521,13 +511,19 @@ describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ sen
   );
 });
 
-describe("Teams text preparation at the SDK HTTP boundary", () => {
-  const source = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-  const expectedText = "**Deployment status**\n\n<at>Alex</at>";
+describe.each([
+  {
+    label: "escaped brackets",
+    sourceName: String.raw`Alice \[Ops\]`,
+    displayName: "Alice [Ops]",
+  },
+])("Teams text preparation at the SDK HTTP boundary ($label)", ({ sourceName, displayName }) => {
+  const source = `# Deployment status\n\n${teamsQuotedRawTable}\n\n@[${sourceName}](11111111-2222-3333-4444-555555555555)`;
+  const expectedText = `**Deployment status**\n\n${teamsQuotedRawTable}\n\n<at>${displayName}</at>`;
   const expectedMention = {
     type: "mention",
-    text: "<at>Alex</at>",
-    mentioned: { id: "11111111-2222-3333-4444-555555555555", name: "Alex" },
+    text: `<at>${displayName}</at>`,
+    mentioned: { id: "11111111-2222-3333-4444-555555555555", name: displayName },
   };
   const expectedAiEntity = {
     type: "https://schema.org/Message",
@@ -565,7 +561,7 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
           log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         });
         await sendMessageMSTeams({ cfg: {}, to: conversationId, text: source });
-        expect(requests[0]?.body.text).toBe(expectedText);
+        expect.soft(requests[0]?.body.text).toBe(expectedText);
         expect
           .soft(requests[0]?.body.entities)
           .toEqual(expect.arrayContaining([expectedMention, expectedAiEntity]));

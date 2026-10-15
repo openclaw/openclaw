@@ -4,7 +4,10 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../models-config.providers.secrets.js";
-import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../provider-auth-aliases.js", () => ({
@@ -32,13 +35,10 @@ describe("provider catalog auth order", () => {
   it("uses configured, stored, cooldown, and alias ordering", () => {
     const profileA = "openai:profile-a";
     const profileB = "openai:profile-b";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileA]: createApiKeyCredential("openai", "key-a"),
-        [profileB]: createApiKeyCredential("openai", "key-b"),
-      },
-    };
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileA]: createApiKeyCredential("openai", "key-a"),
+      [profileB]: createApiKeyCredential("openai", "key-b"),
+    });
     const config: OpenClawConfig = {
       auth: {
         order: {
@@ -114,23 +114,20 @@ describe("provider catalog auth order", () => {
   });
 
   it("keeps the static credential kind separate from the preferred OAuth profile", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "minimax-portal:token": {
-          type: "token",
-          provider: "minimax-portal",
-          token: "catalog-token",
-        },
-        "minimax-portal:oauth": {
-          type: "oauth",
-          provider: "minimax-portal",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60 * 60_000,
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "minimax-portal:token": {
+        type: "token",
+        provider: "minimax-portal",
+        token: "catalog-token",
       },
-    };
+      "minimax-portal:oauth": {
+        type: "oauth",
+        provider: "minimax-portal",
+        access: "oauth-access",
+        refresh: "oauth-refresh",
+        expires: Date.now() + 60 * 60_000,
+      },
+    });
     expect(createProviderApiKeyResolver({}, store)("minimax-portal")).toMatchObject({
       apiKey: "catalog-token",
       discoveryApiKey: "catalog-token",
@@ -218,23 +215,20 @@ describe("provider catalog auth order", () => {
     const profileB = "openai:api-key-b";
     const resolveAuth = createProviderAuthResolver(
       {},
-      {
-        version: 1,
-        profiles: {
-          [profileA]: {
-            type: "oauth",
-            provider: "openai",
-            access: "oauth-a",
-            refresh: "refresh-a",
-            expires: Date.now() + 60_000,
-          },
-          [profileB]: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "file", provider: "vault", id: "/openai/profile-b" },
-          },
+      createAuthProfileStoreFixture({
+        [profileA]: {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-a",
+          refresh: "refresh-a",
+          expires: Date.now() + 60_000,
         },
-      },
+        [profileB]: {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "file", provider: "vault", id: "/openai/profile-b" },
+        },
+      }),
       { auth: { order: { openai: [profileA, profileB] } } },
     );
 

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 354540,
-  "reason": "Main crossed the startup enforcement limit after concurrent landings (main alone 354388 B vs 354270 B limit); this PR adds 119 B for provider auth markers in the model picker; measured 354540 B on the rebased tree. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-11"
+  "startupJsGzipBytes": 374285,
+  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
+  "updatedAt": "2026-10-12"
 }

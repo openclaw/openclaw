@@ -5,7 +5,10 @@ import { acpxExtensionTestRoots } from "./vitest.extension-acpx-paths.mjs";
 import { activeMemoryExtensionTestRoots } from "./vitest.extension-active-memory-paths.mjs";
 import { browserExtensionTestRoots } from "./vitest.extension-browser-paths.mjs";
 import { codexExtensionTestRoots } from "./vitest.extension-codex-paths.mjs";
-import { databaseWorkerExtensionTestRoots } from "./vitest.extension-database-workers-paths.mjs";
+import {
+  databaseWorkerExtensionTestFiles,
+  databaseWorkerExtensionTestRoots,
+} from "./vitest.extension-database-workers-paths.mjs";
 import { diffsExtensionTestRoots } from "./vitest.extension-diffs-paths.mjs";
 import { feishuExtensionTestRoots } from "./vitest.extension-feishu-paths.mjs";
 import { ircExtensionTestRoots } from "./vitest.extension-irc-paths.mjs";
@@ -67,6 +70,7 @@ export function createExtensionsVitestConfig(
     exclude: [
       pluginControlUiPathGlob,
       ...extensionExcludedChannelTestGlobs,
+      ...databaseWorkerExtensionTestFiles,
       ...extensionCatchAllExcludedTestRoots.map(
         (root) => `${root.replace(/^extensions\//u, "")}/**`,
       ),

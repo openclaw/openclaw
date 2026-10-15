@@ -1,7 +1,11 @@
 import * as crypto from "node:crypto";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeOptionalString as pickString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
+import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
@@ -26,82 +30,6 @@ type FeishuVcMeetingInvitedEvent = {
   invite_time?: string;
 };
 
-type ResolvedVcInviter = {
-  senderId: string;
-  openId?: string;
-  userId?: string;
-  unionId?: string;
-  name?: string;
-};
-
-type VcMeetingInvitedTurn = {
-  turnId: string;
-  meetingNo: string;
-  topic?: string;
-  inviteTime?: string;
-  inviter: ResolvedVcInviter;
-  prompt: string;
-};
-
-function pickString(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
-}
-
-function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter | null {
-  const id = event.inviter?.id;
-  const openId = pickString(id?.open_id);
-  const userId = pickString(id?.user_id);
-  const unionId = pickString(id?.union_id);
-  const senderId = openId ?? userId;
-  if (!senderId) {
-    return null;
-  }
-  const name = pickString(event.inviter?.user_name);
-  return {
-    senderId,
-    ...(openId ? { openId } : {}),
-    ...(userId ? { userId } : {}),
-    ...(unionId ? { unionId } : {}),
-    ...(name ? { name } : {}),
-  };
-}
-
-function buildJoinPrompt(params: { meetingNo: string; callId?: string }): string {
-  const base = `Use the available tool to join the meeting with meeting number ${params.meetingNo} immediately. Do not ask for confirmation.`;
-  return params.callId
-    ? `${base} If the join tool supports a call_id parameter, pass call_id=${JSON.stringify(params.callId)}; otherwise join by meeting number only.`
-    : base;
-}
-
-function resolveVcMeetingInvitedTurn(
-  event: FeishuVcMeetingInvitedEvent,
-  uuid: () => string = () => crypto.randomUUID(),
-): VcMeetingInvitedTurn | null {
-  const meetingNo = pickString(event.meeting?.meeting_no);
-  const inviter = resolveVcInviter(event);
-  if (!meetingNo || !FEISHU_MEETING_NUMBER_PATTERN.test(meetingNo) || !inviter) {
-    return null;
-  }
-
-  const eventId = pickString(event.event_id);
-  const inviteTime = pickString(event.invite_time);
-  const callId = pickString(event.call_id);
-  const topic = pickString(event.meeting?.topic);
-  const turnId = eventId
-    ? `vc-invited:event:${eventId}`
-    : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
-  const prompt = buildJoinPrompt({ meetingNo, callId });
-
-  return {
-    turnId,
-    meetingNo,
-    inviter,
-    prompt,
-    ...(topic ? { topic } : {}),
-    ...(inviteTime ? { inviteTime } : {}),
-  };
-}
-
 function parseInviteTimestamp(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -110,48 +38,71 @@ function parseInviteTimestamp(value: string | undefined): number {
   return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
 }
 
-function buildSyntheticMessageEvent(turn: VcMeetingInvitedTurn): FeishuMessageEvent {
+function createVcInviteAdoption(params: {
+  claim: FeishuMessageProcessingClaim;
+  abortSignal?: AbortSignal;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
+}): { lifecycle: FeishuIngressLifecycle; finish: () => Promise<void> } {
+  const cancellation = new AbortController();
+  const settled = createDeferred<void>();
+  let handedOff = false;
+  let released = false;
+  let adoption: Promise<void> | undefined;
+  const abandon = () => {
+    if (released || adoption) {
+      return;
+    }
+    released = true;
+    params.abortSignal?.removeEventListener("abort", abandon);
+    const error =
+      params.abortSignal?.reason ?? new Error("Feishu VC invitation abandoned before adoption");
+    // Cancel queued ownership before making this logical identity available again.
+    cancellation.abort(error);
+    params.claim.release({ error });
+    settled.resolve();
+  };
+  params.trackTask?.(settled.promise);
+  params.abortSignal?.addEventListener("abort", abandon, { once: true });
+  if (params.abortSignal?.aborted) {
+    abandon();
+  }
   return {
-    sender: {
-      sender_id: {
-        ...(turn.inviter.openId ? { open_id: turn.inviter.openId } : {}),
-        ...(turn.inviter.userId ? { user_id: turn.inviter.userId } : {}),
-        ...(turn.inviter.unionId ? { union_id: turn.inviter.unionId } : {}),
+    lifecycle: {
+      abortSignal: cancellation.signal,
+      onAdopted: () => {
+        if (adoption) {
+          return adoption;
+        }
+        if (params.isAccountActive?.() === false) {
+          abandon();
+        }
+        cancellation.signal.throwIfAborted();
+        handedOff = true;
+        // Adoption retires source cancellation; a started commit owns its completion.
+        params.abortSignal?.removeEventListener("abort", abandon);
+        adoption = Promise.resolve()
+          .then(async () => {
+            await params.claim.commit();
+          })
+          .finally(() => settled.resolve());
+        return adoption;
       },
+      onDeferred: () => {
+        handedOff = true;
+      },
+      onAdoptionFinalizing: () => {
+        handedOff = true;
+      },
+      onAbandoned: abandon,
     },
-    message: {
-      message_id: turn.turnId,
-      chat_id: turn.inviter.senderId,
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text: turn.prompt }),
-      create_time: String(parseInviteTimestamp(turn.inviteTime)),
-      suppress_reply_target: true,
+    finish: async () => {
+      if (!handedOff) {
+        abandon();
+      }
+      await adoption;
     },
   };
-}
-
-async function dispatchVcMeetingInvitedTurn(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-  runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
-  turn: VcMeetingInvitedTurn;
-}): Promise<void> {
-  params.runtime?.log?.(
-    `feishu[${params.accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
-  );
-  const event = setFeishuSyntheticDirectPreDispatchTarget(
-    buildSyntheticMessageEvent(params.turn),
-    `user:${params.turn.inviter.senderId}`,
-  );
-  await handleFeishuMessage({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    event,
-    runtime: params.runtime,
-    channelRuntime: params.channelRuntime,
-  });
 }
 
 export function createFeishuVcMeetingInvitedHandler(params: {
@@ -161,12 +112,18 @@ export function createFeishuVcMeetingInvitedHandler(params: {
   channelRuntime?: PluginRuntime["channel"];
   fireAndForget?: boolean;
   autoJoin: boolean;
+  abortSignal?: AbortSignal;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, fireAndForget, autoJoin } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  return async (data) => {
+  const handle = async (data: unknown) => {
+    if (params.abortSignal?.aborted || params.isAccountActive?.() === false) {
+      return;
+    }
     // Meeting invitations represent remote intent, but joining changes the bot's live presence.
     // Keep the event inert unless this account explicitly opts into unattended joins.
     if (!autoJoin) {
@@ -174,30 +131,95 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       return;
     }
     try {
-      const turn = resolveVcMeetingInvitedTurn(data as FeishuVcMeetingInvitedEvent);
-      if (!turn) {
+      const invite = data as FeishuVcMeetingInvitedEvent;
+      const meetingNo = pickString(invite.meeting?.meeting_no);
+      const id = invite.inviter?.id;
+      const openId = pickString(id?.open_id);
+      const userId = pickString(id?.user_id);
+      const unionId = pickString(id?.union_id);
+      const senderId = openId ?? userId;
+      if (!meetingNo || !FEISHU_MEETING_NUMBER_PATTERN.test(meetingNo) || !senderId) {
         log(
           `feishu[${accountId}]: vc meeting invited event has invalid meeting_no ` +
             "or inviter identity, skipping",
         );
         return;
       }
-      const promise = dispatchVcMeetingInvitedTurn({
-        cfg,
-        accountId,
-        runtime,
-        channelRuntime: params.channelRuntime,
-        turn,
+      const eventId = pickString(invite.event_id);
+      const inviteTime = pickString(invite.invite_time);
+      const callId = pickString(invite.call_id);
+      const turnId = eventId
+        ? `vc-invited:event:${eventId}`
+        : `vc-invited:${meetingNo}:${inviteTime ?? crypto.randomUUID()}`;
+      const basePrompt = `Use the available tool to join the meeting with meeting number ${meetingNo} immediately. Do not ask for confirmation.`;
+      const prompt = callId
+        ? `${basePrompt} If the join tool supports a call_id parameter, pass call_id=${JSON.stringify(callId)}; otherwise join by meeting number only.`
+        : basePrompt;
+      runtime?.log?.(
+        `feishu[${accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${senderId} meeting_no=${meetingNo}`,
+      );
+      const event = setFeishuSyntheticDirectPreDispatchTarget(
+        {
+          sender: {
+            sender_id: {
+              ...(openId ? { open_id: openId } : {}),
+              ...(userId ? { user_id: userId } : {}),
+              ...(unionId ? { union_id: unionId } : {}),
+            },
+          },
+          message: {
+            message_id: turnId,
+            chat_id: senderId,
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: prompt }),
+            create_time: String(parseInviteTimestamp(inviteTime)),
+            suppress_reply_target: true,
+          },
+        },
+        `user:${senderId}`,
+      );
+      const claim = await claimUnprocessedFeishuMessage({
+        messageId: resolveFeishuMessageDedupeKey(event),
+        namespace: accountId,
+        log,
       });
-      if (fireAndForget) {
-        promise.catch((err: unknown) => {
-          error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);
-        });
+      if (claim.kind !== "claimed") {
         return;
       }
-      await promise;
+      if (params.abortSignal?.aborted || params.isAccountActive?.() === false) {
+        claim.handle.release({ error: new Error("Feishu account stopped before VC dispatch") });
+        return;
+      }
+      const adoption = createVcInviteAdoption({
+        claim: claim.handle,
+        abortSignal: params.abortSignal,
+        isAccountActive: params.isAccountActive,
+        trackTask: params.trackTask,
+      });
+      try {
+        await handleFeishuMessage({
+          trackTask: params.trackTask,
+          cfg,
+          accountId,
+          event,
+          runtime,
+          channelRuntime: params.channelRuntime,
+          turnAdoptionLifecycle: adoption.lifecycle,
+        });
+      } catch (dispatchError) {
+        await adoption.lifecycle.onAbandoned();
+        throw dispatchError;
+      } finally {
+        await adoption.finish();
+      }
     } catch (err) {
       error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);
     }
+  };
+  return (data) => {
+    const task = handle(data);
+    params.trackTask?.(task);
+    return fireAndForget ? Promise.resolve() : task;
   };
 }

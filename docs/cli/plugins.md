@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
@@ -11,6 +11,31 @@ sidebarTitle: "Plugins"
 # `openclaw plugins`
 
 Manage Gateway plugins, hook packs, and compatible bundles.
+
+Install, uninstall, enable, disable, and reload use their existing Gateway routes
+when a Gateway is running. Local fallbacks require exclusive offline state ownership.
+Stop the Gateway through its service owner before running `plugins update`,
+`plugins registry --refresh`, marketplace feed refreshes, or hook-pack install
+fallbacks. `plugins marketplace entries --offline` reads the saved feed without
+refreshing it. Refused commands report how to retry.
+
+While a plugin or config operation is running, the CLI waits and retries only if
+the Gateway confirms that it did not accept the mutation. Admission stays within
+the command's existing ten-minute budget, including `plugins reload --wait`.
+Interrupting the command cancels pending admission retries. An already accepted
+mutation may still finish; inspect plugin status before retrying it.
+Lost replies and failures after acceptance are reported without automatic replay;
+inspect plugin status before retrying them. Older Gateways that do not provide
+the admission fact keep the explicit busy response.
+
+If a command encounters offline database maintenance, it reports the reason
+without `OPENCLAW_DEBUG`. Wait for maintenance to finish, then retry the command.
+
+`plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
+when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
+policy keys in config use the required lowercase form.
+The same policy applies to live activation and the next Gateway start. Runtime
+IDs and Gateway method names retain the plugin's declared spelling.
 
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
@@ -35,14 +60,15 @@ Manage Gateway plugins, hook packs, and compatible bundles.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--no-enable] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
-openclaw plugins enable <id> [--accept-capabilities]
-openclaw plugins disable <id>
-openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
-openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
+openclaw plugins enable <ids...> [--accept-capabilities]
+openclaw plugins disable <ids...>
+openclaw plugins reload <ids...> [--wait] [--accept-capabilities] [--json]
+openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
+openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
 openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
@@ -59,11 +85,11 @@ command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
 to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Edit the Nix source for this install instead (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
+In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Manage those choices in the Nix source for this install (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. Reload remains available when no new capability consent needs to be recorded; it preserves config and installation state. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 </Note>
 
 <Note>
-Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
+Bundled plugins ship with OpenClaw. A little over half are enabled by default — mostly model and speech providers, plus a few others such as the bundled browser plugin. Other bundled plugins need explicit enablement or relevant configuration. Enabled does not mean currently in use. Provider use depends on configuration and requests. Providers that require authentication need credentials; keyless providers such as Microsoft speech do not. An enabled entry in `plugins list` does not mean the plugin is doing work.
 
 Native OpenClaw plugins ship `openclaw.plugin.json` with an inline JSON Schema (`configSchema`, even if empty). Compatible bundles use their own bundle manifests instead.
 
@@ -77,10 +103,10 @@ reader job. Open the page that matches your task.
 
 | Page                                                              | Read it when                                                                     |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Author plugins](/cli/plugins/authoring)                          | You are scaffolding, building, validating, or packing a plugin project.          |
+| [Author plugins](/cli/plugins/authoring)                          | You are creating, building, validating, or packing a plugin project.             |
 | [Install plugins](/cli/plugins/install)                           | You are installing from ClawHub, npm, git, a path, an archive, or a marketplace. |
 | [List installed plugins](/cli/plugins/list)                       | You want the installed inventory, discovery diagnostics, or the plugin index.    |
-| [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing a plugin, or updating one across pins, channels, and sources.   |
+| [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing or reloading a plugin, or updating its version and source.      |
 | [Inspect and diagnose plugins](/cli/plugins/inspect-and-diagnose) | You need plugin identity, runtime registrations, load errors, or registry state. |
 | [Marketplace feeds](/cli/plugins/marketplace)                     | You are browsing, listing, or refreshing a marketplace or hosted signed feed.    |
 
@@ -110,6 +136,7 @@ points at the page that now holds the content.
 - <a id="param-verbose" />[`--verbose`](/cli/plugins/list#param-verbose)
 - <a id="param-json" />[`--json`](/cli/plugins/list#param-json)
 - <a id="plugin-index" />[Plugin index](/cli/plugins/list#plugin-index)
+- <a id="reload" />[Reload](/cli/plugins/uninstall-and-update#reload)
 - <a id="uninstall" />[Uninstall](/cli/plugins/uninstall-and-update#uninstall)
 - <a id="update" />[Update](/cli/plugins/uninstall-and-update#update)
 - <a id="resolving-plugin-id-vs-npm-spec" />[Resolving plugin id vs npm spec](/cli/plugins/uninstall-and-update#resolving-plugin-id-vs-npm-spec)

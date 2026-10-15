@@ -8,11 +8,9 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listOpenClawRegisteredAgentDatabases } from "../src/state/openclaw-agent-db-registry-listing.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../src/state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { captureFullEnv, setTestEnvValue, withPathResolutionEnv } from "../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
@@ -37,7 +35,7 @@ function installOwnedEnv() {
 
 beforeEach(() => {
   const snapshot = captureFullEnv();
-  cleanups.push(snapshot.restore);
+  cleanups.push(() => snapshot.restore());
   sandbox = makeTempDir(tempDirs, "openclaw-test-state-lifetime-");
   vi.spyOn(os, "tmpdir").mockReturnValue(sandbox);
   setTestEnvValue("VITEST_WORKER_ID", "7");
@@ -67,14 +65,14 @@ describe("test environment SQLite lifetime", () => {
       PRAGMA user_version = 9;
       CREATE TABLE agent_databases (
         agent_id TEXT NOT NULL, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id, path)
+        last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id)
       );
       CREATE TABLE auth_profile_stores (agent_id TEXT PRIMARY KEY);
     `);
     legacy.close();
     const legacyBytes = fs.readFileSync(legacyPath);
     expect(() => listOpenClawRegisteredAgentDatabases({ path: legacyPath })).toThrow(
-      "has a legacy agent database registry schema",
+      "has an unsupported agent database registry schema",
     );
 
     const testEnv = installOwnedEnv();

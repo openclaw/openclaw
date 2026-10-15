@@ -1,50 +1,10 @@
-// Feishu plugin module implements monitor.bot menu handler behavior.
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { claimUnprocessedFeishuMessage, forgetProcessedFeishuMessage } from "./dedup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botOpenIds } from "./monitor.state.js";
 import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
-
-type FeishuBotMenuEvent = {
-  event_key?: string;
-  timestamp?: string | number;
-  operator?: {
-    operator_name?: string;
-    operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-  };
-};
-
-function readStringOrNumber(value: unknown): string | number | undefined {
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
-
-function parseFeishuBotMenuEvent(value: unknown): FeishuBotMenuEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const operator = value.operator;
-  if (operator !== undefined && !isRecord(operator)) {
-    return null;
-  }
-  return {
-    event_key: readString(value.event_key),
-    timestamp: readStringOrNumber(value.timestamp),
-    operator: operator
-      ? {
-          operator_name: readString(operator.operator_name),
-          operator_id: isRecord(operator.operator_id)
-            ? {
-                open_id: readString(operator.operator_id.open_id),
-                user_id: readString(operator.operator_id.user_id),
-                union_id: readString(operator.operator_id.union_id),
-              }
-            : undefined,
-        }
-      : undefined,
-  };
-}
 
 export function createFeishuBotMenuHandler(params: {
   cfg: ClawdbotConfig;
@@ -53,23 +13,27 @@ export function createFeishuBotMenuHandler(params: {
   channelRuntime?: PluginRuntime["channel"];
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
   getBotOpenId?: (accountId: string) => string | undefined;
-  getBotName?: (accountId: string) => string | undefined;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, chatHistories, fireAndForget } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const getBotOpenId = params.getBotOpenId ?? ((id) => botOpenIds.get(id));
-  const getBotName = params.getBotName ?? ((id) => botNames.get(id));
 
-  return async (data) => {
+  const isActive = params.isAccountActive ?? (() => true);
+  const handle = async (data: unknown) => {
     try {
-      const event = parseFeishuBotMenuEvent(data);
-      if (!event) {
+      if (!isActive()) {
         return;
       }
-      const operatorOpenId = event.operator?.operator_id?.open_id?.trim();
-      const eventKey = event.event_key?.trim();
+      if (!isRecord(data) || !isRecord(data.operator) || !isRecord(data.operator.operator_id)) {
+        return;
+      }
+      const operatorId = data.operator.operator_id;
+      const operatorOpenId = readString(operatorId.open_id)?.trim();
+      const eventKey = readString(data.event_key)?.trim();
       if (!operatorOpenId || !eventKey) {
         return;
       }
@@ -77,13 +41,13 @@ export function createFeishuBotMenuHandler(params: {
         sender: {
           sender_id: {
             open_id: operatorOpenId,
-            user_id: event.operator?.operator_id?.user_id,
-            union_id: event.operator?.operator_id?.union_id,
+            user_id: readString(operatorId.user_id),
+            union_id: readString(operatorId.union_id),
           },
           sender_type: "user",
         },
         message: {
-          message_id: `bot-menu:${eventKey}:${event.timestamp ?? Date.now()}`,
+          message_id: `bot-menu:${eventKey}:${typeof data.timestamp === "string" || typeof data.timestamp === "number" ? data.timestamp : Date.now()}`,
           suppress_reply_target: true,
           chat_id: `p2p:${operatorOpenId}`,
           chat_type: "p2p",
@@ -99,6 +63,12 @@ export function createFeishuBotMenuHandler(params: {
         namespace: accountId,
         log,
       });
+      if (!isActive()) {
+        if (claim.kind === "claimed") {
+          claim.handle.release({ error: new Error("feishu account stopped before menu dispatch") });
+        }
+        return;
+      }
       if (claim.kind === "duplicate") {
         log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
         return;
@@ -109,10 +79,10 @@ export function createFeishuBotMenuHandler(params: {
       }
       const handleLegacyMenu = () =>
         handleFeishuMessage({
+          trackTask: params.trackTask,
           cfg,
           event: syntheticEvent,
           botOpenId: getBotOpenId(accountId),
-          botName: getBotName(accountId),
           runtime,
           channelRuntime: params.channelRuntime,
           chatHistories,
@@ -134,7 +104,15 @@ export function createFeishuBotMenuHandler(params: {
             }
             return;
           }
-          return await handleLegacyMenu();
+          if (!isActive()) {
+            if (claim.kind === "claimed") {
+              claim.handle.release({
+                error: new Error("feishu account stopped before menu dispatch"),
+              });
+            }
+            return;
+          }
+          return handleLegacyMenu();
         })
         .catch(async (err: unknown) => {
           if (isFeishuRetryableSyntheticEventError(err)) {
@@ -147,6 +125,7 @@ export function createFeishuBotMenuHandler(params: {
           }
           throw err;
         });
+      params.trackTask?.(promise);
       if (fireAndForget) {
         promise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
@@ -157,5 +136,10 @@ export function createFeishuBotMenuHandler(params: {
     } catch (err) {
       error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
     }
+  };
+  return (data) => {
+    const task = handle(data);
+    params.trackTask?.(task);
+    return task;
   };
 }

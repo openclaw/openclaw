@@ -421,10 +421,8 @@ describe("provider runtime physical ownership", () => {
       const alias = writePlugin({
         id: "alias-owner",
         filename: "index.cjs",
-        body: `module.exports = { id: "alias-owner", register(api) {
-          api.registerProvider({ id: "other-provider", label: "alias", auth: [],
-            hookAliases: ["same-provider", "runtime-only"] });
-        }};`,
+        registration: `api.registerProvider({ id: "other-provider", label: "alias", auth: [],
+          hookAliases: ["same-provider", "runtime-only"] });`,
       });
       writeFileSync(
         path.join(alias.dir, "openclaw.plugin.json"),

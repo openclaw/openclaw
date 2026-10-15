@@ -197,7 +197,7 @@ Button semantics:
   carries a `command` action.
 - `reusable` is optional. Channels that support reusable native callbacks may
   keep the action available after a successful interaction. Use it for
-  repeatable or idempotent actions such as refresh, inspect, or more details;
+  actions safe to repeat such as refresh, inspect, or more details;
   leave it unset for normal one-shot approvals and destructive actions.
 
 Select semantics:
@@ -217,7 +217,7 @@ Chart semantics:
   blocks are dropped during normalization rather than silently changing data.
 - Native chart rendering is opt-in through `presentationCapabilities.charts`.
   Other channels receive the chart title, axes, categories, series, and values
-  as deterministic text. This is also the accessibility fallback.
+  as plain text in a fixed format. This is also the accessibility fallback.
 
 Table semantics:
 
@@ -231,8 +231,8 @@ Table semantics:
   or row-header index drops the table block instead of truncating or repairing
   its data.
 - Native table rendering is opt-in through `presentationCapabilities.tables`.
-  Other channels receive the caption and every row as deterministic linear
-  text, with internal whitespace collapsed:
+  Other channels receive the caption and every row as plain
+  text in a fixed format, with internal whitespace collapsed:
 
   ```text
   Open pipeline (table)
@@ -243,7 +243,7 @@ Table semantics:
 There is no separate `report` discriminator. Compose a report from `title`,
 `tone`, `text`, `context`, `chart`, `table`, and action blocks. This keeps each
 block independently renderable and gives the complete report the same
-deterministic text fallback.
+plain-text fallback in a fixed format.
 
 ## Producer examples
 
@@ -447,7 +447,8 @@ const adapter: ChannelOutboundAdapter = {
   renderPresentation({ payload, presentation, ctx }) {
     return renderNativePayload(payload, presentation, ctx);
   },
-  async pinDeliveredMessage({ target, messageId, pin }) {
+  async pinDeliveredMessage({ target, messageId, pin, assertDirectAdapterHandoff }) {
+    assertDirectAdapterHandoff?.();
     await pinNativeMessage(target, messageId, { notify: pin.notify === true });
   },
 };
@@ -520,14 +521,14 @@ visible fallback.
 
 ## Core render flow
 
-On the canonical outbound path used by CLI and standard message actions, core:
+On the standard outbound path used by CLI and standard message actions, core:
 
 1. Normalizes the presentation payload.
 2. Resolves the target channel's outbound adapter.
 3. Reads `presentationCapabilities`.
 4. Applies generic capability limits such as action count, label length, and
    select option count when the adapter advertises them. Chart and table blocks
-   become deterministic text unless the adapter explicitly advertises
+   become plain text in a fixed format unless the adapter explicitly advertises
    `charts: true` or `tables: true`, respectively.
 5. Calls `renderPresentation` when the adapter can render the payload. Its
    `presentation` is adapted for native limits; `sourcePresentation` retains
@@ -538,7 +539,7 @@ On the canonical outbound path used by CLI and standard message actions, core:
    sent message.
 
 Channel-local reply or preview funnels that consume `ReplyPayload` directly
-must either enter that canonical path or materialize the same presentation
+must either enter that standard path or materialize the same presentation
 fallback before projecting the payload down to plain text/media.
 
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
@@ -633,7 +634,7 @@ helpers. It supports:
 - buttons
 - selects
 
-`MessagePresentation` is the canonical shared send contract. It adds:
+`MessagePresentation` is the shared send contract. It adds:
 
 - title
 - tone
@@ -680,16 +681,16 @@ Non-deprecated helpers worth knowing:
 - `isMessagePresentationInteractiveBlock(block)` narrows a block to the
   `buttons` | `select` union.
 - `resolveMessagePresentationButtonAction(button)` and
-  `resolveMessagePresentationOptionAction(option)` return the canonical typed
+  `resolveMessagePresentationOptionAction(option)` return the normalized typed
   action while accepting deprecated boundary fields. An explicit `action`
   always wins.
 - `resolveMessagePresentationActionValue(action)` /
   `resolveMessagePresentationControlValue(control)` read command/callback
-  scalar values only. A non-scalar canonical action never falls through to a
+  scalar values only. A non-scalar normalized action never falls through to a
   legacy shadow `value`, so approval IDs and link targets stay typed.
 - `renderMessagePresentationChartFallbackText(block)` /
   `renderMessagePresentationTableFallbackText(block)` render one structured
-  data block as deterministic text for channel-specific fallback paths.
+  data block as plain text in a fixed format for channel-specific fallback paths.
 
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK. The compatibility registry records them as
@@ -742,11 +743,27 @@ Semantics:
 - `pin.notify` defaults to `false`.
 - `pin.required` defaults to `false`.
 - Optional pin failures degrade and leave the sent message intact.
-- Required pin failures fail delivery.
+- Required pin failures report a partial delivery failure while preserving the
+  accepted message and its receipt.
 - Chunked messages pin the first delivered chunk, not the tail chunk.
 
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
+
+The `pinDeliveredMessage` context includes an optional
+`assertDirectAdapterHandoff` callback. A successful send does not keep its owner
+active indefinitely: the owner can close while the adapter prepares or waits to
+pin that message. Core checks the assertion before entering the pin hook, and
+the adapter must retain it through preparation, rate-limit queues, and retries,
+checking it synchronously immediately before each provider request. If the
+native pin helper performs those waits, forward the assertion into its existing
+request guard too.
+
+Let a submitted pin request settle even if authority closes while awaiting its
+response. Do not discard an accepted pin or repeat the message send. This
+optional context field preserves older callers that do not supply an assertion;
+it adds no configuration or pin permission and must not be serialized into a
+payload.
 
 ## Plugin author checklist
 

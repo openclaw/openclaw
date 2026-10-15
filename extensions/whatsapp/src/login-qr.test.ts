@@ -144,7 +144,6 @@ async function waitForQrRenderCallCount(count: number) {
 }
 
 describe("login-qr", () => {
-  const rotatingAccountId = "rotating-qr";
   const concurrentAccountId = "concurrent-qr";
 
   beforeEach(() => {
@@ -181,45 +180,6 @@ describe("login-qr", () => {
     vi.useRealTimers();
   });
 
-  it("restarts login once on status 515 and completes", async () => {
-    const beforeCredentialPersistence = vi.fn(async () => {});
-    waitForWaConnectionMock
-      // Baileys v7 wraps the error: { error: BoomError(515) }
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "stable", exists: true });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: rotatingAccountId,
-      beforeCredentialPersistence,
-    });
-    expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
-
-    const resultPromise = waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId: rotatingAccountId,
-    });
-    await flushTasks();
-    await flushTasks();
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock).toHaveBeenNthCalledWith(
-      2,
-      false,
-      false,
-      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
-    );
-    const result = await resultPromise;
-
-    expect(result.connected).toBe(true);
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(logoutWebMock).not.toHaveBeenCalled();
-  });
-
   it("returns a replacement QR when status 408 happens before the first QR", async () => {
     const accountId = "timeout-before-first-qr";
     queueSilentSocket();
@@ -235,6 +195,42 @@ describe("login-qr", () => {
 
     expectScanQrResult(start, "qr-after-timeout");
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the QR deadline without an unhandled rejection during socket startup", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const socketReleased = Promise.withResolvers<void>();
+    const socketStarting = Promise.withResolvers<void>();
+    const close = vi.fn();
+    createWaSocketMock.mockImplementationOnce(async () => {
+      socketStarting.resolve();
+      await socketReleased.promise;
+      return { ws: { close } } as never;
+    });
+    waitForWaConnectionMock.mockImplementation(waitForever);
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    const resultPromise = startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId: "qr-timeout-during-socket-startup",
+    });
+    try {
+      await socketStarting.promise;
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForNextTask();
+      socketReleased.resolve();
+
+      await expect(resultPromise).resolves.toEqual({
+        message: "Failed to get QR: Error: Timed out waiting for WhatsApp QR",
+      });
+      expect(close).toHaveBeenCalledOnce();
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      socketReleased.resolve();
+      await resultPromise;
+    }
   });
 
   it("clears auth and returns a replacement QR when WhatsApp is logged out", async () => {
@@ -517,17 +513,20 @@ describe("login-qr", () => {
     const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const waiting = waitForWebLogin({
+      timeoutMs: 5000,
+      currentQrDataUrl: start.qrDataUrl,
+      accountId,
+    });
+    await waitForNextTask();
+    expect(vi.getTimerCount()).toBe(1);
     finishLogin();
-    await expect(
-      waitForWebLogin({
-        timeoutMs: 5000,
-        currentQrDataUrl: start.qrDataUrl,
-        accountId,
-      }),
-    ).resolves.toEqual({
+    await expect(waiting).resolves.toEqual({
       connected: true,
       message: "✅ Linked! WhatsApp is ready.",
     });
+    expect(vi.getTimerCount()).toBe(0);
 
     logoutWebMock.mockClear();
     getActiveWebListenerMock.mockReturnValue({} as never);
@@ -588,34 +587,6 @@ describe("login-qr", () => {
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     });
     expect(createWaSocketMock).not.toHaveBeenCalled();
-  });
-
-  it("does not report linked success when the socket opens before creds persistence stabilizes", async () => {
-    const accountId = "socket-open-before-persistence";
-    waitForWaConnectionMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(undefined), 20);
-        }),
-    );
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "unstable" });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-    });
-    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
-
-    const result = await waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId,
-    });
-
-    expect(result.connected).toBe(false);
-    expect(result.message).toMatch(/retry/i);
   });
 
   it("reports a recovered linked session when saved auth has no active listener", async () => {
@@ -731,6 +702,77 @@ describe("login-qr", () => {
       message: "✅ Linked! WhatsApp is ready.",
     });
   });
+
+  it.each(["connected", "failed"] as const)(
+    "starts a fresh login after the previous login %s before wait consumes it",
+    async (outcome) => {
+      const accountId = `settled-login-${outcome}`;
+      let finishFirstConnection: (error?: Error) => void = () => {
+        throw new Error("Expected the first connection wait to be pending");
+      };
+      let finishReplacementConnection: () => void = () => {
+        throw new Error("Expected the replacement connection wait to be pending");
+      };
+      let finishPersistedAuthCheck: () => void = () => {
+        throw new Error("Expected the persisted auth check to be pending");
+      };
+      const persistedAuthCheck = new Promise<void>((resolve) => {
+        finishPersistedAuthCheck = resolve;
+      });
+
+      queueQrSocket("first-qr");
+      waitForWaConnectionMock
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              finishFirstConnection = (error) => (error ? reject(error) : resolve());
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              finishReplacementConnection = resolve;
+            }),
+        );
+      readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
+      if (outcome === "connected") {
+        readWebAuthExistsForDecisionMock.mockImplementationOnce(async () => {
+          finishPersistedAuthCheck();
+          return { outcome: "stable", exists: true };
+        });
+      }
+
+      const first = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+      expectScanQrResult(first, "first-qr");
+
+      if (outcome === "connected") {
+        finishFirstConnection();
+        await persistedAuthCheck;
+      } else {
+        finishFirstConnection(new Error("WhatsApp connection failed"));
+      }
+      await flushTasks();
+      await waitForNextTask();
+
+      readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "stable", exists: true });
+      queueQrSocket("replacement-qr");
+      const replacement = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+
+      expectScanQrResult(replacement, "replacement-qr");
+      expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+
+      const waitForReplacement = waitForWebLogin({
+        timeoutMs: 5000,
+        currentQrDataUrl: replacement.qrDataUrl,
+        accountId,
+      });
+      finishReplacementConnection();
+      await expect(waitForReplacement).resolves.toEqual({
+        connected: true,
+        message: "✅ Linked! WhatsApp is ready.",
+      });
+    },
+  );
 
   it("returns a terminal result when an older replaced waiter resolves without state", async () => {
     const accountId = "replaced-login-waiter";

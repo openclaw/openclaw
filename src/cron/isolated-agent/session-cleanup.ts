@@ -5,7 +5,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
+  () => import("../../agents/tools/in-process-gateway.js"),
 );
 
 export type CronRunSessionCleanupOutcome =
@@ -21,7 +21,8 @@ export async function deleteCronSessionViaGateway(params: {
   lifecycleRevision?: string;
   sessionUpdatedAt?: number;
 }): Promise<boolean> {
-  const { callGateway } = await gatewayCallRuntimeLoader.load();
+  const { bindAgentToolGatewayRequest } = await gatewayCallRuntimeLoader.load();
+  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const result = await callGateway<{ deleted?: boolean }>({
     method: "sessions.delete",
     params: {

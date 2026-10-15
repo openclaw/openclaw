@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
+import type { InstallPolicyWarningErrorDetails } from "../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
 import { formatErrorMessage } from "../infra/errors.js";
 
 const MAX_REASON_CHARS = 1000;
@@ -8,14 +9,9 @@ const MAX_FINDINGS = 100;
 const MAX_FINDING_TEXT_CHARS = 1000;
 const TRUNCATION_MARKER = "...";
 
-export type InstallPolicyFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-  evidence?: string;
-};
+export type InstallPolicyFinding = NonNullable<
+  InstallPolicyWarningErrorDetails["findings"]
+>[number];
 
 export type InstallPolicyResult =
   | { blocked?: undefined; warning?: undefined; findings?: InstallPolicyFinding[] }

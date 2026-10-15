@@ -8,7 +8,7 @@ struct ChatSessionsCodingTests {
         {
             "defaults": {
                 "modelProvider": "openai",
-                "model": "gpt-5.6-sol",
+                "model": "gpt-5.6-luna",
                 "contextTokens": 200000,
                 "modelSelectionTarget": "agent"
             },
@@ -25,7 +25,7 @@ struct ChatSessionsCodingTests {
         let data = Data(#"""
         {
             "defaults": {
-                "model": "gpt-5.6-sol",
+                "model": "gpt-5.6-luna",
                 "contextTokens": 200000
             },
             "sessions": []

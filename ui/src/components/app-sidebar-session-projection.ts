@@ -1,17 +1,41 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
+import type { GatewaySessionRow } from "../api/types.ts";
+import type { SidebarZoneEntry } from "../app-navigation.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   groupSidebarSessionRows,
   type SidebarSessionSection,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
+import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
+import {
+  catalogErrorMessages,
+  catalogSessionActivity,
+  catalogSessionRowsByKey,
+  type SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
+  visibleSessionChildren,
+  type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
+import {
+  areSessionCatalogsSettled,
+  type SessionDataControllerHost,
+} from "./session-data-controller-catalog.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // Ambient subtitle sources (observer digest, narration, work path) race at
@@ -19,19 +43,21 @@ const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // the narration throttle so replacement cadence stays consistent.
 const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
-type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
+export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
 type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
+  sections?: SidebarSessionSection<SidebarRecentSession>[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyGroups: boolean;
+  emptyGroupsMode: SidebarEmptyGroupsMode;
+  ownerFiltered: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -54,8 +80,49 @@ export type SidebarVisibleSections = {
     collapsedVisibleRowCount: number;
     renderHeader: boolean;
   })[];
-  expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
+};
+
+type SidebarPresentationHost = Pick<
+  SessionDataControllerHost,
+  | "connected"
+  | "navigationView"
+  | "contextualSidebar"
+  | "sidebarAgentsMode"
+  | "sessionCatalogRowsVisible"
+  | "sessionDataContext"
+  | "expandedAgentId"
+> & {
+  readonly sessionData: SessionDataController;
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
+  readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
+  readonly rosterSessionSource: {
+    agentIds: readonly string[];
+    collapsedAgentIds: ReadonlySet<string>;
+  } | null;
+  activeChipAgent(): {
+    agents: readonly { id: string }[];
+    identity: ReturnType<ApplicationContext["agentIdentity"]["get"]>;
+    identities: ReadonlyMap<string, ReturnType<ApplicationContext["agentIdentity"]["get"]>>;
+  };
+  pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  getSessionNavigationState(): { toSidebarSession(row: GatewaySessionRow): SidebarRecentSession };
+  mainSessionRow(agentId: string): GatewaySessionRow | null;
+  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
+  agentUnreadCount(agentId: string): number;
+  otherAgentsHaveUnread(): boolean;
+  isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
+  isSessionChildrenFullyShown(key: string): boolean;
+  querySelectorAll: HTMLElement["querySelectorAll"];
+};
+type SidebarPresentationReaders = {
+  snapshot: boolean;
+  sections(): SidebarVisibleSections["sections"];
+  tree(): SidebarRecentSession[];
+  catalogs(): SidebarSessionCatalog[];
+  catalogRows(): GatewaySessionRow[];
+  ownerOptions(): readonly SessionOwnerOption[];
 };
 
 /** Attention, agent-declared status, and the queued explanation are messages
@@ -69,12 +136,255 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(
+    private readonly now: () => number = () => Date.now(),
+    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
+  ) {}
 
+  // Record frame admission only; owner.updated can precede child DOM bindings.
+  private publishedSessionPresentation = "";
+  private admittedPresencePresentation = "";
+
+  shouldPublishSessionData(
+    host: SidebarPresentationHost,
+    readers: SidebarPresentationReaders,
+  ): boolean {
+    if (readers.snapshot) {
+      return true;
+    }
+    const data = host.sessionData;
+    const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
+    const chip = host.activeChipAgent();
+    const replacement =
+      sessionsVisible && host.sessionDataContext?.plugins.selectedReplacement("session-list");
+    const navigation = host.getSessionNavigationState();
+    const sections = sessionsVisible ? readers.sections() : [];
+    const roster =
+      sessionsVisible && host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+    const rosterSnapshot =
+      sessionsVisible && host.sidebarAgentsMode === "roster" && host.sessionDataContext
+        ? rosterActivityStore(host.sessionDataContext).snapshot
+        : null;
+    const catalogs = host.sessionCatalogRowsVisible ? readers.catalogs() : null;
+    const catalogRowsByKey = catalogSessionRowsByKey(catalogs?.length ? readers.catalogRows() : []);
+    const presentation = JSON.stringify([
+      host.navigationView,
+      host.connected,
+      host.sessionDataContext?.gateway.snapshot.hello,
+      host.sessionDataContext?.agents.state.agentsList,
+      host.sidebarAgentsMode === "chip" ? chip.identity : null,
+      host.sidebarAgentsMode === "chip" && host.otherAgentsHaveUnread(),
+      host.sidebarMenus.agentMenuPosition !== null
+        ? chip.agents.map(({ id }) => [
+            chip.identities.get(normalizeAgentId(id)),
+            host.agentUnreadCount(id),
+          ])
+        : null,
+      host.sessionDataContext?.plugins.registryStatus,
+      host.pluginNavigation().map(({ key, value }) => [key, value]),
+      Boolean(replacement),
+      replacement ? host.sessionDataContext?.sessions.state.result?.sessions : null,
+      host.sessionDataContext?.sessions.groupsStatus(),
+      host.sessionDataContext?.sessions.state.error,
+      host.sessionDataContext?.sessions.eventSubscriptionError,
+      host.sessionDataContext?.sessions.state.groupSettings,
+      rosterSnapshot && [
+        rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+          id,
+          name,
+          avatar,
+          textAvatar,
+        ]),
+        rosterSnapshot.loading,
+        rosterSnapshot.error,
+        rosterSnapshot.subscriptionError,
+      ],
+      readers.ownerOptions(),
+      host.sessionOwnershipVisibility,
+      data.sessionsLoading,
+      data.sessionsStartupPending,
+      data.sessionsResult?.hasMore,
+      data.sessionMutationError,
+      data.sessionCatalogRefreshStatus,
+      [...data.loadingMoreSessionCatalogIds],
+      [...data.childSessionErrorsByParent],
+      catalogs
+        ? [
+            catalogs.map(({ hosts, ...visible }) => [
+              visible,
+              catalogErrorMessages({ ...visible, hosts }),
+              hosts.some(({ nextCursor }) => Boolean(nextCursor)),
+            ]),
+            catalogs.map((catalog) =>
+              catalogSessionActivity(
+                catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
+                catalogRowsByKey,
+                (row) => host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+              ),
+            ),
+            Array.from(
+              host.querySelectorAll<HTMLElement>("[data-catalog-session-key][data-session-key]"),
+              (element) => {
+                const row = catalogRowsByKey.get(element.dataset.sessionKey ?? "");
+                return row ? navigation.toSidebarSession(row) : null;
+              },
+            ),
+            areSessionCatalogsSettled(data),
+            [...data.visibleSessionLimits],
+          ]
+        : null,
+      [data.ownerCounts.counts && [...data.ownerCounts.counts], data.ownerCounts.error],
+      this.admittedPresencePresentation,
+      sessionsVisible
+        ? [
+            readers.tree().map(({ children: _children, ...row }) => row),
+            sections.map(({ rows: sectionRows, ...header }) => [
+              header,
+              summarizeTeamSessionSlots(sectionRows, true),
+              sectionRows.reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+            ]),
+          ]
+        : null,
+      [...new Set([host.expandedAgentId(), ...(roster?.agentIds ?? [])])].map((id) => {
+        const row = host.mainSessionRow(id);
+        if (!row) {
+          return null;
+        }
+        const { children: _children, ...home } = host.projectHomeSession(row, id);
+        return home;
+      }),
+    ]);
+    if (presentation === this.publishedSessionPresentation) {
+      return false;
+    }
+    this.publishedSessionPresentation = presentation;
+    return true;
+  }
+
+  samePresence(
+    previous: PresencePayload | undefined,
+    next: PresencePayload | undefined,
+    scope: SidebarPresenceScope,
+  ): boolean {
+    this.admittedPresencePresentation = sidebarPresencePresentation(next, scope);
+    return (
+      previous === next ||
+      sidebarPresencePresentation(previous, scope) === this.admittedPresencePresentation
+    );
+  }
+
+  refreshPresencePresentation(host: SidebarPresentationHost, scope: SidebarPresenceScope): void {
+    this.admittedPresencePresentation = sidebarPresencePresentation(
+      host.sessionData.presencePayload,
+      scope,
+    );
+    host.sessionData.requestSessionDataUpdate();
+  }
+
+  visibleTree(
+    roots: SidebarRecentSession[],
+    host: Pick<
+      SidebarPresentationHost,
+      "isSessionChildrenExpanded" | "isSessionChildrenFullyShown"
+    >,
+  ): SidebarRecentSession[] {
+    const rows: SidebarRecentSession[] = [];
+    const append = (session: SidebarRecentSession) => {
+      rows.push(session);
+      if (host.isSessionChildrenExpanded(session)) {
+        visibleSessionChildren({
+          session,
+          fullyShown: host.isSessionChildrenFullyShown(session.key),
+        }).forEach(append);
+      }
+    };
+    roots.forEach(append);
+    return rows;
+  }
+
+  visibleRowsInOrder(
+    zone: {
+      entries: readonly SidebarZoneEntry[];
+      sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+    },
+    visibleRows: SidebarRecentSession[],
+  ): SidebarRecentSession[] {
+    const pinnedRows = zone.entries.flatMap((entry) => {
+      const row = entry.type === "session" ? zone.sessionRows.get(entry.key) : undefined;
+      return row ? [row] : [];
+    });
+    return [...pinnedRows, ...visibleRows];
+  }
+
+  childSessionParents(rows: SidebarRecentSession[], host: SidebarPresentationHost): Set<string> {
+    const grouped = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+    const homeAgents = grouped
+      ? grouped.agentIds.filter((id) => !grouped.collapsedAgentIds.has(id))
+      : [host.expandedAgentId()];
+    const revalidating = new Set<string>();
+    const pending = [...rows];
+    for (const session of pending) {
+      pending.push(...session.children);
+      if (
+        session.childLoadParentKeys?.length &&
+        (session.visuallyActive || host.isSessionChildrenExpanded(session))
+      ) {
+        for (const key of session.childLoadParentKeys) {
+          revalidating.add(key);
+        }
+      }
+    }
+    for (const agentId of homeAgents) {
+      const mainRow = host.mainSessionRow(agentId);
+      if (mainRow?.childSessions?.length) {
+        for (const key of host.projectHomeSession(mainRow, agentId).childLoadParentKeys ?? []) {
+          revalidating.add(key);
+        }
+      }
+    }
+    return revalidating;
+  }
+
+  mainSessionRow(
+    mainKey: string,
+    rows: readonly GatewaySessionRow[],
+    lineage: GatewaySessionRow | null,
+  ): GatewaySessionRow | null {
+    return (
+      (lineage ? [...rows, lineage] : rows).find((row) =>
+        areUiSessionKeysEquivalent(row.key, mainKey),
+      ) ?? null
+    );
+  }
+
+  agentUnreadCount(
+    agentId: string,
+    rows: readonly GatewaySessionRow[],
+    host: SidebarPresentationHost,
+  ): number {
+    return rows.filter(
+      (row) => row.unread && !row.archived && host.sessionNavigationAgentId(row) === agentId,
+    ).length;
+  }
+
+  otherAgentsHaveUnread(host: SidebarPresentationHost): boolean {
+    const active = host.expandedAgentId();
+    return host
+      .activeChipAgent()
+      .agents.some(({ id }) => normalizeAgentId(id) !== active && host.agentUnreadCount(id) > 0);
+  }
+
+  revision = 0;
+  createdOrderRevision = 0;
+  private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
+  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
   private readonly childModes = new Map<string, SidebarExpansionMode>();
+  private readonly observedChildKeys = new Map<string, readonly string[]>();
+  private restoredChildrenPending = false;
   private readonly heldSubtitles = new Map<
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
@@ -90,12 +400,24 @@ export class SidebarSessionProjection {
   }
 
   observeRows(results: readonly { sessions: readonly { key: string }[] }[]): void {
+    if (
+      results.length === this.observedResults.length &&
+      results.every((value, index) => Object.is(value, this.observedResults[index]))
+    ) {
+      return;
+    }
+    this.observedResults = results;
+    const previousOrder = this.nextCreatedOrder;
     for (const result of results) {
       for (const { key } of result.sessions) {
         if (key && !this.observedOrder.has(key)) {
           this.observedOrder.set(key, this.nextCreatedOrder++);
         }
       }
+    }
+    if (previousOrder !== this.nextCreatedOrder) {
+      this.createdOrderRevision += 1;
+      this.revision += 1;
     }
     // Paging gaps must retain their tie-break index; evict absent keys only
     // when the sidebar-lifetime registry actually exceeds its memory bound.
@@ -128,10 +450,15 @@ export class SidebarSessionProjection {
     }
     this.observedOrder.set(key, 0);
     this.nextCreatedOrder = Math.max(this.nextCreatedOrder, 1);
+    this.createdOrderRevision += 1;
+    this.revision += 1;
     return true;
   }
 
   project(input: SidebarProjectionInput): SidebarVisibleSections {
+    // Record the state published by this pass, including sticky membership and subtitles.
+    this.revision += 1;
+    this.clearSubtitleTimer();
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -150,12 +477,15 @@ export class SidebarSessionProjection {
       this.resetMembership();
     }
     if (
+      !this.restoredChildrenPending &&
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity)
     ) {
       this.childModes.clear();
+      this.observedChildKeys.clear();
     }
+    this.restoredChildrenPending = false;
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -174,12 +504,27 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const staleKeys = new Set([...this.childModes.keys(), ...this.heldSubtitles.keys()]);
+    const staleKeys = new Set([
+      ...this.childModes.keys(),
+      ...this.observedChildKeys.keys(),
+      ...this.heldSubtitles.keys(),
+    ]);
     const observeTree = (session: SidebarRecentSession) => {
       staleKeys.delete(session.key);
-      if (session.containsActiveDescendant && !this.childModes.has(session.key)) {
+      const previousChildren = this.observedChildKeys.get(session.key);
+      const mode = this.childModes.get(session.key);
+      // New children reveal their parent once; ordinary refreshes and reordering
+      // must not undo an explicit collapse or the operator's Show more choice.
+      const hasNewChild =
+        previousChildren !== undefined &&
+        session.childSessionKeys.some((key) => !previousChildren.includes(key));
+      if (
+        (mode === undefined && session.containsActiveDescendant) ||
+        (hasNewChild && mode !== "expanded-fully")
+      ) {
         this.childModes.set(session.key, "expanded");
       }
+      this.observedChildKeys.set(session.key, session.childSessionKeys);
       this.observeSubtitle(session, input.subtitle);
       for (const child of session.children) {
         observeTree(child);
@@ -188,21 +533,28 @@ export class SidebarSessionProjection {
     input.rows.forEach(observeTree);
     for (const key of staleKeys) {
       this.childModes.delete(key);
+      this.observedChildKeys.delete(key);
       this.heldSubtitles.delete(key);
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
-    const sections = groupSidebarSessionRows(input.rows, {
-      grouping,
-      knownGroups,
-      selfOwnerId,
-      sectionOrder,
-      catalogIds,
-    }).filter(
-      (section) =>
-        section.id !== "pinned" &&
-        !(input.hideEmptyGroups && section.category && section.rows.length === 0),
-    );
+    const hideEmptyGroups =
+      input.emptyGroupsMode === "always" ||
+      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
+    const sections =
+      input.sections ??
+      groupSidebarSessionRows(input.rows, {
+        grouping,
+        knownGroups,
+        selfOwnerId,
+        sectionOrder,
+        catalogIds,
+      }).filter(
+        (section) =>
+          section.id !== "pinned" &&
+          // Catalog rows have their own projection; these sections are placeholders.
+          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+      );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
       if (!sectionIds.has(sectionId)) {
@@ -221,15 +573,17 @@ export class SidebarSessionProjection {
         (section) =>
           section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
       );
-    const expandedRows: SidebarRecentSession[] = [];
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
       // totalRowCount is the pre-pagination size: headers and empty-zone
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
-      const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
-      const collapsed = renderHeader && input.collapsedSections.has(section.id);
+      const renderHeader =
+        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+      const collapsed =
+        (renderHeader || section.id.startsWith("agent:")) &&
+        input.collapsedSections.has(section.id);
       const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.pinned),
@@ -241,7 +595,6 @@ export class SidebarSessionProjection {
       );
       let visibleRowCount = 0;
       if (!collapsed) {
-        expandedRows.push(...section.rows);
         let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
         let retainedSlots = visibleLimit;
         const sticky = this.stickySections.get(section.id);
@@ -275,10 +628,11 @@ export class SidebarSessionProjection {
         }),
       );
     }
-    return { sections: limitedSections, expandedRows, visibleRows };
+    return { sections: limitedSections, visibleRows };
   }
 
   resetMembership(sectionId?: string): void {
+    this.revision += 1;
     if (sectionId === undefined) {
       this.stickySections.clear();
     } else {
@@ -291,11 +645,32 @@ export class SidebarSessionProjection {
     return mode === "expanded" || mode === "expanded-fully";
   }
 
+  captureChildrenDisplay(key: string): SidebarExpansionMode | undefined {
+    return this.childModes.get(key);
+  }
+
+  restoreChildrenDisplay(
+    rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[],
+  ): void {
+    this.childModes.clear();
+    this.observedChildKeys.clear();
+    for (const row of rows) {
+      if (row.childrenDisplayMode !== undefined) {
+        this.childModes.set(row.key, row.childrenDisplayMode);
+      }
+    }
+    // The first authoritative projection changes the connection scope; these
+    // admitted modes belong to that handoff, not the preceding empty projection.
+    this.restoredChildrenPending = this.childModes.size > 0;
+    this.revision += 1;
+  }
+
   isChildrenFullyShown(key: string): boolean {
     return this.childModes.get(key) === "expanded-fully";
   }
 
   toggleChildren(session: SidebarRecentSession): { expanded: boolean } {
+    this.revision += 1;
     if (this.isChildrenExpanded(session.key)) {
       // The explicit closed mode prevents a still-active descendant from
       // immediately undoing the user's collapse on the next update pass.
@@ -309,16 +684,49 @@ export class SidebarSessionProjection {
   showMoreChildren(key: string): void {
     if (this.isChildrenExpanded(key)) {
       this.childModes.set(key, "expanded-fully");
+      this.revision += 1;
     }
   }
 
-  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
-    if (!params.session.hasActiveRun || !params.showPreview) {
-      return resolveSidebarSessionSubtitle(params);
+  dispose(): void {
+    this.clearSubtitleTimer();
+    this.revision += 1;
+  }
+
+  private clearSubtitleTimer(): void {
+    if (this.subtitleTimer !== null) {
+      globalThis.clearTimeout(this.subtitleTimer);
     }
+    this.subtitleTimer = null;
+    this.subtitleDeadline = Infinity;
+  }
+
+  private scheduleSubtitleUpdate(deadline: number): void {
+    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
+      return;
+    }
+    this.clearSubtitleTimer();
+    this.subtitleDeadline = deadline;
+    this.subtitleTimer = globalThis.setTimeout(
+      () => {
+        this.subtitleTimer = null;
+        this.subtitleDeadline = Infinity;
+        this.revision += 1;
+        this.host?.requestUpdate();
+      },
+      Math.max(0, deadline - this.now()),
+    );
+  }
+
+  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
-    const held = this.heldSubtitles.get(params.session.key);
+    // Tool identity and its prepared progress must advance together; the
+    // ambient narration hold must not pair a new glyph with an old tool label.
+    const held =
+      params.session.hasActiveRun && params.showPreview && !params.toolActivity
+        ? this.heldSubtitles.get(params.session.key)
+        : undefined;
     if (!held) {
       return resolveSidebarSessionSubtitle(params);
     }
@@ -341,7 +749,6 @@ export class SidebarSessionProjection {
     const params = {
       session,
       hasDisplay: false,
-      displaySubtitle: undefined,
       sidebarLiveActivity: environment.sidebarLiveActivity,
       showPreview: environment.showPreview,
       narrationLine: environment.narrationLines.get(session.key),
@@ -349,7 +756,7 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
-      if (session.attention.kind === "question") {
+      if (session.attention.kind === "question" || session.attention.kind === "error") {
         this.heldSubtitles.delete(session.key);
       }
       // Transient gaps between event updates keep the last shown line; the
@@ -364,6 +771,7 @@ export class SidebarSessionProjection {
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
       !isOperatorCriticalSubtitle(session)
     ) {
+      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

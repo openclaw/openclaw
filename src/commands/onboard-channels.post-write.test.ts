@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime } from "../../test/helpers/auth-wizard.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import {
   createChannelOnboardingPostWriteHook,
   createChannelSetupHooks,
-} from "./onboard-channels.js";
+} from "../flows/channel-setup.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 
 describe("setupChannels post-write hooks", () => {
   it.each(["plugin", "wizard"] as const)(
@@ -43,7 +43,16 @@ describe("setupChannels post-write hooks", () => {
                 })
               : await writeWizardConfigFile(next, { baseHash: before.hash });
           expect(afterConfigWritten).not.toHaveBeenCalled();
-          expect(committed.nextConfig.messages?.responsePrefix).toBe("${SETUP_REPLY_PREFIX}");
+          expect(JSON.parse(await fs.readFile(committed.path, "utf8"))).toMatchObject({
+            messages: { responsePrefix: "${SETUP_REPLY_PREFIX}" },
+            gateway: { port: 19001 },
+          });
+          const persisted = await readConfigFileSnapshot();
+          expect({ config: committed.nextConfig, hash: committed.persistedHash }).toEqual({
+            config: persisted.sourceConfig,
+            hash: persisted.hash,
+          });
+          expect(committed.nextConfig.messages?.responsePrefix).toBe("resolved prefix");
           const decoy = state.path("decoy.json");
           await fs.writeFile(decoy, JSON.stringify({ messages: { responsePrefix: "wrong file" } }));
           process.env.OPENCLAW_CONFIG_PATH = decoy;
