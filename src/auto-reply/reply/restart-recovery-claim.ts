@@ -381,20 +381,30 @@ export function createReplyRestartRecoveryClaimController(params: {
       // Clear the retry verifier as the exact admitted claim crosses into execution.
       const preservesTerminalReceipt =
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
+      const patch: SessionTranscriptTurnLifecyclePatch = {
+        lifecycleRunId: executionRunId,
+        lastRunId: undefined,
+        restartRecoveryBeforeAgentReplyState: undefined,
+        ...(preservesTerminalReceipt
+          ? {}
+          : {
+              restartRecoveryDeliveryReceiptState: undefined,
+              restartRecoveryDeliveryToolCallId: undefined,
+              restartRecoveryDeliveryRequestFingerprint: undefined,
+            }),
+        restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
+        updatedAt: Date.now(),
+      };
+      if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
+        patch.restartRecoveryRuns = entry.restartRecoveryRuns;
+        recordLifecycleFence(patch, {
+          runId: executionRunId,
+          lifecycleGeneration: executionGeneration,
+        });
+      }
       const adopted = await persistAdmissionPatch({
         entry,
-        patch: {
-          restartRecoveryBeforeAgentReplyState: undefined,
-          ...(preservesTerminalReceipt
-            ? {}
-            : {
-                restartRecoveryDeliveryReceiptState: undefined,
-                restartRecoveryDeliveryToolCallId: undefined,
-                restartRecoveryDeliveryRequestFingerprint: undefined,
-              }),
-          restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
-          updatedAt: Date.now(),
-        },
+        patch,
         recorder,
         sessionId,
         sessionKey: params.sessionKey,
@@ -471,6 +481,8 @@ export function createReplyRestartRecoveryClaimController(params: {
       ...retiredClaim,
       abortedLastRun: false,
       endedAt: undefined,
+      lifecycleRunId: executionRunId,
+      lastRunId: undefined,
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,

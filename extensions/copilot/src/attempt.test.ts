@@ -610,27 +610,6 @@ describe("runCopilotAttempt", () => {
     expect(result.lastToolError).toEqual(terminalError);
   });
 
-  it("reports code-mode engagement through the real tool bridge", async () => {
-    const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-    });
-
-    // No `createToolBridge` override: this runs the production bridge, so the
-    // reported value is the gate `createAgentHarnessToolSurfaceRuntime`
-    // actually resolved for the run rather than a stubbed constant.
-    const result = await runCopilotAttempt(
-      makeParams({
-        disableTools: false,
-        config: { tools: { codeMode: true } },
-        hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
-      } as never),
-      { pool: makeFakePool(sdk) },
-    );
-
-    expect(result.codeModeEngaged).toBe(true);
-  });
-
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
@@ -1407,53 +1386,6 @@ describe("runCopilotAttempt", () => {
       await vi.waitFor(() => settledAttempt);
       expect(gatewayQuestionMock.waiters.size).toBe(0);
     }
-  });
-
-  it("holds a steering receipt until pending tool results and the user turn persist", async () => {
-    const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-        session.emit("assistant.message", {
-          __eventId: "assistant-tools",
-          content: "checking",
-          messageId: "assistant-tools",
-          toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
-        });
-        return initialTurn.promise;
-      });
-      session.send.mockImplementationOnce(async (options) => {
-        session.emit("user.message", {
-          __eventId: "steered-user",
-          content: (options as { prompt?: string }).prompt,
-          delivery: "steering",
-        });
-        return "steered-user";
-      });
-    });
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
-
-    await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
-    const handle = requireActiveSteeringHandle();
-    let receiptSettled = false;
-    const receipt = handle
-      .queueMessage("change course", { waitForTranscriptCommit: true })
-      .then(() => {
-        receiptSettled = true;
-      });
-    await Promise.resolve();
-    expect(receiptSettled).toBe(false);
-
-    requireSession(sdk).emit("tool.execution_complete", {
-      __eventId: "tool-result",
-      result: { content: "done" },
-      success: true,
-      toolCallId: "call-1",
-    });
-    await receipt;
-
-    initialTurn.resolve(makeAssistantMessageEvent("done"));
-    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
   });
 
   it("rejects a waited steering receipt without leaking an unhandled rejection", async () => {

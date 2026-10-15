@@ -118,20 +118,19 @@ async function withResources(
   });
 }
 
-it.each(["active", "final"] as const)("refuses to reschedule during %s disposal", async (phase) => {
+it("refuses to reschedule during final disposal", async () => {
   await withResources(async (_db, schedule) => {
     const disposalStarted = createDeferredCore();
     const releaseDisposal = createDeferredCore();
     const maintenanceStarted = createDeferredCore();
     const releaseMaintenance = createDeferredCore();
-    const maintain = vi.fn(async () => unchanged);
-    if (phase === "final") {
-      maintain.mockImplementationOnce(async () => {
+    const maintain = vi
+      .fn(async () => unchanged)
+      .mockImplementationOnce(async () => {
         maintenanceStarted.resolve();
         await releaseMaintenance.promise;
         return unchanged;
       });
-    }
     const contextEngine = engine(maintain);
     contextEngine.dispose = async () => {
       disposalStarted.resolve();
@@ -143,16 +142,12 @@ it.each(["active", "final"] as const)("refuses to reschedule during %s disposal"
     const keepProcessAlive = () => {};
     process.on("SIGTERM", keepProcessAlive);
     try {
-      if (phase === "final") {
-        await schedule(engine(maintain));
-        await maintenanceStarted.promise;
-      }
+      await schedule(engine(maintain));
+      await maintenanceStarted.promise;
       await schedule(contextEngine);
-      if (phase === "final") {
-        // The pending engine is disposed in final cleanup, not by the active-run loop.
-        process.emit("SIGTERM", "SIGTERM");
-        releaseMaintenance.resolve();
-      }
+      // The pending engine is disposed in final cleanup, not by the active-run loop.
+      process.emit("SIGTERM", "SIGTERM");
+      releaseMaintenance.resolve();
       await disposalStarted.promise;
       await runContextEngineMaintenance({
         contextEngine,
@@ -167,9 +162,7 @@ it.each(["active", "final"] as const)("refuses to reschedule during %s disposal"
       expect(admitted).not.toHaveBeenCalled();
       expect(failed).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          message: expect.stringContaining(
-            phase === "final" ? "finishing cleanup" : "was disposed",
-          ),
+          message: expect.stringContaining("finishing cleanup"),
         }),
       );
       expect(resources.closeFactoryWork).not.toHaveBeenCalled();

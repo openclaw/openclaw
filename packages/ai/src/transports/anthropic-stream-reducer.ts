@@ -47,9 +47,7 @@ import {
   type WritableTransportStream,
 } from "./transport-stream-shared.js";
 
-export type AnthropicStreamBlock = AssistantMessage["content"][number] & {
-  index?: number;
-};
+type AnthropicStreamBlock = AssistantMessage["content"][number];
 
 /** One Messages protocol reducer; entry points retain their established preview/replay contracts. */
 export async function consumeAnthropicStream(params: {
@@ -247,7 +245,6 @@ export async function consumeAnthropicStream(params: {
             if (block.type !== "text") {
               continue;
             }
-            delete block.index;
             emitContentStart("text", i, block.text);
             emitContentEnd(block, i);
           }
@@ -267,7 +264,6 @@ export async function consumeAnthropicStream(params: {
                     typeof contentBlock.text === "string"
                       ? sanitizeTransportPayloadText(contentBlock.text)
                       : "",
-                  index,
                 }
               : contentBlock.type === "thinking"
                 ? {
@@ -276,7 +272,6 @@ export async function consumeAnthropicStream(params: {
                       typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
                     thinkingSignature:
                       typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-                    index,
                   }
                 : {
                     type: "thinking",
@@ -284,7 +279,6 @@ export async function consumeAnthropicStream(params: {
                     thinkingSignature:
                       typeof contentBlock.data === "string" ? contentBlock.data : "",
                     redacted: true,
-                    index,
                   };
           const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
@@ -305,7 +299,6 @@ export async function consumeAnthropicStream(params: {
                 : "",
             arguments: asRecord(contentBlock.input),
             partialJson: "",
-            index,
           };
           output.content.push(block);
           blockIndexes.set(index, output.content.length - 1);
@@ -360,8 +353,7 @@ export async function consumeAnthropicStream(params: {
           }
         }
         if (managed && !block && delta?.type === "text_delta" && typeof delta.text === "string") {
-          const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
-          block = { type: "text", text: "", index: recoveredIndex };
+          block = { type: "text", text: "" };
           output.content.push(block);
           index = output.content.length - 1;
           if (typeof event.index === "number") {
@@ -447,7 +439,6 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         blockIndexes.delete(eventIndex);
-        delete block.index;
         if (block.type === "thinking" && pendingSignature !== undefined) {
           block.thinkingSignature = pendingSignature;
         }

@@ -3,7 +3,7 @@ import type {
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
-import type { ControllerHost } from "../model-providers/page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import type { ModelSetupConnection } from "./first-run-setup.ts";
 import { captureModelSetupResult, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import { MODEL_SETUP_DETECT_TIMEOUT_MS, MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";

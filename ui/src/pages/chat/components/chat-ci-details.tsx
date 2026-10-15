@@ -233,16 +233,6 @@ class ChatCiDetailsController extends ChatCiDisclosure {
       if (!current()) {
         return;
       }
-      if (
-        result.owner.toLowerCase() !== pr.owner.toLowerCase() ||
-        result.repo.toLowerCase() !== pr.repo.toLowerCase() ||
-        result.number !== pr.number ||
-        result.headSha !== pr.headSha
-      ) {
-        this.result = undefined;
-        this.error = t("chat.pullRequests.checksUnavailable");
-        return;
-      }
       this.result = result;
       this.retryAt =
         Date.now() + Math.max(0, result.retryAfterMs ?? (result.rateLimited ? 60_000 : 0));

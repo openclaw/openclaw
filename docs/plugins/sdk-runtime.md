@@ -418,12 +418,6 @@ temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
 
-`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` accepts
-`databaseAccess: "read-only"` when every task reads canonical databases without
-writing them; private snapshot writes are allowed. This declaration lets worker
-retirement preserve admitted database facts. Omit it for pools that may write
-canonical stores so interrupted writers invalidate unpublished facts.
-
 Worker kernels that write derived data without changing any session facts wrap
 their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
 same subpath. This preserves resident session caches while the database-wide

@@ -10,7 +10,6 @@ import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/mention-menu.css";
 import { LitContent } from "./chat-composer-interop.tsx";
@@ -378,14 +377,6 @@ export class HumanMentionMenu {
 
   get selectedAvatarUrls(): ReadonlyMap<string, string> {
     return this.selectedAvatars;
-  }
-
-  render(host: HumanMentionMenuHost, requestUpdate: () => void) {
-    return solidTemplate(HumanMentionMenuView, { args: [this, host, requestUpdate] });
-  }
-
-  renderSolid(host: HumanMentionMenuHost, requestUpdate: () => void) {
-    return <HumanMentionMenuView args={[this, host, requestUpdate]} />;
   }
 
   renderContents(host: HumanMentionMenuHost, requestUpdate: () => void) {

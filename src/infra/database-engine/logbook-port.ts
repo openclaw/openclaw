@@ -3,6 +3,7 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 
 export const logbookPortProvider: DatabasePortProvider = {
   id: "logbook",
+  minimumPostgresVersion: 16,
   async loadDescriptor() {
     const { loadLogbookPortDescriptor } = await import("./logbook-port-descriptor.js");
     return loadLogbookPortDescriptor();

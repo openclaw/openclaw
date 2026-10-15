@@ -71,7 +71,11 @@ export function resolveSelectedNodeTestRunner(
     job.groups.every(
       (group) =>
         group.configs.length === 1 &&
-        SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) &&
+        (SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
+          (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
+            group.includePatterns?.length === 1 &&
+            group.includePatterns[0] ===
+              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts")) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
         (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
           (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&

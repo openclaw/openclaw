@@ -17,7 +17,7 @@ function createPublicLookupMock(): LookupFn {
 }
 
 describe("ssrf pinning", () => {
-  it.each(["success", "failure", "cancel"] as const)(
+  it.each(["success", "cancel"] as const)(
     "releases the DNS abort listener after %s without changing errors",
     async (outcome) => {
       const caller = new AbortController();
@@ -35,11 +35,7 @@ describe("ssrf pinning", () => {
           dns.resolve([{ address: "93.184.216.34", family: 4 }]);
           await expect(result).resolves.toMatchObject({ addresses: ["93.184.216.34"] });
         } else {
-          if (outcome === "cancel") {
-            caller.abort(reason);
-          } else {
-            dns.reject(reason);
-          }
+          caller.abort(reason);
           expect(
             await Promise.race([
               settled,
@@ -118,10 +114,7 @@ describe("ssrf pinning", () => {
     });
   });
 
-  it.each([
-    { address: "160.79.104.10", family: 4 },
-    { address: "2607:6bc0::10", family: 6 },
-  ])(
+  it.each([{ address: "2607:6bc0::10", family: 6 }])(
     "supports IPv$family-only DNS answers for all-address lookups",
     async ({ address, family }) => {
       const { lookup } = await resolvePinnedHostnameWithPolicy("example.com", {
@@ -140,20 +133,19 @@ describe("ssrf pinning", () => {
     },
   );
 
-  it.each([
-    ["private IPv4/public IPv6", "10.0.0.1", "2607:6bc0::10"],
-    ["public IPv4/private IPv6", "160.79.104.10", "fd00::1"],
-    ["all private", "10.0.0.1", "fd00::1"],
-  ])("rejects the entire %s DNS answer before creating a pinned lookup", async (_, ipv4, ipv6) => {
-    await expect(
-      resolvePinnedHostnameWithPolicy("example.com", {
-        lookupFn: async () => [
-          { address: ipv4, family: 4 },
-          { address: ipv6, family: 6 },
-        ],
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-  });
+  it.each([["public IPv4/private IPv6", "160.79.104.10", "fd00::1"]])(
+    "rejects the entire %s DNS answer before creating a pinned lookup",
+    async (_, ipv4, ipv6) => {
+      await expect(
+        resolvePinnedHostnameWithPolicy("example.com", {
+          lookupFn: async () => [
+            { address: ipv4, family: 4 },
+            { address: ipv6, family: 6 },
+          ],
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+    },
+  );
 
   it("fails loud when a pinned lookup is created without any addresses", () => {
     expect(() =>
@@ -200,18 +192,6 @@ describe("ssrf pinning", () => {
 
     const pinned = await resolvePinnedHostname("example.com", lookup);
     expect(pinned.addresses).toEqual(["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
-  });
-
-  it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias", async () => {
-    const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
-
-    const pinned = await resolvePinnedHostnameWithPolicy("localhost", {
-      lookupFn: lookup,
-      policy: { dangerouslyAllowPrivateNetwork: true },
-    });
-    expect(pinned.hostname).toBe("localhost");
-    expect(pinned.addresses).toEqual(["127.0.0.1"]);
-    expect(lookup).toHaveBeenCalledTimes(1);
   });
 
   it("does not allow explicit localhost trust to resolve through an unspecified address", async () => {

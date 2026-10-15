@@ -1,4 +1,5 @@
-import { ServerResponse } from "node:http";
+import { createServer, ServerResponse } from "node:http";
+import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -7,6 +8,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   createArtifactDownload,
   pruneExpiredArtifactDownloads,
@@ -271,4 +273,101 @@ it("releases retained sharing facts on unused expiry, eviction, and disconnect",
       }
     }
   });
+});
+
+it("backpressures HTTP streams across URL expiry and closes their source on browser abort", async () => {
+  const connection = new AbortController();
+  const client = createClient(connection.signal);
+  const started = createDeferredCore<ServerResponse>();
+  const firstRead = createDeferredCore();
+  const closed = createDeferredCore();
+  const chunkBytes = 512 * 1024;
+  const size = 64 * 1024 * 1024;
+  let reads = 0;
+  const release = vi.fn();
+  const artifact = {
+    id: "stream",
+    type: "file",
+    title: "large.bin",
+    sizeBytes: size,
+    mimeType: "application/octet-stream",
+    download: { mode: "url" as const },
+  };
+  const grant = createArtifactDownload({
+    client,
+    prepared: { artifact, digest: "immutable-stream" },
+    assertCurrent() {},
+    release,
+    read: async () => ({
+      artifact,
+      response: {
+        kind: "full",
+        statusCode: 200,
+        contentLength: size,
+        etag: undefined,
+        lastModified: undefined,
+      },
+      async *stream(signal) {
+        try {
+          while (reads * chunkBytes < size) {
+            signal.throwIfAborted();
+            reads++;
+            firstRead.resolve();
+            yield Buffer.alloc(chunkBytes, 0x61);
+          }
+        } finally {
+          closed.resolve();
+        }
+      },
+    }),
+  });
+  const server = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        // Hold the real socket's writes: the source must wait for drain, not collect the file.
+        res.cork();
+        started.resolve(res);
+        void handleArtifactDownloadHttpRequest(req, res, {
+          clients: new Set([client]),
+          basePath: "",
+        });
+      }),
+  });
+  const abort = new AbortController();
+  try {
+    const fetching = fetch("http://127.0.0.1:" + server.claim.port + grant.url, {
+      signal: abort.signal,
+    });
+    const res = await started.promise;
+    await firstRead.promise;
+    await setImmediate();
+    expect(res.writableNeedDrain).toBe(true);
+    expect(reads).toBeLessThanOrEqual(2);
+    await setImmediate();
+    expect(reads).toBeLessThanOrEqual(2);
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.parse(grant.expiresAt));
+    pruneExpiredArtifactDownloads([client], Date.now());
+    expect(release).not.toHaveBeenCalled();
+    const expired = await fetch("http://127.0.0.1:" + server.claim.port + grant.url);
+    expect(expired.status).toBe(404);
+    await expired.arrayBuffer();
+    res.uncork();
+    const response = await fetching;
+    const first = await response.body!.getReader().read();
+    expect(first.value!.length).toBeGreaterThan(0);
+    expect(first.value!.every((byte) => byte === 0x61)).toBe(true);
+    abort.abort();
+    await closed.promise;
+    await setImmediate();
+    expect(release).toHaveBeenCalledOnce();
+    expect(reads * chunkBytes).toBeLessThan(size);
+  } finally {
+    abort.abort();
+    connection.abort();
+    server.listener.closeAllConnections();
+    await server.releaseListener();
+    await server.claim.release();
+  }
 });

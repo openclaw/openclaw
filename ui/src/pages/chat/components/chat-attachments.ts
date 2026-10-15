@@ -111,18 +111,24 @@ export function appendChatAttachmentFiles(
     candidates.filter((file) => !unsupported.includes(file)),
     props.attachmentLimits,
     stagedBytes,
-    { resizeImages: true },
+    { resizeImages: true, compressVideos: true },
   );
   if (files.length === 0) {
     return 0;
   }
   const reads =
     props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
-  const entries = reads.begin(files, currentAttachments(props), {
-    getAttachments: () => currentAttachments(props),
-    onAttachmentsChange: props.onAttachmentsChange,
-    onPendingReadsChange: props.onPendingReadsChange,
-  });
+  const entries = reads.begin(
+    files,
+    currentAttachments(props),
+    {
+      getAttachments: () => currentAttachments(props),
+      onAttachmentsChange: props.onAttachmentsChange,
+      onPendingReadsChange: props.onPendingReadsChange,
+    },
+    props.attachmentLimits,
+    stagedBytes,
+  );
   entries.forEach((entry, index) => {
     const file = files[index];
     if (file) {

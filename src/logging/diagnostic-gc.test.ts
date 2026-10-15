@@ -26,7 +26,7 @@ import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from 
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const native = vi.hoisted(() => {
-  type Entry = { startTime: number; duration: number; detail?: { kind: number } };
+  type Entry = { startTime: number; duration: number; detail?: { kind: number; flags?: number } };
   const observers: Observer[] = [];
   class Observer {
     static supportedEntryTypes = ["gc"];
@@ -37,7 +37,8 @@ const native = vi.hoisted(() => {
     }
     deliver(entries: Entry[]) {
       this.callback({
-        getEntries: () => entries.map((entry) => ({ detail: { kind: 1 }, ...entry })),
+        getEntries: () =>
+          entries.map((entry) => ({ ...entry, detail: { kind: 1, flags: 0, ...entry.detail } })),
       });
     }
   }
@@ -209,7 +210,13 @@ it.each([
     await flushed;
     await waitForDiagnosticEventsDrained();
     expect(messages).toEqual([
-      { gc: Array.from({ length: 256 }, () => ({ kind: "scavenge", durationMs: 1 })) },
+      {
+        gc: Array.from({ length: 256 }, () => ({
+          kind: "scavenge",
+          reason: "none",
+          durationMs: 1,
+        })),
+      },
     ]);
     expect(events).toEqual(
       Array.from({ length: 256 }, () => ["scavenge", `${script}.js`, 1, slot]),
@@ -246,16 +253,16 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        labels.push([event.kind, event.thread, event.workerSlot]);
+        labels.push([event.kind, event.thread, event.workerSlot, event.reason]);
       }
     },
     { include: ["diagnostic.gc"] },
   );
   // JavaScript SDK producers are not constrained by the TypeScript kind union.
   for (const fields of JSON.parse(`[
-    {"kind":"scavenge","thread":"main"},
-    {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js"},
-    {"kind":"dynamic-123","thread":"worker-123"},
+    {"kind":"scavenge","thread":"main","reason":"forced"},
+    {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js","reason":"all_external_memory"},
+    {"kind":"dynamic-123","thread":"worker-123","reason":"private-user-reason"},
     {"kind":"dynamic-456","thread":"/private/workers/job-456.js"},
     {},
     {"thread":"code-mode-node.worker.js","workerSlot":1},
@@ -270,17 +277,67 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   }
   await waitForDiagnosticEventsDrained();
   expect(labels).toEqual([
-    ["scavenge", "main", undefined],
-    ["mark_sweep_compact", "sqlite-store.worker.js", undefined],
-    [undefined, "other", undefined],
-    [undefined, "other", undefined],
-    [undefined, "main", undefined],
-    [undefined, "code-mode-node.worker.js", 1],
-    [undefined, "code-mode-node.worker.js", 64],
-    [undefined, "code-mode-node.worker.js", undefined],
-    [undefined, "code-mode-node.worker.js", undefined],
-    [undefined, "code-mode-node.worker.js", undefined],
-    [undefined, "code-mode-node.worker.js", undefined],
-    [undefined, "main", undefined],
+    ["scavenge", "main", undefined, "forced"],
+    ["mark_sweep_compact", "sqlite-store.worker.js", undefined, "all_external_memory"],
+    [undefined, "other", undefined, "other"],
+    [undefined, "other", undefined, "other"],
+    [undefined, "main", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", 1, "other"],
+    [undefined, "code-mode-node.worker.js", 64, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "code-mode-node.worker.js", undefined, "other"],
+    [undefined, "main", undefined, "other"],
   ]);
+});
+
+it("carries bounded native GC flags through observer publication", async () => {
+  const reasons: unknown[] = [];
+  const unsubscribe = onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "diagnostic.gc") {
+        reasons.push(event.reason);
+      }
+    },
+    { include: ["diagnostic.gc"] },
+  );
+  setDiagnosticsEnabledForProcess(true);
+  reconcileDiagnosticGcObserver();
+  try {
+    const flags = [
+      constants.NODE_PERFORMANCE_GC_FLAGS_NO,
+      constants.NODE_PERFORMANCE_GC_FLAGS_FORCED,
+      constants.NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING,
+      constants.NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE,
+      constants.NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY,
+      constants.NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE,
+      constants.NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED,
+      constants.NODE_PERFORMANCE_GC_FLAGS_FORCED |
+        constants.NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY,
+      1 << 20,
+    ];
+    native.observers[0]!.deliver(
+      flags.map((flag) => ({
+        startTime: performance.now(),
+        duration: 1,
+        detail: { kind: constants.NODE_PERFORMANCE_GC_MAJOR, flags: flag },
+      })),
+    );
+    await waitForDiagnosticEventsDrained();
+    expect(reasons).toEqual([
+      "none",
+      "forced",
+      "synchronous_phantom_processing",
+      "all_available_garbage",
+      "all_external_memory",
+      "schedule_idle",
+      "construct_retained",
+      "other",
+      "other",
+    ]);
+  } finally {
+    stopDiagnosticGcObserver();
+    unsubscribe();
+  }
 });

@@ -326,6 +326,20 @@ For attachments in Chat and New Session, Android Chrome, Edge, Firefox, and Sams
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
+When a selected video exceeds the attachment limit or the remaining batch budget,
+select **Compress to fit** to prepare a smaller copy on your device. Compression
+starts only after you choose it; ordinary files and videos that already fit stay
+unchanged. The encoder loads on demand and runs in a background worker, with
+per-file progress while you keep typing. Remove the file to cancel. Nothing is
+uploaded until preparation finishes and you send the message.
+
+The copy preserves audio and orientation, uses MP4 when the browser supports the
+required codecs or WebM otherwise, and limits the longest edge to 1920 pixels
+and frame rate to 30 fps. The original file is never changed. The final bytes
+must fit the advertised per-file and batch limits; if the browser cannot decode
+or encode the video with its audio, or a smaller copy still cannot fit, the slot
+shows an error. Choose a smaller file, trim the video, or try another browser.
+
 In **Connectors**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
 
 **Tool access** lists a connector's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
@@ -495,7 +509,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 <AccordionGroup>
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
-    - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New Session.
+    - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New Session.
     - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. HTML attachments open a sandboxed page with a **Source** switch; other text attachments stay literal. HTML attachment previews accept up to 2 MiB of UTF-8 content; other text previews keep the 256 KiB limit. All retain the original download link; Markdown does not execute embedded HTML or automatically load remote images.
     - Same-origin PDF attachments up to 16 MiB open in a native reader that fills the side panel. Background download-link renewal keeps the reader’s page and zoom when the document is unchanged. Unavailable or oversized previews offer the original download instead; external PDFs and Office documents remain download-only.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.

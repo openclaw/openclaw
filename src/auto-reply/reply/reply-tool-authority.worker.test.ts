@@ -8,6 +8,10 @@ import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import {
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -139,7 +143,32 @@ it.each(["main", "policy", "borrowed"] as const)(
           sessionKey: executionKey,
           sessionId: run.run.sessionId,
         });
-        await operation.bindToolAuthoritySnapshotAsync(snapshot);
+        let initialEntries = 0;
+        const initialReads = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
+          const runRequest = pool.run.bind(pool);
+          return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+            const reply = await runRequest(...args);
+            if (
+              reply.ok &&
+              typeof reply.value === "object" &&
+              reply.value !== null &&
+              "kind" in reply.value &&
+              reply.value.kind === "session-exact-entries"
+            ) {
+              initialEntries++;
+            }
+            return reply;
+          });
+        });
+        try {
+          await operation.bindToolAuthoritySnapshotAsync(snapshot);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
+        } finally {
+          for (const read of initialReads) {
+            read.mockRestore();
+          }
+        }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
         await upsertSessionEntryCore(
           { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },

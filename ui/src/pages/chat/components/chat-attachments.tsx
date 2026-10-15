@@ -117,7 +117,10 @@ export function AttachmentReadStatus(props: { pendingReads: number }) {
   );
 }
 
-type AttachmentPreviewEntry = Pick<ChatAttachmentRead, "attachment" | "state" | "progress"> & {
+type AttachmentPreviewEntry = Pick<
+  ChatAttachmentRead,
+  "attachment" | "state" | "progress" | "preparation" | "errorMessage"
+> & {
   read: ChatAttachmentRead;
 };
 
@@ -129,7 +132,7 @@ function AttachmentTile(props: {
   const reading = () => props.entry.state === "reading";
   const failed = () => props.entry.state === "error";
   const failureLabel = () =>
-    t("chat.attachments.readFailed", {
+    t(props.entry.errorMessage ?? "chat.attachments.readFailed", {
       names: att().fileName ?? t("chat.attachments.attachedFile"),
       more: "",
     });
@@ -150,13 +153,41 @@ function AttachmentTile(props: {
               class={[
                 "chat-attachment-thumb",
                 {
+                  "chat-attachment-thumb--preparation": Boolean(
+                    props.entry.preparation || props.entry.errorMessage,
+                  ),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
                   "chat-attachment-thumb--error": failed(),
                 },
               ]}
-              aria-busy={reading() ? "true" : "false"}
+              aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
             >
-              {failed() ? (
+              {props.entry.preparation || props.entry.errorMessage ? (
+                <div class="chat-attachment-preparation">
+                  <span class="chat-attachment-file__name" title={att().fileName ?? ""}>
+                    {att().fileName}
+                  </span>
+                  {props.entry.preparation === "offer" ? (
+                    <button
+                      type="button"
+                      class="chat-attachment-compress"
+                      title={t("chat.attachments.compressionHint")}
+                      disabled={props.controls.disabled}
+                      onClick={() => props.entry.read.compress?.()}
+                    >
+                      {t("chat.attachments.compressToFit")}
+                    </button>
+                  ) : (
+                    <span class="chat-attachment-file__meta" role="status">
+                      {failed()
+                        ? failureLabel()
+                        : t("chat.attachments.compressing", {
+                            progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
+                          })}
+                    </span>
+                  )}
+                </div>
+              ) : failed() ? (
                 <openclaw-tooltip prop:content={failureLabel()}>
                   <span
                     class="chat-attachment-error"
@@ -185,7 +216,7 @@ function AttachmentTile(props: {
               )}
               <span
                 class="chat-attachment-loading"
-                data-state={props.entry.state}
+                data-state={props.entry.preparation === "offer" ? "offer" : props.entry.state}
                 data-indeterminate={
                   reading() && props.entry.progress === undefined ? "true" : "false"
                 }
@@ -240,6 +271,8 @@ export function AttachmentPreview(
       attachment: read.attachment,
       state: read.state,
       progress: read.progress,
+      preparation: read.preparation,
+      errorMessage: read.errorMessage,
     }));
   });
   return (

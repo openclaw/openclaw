@@ -147,6 +147,11 @@ export function canApplySessionListSnapshot(
       covered = true;
       continue;
     }
+    // Owner totals cover the full roster, not just this sampled page.
+    // Without the prior row, exclusion cannot prove its contribution is unchanged.
+    if (countsOnly && !existing) {
+      return false;
+    }
     const excluded =
       !existing &&
       complete &&

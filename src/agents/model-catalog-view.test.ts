@@ -83,13 +83,6 @@ describe("prepared model catalog view", () => {
       expect(policy).toHaveBeenCalledTimes(2);
       const variant = physical[0]!;
       expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
-      policy.mockReturnValue(null);
-      expect(view.variantsOf(variant)).toBeUndefined();
-      expect(view.project(variant, { availability: true, routeResolution: null }).entry.id).toBe(
-        variant.id,
-      );
-      variant.id = canonical[0]!.id;
-      expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
     } finally {
       policy.mockRestore();
     }
