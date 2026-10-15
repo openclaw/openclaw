@@ -622,7 +622,15 @@ describe("followup queue collect routing", () => {
     );
     controller.abort();
     refreshQueuedFollowupSession({ key: q.key, nextModel: "current-model" });
-    await q.drain();
+    const canceled: string[] = [];
+    await q.drain(async (run) => {
+      if (isFollowupRunAborted(run)) {
+        canceled.push(run.prompt);
+        return;
+      }
+      await q.runFollowup(run);
+    });
+    expect(canceled).toEqual(["private direct content"]);
     expect(q.calls).toHaveLength(1);
     expect(q.calls[0]?.run.model).toBe("current-model");
     expect(q.calls[0]?.run.requestedRouteResolution).toBe("raw");
