@@ -1,6 +1,7 @@
 // Runtime plan tool tests cover schema normalization and diagnostics when the
 // runtime plan owns tool policy, with legacy provider fallback still available.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -162,12 +163,14 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       const catalogRef = createToolSearchCatalogRef();
       try {
         const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
-        const tool: AgentTool = {
+        const tool = wrapToolWithBeforeToolCallHook({
           ...createParameterFreeTool("fixture__lookup_note"),
           label: "Fixture lookup",
           parameters: Type.Object({}),
+          outputSchema: Type.Object({}),
+          hideFromChannelProgress: true,
           execute: vi.fn(async () => output),
-        };
+        });
         const metadata: Parameters<typeof setPluginToolMeta>[1] = {
           pluginId: "bundle-mcp",
           optional: false,
@@ -197,11 +200,19 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           route === "plan"
             ? ({ tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan)
             : undefined;
-        const normalized = normalizeAgentRuntimeTools({
-          runtimePlan,
-          tools: [tool],
-          provider: "openai",
-        });
+        const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+        let normalized: AgentTool[];
+        try {
+          normalized = normalizeAgentRuntimeTools({
+            runtimePlan,
+            tools: [tool],
+            provider: "openai",
+          });
+          // Provider binding/call and guarded source attachment retain admission.
+          expect(frames).toHaveBeenCalledTimes(3);
+        } finally {
+          frames.mockRestore();
+        }
         const normalizedTool = expectDefined(normalized[0], "normalized tool");
         const wrapped = normalized
           .map((entry) => wrapToolWithBeforeToolCallHook(entry))
@@ -246,6 +257,15 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         ...createParameterFreeTool("fixture_status"),
         parameters: normalizedParameterFreeSchema(),
       } as unknown as AgentTool;
+      Object.defineProperty(normalized, "outputSchema", {
+        configurable: true,
+        get() {
+          throw new Error("output schema has not been assigned yet");
+        },
+        set(value: AgentTool["outputSchema"]) {
+          Object.defineProperty(normalized, "outputSchema", { value });
+        },
+      });
       mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 
       const result = normalizeAgentRuntimeTools({

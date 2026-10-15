@@ -56,11 +56,24 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
     return;
   }
   const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
-  Object.assign(target, {
-    ...(catalogMode ? { catalogMode } : {}),
-    ...(outputSchema !== undefined ? { outputSchema } : {}),
-    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
-  });
+  if (
+    catalogMode &&
+    Object.getOwnPropertyDescriptor(target, "catalogMode")?.value !== catalogMode
+  ) {
+    (target as AnyAgentTool).catalogMode = catalogMode;
+  }
+  if (
+    outputSchema !== undefined &&
+    Object.getOwnPropertyDescriptor(target, "outputSchema")?.value !== outputSchema
+  ) {
+    target.outputSchema = outputSchema;
+  }
+  if (
+    hideFromChannelProgress === true &&
+    Object.getOwnPropertyDescriptor(target, "hideFromChannelProgress")?.value !== true
+  ) {
+    target.hideFromChannelProgress = true;
+  }
   copyAgentToolMetadata(source as never, target as never);
 }
 
