@@ -37,6 +37,7 @@ type DmPrincipalRoute = {
 function* mutableToolsBySenderKeys(
   value: unknown,
   path: string,
+  isAccountRoot = true,
 ): Generator<{ path: string; key: string }> {
   const record = asNullableRecord(value);
   if (!record) {
@@ -53,11 +54,13 @@ function* mutableToolsBySenderKeys(
       }
       continue;
     }
-    // Nested account maps are audited as their own account scope.
-    if (key === "accounts") {
+    // Top-level `accounts` maps are audited separately per account; nested
+    // room/channel entries literally named "accounts" (e.g. channels.slack.channels.accounts)
+    // are normal policy scopes and must still be traversed.
+    if (isAccountRoot && key === "accounts") {
       continue;
     }
-    yield* mutableToolsBySenderKeys(child, `${path}.${key}`);
+    yield* mutableToolsBySenderKeys(child, `${path}.${key}`, false);
   }
 }
 
@@ -332,8 +335,9 @@ export async function collectChannelSecurityFindingsCore(params: {
 
       const accountNote =
         orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
-      const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
-        ?.config;
+      const accountConfig =
+        (account as { config?: Record<string, unknown> } | null | undefined)?.config ??
+        asNullableRecord(account);
       const dmPolicy = await resolvePluginDmPolicy({
         plugin,
         cfg: params.cfg,
@@ -361,7 +365,7 @@ export async function collectChannelSecurityFindingsCore(params: {
               ", ",
             )}${uniqueScopes.length > 3 ? ", …" : ""} match mutable username:/name: sender attributes. Because group members can change their display names or handles, another sender could select that tool policy override.`,
           remediation:
-            "Prefer stable id: or channel: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
         });
       }
       const configuredEntries = (dmPolicy?.allowFrom ?? [])
