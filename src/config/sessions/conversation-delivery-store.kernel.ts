@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Selectable } from "kysely";
 import {
@@ -81,7 +82,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   };
 }
 
-const operationQuery = createSqliteQueryCache((database) => {
+const operationQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical

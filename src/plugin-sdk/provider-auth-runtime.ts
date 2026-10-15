@@ -90,7 +90,7 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
-/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Retained until an announced stable removal window. */
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Final compatibility day: 2026-12-31. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;

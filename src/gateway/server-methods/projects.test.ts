@@ -4,6 +4,7 @@ import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
+import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
@@ -299,6 +300,48 @@ test("registered anonymous native search does not borrow the service credential"
   } finally {
     native.mockRestore();
   }
+});
+
+test("checkout options preserve permitted Current access without exposing paths", async () => {
+  await withProjectState(async (state) => {
+    const workspace = await initializeRepository(state.root, "workspace");
+    const outside = await initializeRepository(state.root, "outside");
+    const project = await registerProjectRegistry({ path: outside });
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
+    };
+    for (const scopes of [
+      ["operator.admin"],
+      ["operator.sessions.read", "operator.sessions.write"],
+    ]) {
+      expect(
+        await invokeProjectMethod(
+          "projects.checkoutOptions",
+          { projectId: project.id, agentId: "main" },
+          cfg,
+          scopes,
+        ),
+      ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
+    }
+    const params = { projectId: project.id, agentId: "main" };
+    expect(
+      await invokeProjectMethod("projects.checkoutOptions", params, cfg, ["operator.read"]),
+    ).toMatchObject({ ok: true, payload: { current: false, worktree: false } });
+    let authorityChecks = 0;
+    expect(
+      await invokeProjectMethod(
+        "projects.checkoutOptions",
+        params,
+        cfg,
+        ["operator.admin"],
+        undefined,
+        projectsHandlers,
+        undefined,
+        () => cfg,
+        { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
+      ),
+    ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  });
 });
 
 test("projects.list exposes a normalized configured default repository", async () => {
@@ -609,6 +652,8 @@ test("registered projects.list serves current session metadata without broad rea
       using _ = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation(() => {
         throw new Error("Session display refresh is unavailable");
       });
+      using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+      ownership.mockRejectedValue(new Error("Session runtime ownership is unavailable"));
       sessionChanges.emit({ all: true, scope: "catalog" });
       for (let round = 0; round < 2; round++) {
         if (round === 1) {

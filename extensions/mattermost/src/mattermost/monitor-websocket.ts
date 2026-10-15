@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import {
+  captureWsEventAsync,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -11,9 +11,6 @@ import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
-
-// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
-const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
 
 export type MattermostEventPayload = z.infer<typeof MattermostEventPayloadSchema>;
 
@@ -145,17 +142,15 @@ export function createMattermostConnectOnce(
   return async () => {
     const flowId = randomUUID();
     const captureEvent = (
-      event: Omit<Parameters<typeof proxyCaptureSdk.captureWsEventAsync>[0], "url" | "flowId">,
+      event: Omit<Parameters<typeof captureWsEventAsync>[0], "url" | "flowId">,
     ) => {
       // Capture finalization owns failures; observe this connection's asynchronous writes.
-      void captureSdk
-        .captureWsEventAsync?.({
-          ...event,
-          url: opts.wsUrl,
-          flowId,
-          meta: { subsystem: "mattermost-websocket", ...event.meta },
-        })
-        .catch(() => {});
+      void captureWsEventAsync({
+        ...event,
+        url: opts.wsUrl,
+        flowId,
+        meta: { subsystem: "mattermost-websocket", ...event.meta },
+      }).catch(() => {});
     };
     const ws = webSocketFactory(opts.wsUrl, {
       maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,

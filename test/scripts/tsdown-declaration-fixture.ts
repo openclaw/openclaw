@@ -176,6 +176,10 @@ export function createFixture(groups: readonly string[], root: string) {
   );
   write("pnpm-workspace.yaml", "packages: []\n");
   write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
+  write(
+    "tsconfig.packages.json",
+    fs.readFileSync(path.join(sourceRoot, "tsconfig.packages.json"), "utf8"),
+  );
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, "extensions"));
   fs.mkdirSync(path.join(root, "scripts/lib"));
@@ -223,6 +227,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/infra/format-time/format-duration-internal.ts",
     "src/infra/node-runtime-executable.ts",
     "src/infra/runtime-dependency-ownership.ts",
+    "src/infra/runtime-process-manifest.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/infra/package-update-activation-runtime-assets.ts",
     "packages/normalization-core/src/error-coercion.ts",

@@ -1,5 +1,4 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
 import { onTestFinished, vi } from "vitest";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -17,8 +16,9 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {
@@ -70,7 +70,7 @@ export function composerFixture(
     if (native) {
       native.unmount();
     } else {
-      render(nothing, container);
+      disposeComposer(container);
     }
     container.remove();
   });
@@ -96,25 +96,22 @@ export function composerFixture(
       params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
     };
     if (kind === "chat") {
-      render(
-        renderChatComposer({
-          ...props,
-          submitDisabledReason,
-          draft,
-          mentions,
-          getDraft: () => draft,
-          getMentions: () => mentions,
-          mentionDirectory: unsupported ? undefined : directory,
-          mentionsUnsupported: unsupported,
-          onDraftChange: onInput,
-          onRequestUpdate: renderCurrent,
-          onSlashCommand: slashCommand,
-          canAbort: true,
-          onAbort: abort,
-          onSend: () => send({ draft, mentions }),
-        }),
-        container,
-      );
+      renderComposerInto(container, {
+        ...props,
+        submitDisabledReason,
+        draft,
+        mentions,
+        getDraft: () => draft,
+        getMentions: () => mentions,
+        mentionDirectory: unsupported ? undefined : directory,
+        mentionsUnsupported: unsupported,
+        onDraftChange: onInput,
+        onRequestUpdate: renderCurrent,
+        onSlashCommand: slashCommand,
+        canAbort: true,
+        onAbort: abort,
+        onSend: () => send({ draft, mentions }),
+      });
     } else {
       nativeOptions = {
         agentId: "main",

@@ -20,6 +20,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortQueuedChatTurnById,
@@ -86,7 +87,7 @@ describe("pending input read boundary", () => {
             jobs: name ? [{ ...job, name }] : [],
           });
           const counter = trackSqliteStatementExecutions(
-            openOpenClawStateDatabase().db,
+            requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
             ["names", "selection"],
             (sql) =>
               /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)

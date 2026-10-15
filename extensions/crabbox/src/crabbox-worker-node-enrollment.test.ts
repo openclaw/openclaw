@@ -320,6 +320,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     });
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
+      prepareCapture: async () => {},
       warn: (message) => {
         throw new Error(message);
       },
@@ -582,9 +583,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     fs.writeFileSync(path.join(stateDir, "setup-code"), setupCode);
     fs.mkdirSync(path.join(home, ".crabbox", "env"), { recursive: true });
     fs.writeFileSync(path.join(home, ".crabbox", "env", "forwarded"), workerBundle.token);
-    execFileSync("sh", ["-c", SCRUB_WORKER_STATE], {
+    const scrubTmp = path.join(home, "scrub-tmp");
+    fs.mkdirSync(scrubTmp);
+    // The script's Linux /tmp root belongs to the synthetic worker, not this host.
+    execFileSync("sh", ["-c", SCRUB_WORKER_STATE.replace('"/tmp"', JSON.stringify(scrubTmp))], {
       cwd: home,
-      env: { HOME: home, PATH: process.env.PATH },
+      env: { HOME: home, PATH: process.env.PATH, TMPDIR: scrubTmp },
     });
     expect(fs.existsSync(stateDir)).toBe(false);
     expect(fs.existsSync(path.join(home, ".crabbox", "env"))).toBe(false);

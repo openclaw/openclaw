@@ -118,6 +118,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import { registerMaintenanceContentionTests } from "./update-command-maintenance-contention.test-support.js";
 import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -170,6 +171,7 @@ describe("successful update finalization ordering", () => {
   });
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
+  registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);
   registerStaleSessionReceiptUpdateTest(mocks);
   registerCurrentCoreServiceReceiptTests({
     makeHome: () => tempDirs.make("current-core-service-receipt-"),

@@ -210,7 +210,7 @@ export function createSessionRowProjectionFixture(params: {
     modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
-      return { kind: "complete", value: consume(projection) };
+      return consume(projection);
     },
     present: (record, options) => {
       const now = options?.now ?? Date.now();
@@ -302,12 +302,18 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
-      scope: (options) => ({
-        paths: new Map([...rows.values()].map((row, index) => [row.storeTarget.storePath, index])),
-        path: storePath,
-        agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
-        configuredAgentIds: options.configuredAgentsOnly ? new Set(listAgentIds(cfg)) : undefined,
-      }),
+      scope: (options) => {
+        const ownerAgentIds = new Set(listAgentIds(cfg));
+        return {
+          paths: new Map(
+            [...rows.values()].map((row, index) => [row.storeTarget.storePath, index]),
+          ),
+          path: storePath,
+          agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
+          configuredAgentIds: options.configuredAgentsOnly ? ownerAgentIds : undefined,
+          ownerAgentIds,
+        };
+      },
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
     selectEntries,

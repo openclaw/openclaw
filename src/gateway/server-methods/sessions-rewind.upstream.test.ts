@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -33,7 +34,7 @@ import {
 useMessageCutStorageFixture();
 
 function adoptUpstreamSource(
-  database: DatabaseSync,
+  database: EngineConnection,
   scope: SourceScope,
   threadId = "late-upstream-thread",
 ): boolean {

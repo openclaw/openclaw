@@ -35,7 +35,7 @@ import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
 import { ChatToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 export type StreamGroupPart = Extract<
@@ -156,32 +156,39 @@ function NonstreamPart(props: {
   options: StreamGroupOptions;
   presentation: "standalone" | "continuation";
 }) {
-  const content = createMemo(() => {
-    if (props.part.kind === "reading-indicator") {
-      return renderChatWorkingIndicator(props.part, {
-        bubbleMode: props.options.bubbleMode,
-        mascot: props.options.branding?.mascot,
-        workingIndicator: props.options.branding?.workingIndicator,
-        workingPhrases: props.options.branding?.workingPhrases,
-        waitingApproval: props.options.waitingApproval === true,
-        waitingSubagents:
-          props.part.waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
-        runningSubagents: props.options.runningSubagents,
-        subagentActivity: props.options.subagentActivity,
-        onOpenSubagents: props.options.onOpenSubagents,
-        startupLabel: props.options.startupLabel,
-        retryAt: props.options.retryAt,
-        outputTokens: props.options.runOutputTokens,
-        presentation: props.presentation,
-      });
-    }
+  const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
+  const question = createMemo(() => {
     const prompt =
       props.part.kind === "question"
         ? props.options.questionPrompts?.get(props.part.questionId)
         : undefined;
     return prompt ? renderChatQuestionSummary(prompt) : litNothing;
   });
-  return <LitContent value={content()} />;
+  return (
+    <Show when={indicator()} fallback={<LitContent value={question()} />}>
+      {(part) => (
+        <ChatWorkingIndicator
+          part={part()}
+          options={{
+            bubbleMode: props.options.bubbleMode,
+            mascot: props.options.branding?.mascot,
+            workingIndicator: props.options.branding?.workingIndicator,
+            workingPhrases: props.options.branding?.workingPhrases,
+            waitingApproval: props.options.waitingApproval === true,
+            waitingSubagents:
+              part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
+            runningSubagents: props.options.runningSubagents,
+            subagentActivity: props.options.subagentActivity,
+            onOpenSubagents: props.options.onOpenSubagents,
+            startupLabel: props.options.startupLabel,
+            retryAt: props.options.retryAt,
+            outputTokens: props.options.runOutputTokens,
+            presentation: props.presentation,
+          }}
+        />
+      )}
+    </Show>
+  );
 }
 
 function StreamingMessage(props: {
@@ -225,10 +232,6 @@ function StreamingMessage(props: {
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
-export function renderSolidStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  return <StreamGroup parts={parts} options={opts} />;
-}
-
 export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGroupOptions }) {
   const starts = () =>
     props.parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
@@ -422,13 +425,6 @@ function WorkGroupSummaryBody(props: {
 }
 
 /** Completed work keeps elapsed time and outcomes above the expandable narration. */
-export function renderSolidWorkGroupSummary(
-  item: WorkGroupSummaryItem,
-  options: WorkGroupSummaryOptions,
-) {
-  return <WorkGroupSummary item={item} options={options} />;
-}
-
 export function WorkGroupSummary(props: {
   item: WorkGroupSummaryItem;
   options: WorkGroupSummaryOptions;

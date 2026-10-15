@@ -8,9 +8,12 @@ import type {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
+import {
+  captureSessionEntryMaintenanceAgeChange,
+  publishSessionEntryMaintenanceAgeChanges,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
@@ -63,7 +66,7 @@ const executePhase: {
     scope: TransportScope,
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
-  ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
+  ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
   adoptRun: (scope, input) => scope.execute({ type: "session.actor.adoptRun", input }),
@@ -128,7 +131,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
+        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
         authority.authorize(
@@ -159,15 +162,11 @@ export function createSqliteSessionActorExecutor(
           authority.assertCurrent();
           let snapshot = params.replica.read();
           if (!snapshot) {
-            const pending = params.replica.beginRead();
-            try {
-              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-              pending.install(snapshot);
-              // Disclose the immutable installed revision, including a superseding receipt.
-              snapshot = params.replica.read();
-            } finally {
-              pending.cancel();
-            }
+            const install = params.replica.beginRead();
+            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+            install(snapshot);
+            // Disclose the immutable installed revision, including a superseding receipt.
+            snapshot = params.replica.read();
           }
           if (!snapshot) {
             throw new SessionActorReadInvalidatedError();
@@ -201,6 +200,7 @@ export function createSqliteSessionActorExecutor(
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
     let previousEntry: SessionActorAuthorityFacts["entry"];
+    let capturedPreviousEntry = false;
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
@@ -232,7 +232,7 @@ export function createSqliteSessionActorExecutor(
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = freezeJsonSnapshot({
+      committed = {
         ...committed,
         failure: committed.failure
           ? {
@@ -240,7 +240,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      });
+      };
       return committed;
     };
     let outcome: Outcome;
@@ -279,11 +279,11 @@ export function createSqliteSessionActorExecutor(
                 receipt.phase === name
               ) {
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = evidence as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
+                  committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
                 try {
@@ -298,6 +298,19 @@ export function createSqliteSessionActorExecutor(
                       true,
                       entry,
                     );
+                    if (entry) {
+                      // Actor delivery settlement can release the last durable recovery claim.
+                      const change = captureSessionEntryMaintenanceAgeChange({
+                        sessionKey: target.sessionKey,
+                        entry,
+                        previousEntry,
+                      });
+                      if (!isDeepStrictEqual(change.entry, change.previousEntry)) {
+                        publishSessionEntryMaintenanceAgeChanges(target.database.physicalIdentity, [
+                          change,
+                        ]);
+                      }
+                    }
                   }
                   // Partial transcript publication precedes installation of the full actor replica.
                   publishCommittedSessionTranscriptReceipts(
@@ -341,7 +354,7 @@ export function createSqliteSessionActorExecutor(
             if (result.kind === "stale-version") {
               try {
                 authority.assertCurrent();
-                authority.authorize("commit", freezeJsonSnapshot(result.postimage));
+                authority.authorize("commit", result.postimage);
                 authority.assertCurrent();
                 params.assertAccepted();
               } catch (error) {
@@ -367,8 +380,10 @@ export function createSqliteSessionActorExecutor(
         },
         authorize(authority, (admission, publication, stage, snapshot) => {
           native = admission;
-          if (stage === "transaction") {
+          // Compound phases and transfer frames carry later snapshots of the same transaction.
+          if (stage === "transaction" && !capturedPreviousEntry) {
             previousEntry = snapshot.entry;
+            capturedPreviousEntry = true;
           }
           if (isRecord(publication) && publication.kind === "session-actor-outcome") {
             transfer.accept(publication.transfer);

@@ -529,6 +529,7 @@ async function agentCommandInternal(
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
+        admittedRecoverySource: preparedRunAdmission.pendingFinalRecoverySource,
         prepared: attemptPrepared,
         opts,
         deps: resolvedDeps,

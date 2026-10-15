@@ -5,12 +5,18 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -69,8 +75,8 @@ export function readOpenClawAgentDatabase<T>(
 
 function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
   const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
-  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   const schemaMeta = readExistingAgentSchemaMeta(database.db);
+  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   if (!schemaMeta) {
     return false;
   }
@@ -185,7 +191,16 @@ export function openOpenClawAgentDatabaseReadOnly(
       adoptOpenClawAgentDatabaseSchema(database) ||
       runSqliteReadOperationSync(db, () => {
         admitSqliteSchema(db);
-        return hasAdmittedAgentReadOnlySchema(database);
+        if (!hasAdmittedAgentReadOnlySchema(database)) {
+          return false;
+        }
+        const schema = getAdmittedSqliteSchemaFacts(database.db);
+        if (schema && hasPendingAgentStartupColumns(schema.tableSql)) {
+          throw new SqliteSchemaMismatchError(
+            `OpenClaw agent database ${database.path} requires writable startup admission before session reads; restart the Gateway or run openclaw doctor --fix.`,
+          );
+        }
+        return true;
       });
     if (!hasSchema) {
       close();

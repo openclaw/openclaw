@@ -291,8 +291,10 @@ export function mutableCompensationFixtureSource(): string {
         let receiptWorker;
         const post = Worker.prototype.postMessage;
         Worker.prototype.postMessage = function(request,...args) {
+          // postMessage transfers and detaches the serialized input.
+          const commandType = request.type==='execute' ? deserialize(request.input).type : undefined;
           const result = Reflect.apply(post,this,[request,...args]);
-          if(request.type==='execute' && deserialize(request.input).type==='updateRuns.recordPhase') {
+          if(commandType==='updateRuns.recordPhase') {
             Worker.prototype.postMessage=post;
             receiptWorker=this;
             assert.equal(fs.existsSync(root+'/compensation-signal-snapshot'),true);

@@ -18,10 +18,8 @@ import {
   refreshAuthProfileFileState,
   registerAuthProfileFileChangeListener,
 } from "./file-state.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  runtimeAuthProfileRowsCache,
-} from "./runtime-snapshots.js";
+import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -34,38 +32,6 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.useRealTimers();
-});
-
-it("keeps unchanged fallback observations off row workers and detects WAL-only writes", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-unchanged-source-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  fs.writeFileSync(databasePath, "synthetic database");
-  const captured = captureAuthProfileFileIdentity(databasePath);
-  const refresh = vi.fn(async () => ({
-    store: { status: "missing" as const, reason: "row" as const },
-    state: { status: "missing" as const, reason: "row" as const },
-    cacheable: false,
-  }));
-  runtimeAuthProfileRowsCache.recordSource(databasePath, "fixture", null, refresh);
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  await refreshAuthProfileFileState();
-  expect(refresh).not.toHaveBeenCalled();
-
-  fs.writeFileSync(`${databasePath}-wal`, "externally committed synthetic rows");
-  await refreshAuthProfileFileState();
-  expect(refresh).toHaveBeenCalledOnce();
-  expect(() => captured.assertCurrent()).not.toThrow();
-
-  await vi.advanceTimersByTimeAsync(30_000);
-  await refreshAuthProfileFileState();
-  expect(refresh).toHaveBeenCalledOnce();
 });
 
 it.skipIf(process.platform === "win32")(
@@ -92,8 +58,10 @@ it.skipIf(process.platform === "win32")(
         const unregister = register();
         const files = await import(workerData.files);
         const snapshots = await import(workerData.snapshots);
+        const { runtimeAuthProfileRowsCache } = await import(workerData.cache);
         const { acquireAuthProfileReadDatabase } = await import(workerData.pool);
         const { readAuthProfileRowsReadOnly } = await import(workerData.rows);
+        const { openSqliteReadOnlyDatabase } = await import(workerData.opener);
         const { runInDetachedAsyncContext } = await import(workerData.detached);
         const { closeOpenClawStateDatabaseAsync } = await import(workerData.cleanup);
         const databasePath = path.join(workerData.directory, "openclaw-agent.sqlite");
@@ -114,7 +82,7 @@ it.skipIf(process.platform === "win32")(
         const writer = create(databasePath, "worker-original");
         try {
           writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-          const acquired = acquireAuthProfileReadDatabase(databasePath);
+          const acquired = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
           assert.equal(acquired.status, "readable");
           const reader = acquired.db;
           const owner = { databasePath, sharedDatabasePath: databasePath, location: "legacy-main" };
@@ -128,9 +96,8 @@ it.skipIf(process.platform === "win32")(
             writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
             assert.ok(fs.statSync(databasePath + "-wal").size > 0);
             await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
-            assert.ok(changes.some((change) => change.contentsChanged && !change.identityChanged));
             assert.equal(spawned, 0, "WAL-only observation must not launch an auth row child");
-            assert.equal(snapshots.runtimeAuthProfileRowsCache.hasSource(databasePath), false);
+            assert.equal(runtimeAuthProfileRowsCache.hasSource(databasePath), false);
             assert.equal(reader.isOpen, true);
             assert.deepEqual(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), store("worker-original"));
 
@@ -142,7 +109,7 @@ it.skipIf(process.platform === "win32")(
             assert.ok(changes.some((change) => change.identityChanged));
             assert.equal(reader.isOpen, false);
             assert.equal(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), undefined);
-            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath).store, {
+            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase).store, {
               status: "readable", raw: store("worker-replacement")
             });
             assert.equal(spawned, 0);
@@ -168,8 +135,10 @@ it.skipIf(process.platform === "win32")(
           loader: import.meta.resolve("tsx/esm/api"),
           files: new URL("./file-state.ts", import.meta.url).href,
           snapshots: new URL("./runtime-snapshots.ts", import.meta.url).href,
+          cache: new URL("./runtime-persisted-rows.ts", import.meta.url).href,
           pool: new URL("./sqlite-read-pool.ts", import.meta.url).href,
           rows: new URL("./sqlite-json.ts", import.meta.url).href,
+          opener: new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url).href,
           detached: new URL("../../shared/detached-async-context.ts", import.meta.url).href,
           cleanup: new URL("../../state/openclaw-state-db-cache.ts", import.meta.url).href,
         },

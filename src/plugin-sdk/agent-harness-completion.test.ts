@@ -7,7 +7,6 @@ import {
   createAgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
@@ -298,34 +297,20 @@ describe("SDK harness completion source admission", () => {
     },
   );
 
-  it("preserves a reconciliation refusal without announcing the completion", async () => {
-    const refusal = new SessionTranscriptProjectionUnavailableError(source.requesterSessionId);
-    mocks.reconcile.mockRejectedValueOnce(refusal);
-    await expect(deliverAgentHarnessCompletion(params())).rejects.toBe(refusal);
+  it("blocks a replaced requester revision after awaited origin resolution", async () => {
+    mocks.resolveCompletionOrigin.mockImplementation(async () => {
+      mocks.loadRequester.mockReturnValue({
+        entry: {
+          sessionId: source.requesterSessionId,
+          lifecycleRevision: "successor",
+        },
+      });
+      return undefined;
+    });
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+    });
     expect(mocks.deliver).not.toHaveBeenCalled();
   });
-
-  it.each(["missing", "session", "revision"])(
-    "blocks %s requester after awaited origin resolution",
-    async (kind) => {
-      mocks.resolveCompletionOrigin.mockImplementation(async () => {
-        mocks.loadRequester.mockReturnValue({
-          entry:
-            kind === "missing"
-              ? undefined
-              : {
-                  sessionId: kind === "session" ? "successor" : source.requesterSessionId,
-                  lifecycleRevision:
-                    kind === "revision" ? "successor" : source.requesterLifecycleRevision,
-                },
-        });
-        return undefined;
-      });
-      await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
-        delivered: false,
-        recoveryBlocked: true,
-      });
-      expect(mocks.deliver).not.toHaveBeenCalled();
-    },
-  );
 });

@@ -17,6 +17,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -41,6 +42,7 @@ it.each([
   "retains the accepted chat target while preparation outlives its predecessor: %s",
   async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const agentId = "main";
       const sessionKey = "agent:main:compaction-handoff";
       const initialSessionId = "before-compaction";

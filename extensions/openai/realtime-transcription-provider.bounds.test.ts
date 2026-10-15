@@ -8,50 +8,10 @@ import {
   emitJson,
 } from "./realtime-transcription-provider.test-support.js";
 
-const { FakeWebSocket } = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    closed = false;
-
-    constructor() {
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(): void {}
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-    }
-
-    terminate(): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-    }
-  }
-
-  return { FakeWebSocket: MockWebSocket };
+const { FakeWebSocket } = await vi.hoisted(async () => {
+  const { createTranscriptionMockWebSocket } =
+    await import("./realtime-transcription-socket.test-support.js");
+  return { FakeWebSocket: createTranscriptionMockWebSocket() };
 });
 
 // Intercept the shared transport constructor, not Bun's bare ws adapter.

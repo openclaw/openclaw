@@ -114,7 +114,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
             agentId: resolved.agentId,
             config: cfg,
           });
-          owner?.recheckNativeLogin?.();
+          void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
             await owner?.loadNativeModelCatalog?.();
             assertCurrent();

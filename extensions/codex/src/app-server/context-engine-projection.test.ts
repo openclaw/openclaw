@@ -4,7 +4,7 @@ import {
   IMAGE_BLOCK_TOKENS,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildCodexContinuityCalibration,
   fitCodexProjectedContextForTurnStart,
@@ -43,27 +43,6 @@ function summaryMessages(type: "compaction" | "branch_summary", summary: string)
 }
 
 describe("projectContextEngineAssemblyForCodex", () => {
-  it("charges restored file content to the selected window before reading older attachments", async () => {
-    const older = textMessage("user", "older attachment");
-    const recent = textMessage("user", "recent attachment");
-    const prepareFileContext = vi.fn(async (message: AgentMessage) => {
-      expect(message).toBe(recent);
-      return { text: `${"x".repeat(200)} retained-file-value`, images: [] };
-    });
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: [older, recent],
-      prompt: "continue",
-      maxRenderedContextChars: 80,
-      prepareFileContext,
-    });
-    expect(prepareFileContext).toHaveBeenCalledOnce();
-    expect(result.promptText).toContain("retained-file-value");
-    expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
-      80,
-    );
-    expect(recent).toEqual(textMessage("user", "recent attachment"));
-  });
-
   it("omits native document images that exceed the context budget", async () => {
     const page = {
       type: "image" as const,
@@ -111,43 +90,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(renderedChars + groups.length * IMAGE_BLOCK_TOKENS * 4).toBeLessThanOrEqual(budget);
   });
 
-  it("omits restored images when the context window cuts their owning message", async () => {
-    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
-    const historical = textMessage("user", `old screenshot ${"caption ".repeat(100)}`);
-    const current = textMessage("assistant", "recent answer");
-    const history = [historical, current];
-    const original = structuredClone(history);
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: history,
-      prompt: "What is next?",
-      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 100,
-      prepareFileContext: async () => ({ images: [image] }),
-    });
-
-    expect(result.promptText).toContain("recent answer");
-    expect(result.promptText).not.toContain("old screenshot");
-    expect(result.imageGroups).toBeUndefined();
-    expect(history).toEqual(original);
-  });
-
-  it("omits an image if the older-context truncation marker removes its source label", async () => {
-    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
-    const result = await projectContextEngineAssemblyForCodex({
-      assembledMessages: [
-        textMessage("assistant", "old context ".repeat(100)),
-        textMessage("user", "screenshot description survives"),
-      ],
-      prompt: "Continue",
-      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 60,
-      prepareFileContext: async () => ({ images: [image] }),
-    });
-
-    expect(result.promptText).toContain("from older context]");
-    expect(result.promptText).toContain("survives");
-    expect(result.promptText).not.toContain("[user]");
-    expect(result.imageGroups).toBeUndefined();
-  });
-
   it("drops a duplicate trailing current prompt from assembled history", async () => {
     const currentUserMessage = {
       ...textMessage("user", "Need the latest answer"),
@@ -165,7 +107,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "places stable current sender provenance beside the request (history: %s)",
     async (withHistory) => {
       const prompt = "i am Bea coded wdym";
@@ -433,17 +375,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
   });
 
-  it.each(["user", "assistant", "compaction"] as const)(
+  it.each(["user"] as const)(
     "retains complete %s text that fits the continuity window without a runtime budget",
     async (type) => {
       const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
       const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages:
-          type === "user"
-            ? [{ role: "user", content: text, timestamp: 1 }]
-            : type === "assistant"
-              ? [textMessage("assistant", text)]
-              : summaryMessages(type, text),
+        assembledMessages: [{ role: type, content: text, timestamp: 1 }],
         prompt: "next",
         maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
       });

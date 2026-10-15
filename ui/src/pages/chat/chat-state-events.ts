@@ -1,8 +1,11 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  readSessionProjectionFinalMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { sleepWithAbort } from "@openclaw/retry";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
+import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -65,13 +68,11 @@ import { reconcileSessionApprovalEvent } from "./session-approval-projection.ts"
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
-import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
 import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
 const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
-const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
 
@@ -237,92 +238,20 @@ function replayPendingSessionMessageReload(
   return true;
 }
 
-type TerminalRecoveryOwnership = {
-  sessionKey: string;
-  agentId: string;
-  runId: string;
-  client: ChatPageHost["client"];
-  connectionEpoch: number;
-  runLifecycleGeneration: number;
-  initialTerminalReplySignatures: ReadonlySet<string>;
-};
+const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, true>>();
 
-const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
-
-function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
+function claimTerminalRecovery(state: ChatPageHost, runId: string): boolean {
   let claims = terminalRecoveryClaimsByPane.get(state);
   if (!claims) {
     claims = new Map();
     terminalRecoveryClaimsByPane.set(state, claims);
   }
-  const key = [
-    ownership.connectionEpoch,
-    ownership.runLifecycleGeneration,
-    ownership.agentId,
-    ownership.sessionKey,
-    ownership.runId,
-  ].join("\0");
-  if (claims.has(key) && claims.get(key) === ownership.client) {
+  if (claims.has(runId)) {
     return false;
   }
-  claims.delete(key);
-  claims.set(key, ownership.client);
+  claims.set(runId, true);
   pruneMapToMaxSize(claims, MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS);
   return true;
-}
-
-function hasRecoveredTerminalReply(
-  state: ChatPageHost,
-  ownership: TerminalRecoveryOwnership,
-): boolean {
-  const recovery = readTerminalReplyRecoveryState(state, ownership.runId);
-  return (
-    recovery.acceptedFinal ||
-    [...recovery.terminalReplySignatures].some(
-      (signature) => !ownership.initialTerminalReplySignatures.has(signature),
-    )
-  );
-}
-
-function terminalRecoveryStillOwned(
-  state: ChatPageHost,
-  ownership: TerminalRecoveryOwnership,
-): boolean {
-  return (
-    state.connected &&
-    state.client === ownership.client &&
-    state.connectionEpoch === ownership.connectionEpoch &&
-    areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
-    resolveChatAgentId(state) === ownership.agentId &&
-    (state.chatRunId === null || state.chatRunId === ownership.runId) &&
-    (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
-    !hasRecoveredTerminalReply(state, ownership)
-  );
-}
-
-async function recoverMissingTerminalReply(
-  state: ChatPageHost,
-  ownership: TerminalRecoveryOwnership,
-  presentation: ChatPanePresentation,
-): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    if (!terminalRecoveryStillOwned(state, ownership)) {
-      return;
-    }
-    await loadChatHistory(state, {
-      deferBranches: !presentation(),
-      supersedeInFlight: true,
-    });
-    state.requestUpdate?.();
-    if (!terminalRecoveryStillOwned(state, ownership)) {
-      return;
-    }
-    const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];
-    if (delayMs === undefined) {
-      return;
-    }
-    await sleepWithAbort(delayMs);
-  }
 }
 
 function handleSessionsChangedEvent(
@@ -496,10 +425,16 @@ export function handlePageGatewayEvent(
       const sessionMatches = Boolean(
         payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
       );
+      const finalMessage = payload?.state === "final" ? asNullableRecord(payload.message) : null;
+      // Retired source text can remain on the wire with an empty display projection.
+      // Like an omitted final, it still needs the durable reply if publication was missed.
       const recoveryRunId =
         (payload?.state === "error" ||
           (payload?.state === "final" &&
-            (payload.message === undefined || payload.message === null))) &&
+            (!finalMessage ||
+              !readSessionProjectionFinalMessageIdentity(
+                projectAssistantDisplayContent(finalMessage),
+              )))) &&
         sessionMatches &&
         typeof payload.runId === "string" &&
         (!state.chatRunId || state.chatRunId === payload.runId)
@@ -539,32 +474,15 @@ export function handlePageGatewayEvent(
           : getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status ===
             "completed"),
       );
-      const recoveryOwnership: TerminalRecoveryOwnership | null =
-        shouldRecoverMissingTerminal && payload?.runId
-          ? {
-              sessionKey: payload.sessionKey,
-              agentId: resolveChatAgentId(state),
-              runId: payload.runId,
-              client: state.client,
-              connectionEpoch: state.connectionEpoch,
-              runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
-              initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, payload.runId)
-                .terminalReplySignatures,
-            }
-          : null;
-      if (recoveryOwnership && claimTerminalRecovery(state, recoveryOwnership)) {
+      if (
+        shouldRecoverMissingTerminal &&
+        recoveryRunId &&
+        claimTerminalRecovery(state, recoveryRunId)
+      ) {
         state.pendingSessionMessageReloadSessionKey = null;
-        if (payload?.state === "error") {
-          // Failure receipts commit before chat.error but do not emit session.message.
-          // A reloaded pane has no pending message refresh to recover that notice.
-          refreshChatEventHistory(state, isPresented(), true);
-        } else {
-          // Successful reply persistence can trail a message-less final. Replays,
-          // yielded, and background-run terminals must not repeat recovery I/O.
-          void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
-            () => undefined,
-          );
-        }
+        // A final persisted after this read catches up through session events or Refresh.
+        // The history owner already rejects results for a replaced connection/session.
+        refreshChatEventHistory(state, isPresented(), true);
       } else {
         replayPendingSessionMessageReload(state, payload, isPresented);
       }

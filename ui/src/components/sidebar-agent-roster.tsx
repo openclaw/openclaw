@@ -22,18 +22,17 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.tsx";
 import {
   renderSessionListFrame,
-  renderSessionSection,
+  renderSessionSection as SessionSection,
 } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
-  renderSessionTree,
+  renderSessionTree as SessionTree,
   renderSidebarSessionIndicators,
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -41,20 +40,28 @@ import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import { renderTeamSessionSlots, sessionRunVisibility } from "./solid/session-presentation.tsx";
+import {
+  TeamSessionSlots,
+  type TeamSessionSlotsProps,
+  sessionRunVisibility,
+} from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
-type RosterProps = { host: RosterHost; active?: boolean };
+type RosterProps = {
+  host: RosterHost;
+  active: boolean;
+  sections: SidebarVisibleSections["sections"];
+  involvingMe: boolean;
+  empty: boolean;
+};
 
 function cachedRosterCards(host: RosterHost) {
   return host.sidebarSnapshot?.cards.map((card) => ({
     ...card,
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
-    role: card.role,
-    model: card.model,
     activeNow: false,
     unreadCount: 0,
     lastActiveAt: 0,
@@ -70,9 +77,8 @@ function cachedRosterCards(host: RosterHost) {
 
 function useRoster(props: RosterProps) {
   const application = useApplication();
-  const currentHost = createMemo(() => props.host);
   const hostProjection = createMemo(() =>
-    projectSource(currentHost(), {
+    projectSource(props.host, {
       read: (host) => host,
       subscribe: (host, notify) => host.subscribe(notify),
       equality: "revision",
@@ -83,9 +89,7 @@ function useRoster(props: RosterProps) {
   const store = createMemo(() => rosterActivityStore(context()));
   const projection = createMemo(() => projectRosterActivity(store()));
   const gateway = createMemo(() => projectGateway(context().gateway));
-  const snapshot = createMemo(() =>
-    props.active === false ? store().snapshot : projection().read(),
-  );
+  const snapshot = createMemo(() => (props.active ? projection().read() : store().snapshot));
   const [avatarRevision, setAvatarRevision] = createSignal(0, { ownedWrite: true });
   const avatars = new IdentityAvatarController(() => setAvatarRevision((value) => value + 1));
   onSettled(() => {
@@ -117,13 +121,7 @@ function useRoster(props: RosterProps) {
   return { host, context, store, snapshot, gateway, cards };
 }
 
-function SidebarAgentRosterContent(
-  props: RosterProps & {
-    sections?: SidebarVisibleSections["sections"];
-    involvingMe?: boolean;
-    empty?: boolean;
-  },
-) {
+export function SidebarAgentRoster(props: RosterProps) {
   const roster = useRoster(props);
   const settingsScope = () => roster.gateway().read().connection.gatewayUrl;
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(
@@ -143,7 +141,7 @@ function SidebarAgentRosterContent(
     );
   });
   createEffect(
-    () => [roster.store(), props.involvingMe ?? false] as const,
+    () => [roster.store(), props.involvingMe] as const,
     ([store, involvingMe]) => {
       store.setInvolvingMe(involvingMe);
     },
@@ -184,7 +182,7 @@ function SidebarAgentRosterContent(
   };
   const error = () => roster.snapshot().error ?? roster.snapshot().subscriptionError;
   return (
-    <>
+    <openclaw-sidebar-agent-roster>
       {renderSessionListFrame(
         untrack(roster.host),
         <div class="sidebar-agent-roster">
@@ -206,9 +204,7 @@ function SidebarAgentRosterContent(
               onCleanup(() => removeMenuPreparation?.());
               const runVisibility = sessionRunVisibility;
               const sections = () =>
-                (props.sections ?? []).filter((section) =>
-                  section.id.startsWith(`agent:${card().id}:`),
-                );
+                props.sections.filter((section) => section.id.startsWith(`agent:${card().id}:`));
               const mainKey = () => roster.host().selectedAgentMainSessionKey(card().id);
               const mainRow = () => roster.host().mainSessionRow(card().id);
               const home = () => {
@@ -237,15 +233,18 @@ function SidebarAgentRosterContent(
                 ...(main() ? [main()!] : []),
                 ...(isCollapsed() ? sections().flatMap((section) => section.rows) : []),
               ];
-              const headerSummary = (): Parameters<typeof renderTeamSessionSlots> => [
-                summaryRows(),
-                isCollapsed(),
-                isCollapsed()
+              const headerSummary = (): TeamSessionSlotsProps => ({
+                rows: summaryRows(),
+                includeChildren: isCollapsed(),
+                childCount: isCollapsed()
                   ? sections().reduce((count, section) => count + section.rows.length, 0)
                   : 0,
-                summaryRows().reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
+                groupConflicts: summaryRows().reduce(
+                  (count, row) => count + (row.workspaceConflictCount ?? 0),
+                  0,
+                ),
                 runVisibility,
-              ];
+              });
               const access = () => roster.host().readNewSessionAccess();
               return (
                 <section
@@ -292,15 +291,17 @@ function SidebarAgentRosterContent(
                       </span>
                     </a>
                     <span class="sidebar-agent-roster__signals">
-                      {main()
-                        ? renderSidebarSessionIndicators(
-                            roster.host(),
-                            () => main()!,
+                      <Show when={main()} fallback={<TeamSessionSlots {...headerSummary()} />}>
+                        {(session) =>
+                          renderSidebarSessionIndicators(
+                            untrack(roster.host),
+                            session,
                             undefined,
                             undefined,
-                            headerSummary(),
+                            headerSummary,
                           ).content
-                        : renderTeamSessionSlots(...headerSummary())}
+                        }
+                      </Show>
                     </span>
                     <span
                       class="sidebar-agent-roster__actions"
@@ -411,17 +412,13 @@ function SidebarAgentRosterContent(
                       {(key) => renderChildSessionLoadError(roster.host(), key)}
                     </For>
                     <For each={sections()} keyed={(section) => section.id}>
-                      {(section) =>
-                        renderSessionSection({
-                          get host() {
-                            return roster.host();
-                          },
-                          get section() {
-                            return section();
-                          },
-                          personHeaders: undefined,
-                        })
-                      }
+                      {(section) => (
+                        <SessionSection
+                          host={roster.host()}
+                          section={section()}
+                          personHeaders={undefined}
+                        />
+                      )}
                     </For>
                   </Show>
                 </section>
@@ -430,7 +427,7 @@ function SidebarAgentRosterContent(
           </For>
           {renderPersonalSessionEmpty(
             roster.host(),
-            props.empty ?? false,
+            props.empty,
             roster.gateway().read().snapshot.phase === "connected" &&
               roster.snapshot().result !== null &&
               !roster.snapshot().loading &&
@@ -440,42 +437,17 @@ function SidebarAgentRosterContent(
           )}
         </div>,
       )}
-    </>
+    </openclaw-sidebar-agent-roster>
   );
 }
 
-type RosterBridgeProps = { host: RosterHost | null; active: boolean };
-type AgentRosterBridgeProps = RosterBridgeProps & {
-  sections: SidebarVisibleSections["sections"];
-  involvingMe: boolean;
-  empty: boolean;
-};
-
-export const SidebarAgentRoster = defineSolidBridge<AgentRosterBridgeProps>(
-  "openclaw-sidebar-agent-roster",
-  (props) => (
-    <Show when={props.host}>
-      {(host) => (
-        <SidebarAgentRosterContent
-          host={host()}
-          active={props.active}
-          sections={props.sections}
-          involvingMe={props.involvingMe}
-          empty={props.empty}
-        />
-      )}
-    </Show>
-  ),
-  {
-    properties: {
-      host: { default: null, attribute: false },
-      active: { default: true, type: Boolean },
-      sections: { default: [], attribute: false },
-      involvingMe: { default: false, attribute: false },
-      empty: { default: false, type: Boolean },
-    },
-  },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sidebar-agent-roster": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 
 export function renderSidebarPinnedSession(host: RosterHost, session: () => SidebarRecentSession) {
   const agentId = createMemo(() => host.sessionNavigationAgentId(session()));
@@ -485,14 +457,12 @@ export function renderSidebarPinnedSession(host: RosterHost, session: () => Side
       (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
     return cards.find((agent) => agent.id === agentId());
   });
-  return renderSessionTree({
-    host,
-    get session() {
-      return session();
-    },
-    listItem: false,
-    get icon() {
-      return <AgentIdentityAvatar agent={card() ?? { id: agentId() }} />;
-    },
-  });
+  return (
+    <SessionTree
+      host={host}
+      session={session()}
+      listItem={false}
+      icon={<AgentIdentityAvatar agent={card() ?? { id: agentId() }} />}
+    />
+  );
 }

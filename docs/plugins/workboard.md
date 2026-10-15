@@ -428,6 +428,11 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
+Creating linked cards, linking existing cards, and decomposition save one card at a
+time. If a later step fails, completed steps remain visible; Workboard reports the
+original error without rolling them back. Inspect the board before retrying, and
+repair missing links or remove unwanted partial cards as needed.
+
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded. Consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
@@ -438,6 +443,15 @@ already has the same terminal status is reused unchanged. Completion proof witho
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
 
+Completion validates its proof, artifacts, and notification before saving the card.
+A validation failure leaves the card unchanged. Completion notifications preserve
+the full execution run ID, including IDs longer than 120 characters. Run IDs are limited
+to 512 characters across execution admission, launch metadata, worker logs, and
+notification subscriptions. Use a shorter ID if admission rejects it; IDs are never
+truncated. Metadata trimming preserves the completion's new notification and proof,
+discarding older history as needed. If those records cannot fit, completion fails
+without saving the card.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`
@@ -447,9 +461,10 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
-Promotion rejects completed (`done`) cards, including when `force` is set, and
-preserves their completion timestamp. It remains available for recovering
-blocked work; `force` only bypasses dependency or schedule holds.
+Promotion only moves `todo` cards to `ready`; every other status returns an
+error without changing the card, including when `force` is set. To recover
+blocked work, use `workboard_unblock` first to move it to `todo`.
+`force` only bypasses dependency or schedule holds.
 
 ## Dispatch
 
@@ -625,6 +640,10 @@ its run is still active. A bounded session sweep runs once per minute to reconci
 terminal, active, idle, missing, and stale session state. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
 the stored card instead of writing its own lifecycle projection.
+
+Archiving a linked session does not hide its terminal outcome from this sweep.
+After a restart or missed completion hook, Workboard still reconciles active cards linked
+to archived sessions into `review` or `blocked`.
 
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived

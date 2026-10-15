@@ -7,30 +7,19 @@ if (!transcribeOpenRouterAudio) {
   throw new Error("expected OpenRouter audio transcription provider");
 }
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = vi.hoisted(() => ({
+  postJsonRequestMock: vi.fn(),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   postJsonRequest: postJsonRequestMock,
-  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
-  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
-  requireTranscriptionText: (value: string | undefined, message: string) => {
-    const text = value?.trim();
-    if (!text) {
-      throw new Error(message);
-    }
-    return text;
-  },
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -44,7 +33,6 @@ function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
 
 describe("openrouter media understanding provider", () => {
   afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
     resolveProviderHttpRequestConfigMock.mockClear();
   });
@@ -195,5 +183,46 @@ describe("openrouter media understanding provider", () => {
       }),
     ).rejects.toThrow("OpenRouter STT could not resolve audio format");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  const transcribeWavResponse = (body: string, status = 200) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(body, { status }),
+      release: vi.fn(async () => {}),
+    });
+    return transcribeOpenRouterAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.wav",
+      mime: "audio/wav",
+      apiKey: "sk-openrouter",
+      timeoutMs: 5_000,
+      fetchFn: fetch,
+    });
+  };
+
+  it.each(["", " \t\n"])(
+    "returns an empty transcript for silent audio (%j) without retrying",
+    async (text) => {
+      await expect(transcribeWavResponse(JSON.stringify({ text }))).resolves.toMatchObject({
+        text: "",
+      });
+      expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ...[{}, { text: null }, { text: 42 }, { error: "upstream failed" }].map((payload) => ({
+      body: JSON.stringify(payload),
+      status: 200,
+      error: "OpenRouter transcription response missing text",
+    })),
+    ...["null", "[]", "{ nope"].map((body) => ({
+      body,
+      status: 200,
+      error: "openrouter.stt: malformed JSON response",
+    })),
+    { body: "unauthorized", status: 401, error: "OpenRouter audio transcription failed" },
+  ])("rejects status $status response $body", async ({ body, status, error }) => {
+    await expect(transcribeWavResponse(body, status)).rejects.toThrow(error);
   });
 });

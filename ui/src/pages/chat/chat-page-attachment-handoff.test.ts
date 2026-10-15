@@ -15,8 +15,9 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import { settleChatPage, createChatPageSessions } from "./chat-page.test-support.ts";
-import { ChatPage, chatPageState } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
 
@@ -90,7 +91,8 @@ describe("chat page staged attachment rebound", () => {
     configure(page);
     document.body.append(page);
     await settleChatPage(page);
-    (chatPageState(page) as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
     page.requestUpdate();
     await settleChatPage(page);
 
@@ -111,7 +113,8 @@ describe("chat page staged attachment rebound", () => {
     expect(discard).toHaveBeenCalledOnce();
     expect(closingPane.isConnected).toBe(true);
 
-    (chatPageState(page) as unknown as { layout: ChatSplitLayout }).layout = splitLayout("main");
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
     page.requestUpdate();
     await settleChatPage(page);
     expect(resume).toHaveBeenCalled();

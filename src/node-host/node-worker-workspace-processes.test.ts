@@ -89,6 +89,34 @@ function fixture(ephemeral = false) {
 }
 
 describe("conversation-owned preview processes", () => {
+  it("rejects outside path operands after positional arguments, eval terminators, and option values", async () => {
+    const { workspace } = fixture(true);
+    vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockResolvedValue(undefined);
+    const initial = await workspace.exec({
+      ...identity,
+      nativeProcessOwner: true,
+      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
+    });
+    const outside = path.join(tempDirs.make("node-workspace-outside-"), "outside.cjs");
+    fs.writeFileSync(outside, "process.exit(0)");
+    fs.writeFileSync(path.join(initial.workspaceDir, "tool.cjs"), "process.exit(0)");
+    const commands = [
+      [...(process.versions.bun ? ["run"] : []), "./tool.cjs", "-e", outside],
+      ["-e", "process.exit(0)", "--", "-e", outside],
+      ["-e", "process.exit(0)", "label", "-p", outside],
+      ["--title", "-e", outside],
+    ];
+    for (const args of commands) {
+      await expect(
+        workspace.exec({
+          ...identity,
+          nativeProcessOwner: true,
+          argv: [runtimeExecutableName, ...args],
+        }),
+      ).rejects.toThrow("workspace command argv resolves outside its workspace");
+    }
+  });
+
   it("keeps identical logical process ids isolated across node workspace runtimes", async ({
     signal,
   }) => {

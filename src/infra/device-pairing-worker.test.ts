@@ -29,7 +29,6 @@ import {
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -203,21 +202,15 @@ test("rolls back owner approval when live policy is revoked before worker commit
   );
 });
 
-test("refreshes cached reads after a sibling owner replaces pairing authority", async () => {
+test("refreshes cached reads after a native owner replaces pairing authority", async () => {
   await expect(getPairedDevice("paired-rich", baseDir)).resolves.toMatchObject({
     publicKey: "synthetic-original-key",
   });
   await listDevicePairing(baseDir);
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other
-      .prepare(
-        "UPDATE device_pairing_paired SET public_key = ?, display_name = ? WHERE device_id = ?",
-      )
-      .run("synthetic-sibling-key", "Sibling fixture", "paired-rich");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
+  persistDevicePairingStoreState(state, baseDir, "paired");
   const native = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId[
     "paired-rich"
   ];
@@ -307,18 +300,13 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other
-      .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-sibling-key", "paired-rich");
-    // A receipt must not decode unrelated pending requests.
-    other
-      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
-      .run("synthetic-unreadable-json", "refreshed");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  persistDevicePairingStoreState(state, baseDir, "paired");
+  // A receipt must not decode unrelated pending requests.
+  database.db
+    .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
+    .run("synthetic-unreadable-json", "refreshed");
   try {
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),

@@ -487,6 +487,7 @@ suite.define(() => {
             "Rename…",
             "Mark as unread",
             "Copy link",
+            "Move to cloud…",
             "Assign to…",
             "Move to group",
             "Snooze",

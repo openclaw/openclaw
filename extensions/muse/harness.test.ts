@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -14,7 +15,6 @@ import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
 import { createApprovalHandler } from "./src/approvals.js";
-import { MusePool } from "./src/runtime.js";
 
 const writes = vi.hoisted(() => ({
   append: vi.fn(async (params: { messages: unknown[] }) => params.messages),
@@ -41,6 +41,7 @@ const readHistory = vi.spyOn(SessionManager, "openModelContextAsync");
 beforeEach(() => {
   approvals.load.mockResolvedValue({ version: 1, agents: {} });
   readHistory.mockResolvedValue(SessionManager.inMemory());
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
 });
 
 let workspace: string;
@@ -50,9 +51,11 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 function setup() {
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
   const bindings = new Map<string, MuseSessionBinding>();
   const sessionStore = {
     lookup: async (key: string) => bindings.get(key),
@@ -149,16 +152,22 @@ describe("Muse native MSP harness", () => {
 
   it("streams reasoning and text, journals native tool pairs, and resumes after restart", async () => {
     const first = setup();
+    const globalEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
     try {
       const result = await first.harness.runAttempt({ ...first.params, prompt: "tool" });
       expect(terminal(result).kind).toBe("ok");
       expect(result.assistantTexts).toEqual(["started: hello"]);
-      expect(
-        first.events
-          .filter((event) => event.stream === "assistant")
-          .map((event) => event.data.delta)
-          .join(""),
-      ).toBe("started: hello");
+      for (const events of [first.events, globalEvents]) {
+        expect(
+          events
+            .filter((event) => event.stream === "assistant")
+            .map((event) => event.data.delta)
+            .join(""),
+        ).toBe("started: hello");
+      }
+      expect(globalEvents.at(0)?.data.phase).toBe("start");
+      expect(globalEvents.at(-1)?.data.phase).toBe("end");
       expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
         "assistant",
         "assistant",
@@ -176,6 +185,7 @@ describe("Muse native MSP harness", () => {
         }),
       );
     } finally {
+      unsubscribe();
       await first.harness.dispose?.();
     }
     const resumed = createMuseAgentHarness({
@@ -456,6 +466,23 @@ describe("Muse native MSP harness", () => {
           }),
         }),
       );
+    } finally {
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("runs a consented turn whose conversation tool policy is restricted", async () => {
+    const { harness, params } = setup();
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    try {
+      await harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true });
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.map((request) => request.method)).toContain("turn/start");
     } finally {
       await harness.dispose?.();
       vi.unstubAllEnvs();
@@ -849,12 +876,78 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("rejects sandbox and restricted-tool attempts before starting native work", async () => {
+  it.runIf(process.platform !== "win32")(
+    "verifies native catalogs on inherited PATH without a workspace, and rejects bundled fallback",
+    async () => {
+      const { harness, params } = setup();
+      const log = join(workspace, `${params.runId}.jsonl`);
+      await writeFile(
+        join(workspace, "muse"),
+        `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const stateDir = join(workspace, "catalog-state");
+      await mkdir(join(stateDir, "muse", "muse"), { recursive: true });
+      await writeFile(join(stateDir, "muse", "muse", "auth.json"), "{}");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("PATH", `${workspace}${delimiter}${process.env.PATH ?? ""}`);
+      vi.stubEnv("MUSE_REQUEST_LOG", log);
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "providerCatalog");
+      const scope = {
+        config: { plugins: { entries: { muse: { config: { binaryPath: "muse" } } } } },
+        agentId: "main",
+        agentDir: workspace,
+        workspaceDir: join(workspace, "absent"),
+      };
+      const verification = {
+        ...scope,
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      };
+      if (!harness.verifySetup || !harness.loadModelCatalog || !harness.readModelCatalogReadiness) {
+        throw new Error("Muse must own its catalog readiness and setup verification");
+      }
+      try {
+        await harness.verifySetup(verification);
+        await harness.verifySetup(verification);
+        await harness.loadModelCatalog(scope);
+        expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
+        const initialRequests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
+        expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(
+          3,
+        );
+        vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
+        await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
+        await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
+        await expect(harness.loadModelCatalog(scope)).rejects.toThrow("authenticate");
+        expect(harness.readModelCatalogReadiness(verification)).toBeUndefined();
+        const requests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(requests[0]).toMatchObject({
+          path: process.env.PATH,
+          credentialBackend: "file",
+          configHome: join(stateDir, "muse"),
+        });
+        expect(requests.map((request) => request.method)).not.toContain("turn/start");
+        expect(requests.map((request) => request.method)).not.toContain("session/start");
+      } finally {
+        await harness.dispose?.();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("rejects sandbox and workspace-only attempts before starting native work", async () => {
     const { harness, params, bindings } = setup();
     try {
-      await expect(
-        harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true }),
-      ).rejects.toThrow("cannot enforce");
       await expect(harness.runAttempt({ ...params, requireWorkspaceOnly: true })).rejects.toThrow(
         "cannot enforce",
       );
@@ -870,26 +963,46 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("isolates pooled credentials, reuses matching hosts, and closes idle hosts", async () => {
-    const pool = new MusePool(fixture);
+  it("starts fresh sessions when managed auth appears, changes, or disappears", async () => {
+    const { harness, params, bindings } = setup();
+    const stateDir = await mkdtemp(join(workspace, "session-auth-"));
+    const authDir = join(stateDir, "muse", "muse");
+    const authFile = join(authDir, "auth.json");
+    const log = join(stateDir, "requests.jsonl");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("META_API_KEY", undefined);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
     try {
-      const first = await pool.acquire(workspace, "key-a", false);
-      const same = await pool.acquire(workspace, "key-a", false);
-      const other = await pool.acquire(workspace, "key-b", false);
-      expect(same.runtime).toBe(first.runtime);
-      expect(other.runtime).not.toBe(first.runtime);
-      vi.useFakeTimers();
-      first.release();
-      same.release();
-      other.release();
-      await vi.advanceTimersByTimeAsync(300_000);
-      vi.useRealTimers();
-      await first.runtime.host.exited;
-      expect(first.runtime.closing).toBe(true);
-      await other.runtime.host.exited;
+      const native = await harness.runAttempt(params);
+      expect(terminal(native).kind).toBe("ok");
+      const identities = [bindings.get(params.sessionId)];
+      await mkdir(authDir, { recursive: true });
+      await writeFile(authFile, '{"account":"managed"}');
+      const managed = await harness.runAttempt(params);
+      expect(terminal(managed).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      await writeFile(authFile, '{"account":"replacement-account"}');
+      const changed = await harness.runAttempt(params);
+      expect(terminal(changed).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      await rm(authFile);
+      const restored = await harness.runAttempt(params);
+      expect(terminal(restored).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+      expect(identities.every((binding) => binding !== undefined)).toBe(true);
+      expect(new Set(identities.map((binding) => binding?.sessionId)).size).toBe(4);
+      expect(identities[1]?.compatibility).not.toBe(identities[0]?.compatibility);
+      expect(identities[2]?.compatibility).not.toBe(identities[1]?.compatibility);
+      expect(identities[3]?.compatibility).not.toBe(identities[2]?.compatibility);
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.filter((request) => request.method === "session/start")).toHaveLength(4);
+      expect(requests.filter((request) => request.method === "session/resume")).toHaveLength(0);
     } finally {
-      vi.useRealTimers();
-      await pool.dispose();
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
     }
   });
 

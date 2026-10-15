@@ -10,6 +10,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
@@ -3311,6 +3312,7 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("refreshes owner refs when only the resolved source snapshot changes", async () => {
+    await prepareSharedAuthStoreOwnership();
     const authAgentDir = "/tmp/openclaw-source-only-auth-owner";
     const authProfileId = "openai:source-only";
     const authOwnerId = resolveAuthProfileSecretOwnerId({

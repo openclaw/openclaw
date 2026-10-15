@@ -65,6 +65,7 @@ type SettlementStore = Pick<
   | "release"
   | "releaseAll"
   | "bindUpdateChildren"
+  | "processIdentity"
   | "cancelUpdate"
   | "current"
   | "owns"
@@ -129,6 +130,7 @@ beforeEach(() => {
     release: (candidate: ManagedHandoffLease) => current(candidate) && rows.delete(candidate.key),
     releaseAll,
     bindUpdateChildren: (children) => (children.every(current) ? children : null),
+    processIdentity: (pid) => ({ pid: pid ?? process.pid, startIdentity: "synthetic" }),
     cancelUpdate: (original, retained) =>
       current(original) && (!retained || current(retained))
         ? {

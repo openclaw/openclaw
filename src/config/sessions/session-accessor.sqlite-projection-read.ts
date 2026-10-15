@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
@@ -20,6 +21,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
@@ -223,7 +225,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-const messageRangeReaders = createSqliteQueryCache((db) => {
+const messageRangeReaders = createSqliteQueryCache((db: DatabaseSync) => {
   const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
@@ -378,7 +380,7 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReader = createSqliteQueryCache((db) =>
+const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
   prepareSqliteQuerySync<
     string,
     InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
@@ -393,7 +395,10 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
-    return projectSessionTranscriptFacts(actor);
+    return {
+      ...projectSessionTranscriptFacts(actor),
+      contextMetadata: projectSessionActorContextMetadata(actor),
+    };
   }
   const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
   if (retained && !retained.contextOnly) {

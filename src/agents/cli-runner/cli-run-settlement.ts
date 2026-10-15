@@ -50,7 +50,7 @@ async function settleCliAuthProfile(params: {
   provider: string;
   agentDir?: string;
   terminal:
-    | { outcome: "success" }
+    | { outcome: "success"; modelId?: string }
     | {
         outcome: "failure";
         error: unknown;
@@ -65,6 +65,7 @@ async function settleCliAuthProfile(params: {
         store: params.store,
         profileId: params.profileId,
         provider: params.provider,
+        modelId: params.terminal.modelId,
         agentDir: params.agentDir,
       });
       return;
@@ -268,7 +269,7 @@ export async function settlePreparedCliRun(params: {
               modelId: context.modelId,
             }
           : outcome.result.meta.executionTrace?.attempts?.at(-1)?.result === "success"
-            ? { outcome: "success" }
+            ? { outcome: "success", modelId: context.modelId }
             : undefined;
       if (terminal) {
         await settleCliAuthProfile({

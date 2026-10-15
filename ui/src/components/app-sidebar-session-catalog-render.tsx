@@ -7,7 +7,6 @@ import type {
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   groupCatalogSessionsByPerson,
@@ -20,27 +19,12 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
-import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
+import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 const CATALOG_SESSION_GROUP_LIMIT = 5;
-function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
-  if (hasActiveRun) {
-    return (
-      <span
-        class="session-run-spinner"
-        role="img"
-        aria-label={t("sessionsView.activeRun")}
-        title={t("sessionsView.activeRun")}
-      />
-    );
-  }
-  return hasUnread ? (
-    <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
-  ) : undefined;
-}
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -261,7 +245,7 @@ function renderCatalogGroup(
       return row ? [row] : [];
     });
   });
-  const hasActiveRun = createMemo(() => liveRows().some(isSessionRunActive));
+  const hasActiveRun = createMemo(() => liveRows().some(params.isRunVisuallyActive));
   const hasUnread = createMemo(() => liveRows().some((row) => row.unread === true));
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
   const loadingMore = createMemo(() => params.loadingMoreCatalogIds.has(readCatalog().id));
@@ -309,12 +293,10 @@ function renderCatalogGroup(
         }
       }}
     >
-      {renderSidebarSessionSectionHeader({
-        get sectionId() {
-          return sectionId;
-        },
-        get status() {
-          return hasError() || (collapsed() && rows().length > 0)
+      <SessionSectionHeader
+        sectionId={sectionId}
+        status={
+          hasError() || (collapsed() && rows().length > 0)
             ? {
                 label: hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label,
                 expanded: !collapsed(),
@@ -330,25 +312,17 @@ function renderCatalogGroup(
                   </span>
                 ),
               }
-            : undefined;
-        },
-        get disabledReason() {
-          return params.sectionDragDisabledReason;
-        },
-        get onStartDrag() {
-          return params.onStartSectionDrag;
-        },
-        get onFinishDrag() {
-          return params.onFinishSectionDrag;
-        },
-        get reorder() {
-          return {
-            label: readCatalog().label,
-            onMove: (target: string, position: "before" | "after") =>
-              params.onReorderSection(sectionId, target, position),
-          };
-        },
-        onContextMenu: (event) => {
+            : undefined
+        }
+        disabledReason={params.sectionDragDisabledReason}
+        onStartDrag={params.onStartSectionDrag}
+        onFinishDrag={params.onFinishSectionDrag}
+        reorder={{
+          label: readCatalog().label,
+          onMove: (target: string, position: "before" | "after") =>
+            params.onReorderSection(sectionId, target, position),
+        }}
+        onContextMenu={(event) => {
           event.preventDefault();
           const header = event.currentTarget;
           const trigger =
@@ -357,83 +331,90 @@ function renderCatalogGroup(
             x: event.clientX,
             y: event.clientY,
           });
-        },
-        get content() {
-          return (
-            <>
-              <button
-                type="button"
-                class="sidebar-session-group-toggle"
-                aria-expanded={collapsed() ? "false" : "true"}
-                aria-label={
-                  hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label
-                }
-                title={hasError() ? errorHelp() : undefined}
-                onClick={() => params.onToggleSection(sectionId)}
+        }}
+        content={
+          <>
+            <button
+              type="button"
+              class="sidebar-session-group-toggle"
+              aria-expanded={collapsed() ? "false" : "true"}
+              aria-label={
+                hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label
+              }
+              title={hasError() ? errorHelp() : undefined}
+              onClick={() => params.onToggleSection(sectionId)}
+            >
+              <span
+                class={`sidebar-session-group-toggle__lead ${hasBrandIcon() ? "sidebar-session-group-toggle__lead--branded" : ""}`}
+                aria-hidden="true"
               >
-                <span
-                  class={`sidebar-session-group-toggle__lead ${hasBrandIcon() ? "sidebar-session-group-toggle__lead--branded" : ""}`}
-                  aria-hidden="true"
-                >
-                  {hasBrandIcon() ? (
-                    <ProviderBrandIcon
-                      provider={readCatalog().id}
-                      class="sidebar-session-catalog-provider-icon"
-                    />
-                  ) : undefined}
-                  <span class="sidebar-session-group-toggle__icon">
-                    {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
-                  </span>
+                {hasBrandIcon() ? (
+                  <ProviderBrandIcon
+                    provider={readCatalog().id}
+                    class="sidebar-session-catalog-provider-icon"
+                  />
+                ) : undefined}
+                <span class="sidebar-session-group-toggle__icon">
+                  {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
                 </span>
-                {renderHoverMarquee(readCatalog().label, "sidebar-recent-sessions__label-text")}
-                {renderCatalogHeaderStatus(hasActiveRun(), hasUnread())}
-              </button>
-              <button
-                type="button"
-                class={`sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive ? "sidebar-session-sort--filtered" : ""}`}
-                data-session-catalog-view-menu={readCatalog().id}
-                title={t("chat.sidebar.catalogViewOptions")}
-                aria-label={t("chat.sidebar.catalogViewOptions")}
-                aria-haspopup="menu"
-                aria-expanded={params.viewMenuOpenCatalogId === readCatalog().id ? "true" : "false"}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  params.onOpenViewMenu(readCatalog().id, event.currentTarget);
-                }}
-              >
-                <Icon name="listFilter" />
-              </button>
-              {canCreateSession()
-                ? renderNewSessionLink({
-                    get basePath() {
-                      return params.basePath;
-                    },
-                    get agentId() {
-                      return params.newSessionAgentId;
-                    },
-                    get target() {
-                      return {
-                        catalogId: readCatalog().id,
-                      };
-                    },
-                    get className() {
-                      return "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new";
-                    },
-                    get label() {
-                      return `${t("chat.runControls.newSession")} — ${readCatalog().label}`;
-                    },
-                    get disabledReason() {
-                      return params.newSessionDisabledReason;
-                    },
-                    get onOpen() {
-                      return params.onOpenNewSession;
-                    },
-                  })
-                : undefined}
-            </>
-          );
-        },
-      })}
+              </span>
+              {renderHoverMarquee(readCatalog().label, "sidebar-recent-sessions__label-text")}
+              {hasActiveRun() ? (
+                <span
+                  class="session-run-spinner"
+                  role="img"
+                  aria-label={t("sessionsView.activeRun")}
+                  title={t("sessionsView.activeRun")}
+                />
+              ) : hasUnread() ? (
+                <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
+              ) : undefined}
+            </button>
+            <button
+              type="button"
+              class={`sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive ? "sidebar-session-sort--filtered" : ""}`}
+              data-session-catalog-view-menu={readCatalog().id}
+              title={t("chat.sidebar.catalogViewOptions")}
+              aria-label={t("chat.sidebar.catalogViewOptions")}
+              aria-haspopup="menu"
+              aria-expanded={params.viewMenuOpenCatalogId === readCatalog().id ? "true" : "false"}
+              onClick={(event) => {
+                event.stopPropagation();
+                params.onOpenViewMenu(readCatalog().id, event.currentTarget);
+              }}
+            >
+              <Icon name="listFilter" />
+            </button>
+            {canCreateSession()
+              ? renderNewSessionLink({
+                  get basePath() {
+                    return params.basePath;
+                  },
+                  get agentId() {
+                    return params.newSessionAgentId;
+                  },
+                  get target() {
+                    return {
+                      catalogId: readCatalog().id,
+                    };
+                  },
+                  get className() {
+                    return "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new";
+                  },
+                  get label() {
+                    return `${t("chat.runControls.newSession")} — ${readCatalog().label}`;
+                  },
+                  get disabledReason() {
+                    return params.newSessionDisabledReason;
+                  },
+                  get onOpen() {
+                    return params.onOpenNewSession;
+                  },
+                })
+              : undefined}
+          </>
+        }
+      />
       {collapsed() ? undefined : (
         <>
           <div class="sidebar-recent-sessions__list">

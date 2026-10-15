@@ -154,9 +154,8 @@ describe("getReplyFromConfig fallback availability", () => {
       loginCommand: "/login",
     })),
   ])("$title", async ({ provider, errorMessage, toolMetas, loginCommand }) => {
-    // Pre-fix this chain returned "The AI service is temporarily rate-limited. Please try again
-    // in a moment." because run preparation rebuilt fallbackConfigured from config defaults instead
-    // of carrying the disabled model-fallback availability into the embedded runner.
+    // The disabled fallback ladder must reach the embedded runner instead of escalating.
+    // #171760 made exhausted no-progress recovery explicit, including for pinned models.
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       if (provider === "openai") {
         await writeFallbackMultiProfileAuthStore(agentDir);
@@ -302,8 +301,12 @@ describe("getReplyFromConfig fallback availability", () => {
       expect(delivered[0]?.payload.text?.trim().length).toBeGreaterThan(0);
       if (errorMessage === RATE_LIMIT_ERROR_MESSAGE) {
         expect(countProviderAttempts("openai")).toBeGreaterThan(2);
-        expect(text).toContain("The AI service needs a short break");
-        expect(delivered[0]?.payload.text).toContain("The AI service needs a short break");
+        expect(text).toContain("Rate-limit recovery stopped after");
+        expect(delivered[0]?.payload.text).toContain("Rate-limit recovery stopped after");
+        expect(text).not.toContain("The AI service is temporarily rate-limited");
+        expect(delivered[0]?.payload.text).not.toContain(
+          "The AI service is temporarily rate-limited",
+        );
       } else if (loginCommand) {
         expect(countProviderAttempts(provider)).toBe(1);
         if (reservedProviders.includes(provider)) {

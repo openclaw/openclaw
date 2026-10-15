@@ -56,10 +56,10 @@ export type ReplyOperationRunState = {
   backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
   /**
-   * Armed by the admitted interactive run owner. Dispatch consumes it once when a stale
-   * watchdog drops the turn before output; true means the session lane will answer instead.
+   * Armed by the admitted interactive run owner. Interruption recovery consumes it once;
+   * true means the session lane will answer instead.
    */
-  continueStalledTurn?: () => boolean;
+  continueStalledTurn?: (guidance?: string, owner?: ReplyOperation) => boolean;
 };
 
 // Carries this invocation's admission decision through reply option spreads so

@@ -131,6 +131,8 @@ export class GatewayScheduler {
     const beginClose = () => {
       controller.abort();
       materializeErrorStack(controller.signal.reason);
+      // Capture the composite reason while its weak source is still reachable.
+      materializeErrorStack(owner.signal.reason);
       for (const job of owner.jobs) {
         this.cancel(job);
       }

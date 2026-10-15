@@ -185,10 +185,9 @@ describe("update recovery reporting", () => {
           staleGatewayPids: [],
           expectedVersion: "2026.9.6",
           gatewayVersion: "2026.9.6",
-          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
         },
         readyz: healthy,
-        http: undefined,
+        http: { healthz: 200, readyz: healthy ? 200 : 503 },
         launchAgentRecovery: null,
       });
       await verifyUpdatedGateway({
@@ -221,7 +220,7 @@ describe("update recovery reporting", () => {
           expect(output).not.toContain("did not pass verification");
         } else {
           expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
-          expect(output).toContain("channel-errors");
+          expect(output).toContain("readyz-unhealthy");
           expect(output).toContain(hostGuidance);
           expect(output).not.toContain("nothing to restore");
         }
@@ -520,4 +519,45 @@ describe("update recovery reporting", () => {
     expect(action).toContain("stop the Gateway first (`openclaw --profile work gateway stop`)");
     expect(action).toContain("Use the same profile, state, and config settings.");
   });
+
+  it.each([false, true])(
+    "retains plugin activation guidance when restart was skipped (core current=%s)",
+    async (coreAlreadyCurrent) => {
+      const run = createRun({ profile: "work" });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, restart: false, run }, coreAlreadyCurrent },
+        {
+          status: "ok",
+          mode: "npm",
+          before: { version: coreAlreadyCurrent ? "2026.9.7" : "2026.9.6" },
+          after: { version: "2026.9.7" },
+          steps: [],
+          durationMs: 0,
+          postUpdate: {
+            plugins: {
+              status: "ok",
+              changed: true,
+              sync: {
+                changed: false,
+                switchedToBundled: [],
+                switchedToNpm: [],
+                warnings: [],
+                errors: [],
+              },
+              npm: { changed: true, outcomes: [] },
+              integrityDrifts: [],
+            },
+          },
+        },
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      const action =
+        "Plugins updated; Gateway restart skipped (--no-restart). Run `openclaw --profile work gateway restart` to activate them in the running Gateway.";
+      expect(stored?.origin.nextAction).toBe(action);
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+    },
+  );
 });

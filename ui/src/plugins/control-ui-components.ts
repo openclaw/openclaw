@@ -131,7 +131,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/appearance-picker.ts");
+          await import("../components/appearance-picker.tsx");
           return document.createElement("openclaw-appearance-picker");
         },
         (element, next, current) => {
@@ -149,7 +149,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/appearance-picker.ts");
+          await import("../components/appearance-picker.tsx");
           return document.createElement("openclaw-appearance-glyph");
         },
         (element, next) => {

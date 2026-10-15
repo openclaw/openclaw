@@ -36,6 +36,8 @@ What the bridge guarantees (all covered by `solid-bridge.test.tsx`):
 
 The bridge is interim. It and its exact-path ratchet exception die with the last Lit caller.
 
+Before retaining an adapter, trace its production callers. If all callers are Solid and no native custom-element API remains, import the component directly and delete the bridge registration, legacy facade, and coupled tests. Preserve lazy imports during that cutover. A native tag with an existing imperative contract (such as the lazy tooltip host) is still a real boundary; do not remove it just because its content renders with Solid.
+
 ## Lit inside Solid
 
 An unported Lit element inside a Solid tree is just a custom element: render its tag, set properties with `prop:`, and listen with camelCase or dashed `on…` handlers. Never let Solid and Lit both own the same DOM children. The Lit element gets its own host node.
@@ -47,6 +49,8 @@ slots. Native views use this boundary and its `emptyLegacyContent` sentinel
 instead of importing Lit. The ratchet exempts this one interop module, not other
 new files in its directory. Delete the module and its exception with the final
 legacy-template cutover.
+
+`LitContent` is for actual legacy templates, not a wrapper around Solid JSX. Remove it when its last legacy producer is ported, along with newly unused template helpers (check production Knip). Keep xterm, noVNC, markdown reconcilers, and canvas DOM islands as ref-owned native nodes: Solid owns the host and cleanup, while the island owns its descendants. A DOM island does not itself justify keeping Lit.
 
 ## The Lit ratchet
 

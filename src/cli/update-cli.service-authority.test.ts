@@ -118,7 +118,7 @@ describe("update-cli", () => {
       ancestors: [],
       pid: process.ppid,
       runtime: { status: "stopped", state: "stopped", pid: gatewayFixturePid },
-      code: "service-ancestry-unverified",
+      code: process.platform === "darwin" ? undefined : "service-ancestry-unverified",
     },
   ])(
     "checks inherited Gateway ancestry before --no-restart updates: $caller",

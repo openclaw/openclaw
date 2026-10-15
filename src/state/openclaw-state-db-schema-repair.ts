@@ -10,6 +10,7 @@ import {
 } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -67,6 +68,7 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "github_publication_session_lifecycles",
     "github_repository_publication_requests",
   ],
+  "meeting-transcript-start-time": ["meeting_transcript_sessions"],
   "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
@@ -430,6 +432,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     ["acp_sessions", ...STATE_CURSOR_TABLES_V22].some((table) => tableExists(db, table))
   ) {
     migrations.push({ kind: "portable-identity-columns-v22", path: pathname });
+  }
+  if (
+    userVersion < MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION &&
+    tableExists(db, "meeting_transcript_sessions")
+  ) {
+    migrations.push({ kind: "meeting-transcript-start-time", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

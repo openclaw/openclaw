@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
@@ -110,6 +111,20 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("recovers browser storage after an unavailable initial open", async () => {
+  vi.resetModules();
+  const { openControlUiDatabase } = await import("../../lib/chat/control-ui-database.runtime.ts");
+  vi.stubGlobal("indexedDB", undefined);
+  await expect(openControlUiDatabase()).rejects.toThrow("IndexedDB is unavailable");
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  const database = await openControlUiDatabase();
+  try {
+    expect(database.objectStoreNames.contains("outboxPayloads")).toBe(true);
+  } finally {
+    database.close();
+  }
 });
 
 it("restores selected recipients and gives same-text recipient changes their own revision", () => {

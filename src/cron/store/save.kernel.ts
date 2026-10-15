@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
@@ -117,7 +117,7 @@ function assertCronStoreChangesCurrent(
 
 /** Applies prepared changes inside the caller's synchronous write transaction. */
 export function saveCronStoreChangesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   resolvedStorePath: string,
   prepared: PreparedCronStoreChanges,
@@ -184,7 +184,7 @@ export function saveCronStoreChangesInDatabase(
 }
 
 function replaceCronStoreRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
   preserveRuntimeState: boolean,

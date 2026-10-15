@@ -5,7 +5,6 @@ import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projecti
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { useStreamAutoFollow } from "../lib/reactive/stream-auto-follow.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import "../styles/update-run-view.css";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
@@ -84,7 +83,7 @@ function RunStep(props: { step: UpdateRunStep; label?: string }) {
   );
 }
 
-function UpdateRunContent(props: { run: UpdateRunRecord | null; connected: boolean }) {
+export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: boolean }) {
   let details: HTMLPreElement | undefined;
   let steps: HTMLOListElement | undefined;
   const identity = () => props.run?.runId;
@@ -111,129 +110,120 @@ function UpdateRunContent(props: { run: UpdateRunRecord | null; connected: boole
     return props.run ? projectUpdateRun(props.run, props.connected) : null;
   });
   return (
-    <Show when={view()}>
-      {(current) => (
-        <section
-          class="update-run-view"
-          data-run-id={props.run?.runId}
-          data-run-status={props.run?.status}
-          aria-label={t("updates.run.title")}
-        >
-          <header class="update-run-view__heading">
-            <h3 role="status" aria-live="polite">
-              <Show when={current().terminal} fallback={current().headline}>
-                <ReportHeadline headline={current().headline} />
+    <openclaw-update-run-view>
+      <Show when={view()}>
+        {(current) => (
+          <section
+            class="update-run-view"
+            data-run-id={props.run?.runId}
+            data-run-status={props.run?.status}
+            aria-label={t("updates.run.title")}
+          >
+            <header class="update-run-view__heading">
+              <h3 role="status" aria-live="polite">
+                <Show when={current().terminal} fallback={current().headline}>
+                  <ReportHeadline headline={current().headline} />
+                </Show>
+              </h3>
+              <Show when={current().compactLabel}>
+                <span class="update-run-view__progress">{current().compactLabel}</span>
               </Show>
-            </h3>
-            <Show when={current().compactLabel}>
-              <span class="update-run-view__progress">{current().compactLabel}</span>
+            </header>
+            <Show when={!props.connected && !current().terminal}>
+              <p class="update-run-view__connection">{t("updates.run.reconnecting")}</p>
             </Show>
-          </header>
-          <Show when={!props.connected && !current().terminal}>
-            <p class="update-run-view__connection">{t("updates.run.reconnecting")}</p>
-          </Show>
-          <Show when={current().phases.length}>
-            <ol class="update-run-view__phases" aria-label={t("updates.run.phases")}>
-              <For each={current().phases} keyed={false}>
-                {(phase) => <RunStep step={phase()} label={phase().label} />}
-              </For>
-            </ol>
-          </Show>
-          <Show when={current().steps.length}>
-            <details
-              class="update-run-view__step-list"
-              onToggle={(event) => event.currentTarget.open && stepsFollow.schedule(true)}
-            >
-              <summary>{t("updates.run.steps")}</summary>
-              <ol
-                ref={(element) => {
-                  steps = element;
-                }}
-                class="update-run-view__step-scroll"
-                tabindex={0}
-                aria-label={t("updates.run.steps")}
-                onScroll={stepsFollow.handleScroll}
-              >
-                <For each={current().steps} keyed={false}>
-                  {(step) => <RunStep step={step()} />}
+            <Show when={current().phases.length}>
+              <ol class="update-run-view__phases" aria-label={t("updates.run.phases")}>
+                <For each={current().phases} keyed={false}>
+                  {(phase) => <RunStep step={phase()} label={phase().label} />}
                 </For>
               </ol>
+            </Show>
+            <Show when={current().steps.length}>
+              <details
+                class="update-run-view__step-list"
+                onToggle={(event) => event.currentTarget.open && stepsFollow.schedule(true)}
+              >
+                <summary>{t("updates.run.steps")}</summary>
+                <ol
+                  ref={(element) => {
+                    steps = element;
+                  }}
+                  class="update-run-view__step-scroll"
+                  tabindex={0}
+                  aria-label={t("updates.run.steps")}
+                  onScroll={stepsFollow.handleScroll}
+                >
+                  <For each={current().steps} keyed={false}>
+                    {(step) => <RunStep step={step()} />}
+                  </For>
+                </ol>
+              </details>
+            </Show>
+            <details
+              class="update-run-view__diagnostics"
+              open
+              onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
+            >
+              <summary>
+                {t("updates.run.details")}{" "}
+                <Show when={current().detailStep}>
+                  {(step) => <span title={step()}>{formatUpdateRunStepLabel(step())}</span>}
+                </Show>
+              </summary>
+              <pre
+                ref={(element) => {
+                  details = element;
+                }}
+                class="update-run-view__details"
+                tabindex={0}
+                aria-label={t("updates.run.details")}
+                onScroll={logFollow.handleScroll}
+              >
+                {current().details ||
+                  t(
+                    current().detailStep === "updater-runtime-retention"
+                      ? "updates.run.prepareUpdaterDetails"
+                      : "updates.run.noDetails",
+                  )}
+              </pre>
             </details>
-          </Show>
-          <details
-            class="update-run-view__diagnostics"
-            open
-            onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
-          >
-            <summary>
-              {t("updates.run.details")}{" "}
-              <Show when={current().detailStep}>
-                {(step) => <span title={step()}>{formatUpdateRunStepLabel(step())}</span>}
-              </Show>
-            </summary>
-            <pre
-              ref={(element) => {
-                details = element;
-              }}
-              class="update-run-view__details"
-              tabindex={0}
-              aria-label={t("updates.run.details")}
-              onScroll={logFollow.handleScroll}
-            >
-              {current().details ||
-                t(
-                  current().detailStep === "updater-runtime-retention"
-                    ? "updates.run.prepareUpdaterDetails"
-                    : "updates.run.noDetails",
-                )}
-            </pre>
-          </details>
-          <Show when={current().oracles.length}>
-            <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
-              <For each={current().oracles}>
-                {(oracle) => (
-                  <li
-                    data-oracle={oracle.name}
-                    data-state={oracle.state}
-                    class={`update-run-view__oracle update-run-view__oracle--${oracle.state}`}
-                  >
-                    <span aria-hidden="true">{ORACLE_MARKS[oracle.state]}</span>
-                    <span>{t(`updates.run.oracle.${oracle.name}`)}</span>
-                    <small>{t(`updates.run.oracleState.${oracle.state}`)}</small>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-          <Show when={current().terminal}>
-            <section
-              class={[
-                "update-run-view__report",
-                { [`update-run-view__report--${props.run?.status}`]: !current().reconciled },
-              ]}
-              aria-label={t("updates.run.report")}
-            >
-              <h4>
-                <ReportHeadline headline={current().report.headline} />
-              </h4>
-              <div class="update-run-view__report-body" tabindex={0}>
-                <For each={current().report.lines}>{(line) => <p>{line}</p>}</For>
-              </div>
-            </section>
-          </Show>
-        </section>
-      )}
-    </Show>
+            <Show when={current().oracles.length}>
+              <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
+                <For each={current().oracles}>
+                  {(oracle) => (
+                    <li
+                      data-oracle={oracle.name}
+                      data-state={oracle.state}
+                      class={`update-run-view__oracle update-run-view__oracle--${oracle.state}`}
+                    >
+                      <span aria-hidden="true">{ORACLE_MARKS[oracle.state]}</span>
+                      <span>{t(`updates.run.oracle.${oracle.name}`)}</span>
+                      <small>{t(`updates.run.oracleState.${oracle.state}`)}</small>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+            <Show when={current().terminal}>
+              <section
+                class={[
+                  "update-run-view__report",
+                  { [`update-run-view__report--${props.run?.status}`]: !current().reconciled },
+                ]}
+                aria-label={t("updates.run.report")}
+              >
+                <h4>
+                  <ReportHeadline headline={current().report.headline} />
+                </h4>
+                <div class="update-run-view__report-body" tabindex={0}>
+                  <For each={current().report.lines}>{(line) => <p>{line}</p>}</For>
+                </div>
+              </section>
+            </Show>
+          </section>
+        )}
+      </Show>
+    </openclaw-update-run-view>
   );
 }
-
-defineSolidBridge<{ run: UpdateRunRecord | null; connected: boolean }>(
-  "openclaw-update-run-view",
-  UpdateRunContent,
-  {
-    properties: {
-      run: { default: null, attribute: false },
-      connected: { default: true },
-    },
-  },
-);

@@ -35,7 +35,6 @@ import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import { createNodeWorkerProcessObserver } from "./node-worker-process-observation.js";
 import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import {
-  assertDeviceFolderWorkspaceCommand,
   createNodeWorkerWorkspaceActions,
   type NodeWorkerWorkspaceBinding,
 } from "./node-worker-workspace-actions.js";
@@ -208,7 +207,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(command.process === undefined ? {} : { process: command.process }),
       ...(command.quiescence === undefined ? {} : { quiescence: command.quiescence }),
     };
-    assertDeviceFolderWorkspaceCommand(input);
+    if (
+      input.deviceFolder !== undefined &&
+      (input.transfer || input.seed || input.resetWorkspace)
+    ) {
+      throw new Error("Device folders cannot receive workspace transfers, seeds, or resets");
+    }
     while (true) {
       assertCurrent();
       const remainingMs = deadline - Date.now();

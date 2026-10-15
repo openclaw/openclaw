@@ -12,8 +12,9 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { renderChat, type ChatProps } from "./chat-view.tsx";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import { renderChat } from "./chat-view-render.test-support.ts";
+import type { ChatProps } from "./chat-view.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

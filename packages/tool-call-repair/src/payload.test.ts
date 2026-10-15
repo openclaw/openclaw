@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
 
 function trackStringOperations(value: string) {
@@ -79,6 +79,21 @@ describe("scanPlainTextJsonToolCall", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
+  it.each([
+    "[guide](https://example.test)\nUse `code` here.",
+    "[guide][reference]\n\n[reference]: https://example.test\n\n```js\nconst x = {};\n```",
+    "[section]\nOrdinary prose with `code`.",
+    "[tool:read]\n",
+  ])("does not resolve Markdown ownership without a bracket payload: %s", (raw) => {
+    const resolveProtectedRanges = vi.fn(() => []);
+
+    for (let end = 1; end <= raw.length; end++) {
+      const prefix = raw.slice(0, end);
+      expect(stripPlainTextToolCallBlocks(prefix, { resolveProtectedRanges })).toBe(prefix);
+    }
+    expect(resolveProtectedRanges).not.toHaveBeenCalled();
+  });
+
   it.each(['Example [tool:read]{"path":"example.txt"}'])(
     "preserves inline bracket text: %s",
     (raw) => {

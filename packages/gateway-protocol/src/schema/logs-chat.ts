@@ -218,6 +218,20 @@ export const ChatMetadataParamsSchema = Object.assign(
   { not: { required: ["sessionKey", "authProfileId"] } },
 );
 
+/** Transient composer prediction anchored to a completed session run. */
+export const ChatPredictParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  runId: NonEmptyString,
+});
+
+/** Transient composer text only; null means there is no suggestion. */
+export const ChatPredictResultSchema = closedObject({
+  text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
+});
+
+export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
+
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({
   sessionKey: NonEmptyString,

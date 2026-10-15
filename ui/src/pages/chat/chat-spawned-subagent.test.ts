@@ -14,8 +14,7 @@ import {
   createToolCall,
   createToolGroup,
 } from "./components/chat-message.test-support.ts";
-import { renderToolCard } from "./components/chat-tool-cards.ts";
-import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
+import { renderToolFixture, renderToolCard } from "./components/chat-tool-render.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";

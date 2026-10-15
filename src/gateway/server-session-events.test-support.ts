@@ -75,7 +75,7 @@ const projection = {
   needsMembershipPreparation: () => false,
   withPreparedExactRows: (async (queries, consume) => {
     queries(runtimeConfigState.value);
-    return { kind: "complete", value: consume(projection) };
+    return consume(projection);
   }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
   observeGeneration: (() => ({

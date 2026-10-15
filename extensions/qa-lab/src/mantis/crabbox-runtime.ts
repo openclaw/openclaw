@@ -18,13 +18,16 @@ export type MantisCrabboxLeaseOptions = {
 function resolveMantisCrabboxLeaseOptions(
   opts: MantisCrabboxLeaseOptions,
   env: NodeJS.ProcessEnv,
-  defaults: { idleTimeout?: string; keepLease?: boolean; ttl?: string } = {},
+  defaults: { idleTimeout?: string; keepLease?: boolean; machineClass?: string; ttl?: string } = {},
 ) {
   return {
     provider:
       trimToValue(opts.provider) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_PROVIDER) ?? "hetzner",
     machineClass:
-      trimToValue(opts.machineClass) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ?? "beast",
+      trimToValue(opts.machineClass) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ??
+      defaults.machineClass ??
+      "beast",
     idleTimeout:
       trimToValue(opts.idleTimeout) ??
       trimToValue(env.OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT) ??
@@ -50,7 +53,7 @@ type CommandFailureDiagnostics = CommandResult & { recoveryLeaseCandidates: stri
 // Keep private command output out of Error serialization and routine Mantis reports.
 const commandFailureDiagnostics = new WeakMap<Error, CommandFailureDiagnostics>();
 
-export function getCommandFailureDiagnostics(error: unknown) {
+function getCommandFailureDiagnostics(error: unknown) {
   return error instanceof Error ? commandFailureDiagnostics.get(error) : undefined;
 }
 

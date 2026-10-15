@@ -3,7 +3,7 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 
-/** @deprecated Use resolvePreparedNativeSessionBinding. */
+/** @deprecated Use resolvePreparedNativeSessionBinding. Supported through 2026-12-31. */
 export async function resolveNativeSessionBinding<TBinding>(
   params: Omit<NativeSessionGenerationParams, "target"> & {
     target?: NativeSessionGenerationTarget;
@@ -52,7 +52,7 @@ export async function resolveNativeSessionBinding<TBinding>(
   return { binding, assertCurrent };
 }
 
-/** @deprecated Use reclaimNativeSessionGenerationWithAuthority. */
+/** @deprecated Use reclaimNativeSessionGenerationWithAuthority. Supported through 2026-12-31. */
 export async function reclaimNativeSessionGeneration(
   params: NativeSessionGenerationParams & {
     generation: NativeSessionGenerationOperations;
@@ -76,7 +76,7 @@ export async function reclaimNativeSessionGeneration(
   return reclaimPreparedGeneration(params, authority);
 }
 
-/** @deprecated Await retainNativeSessionGenerationAuthority. */
+/** @deprecated Await retainNativeSessionGenerationAuthority. Supported through 2026-12-31. */
 export function captureNativeSessionGenerationAuthority(params: NativeSessionGenerationParams) {
   warnPluginSdkDeprecation({
     family: "native-session-binding",
@@ -143,7 +143,7 @@ export type NativeSessionGenerationReclaimPlan =
 
 export type NativeSessionGenerationAdoptionResult = "absent" | "current" | "adopted" | "conflict";
 
-/** @deprecated Use NativeSessionGenerationOperationsV2. */
+/** @deprecated Use NativeSessionGenerationOperationsV2. Supported through 2026-12-31. */
 export type NativeSessionGenerationOperations = {
   prepareReclaim: () => Promise<NativeSessionGenerationReclaimPlan>;
   adopt: (

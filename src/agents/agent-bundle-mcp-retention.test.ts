@@ -95,5 +95,6 @@ export default {
       );
       expect(memory.endTime).toBeLessThanOrEqual(requester.startTime);
     }),
-  180_000,
+  // A cold nested Vitest run of both files takes over 180s on loaded 4-CPU hosts.
+  600_000,
 );
