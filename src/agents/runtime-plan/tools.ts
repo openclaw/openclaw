@@ -51,9 +51,9 @@ function runtimePlanToolContext(params: {
 
 // Normalizers may return cloned tool definitions. Preserve owner and private
 // execution metadata so downstream dispatch keeps the same policy and result contract.
-function copyRuntimeToolMetadata(
-  source: AgentToolWithMeta<TSchema, unknown>,
-  target: AgentToolWithMeta<TSchema, unknown>,
+function copyRuntimeToolMetadata<TSchemaType extends TSchema, TResult>(
+  source: AgentToolWithMeta<TSchemaType, TResult>,
+  target: AgentToolWithMeta<TSchemaType, TResult>,
 ): void {
   if (source === target) {
     return;
