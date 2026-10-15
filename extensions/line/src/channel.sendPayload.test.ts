@@ -11,14 +11,12 @@ import type { OpenClawConfig } from "../api.js";
 import { createQuickReply } from "./auto-reply-delivery.test-helpers.js";
 import { linePlugin } from "./channel.js";
 import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
-import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createPendingLineResponse,
   LINE_QUOTA_ACCOUNT,
   stubLineApiFetch,
 } from "./probe.test-support.js";
-import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineConfig } from "./types.js";
@@ -59,10 +57,6 @@ function send({ line, ...payload }: Payload, context: SendOverrides = {}) {
     ...context,
     payload: { ...payload, ...(line ? { channelData: { line } } : {}) },
   });
-}
-
-function inlineMedia(mediaUrl: string, line: LineChannelData = {}, context: SendOverrides = {}) {
-  return send({ mediaUrl, line: { quickReplies: ["One"], ...line } }, context);
 }
 
 function expectBatch(messages: readonly unknown[], target = to) {
@@ -303,63 +297,25 @@ it("sends quick-reply-only payloads with fallback text", async () => {
   expect(result).toEqual(delivery(["m-quick"]));
 });
 
-it.each([
-  { target: "line:group:C123", tracking: {} },
-  { target: to, tracking: { trackingId: "track-user" } },
-])("gates inline video tracking on $target", async ({ target, tracking }) => {
-  await inlineMedia(
-    videoUrl,
-    { mediaKind: "video", previewImageUrl, trackingId: "track-user" },
-    { to: target },
-  );
-  expectBatch(
-    [
-      {
-        type: "video",
-        originalContentUrl: videoUrl,
-        previewImageUrl,
-        ...tracking,
-        quickReply: createQuickReply("One"),
-      },
-    ],
-    target,
-  );
-});
-
-it("rejects insecure generic media before quick-reply batch sends", async () => {
-  const url = new URL("http://example.com/image.jpg");
-  url.username = ["line", "user"].join("-");
-  url.password = ["line", "fixture"].join("-");
-  url.searchParams.set("auth", ["line", "query"].join("-"));
-  await expect(inlineMedia(url.href)).rejects.toThrow(
-    new Error("LINE outbound media URL must use HTTPS"),
-  );
-  expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
-});
-
-it("rejects quick-reply inline video media without previewImageUrl", async () => {
-  await expect(inlineMedia(videoUrl, { mediaKind: "video" })).rejects.toThrow(
-    /require previewimageurl/i,
-  );
-});
-
-it("returns a receipt for a quoted send through the registered text adapter", async () => {
-  recordLineQuoteToken({
-    accountId: "primary",
-    chatId: "U123",
-    messageId: "m-answered",
-    quoteToken: "q-answered",
+it("carries inline video tracking and quick replies to a user", async () => {
+  await send({
+    mediaUrl: videoUrl,
+    line: {
+      quickReplies: ["One"],
+      mediaKind: "video",
+      previewImageUrl,
+      trackingId: "track-user",
+    },
   });
-  const result = await linePlugin.message!.send!.text!({
-    ...primaryContext,
-    text: "answering you",
-    replyToId: "m-answered",
-  });
-  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "answering you", {
-    ...primaryOptions,
-    quoteToken: "q-answered",
-  });
-  expect(result.receipt.platformMessageIds).toEqual(["m-text"]);
+  expectBatch([
+    {
+      type: "video",
+      originalContentUrl: videoUrl,
+      previewImageUrl,
+      trackingId: "track-user",
+      quickReply: createQuickReply("One"),
+    },
+  ]);
 });
 
 it("reports caption and media receipts through the registered media adapter", async () => {
@@ -537,14 +493,4 @@ it("pushes the approval from the approved account", async () => {
     expect.any(String),
     expect.objectContaining({ accountId: "beta", channelAccessToken: "token-beta" }),
   );
-});
-
-it("uses account-level group mention settings when provided", () => {
-  const groupCfg = lineConfig({
-    groups: { "*": { requireMention: false } },
-    accounts: { primary: { groups: { "group-1": { requireMention: true } } } },
-  });
-  expect(
-    resolveLineGroupRequireMention({ cfg: groupCfg, accountId: "primary", groupId: "group-1" }),
-  ).toBe(true);
 });

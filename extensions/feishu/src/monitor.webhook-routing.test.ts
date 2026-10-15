@@ -181,10 +181,7 @@ describe("Feishu webhook route configuration", () => {
     },
   );
 
-  it.each([
-    { name: "normal stop after identity recovery", replacement: undefined },
-    { name: "successor publishing the same identity", replacement: "ou_recovered" },
-  ])("preserves identity ownership during $name", async ({ replacement }) => {
+  it("clears recovered identity after normal shutdown finishes draining", async () => {
     const accountId = "identity-handoff";
     const invoked = createDeferred<void>();
     const releaseDispatch = createDeferred<void>();
@@ -203,15 +200,12 @@ describe("Feishu webhook route configuration", () => {
       setFeishuBotIdentityState(accountId, "ou_recovered");
       entry.abort.abort();
       expect(botOpenIds.get(accountId)).toBe("ou_recovered");
-      if (replacement) {
-        setFeishuBotIdentityState(accountId, replacement);
-      }
       releaseDispatch.resolve();
       const response = await request;
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({});
       await entry.monitor;
-      expect(botOpenIds.get(accountId)).toBe(replacement);
+      expect(botOpenIds.has(accountId)).toBe(false);
     } finally {
       releaseDispatch.resolve();
       entry.abort.abort();

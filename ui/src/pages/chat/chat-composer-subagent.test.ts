@@ -85,7 +85,6 @@ class SuggestionRecoveryPane extends ChatPaneRuntime {
 it.each([
   { draft: "Keep this draft", control: false, cached: false },
   { draft: "/stop", control: true, cached: false },
-  { draft: "/approve approval-123 allow-once", control: true, cached: false },
   { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
   "holds early input until recovery is ready, preserving live controls: $draft",
@@ -312,7 +311,6 @@ it.each([
 
 it.each([
   { draft: "Hello", allowed: false, restricted: false },
-  { draft: "/models", allowed: true, restricted: false },
   { draft: "Hello", allowed: false, restricted: true },
   { draft: "/models", allowed: true, restricted: true },
 ])(

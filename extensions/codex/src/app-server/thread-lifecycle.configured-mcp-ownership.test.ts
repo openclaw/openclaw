@@ -195,7 +195,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     expect(sibling).toBeDefined();
     expect(releaseSibling).not.toHaveBeenCalled();
     await sibling?.release("thread-sibling");
-    expect(releaseSibling).toHaveBeenCalledWith("thread-sibling");
+    expect(releaseSibling).toHaveBeenCalledWith("thread-sibling", undefined, undefined);
   });
 
   it.each(["start", "conflict", "error"] as const)(

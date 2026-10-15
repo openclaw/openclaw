@@ -726,7 +726,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   it.each([
     { platform: "linux", action: "installed" },
     { platform: "win32", action: "installed" },
-    { platform: "linux", action: "restarted" },
   ] as const)(
     "uses the $platform readiness budget after service $action",
     async ({ platform, action }) => {

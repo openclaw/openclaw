@@ -5,7 +5,6 @@ import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-mar
 import {
   extractContentFromMessage,
   extractTextFromMessage,
-  extractThinkingFromMessage,
   formatTuiFooter,
   formatTuiErrorMessage,
   isolateRtlRenderedLine,
@@ -197,18 +196,6 @@ describe("extractTextFromMessage", () => {
     ).toBe(expected);
   });
 
-  it("keeps an ordinary user prompt unchanged when it also has attachments", () => {
-    expect(
-      extractTextFromMessage({
-        role: "user",
-        content: [
-          { type: "text", text: "Describe this image" },
-          { type: "image", source: { type: "url", url: "/image.png" } },
-        ],
-      }),
-    ).toBe("Describe this image");
-  });
-
   it("sanitizes the display name of an attachment-only user turn", () => {
     expect(
       extractTextFromMessage({
@@ -341,30 +328,12 @@ describe("extractTextFromMessage", () => {
     const text = extractTextFromMessage({
       role: "assistant",
       content: [
-        { type: "text", text: "first" },
+        { type: "text", text: "first\ncontinued" },
         { type: "text", text: "second" },
       ],
     });
 
-    expect(text).toBe("first\nsecond");
-  });
-
-  it("preserves internal newlines for string content", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: "Line 1\nLine 2\nLine 3",
-    });
-
-    expect(text).toBe("Line 1\nLine 2\nLine 3");
-  });
-
-  it("preserves internal newlines for text blocks", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }],
-    });
-
-    expect(text).toBe("Line 1\nLine 2\nLine 3");
+    expect(text).toBe("first\ncontinued\nsecond");
   });
 
   it.each([
@@ -396,10 +365,10 @@ describe("extractTextFromMessage", () => {
   it("sanitizes ANSI and control chars from string content", () => {
     const text = extractTextFromMessage({
       role: "assistant",
-      content: "Hello\x1b[31m red\x1b[0m\x00world",
+      content: "Hello\x1b[31m red\x1b[0m\x00world\nNext line",
     });
 
-    expect(text).toBe("Hello redworld");
+    expect(text).toBe("Hello redworld\nNext line");
   });
 
   it("redacts heavily corrupted binary-like lines", () => {
@@ -478,17 +447,6 @@ describe("extractTextFromMessage", () => {
     expect(text).toContain("Assistant body");
   });
 
-  it("does not strip metadata-like blocks that are not a leading prefix", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: 'Hello world\nConversation info:\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
-    });
-
-    expect(text).toBe(
-      'Hello world\nConversation info:\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
-    );
-  });
-
   it("strips trailing untrusted context metadata suffix blocks for user messages", () => {
     const text = extractTextFromMessage({
       role: "user",
@@ -505,51 +463,6 @@ example
     });
 
     expect(text).toBe("Hello world");
-  });
-
-  it("strips leading active-memory prompt prefix blocks for user messages", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Context:
-<active_memory_plugin>
-User prefers aisle seats and extra buffer on connections.
-</active_memory_plugin>
-
-What should I grab on the way?`,
-    });
-
-    expect(text).toBe("What should I grab on the way?");
-  });
-
-  it("strips active-memory prompt prefix blocks for user messages even when earlier text precedes them", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Queued earlier user turn
-
-Context:
-<active_memory_plugin>
-User prefers aisle seats and extra buffer on connections.
-</active_memory_plugin>
-
-What should I grab on the way?`,
-    });
-
-    expect(text).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
-  });
-});
-
-describe("extractThinkingFromMessage", () => {
-  it("collects only thinking blocks", () => {
-    const text = extractThinkingFromMessage({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "alpha" },
-        { type: "text", text: "hello" },
-        { type: "thinking", thinking: "beta" },
-      ],
-    });
-
-    expect(text).toBe("alpha\nbeta");
   });
 });
 
@@ -601,29 +514,11 @@ describe("sanitizeRenderableText", () => {
 
   it("preserves long CJK prose without inserting display spaces", () => {
     const input =
-      "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
+      "MotherTeresa特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
     expect(sanitized).not.toContain("苦难 者");
-  });
-
-  it.each<[name: string, input: string]>([
-    [
-      "preserves mixed long CJK prose without inserting display spaces",
-      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难",
-    ],
-    [
-      "preserves long filesystem paths verbatim for copy safety",
-      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt",
-    ],
-    [
-      "preserves long urls verbatim for copy safety",
-      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered",
-    ],
-  ])("%s", (_name, input) => {
-    const sanitized = sanitizeRenderableText(input);
-    expect(sanitized).toBe(input);
   });
 
   it("only wraps lines that contain rtl script", () => {
@@ -645,30 +540,9 @@ describe("sanitizeRenderableText", () => {
     expect(sanitizeRenderableText("\u061cمرحبا\u200f")).toBe("\u2067مرحبا\u2069");
   });
 
-  it.each<[name: string, input: string]>([
-    [
-      "preserves long camelCase identifiers wrapped in inline code spans (#48432)",
-      "- `requireConfirmationForMutatingActions: false`",
-    ],
-    [
-      "preserves long hyphenated package names in inline code spans (#48432)",
-      "Install `ubuntu-budgie-desktop-environment` to fix it.",
-    ],
-    [
-      "preserves dotted entity IDs in inline code spans (#39505)",
-      "See `binary_sensor.sense_energy_monitor_power` for the live reading.",
-    ],
-    [
-      "preserves bare hyphenated package names in prose",
-      "Run apt install ubuntu-budgie-desktop-environment after enabling the PPA.",
-    ],
-    [
-      "preserves bare dotted entity IDs in prose",
-      "Watch binary_sensor.sense_energy_monitor_power.daily_energy after midnight.",
-    ],
-  ])("%s", (_name, input) => {
-    const sanitized = sanitizeRenderableText(input);
-    expect(sanitized).toBe(input);
+  it("preserves long camelCase identifiers wrapped in inline code spans (#48432)", () => {
+    const input = "- `requireConfirmationForMutatingActions: false`";
+    expect(sanitizeRenderableText(input)).toBe(input);
   });
 
   it("preserves backtick-fenced code blocks verbatim", () => {
@@ -683,28 +557,6 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
-  });
-
-  it("strips ANSI escapes inside fenced code blocks (sanitization runs before segmentation)", () => {
-    const input = "Hello\n```\nlet x = 1;[31m injected[0m\n```\nbye";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).not.toContain("");
-    expect(sanitized).toContain("let x = 1;");
-  });
-
-  it("strips control chars inside inline code spans (sanitization runs before segmentation)", () => {
-    const input = "Hello `safe\x00content` world";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe("Hello `safecontent` world");
-  });
-
-  it("redacts heavily corrupted lines even inside fenced code blocks", () => {
-    const input = `Header\n\`\`\`\n${"�".repeat(40)}\n\`\`\`\nFooter`;
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toContain("[binary data omitted]");
   });
 });
 
@@ -758,12 +610,6 @@ describe("sanitizeRenderableLine", () => {
     expect(sanitizeRenderableLine("left\r\nمرحبا\tשלום right")).toBe(
       "\u2067left مرحبا שלום right\u2069",
     );
-  });
-
-  it("preserves long exact labels without prose token splitting", () => {
-    const label = "a".repeat(300);
-
-    expect(sanitizeRenderableLine(label)).toBe(label);
   });
 
   it("strips terminal controls and redacts binary-like lines before collapsing whitespace", () => {

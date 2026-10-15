@@ -17,21 +17,6 @@ function hasValidRoomTag(event: Event): boolean {
   );
 }
 
-async function sleepWithSignal(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (delayMs === 0) {
-    signal.throwIfAborted();
-    return;
-  }
-  try {
-    await sleepWithAbort(delayMs, signal);
-  } catch {
-    const error = signal.reason ?? new Error("Buzz room access wait aborted");
-    throw error instanceof Error
-      ? error
-      : new Error("Buzz room access wait failed", { cause: error });
-  }
-}
-
 export async function waitForBuzzRoomAccess(params: {
   relayUrl: string;
   privateKey: string;
@@ -93,7 +78,8 @@ export async function waitForBuzzRoomAccess(params: {
         try {
           const delays = retry ? DISCOVERY_RETRY_DELAYS_MS : ([0] as const);
           for (const delayMs of delays) {
-            await sleepWithSignal(delayMs, signal);
+            signal.throwIfAborted();
+            await sleepWithAbort(delayMs, signal);
             try {
               const rooms = await discoverBuzzRoomsOnRelay({
                 relay,

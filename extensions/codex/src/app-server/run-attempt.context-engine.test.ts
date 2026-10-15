@@ -477,16 +477,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const agentDir = path.join(tempDir, "agent");
       const resumed = scenario === "byte guard";
       const active = scenario !== "inactive engine";
-      await writeCodexAppServerBinding(
-        sessionFile,
-        makeThreadBootstrapBinding({
+      await writeCodexAppServerBinding(sessionFile, {
+        ...makeThreadBootstrapBinding({
           threadId: "thread-bootstrapped",
           cwd: workspaceDir,
           policyFingerprint:
             '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
           epoch: "epoch-1",
         }),
-      );
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+      });
       await fs.writeFile(
         path.join(path.dirname(sessionFile), "sessions.json"),
         JSON.stringify({ "agent:main:session-1": { sessionFile, totalTokens: 12_000 } }),
@@ -496,7 +497,20 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await fs.writeFile(
         path.join(rolloutDir, "rollout-thread-bootstrapped.jsonl"),
         resumed
-          ? "x".repeat(2_000)
+          ? [
+              "x".repeat(2_000),
+              JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.4-codex" } }),
+              JSON.stringify({
+                payload: {
+                  type: "token_count",
+                  info: {
+                    last_token_usage: { total_tokens: 12_000 },
+                    model_context_window: 258_400,
+                  },
+                },
+              }),
+              "",
+            ].join("\n")
           : `${JSON.stringify({
               payload: {
                 type: "token_count",
@@ -508,15 +522,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const params = createParams(sessionFile, workspaceDir);
       params.agentDir = agentDir;
+      const assemble = vi.fn<ContextEngine["assemble"]>(async ({ prompt }) => ({
+        messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+      }));
       if (active) {
-        params.contextEngine = createContextEngine({
-          assemble: vi.fn(async ({ prompt }) => ({
-            messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
-            estimatedTokens: 42,
-            systemPromptAddition: "context-engine system",
-            contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
-          })),
-        });
+        params.contextEngine = createContextEngine({ assemble });
       } else {
         const manager = openFileBackedSessionManagerForTest(sessionFile, {
           sessionId: "session-1",
@@ -555,6 +568,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const inputText = getRequestInputText(harness);
       if (resumed) {
         expect(inputText).toBe("hello");
+        expect(assemble).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 258_400 }));
       } else if (active) {
         expect(inputText).toContain("OpenClaw assembled context for this turn:");
         expect(inputText).toContain("reprojected context");

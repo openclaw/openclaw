@@ -23,7 +23,6 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  hasActiveCronJobs,
   hasActiveCronJobsExceptMarkers,
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
@@ -82,7 +81,7 @@ export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     getReplyFromConfig?: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
-    getQueueSize?: (lane?: string) => number;
+    getQueueSize?: typeof getQueueSize;
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
@@ -214,20 +213,25 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
-  // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
-  // Keep unrelated Cron work and all CronNested work as busy signals.
-  const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
-  const cronBusy =
-    heartbeatWaitOwners.length > 0
-      ? hasActiveCronJobsExceptMarkers(heartbeatWaitOwners)
-      : hasActiveCronJobs();
-  // HookDispatch is included so moving hook agent runs off `cron-nested` onto
-  // their own lane does not silently stop them from suppressing heartbeats.
-  // They are still active agent work; only the lane they occupy changed.
+  const targetsHeartbeatAgent = (target?: { agentId?: string; sessionKey?: string }) => {
+    const sessionAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
+    // Unknown targets stay global; an explicit session can belong to a different agent.
+    return (
+      (!target?.agentId && !sessionAgentId) ||
+      target?.agentId === agentId ||
+      sessionAgentId === agentId ||
+      (target?.sessionKey !== undefined && !sessionAgentId)
+    );
+  };
+  // Exact cron executions awaiting heartbeat settlement are idle, not competing work.
+  const cronBusy = hasActiveCronJobsExceptMarkers(
+    listCronHeartbeatWaitOwners(),
+    targetsHeartbeatAgent,
+  );
   const cronLaneBusy =
-    getSize(CommandLane.Cron) > 0 ||
-    getSize(CommandLane.CronNested) > 0 ||
-    getSize(CommandLane.HookDispatch) > 0;
+    getSize(CommandLane.Cron, targetsHeartbeatAgent) > 0 ||
+    getSize(CommandLane.CronNested, targetsHeartbeatAgent) > 0 ||
+    getSize(CommandLane.HookDispatch, targetsHeartbeatAgent) > 0;
   if (!isSessionExecCompletion && (cronBusy || cronLaneBusy)) {
     return skippedBusyStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS);
   }

@@ -14,6 +14,12 @@ The Gateway applies revisioned config snapshots automatically. Most settings do
 not need a manual restart. `~/.openclaw/openclaw.json` remains the config source,
 including JSON5, `$include`, and environment substitutions.
 
+Startup waits for the config watcher's initial reconciliation, queued file-stability
+checks, and any resulting reload attempt before completing. Initial config
+publication cannot race the first request after startup.
+Credential refreshes that leave the effective config unchanged preserve pending
+work instead of invalidating its config snapshot.
+
 Writes made through the running Gateway publish their committed snapshot
 directly to the reload owner. They do not wait for a file-watcher event or its
 debounce window. Runtime consumers keep reading the last successfully applied

@@ -1,4 +1,3 @@
-import { types } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -36,17 +35,9 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
   // are measured separately, so producer callbacks execute exactly once.
-  return JSON.stringify(event, function (this: object, key: string, input: unknown) {
-    let value = input;
-    if (types.isNumberObject(value)) {
-      // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
-      // Reflect.apply preserves the boxed input for Math.max's native ToNumber operation.
-      value = Reflect.apply(Math.max, undefined, [value]);
-    } else if (types.isStringObject(value)) {
-      value = String(value);
-    } else if (types.isBooleanObject(value)) {
-      value = Boolean.prototype.valueOf.call(value);
-    }
+  // Boxed primitives use native coercion and the final size check; ordinary
+  // tool payloads retain early budget rejection without per-value type probes.
+  return JSON.stringify(event, function (this: object, key: string, value: unknown) {
     const parent = containers.get(this);
     const omitted = value === undefined || typeof value === "function" || typeof value === "symbol";
     if (parent && (parent.array || !omitted)) {

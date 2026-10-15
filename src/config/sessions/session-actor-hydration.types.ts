@@ -18,6 +18,8 @@ export type SessionActorStoredState = {
   pendingInputs: Map<string, SessionPendingInputRow>;
   completions: Map<string, Selectable<DB["session_input_completions"]>>;
   transcript: {
+    /** Only a complete window can prove that an identity or history row is absent. */
+    complete: boolean;
     coldArchive:
       | Omit<Selectable<DB["session_transcript_cold_archives"]>, "archive_blob">
       | undefined;

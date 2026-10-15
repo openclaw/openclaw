@@ -6,11 +6,8 @@ import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../src/gateway/mcp-app-sandbox-http.js";
-import {
-  createColdLoadFrameProbe,
-  type ColdLoadProbeInput,
-} from "../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
-import { installColdLoadProbes } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
+import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -21,6 +18,7 @@ import {
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import {
   mapColdLoadCpuProfile,
@@ -29,13 +27,137 @@ import {
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 
-function createColdLoadProbeInitScript(input: ColdLoadProbeInput): string {
-  return `(${installColdLoadProbes.toString()})(${JSON.stringify(input)}, ${createColdLoadFrameProbe.toString()});`;
+function summarizeResponseTasks(raw: unknown[]) {
+  const events = raw.map(prepareColdLoadTraceEvent);
+  const tasks: Array<{ pid: number; tid: number; start: number; end: number }> = [];
+  const stacks = new Map<string, (typeof events)[number][]>();
+  const add = (event: (typeof events)[number], end: number) => {
+    if (event.name === "RunTask" || event.name === "ThreadControllerImpl::RunTask") {
+      tasks.push({ pid: event.pid, tid: event.tid, start: event.ts, end });
+    }
+  };
+  for (const event of events) {
+    if (event.ph === "X" && event.dur !== undefined) {
+      add(event, event.ts + event.dur);
+    } else if (event.ph === "B") {
+      const key = `${event.pid}:${event.tid}`;
+      const stack = stacks.get(key) ?? [];
+      stack.push(event);
+      stacks.set(key, stack);
+    } else if (event.ph === "E") {
+      const begin = stacks.get(`${event.pid}:${event.tid}`)?.pop();
+      if (begin) {
+        add(begin, event.ts);
+      }
+    }
+  }
+  const responses = events.flatMap((event) => {
+    const match = /^cold-load-rpc:(\d+):(.+):start$/u.exec(event.name ?? "");
+    if (!match) {
+      return [];
+    }
+    const task = tasks
+      .filter(
+        (candidate) =>
+          candidate.pid === event.pid &&
+          candidate.tid === event.tid &&
+          candidate.start <= event.ts &&
+          candidate.end >= event.ts,
+      )
+      .toSorted((left, right) => left.end - left.start - (right.end - right.start))[0];
+    if (!task) {
+      throw new Error(`Response mark lacks an enclosing renderer task: ${event.name}`);
+    }
+    return [
+      { rpcIndex: Number(match[1]), method: match[2], taskMs: (task.end - task.start) / 1000 },
+    ];
+  });
+  return {
+    measurement:
+      "response task including application JSON parse and reconciliation microtasks; excludes later animation-frame rendering",
+    responses,
+  };
+}
+
+type LiveRpc = {
+  method: string;
+  params: Record<string, unknown>;
+  ms: number;
+  responseAtMs: number;
+  responseBytes: number;
+};
+
+function requestedAtMs(rpc: LiveRpc) {
+  return rpc.responseAtMs - rpc.ms;
+}
+
+function sidebarWindow(params: Record<string, unknown>) {
+  if (params.rowMode !== "sidebar" || params.limit !== 200) {
+    return null;
+  }
+  return params.ownerFirst === true
+    ? "ownerFirst"
+    : params.involvingMe === true
+      ? "involvingMe"
+      : null;
+}
+
+function summarizeSidebarWindows(
+  rpcs: LiveRpc[],
+  rpcOffset: number,
+  reads: ReturnType<ReturnType<typeof createTeamScaleSidebarListOwner>["stats"]>,
+  tasks: ReturnType<typeof summarizeResponseTasks>,
+  activeStreamMs: number,
+  elapsedMs: number,
+) {
+  return Object.fromEntries(
+    (["ownerFirst", "involvingMe"] as const).map((window) => {
+      const windowReads = reads.filter((read) => sidebarWindow(read.params) === window);
+      const windowRpcs = rpcs
+        .map((rpc, index) => ({ ...rpc, rpcIndex: rpcOffset + index }))
+        .filter((rpc) => rpc.method === "sessions.list" && sidebarWindow(rpc.params) === window);
+      if (windowReads.length !== windowRpcs.length) {
+        throw new Error(`Sidebar ${window} response/stat count mismatch`);
+      }
+      const samples = windowRpcs.map((rpc, index) => {
+        const task = tasks.responses.find((response) => response.rpcIndex === rpc.rpcIndex);
+        if (!task) {
+          throw new Error(`Sidebar response ${rpc.rpcIndex} lacks a task measurement`);
+        }
+        return Object.assign({}, windowReads[index]!, {
+          requestedAtMs: requestedAtMs(rpc),
+          responseAtMs: rpc.responseAtMs,
+          wireBytes: rpc.responseBytes,
+          responseTaskMs: task.taskMs,
+        });
+      });
+      const taskMs = samples.map((sample) => sample.responseTaskMs).toSorted((a, b) => a - b);
+      const median = taskMs.length
+        ? (taskMs[Math.floor((taskMs.length - 1) / 2)]! + taskMs[Math.floor(taskMs.length / 2)]!) /
+          2
+        : 0;
+      return [
+        window,
+        {
+          reads: samples.length,
+          readsPerMinuteObserved: (samples.length * 60_000) / elapsedMs,
+          readsPerMinuteNormalizedToActiveStream: (samples.length * 60_000) / activeStreamMs,
+          changedRows: samples.reduce((sum, sample) => sum + sample.changedRows, 0),
+          rowsSent: samples.reduce((sum, sample) => sum + sample.rowsSent, 0),
+          wireBytes: samples.reduce((sum, sample) => sum + sample.wireBytes, 0),
+          responseTaskMs: { sum: taskMs.reduce((sum, value) => sum + value, 0), median },
+          samples,
+        },
+      ];
+    }),
+  );
 }
 
 const { values } = parseArgs({
   options: {
     "live-events": { type: "boolean", default: false },
+    "sidebar-list-churn": { type: "boolean", default: false },
+    "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     runs: { type: "string", default: "3" },
     "latency-ms": { type: "string", default: "35" },
@@ -44,6 +166,16 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["sidebar-list-churn"] && !values["live-events"]) {
+  throw new Error("sidebar-list-churn requires live-events");
+}
+const sidebarRowTransfer = values["sidebar-row-transfer"];
+if (!["full", "delta", "interleaved"].includes(sidebarRowTransfer)) {
+  throw new Error("Expected sidebar-row-transfer full, delta or interleaved");
+}
+if (!values["sidebar-list-churn"] && sidebarRowTransfer !== "full") {
+  throw new Error("sidebar-row-transfer requires sidebar-list-churn");
+}
 const sidebarView = values["sidebar-view"];
 if (sidebarView !== "sessions" && sidebarView !== "online") {
   throw new Error("Expected sidebar-view sessions or online");
@@ -61,6 +193,9 @@ if (
   frameGapMs < 0
 ) {
   throw new Error("Expected 1–20 runs and nonnegative finite wire delays");
+}
+if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
+  throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
 }
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
 await mkdir(artifactDir, { recursive: true });
@@ -86,7 +221,12 @@ const fixture = createControlUiTeamScaleFixture({
   sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
   sandboxPort: address.port,
   liveRun: values["live-events"],
+  sidebarListChurn: values["sidebar-list-churn"],
 });
+let sidebarLists = fixture.sidebarListChurn
+  ? createTeamScaleSidebarListOwner(fixture.sidebarListChurn)
+  : undefined;
+let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
 try {
@@ -105,6 +245,31 @@ try {
     permissions: ["local-network-access"],
   });
   const page = await context.newPage();
+  if (fixture.sidebarListChurn) {
+    await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
+      const { result, previousRows } = sidebarLists!.list(params);
+      const response =
+        params.rowMode === "sidebar"
+          ? {
+              ...result,
+              ...shareSidebarSessionRows(
+                result.sessions,
+                typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
+                runTransfer === "delta" ? previousRows : undefined,
+              ),
+            }
+          : result;
+      sidebarLists!.recordWire(response);
+      return response;
+    });
+    await context.exposeBinding(
+      "__teamScaleMutate",
+      (
+        _source,
+        mutation: Parameters<ReturnType<typeof createTeamScaleSidebarListOwner>["apply"]>[0],
+      ) => sidebarLists!.apply(mutation),
+    );
+  }
   const errors: string[] = [];
   const harnessWarnings: string[] = [];
   page.on("pageerror", (error) => {
@@ -153,7 +318,7 @@ try {
     },
   );
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })} })();`,
+    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -208,7 +373,11 @@ try {
   await page.goto(url);
   try {
     await page.locator("#sidebar-session-owner-title").click();
-    await page.locator('.sidebar-session-owner-filter [role="option"][data-value="all"]').click();
+    await page
+      .locator(
+        `.sidebar-session-owner-filter [role="option"][data-value="${values["sidebar-list-churn"] ? "involving-me" : "all"}"]`,
+      )
+      .click();
   } catch (error) {
     await writeFile(
       path.join(artifactDir, "setup-failure.json"),
@@ -227,9 +396,14 @@ try {
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
+    runTransfer =
+      sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
+        ? "delta"
+        : "full";
     const cdp = await context.newCDPSession(page);
     const rawTrace: unknown[] = [];
-    cdp.on("Tracing.dataCollected", (data) => rawTrace.push(...data.value));
+    let collectedTrace = rawTrace;
+    cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
     await cdp.send("Profiler.enable");
     await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
     await cdp.send("Profiler.start");
@@ -238,6 +412,9 @@ try {
         "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
       transferMode: "ReportEvents",
     });
+    if (fixture.sidebarListChurn) {
+      sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListChurn);
+    }
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
     const metrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").read());
@@ -308,11 +485,12 @@ try {
         transitionGroups,
       };
     }, screenshots);
-    const mapped = await mapColdLoadCpuProfile(profile.profile, {
-      assetBaseUrl: new URL("assets/", server.baseUrl).href,
-      assetDirectory: path.join(bundleDir, "assets"),
-    });
-    await cdp.detach();
+    const mapped = values["sidebar-list-churn"]
+      ? { profile: profile.profile, mappedFrames: 0, unmappedFrames: profile.profile.nodes.length }
+      : await mapColdLoadCpuProfile(profile.profile, {
+          assetBaseUrl: new URL("assets/", server.baseUrl).href,
+          assetDirectory: path.join(bundleDir, "assets"),
+        });
     let live;
     const readLivePresentation = () =>
       page.evaluate(
@@ -353,21 +531,98 @@ try {
       );
     if (values["live-events"]) {
       const before = await readLivePresentation();
+      const liveTrace: unknown[] = [];
+      collectedTrace = liveTrace;
+      await cdp.send("Tracing.start", {
+        categories: "toplevel,blink.user_timing,devtools.timeline",
+        transferMode: "ReportEvents",
+      });
+      const listOffset = sidebarLists?.stats().length ?? 0;
       await page.evaluate(() => Reflect.get(window, "__coldLoad").startLive());
       await page.waitForFunction(
         (count) => Reflect.get(window, "__coldLoad").readLive().sentEvents === count,
         fixture.liveEvents.length,
         { timeout: 35_000 },
       );
-      const plannedWindowMs = fixture.liveEvents.at(-1)!.atMs + 750;
+      const plannedWindowMs =
+        fixture.liveEvents.at(-1)!.atMs + (values["sidebar-list-churn"] ? 16_000 : 750);
       await page.waitForFunction(
         (windowMs) => Reflect.get(window, "__coldLoad").readLive().elapsedMs >= windowMs,
         plannedWindowMs,
       );
+      if (values["sidebar-list-churn"]) {
+        try {
+          await page.waitForFunction(() => {
+            const state = Reflect.get(window, "__coldLoad").read();
+            return !state.pending && !state.queued;
+          });
+        } catch (error) {
+          await writeFile(
+            path.join(artifactDir, `run-${run + 1}.live-failure.json`),
+            JSON.stringify({
+              error: String(error),
+              metrics: await page.evaluate(() => Reflect.get(window, "__coldLoad").read()),
+              live: await page.evaluate(() => Reflect.get(window, "__coldLoad").readLive()),
+              sidebarLists: sidebarLists?.stats().slice(listOffset),
+            }),
+          );
+          throw error;
+        }
+      }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
+      const liveComplete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await liveComplete;
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.live.trace.json`),
+        JSON.stringify({ traceEvents: liveTrace }),
+      );
       const after = await readLivePresentation();
+      const liveMetrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").readLive());
+      // Independent coordinators drift; pair request starts within half their minimum cooldown.
+      const pairedRefreshes = values["sidebar-list-churn"]
+        ? liveMetrics.rpcs.filter(
+            (rpc: LiveRpc) =>
+              rpc.method === "sessions.list" &&
+              sidebarWindow(rpc.params) === "ownerFirst" &&
+              rpc.params.ifRowsRevision !== undefined &&
+              requestedAtMs(rpc) >= 6000 &&
+              liveMetrics.rpcs.some(
+                (other: LiveRpc) =>
+                  other.method === "sessions.list" &&
+                  sidebarWindow(other.params) === "involvingMe" &&
+                  other.params.ifRowsRevision !== undefined &&
+                  Math.abs(requestedAtMs(other) - requestedAtMs(rpc)) < 2500,
+              ),
+          ).length
+        : undefined;
+      const activeStreamMs = fixture.liveEvents.at(-1)!.atMs;
+      const sidebarReads = sidebarLists?.stats().slice(listOffset);
+      const responseTasks = summarizeResponseTasks(liveTrace);
       live = {
-        ...(await page.evaluate(() => Reflect.get(window, "__coldLoad").readLive())),
+        ...liveMetrics,
+        head,
+        sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
+        sidebarLists: sidebarReads,
+        sidebarWindows: sidebarReads
+          ? summarizeSidebarWindows(
+              liveMetrics.rpcs,
+              liveMetrics.rpcOffset,
+              sidebarReads,
+              responseTasks,
+              activeStreamMs,
+              liveMetrics.elapsedMs,
+            )
+          : undefined,
+        pairedRefreshes,
+        pairingMeasurement:
+          "Conditional request starts after six seconds, paired within half the five-second minimum cooldown; response arrival skew is separate.",
+        responseTasks,
+        activeStreamMs,
+        rateMeasurement:
+          "Observed rates use the complete capture including drain; active-stream-normalized rates charge trailing coalesced reads to the event stream.",
         plannedWindowMs,
         presentation: { before, after },
       };
@@ -376,9 +631,17 @@ try {
         path.join(artifactDir, `run-${run + 1}.live.json`),
         JSON.stringify(live, null, 2),
       );
+      if (pairedRefreshes !== undefined && pairedRefreshes < 3) {
+        throw new Error(
+          `Sidebar churn reproduced ${pairedRefreshes} sustained conditional sidebar pairs; expected at least three`,
+        );
+      }
     }
+    await cdp.detach();
     const result = {
       run: run + 1,
+      head,
+      sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
       trace: summarizeColdLoadTrace(trace, metrics.at),
       cpu: summarizeCpuProfile(mapped.profile),
@@ -411,6 +674,11 @@ try {
         bundleDir,
         fixture: fixture.counts,
         sidebarView,
+        sidebarListChurn: values["sidebar-list-churn"],
+        sidebarRowTransfer,
+        sidebarComparison: values["sidebar-list-churn"]
+          ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."
+          : undefined,
         latencyMs,
         frameGapMs,
         results,

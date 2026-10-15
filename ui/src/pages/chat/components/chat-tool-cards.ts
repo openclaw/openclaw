@@ -1,4 +1,3 @@
-import { html } from "lit";
 import {
   browserRouteKey,
   browserTabKey,
@@ -7,15 +6,19 @@ import {
 import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
-import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import { renderToolPreview } from "./widget-card.ts";
-export { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
-export function renderBrowserTabPreviews(
+export type BrowserTabPreview = {
+  preview: Extract<ToolPreview, { kind: "browser-tab" }>;
+  revision?: string;
+  latest: boolean;
+};
+
+export function selectBrowserTabPreviews(
   groups: readonly MessageGroup[],
   options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
-  placePreview?: (groupKey: string, content: unknown) => void,
+  placePreview?: (groupKey: string, preview: BrowserTabPreview) => void,
 ) {
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) =>
@@ -58,26 +61,27 @@ export function renderBrowserTabPreviews(
     .toReversed()
     .map(({ card, groupKey, preview }) => {
       const revision = browserTabCardRevision(card);
-      const content = renderToolPreview(preview, "chat_tool", {
-        browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
-        browserTabLatest: Boolean(
+      const content: BrowserTabPreview = {
+        preview,
+        revision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+        latest: Boolean(
           revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
         ),
-      });
+      };
       placePreview?.(groupKey, content);
       return content;
     });
 }
 
-export function renderWorkGroupBrowserTabPreviews(
+export function selectWorkGroupBrowserTabPreviews(
   items: readonly WorkGroupRenderItem[],
-  options: Parameters<typeof renderBrowserTabPreviews>[1],
+  options: Parameters<typeof selectBrowserTabPreviews>[1],
 ) {
-  const byAnchor = new Map<string, unknown[]>();
+  const byAnchor = new Map<string, BrowserTabPreview[]>();
   // Deduplicate the whole turn before placing previews, so later blank tabs or
   // repeated page opens cannot resurrect an earlier preview across an answer.
   for (const item of items) {
-    renderBrowserTabPreviews(item.groups, options, (groupKey, content) => {
+    selectBrowserTabPreviews(item.groups, options, (groupKey, content) => {
       const anchor = item.previewAfterGroup?.get(groupKey) ?? item.key;
       const previews = byAnchor.get(anchor) ?? [];
       previews.push(content);
@@ -85,15 +89,4 @@ export function renderWorkGroupBrowserTabPreviews(
     });
   }
   return byAnchor;
-}
-
-export function renderToolIcon(
-  name: string,
-  tool?: { toolName: string; pluginToolIcons?: PluginToolIcons },
-) {
-  return html`<openclaw-chat-tool-icon
-    style="display: contents"
-    .name=${name}
-    .tool=${tool}
-  ></openclaw-chat-tool-icon>`;
 }

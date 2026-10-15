@@ -394,6 +394,32 @@ async function openServiceDuplex(
 }
 
 describe("service-owned node duplex", () => {
+  it.each(["listener", "send"] as const)(
+    "preserves an invocation rejection after readiness for %s setup",
+    async (operation) => {
+      const fixture = await openServiceDuplex();
+      const pairingChanged = {
+        code: "UNAVAILABLE",
+        message: "node pairing changed while invocation was active",
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      };
+      try {
+        fixture.ctx.respond(false, undefined, pairingChanged);
+        await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+
+        const setup =
+          operation === "listener"
+            ? Promise.resolve().then(() => fixture.channel.onMessage(vi.fn()))
+            : fixture.channel.send(Uint8Array.of(1));
+        await expect(setup).rejects.toMatchObject(pairingChanged);
+        expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+      } finally {
+        fixture.finish.resolve();
+      }
+    },
+  );
+
   it.each([true, "optional"] as const)(
     "uses %s duplex after canonical preflight",
     async (duplex) => {

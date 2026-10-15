@@ -279,9 +279,9 @@ describe("AppSidebar session catalog pagination", () => {
       runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
     ).not.toBeNull();
 
-    for (const [phase, seq, expectedSignals] of [
-      ["finishing", 1, 0],
-      ["start", 2, 1],
+    for (const [phase, seq] of [
+      ["finishing", 1],
+      ["start", 2],
     ] as const) {
       gateway.publishEvent("agent", {
         sessionKey: backingSessionKey,
@@ -300,11 +300,40 @@ describe("AppSidebar session catalog pagination", () => {
         currentSection?.querySelectorAll(
           `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-glyph__ring`,
         ),
-      ).toHaveLength(expectedSignals);
+      ).toHaveLength(1);
       expect(
         currentSection?.querySelectorAll(".sidebar-recent-sessions__head .session-run-spinner"),
-      ).toHaveLength(expectedSignals);
+      ).toHaveLength(1);
     }
+
+    sessions.publish({
+      result: {
+        ...runningResult,
+        sessions: runningRows.map((row) =>
+          row.key === backingSessionKey
+            ? Object.assign({}, row, {
+                hasActiveRun: false,
+                activeRunIds: [],
+                status: "done" as const,
+              })
+            : row,
+        ),
+      },
+    });
+    await settleLitElement(sidebar);
+    const settledSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(settledSection).not.toBeNull();
+    expect(
+      settledSection!.querySelector(`[data-session-key="${backingSessionKey}"]`),
+    ).not.toBeNull();
+    expect(
+      settledSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-glyph__ring`,
+      ),
+    ).toBeNull();
+    expect(
+      settledSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
+    ).toBeNull();
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {

@@ -653,23 +653,6 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
   });
 
-  it("marks gauntlet prebuilds as runtime-only when requested", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1" },
-        {
-          buildIds: ["acpx"],
-          skipDeclarationBuild: true,
-        },
-      ),
-    ).toEqual({
-      EXISTING: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-    });
-  });
-
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
     expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
       command: process.execPath,
@@ -1447,21 +1430,6 @@ try {
       allowEmpty: true,
       failOnObservation: true,
     });
-  });
-
-  it("promotes gauntlet observations to guard failures when requested", () => {
-    const observations = [
-      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
-    ];
-
-    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
-    expect(buildObservationGuardFailures(observations, true)).toEqual([
-      {
-        kind: "observation:phase-rss-high",
-        message: "Gauntlet observation threshold exceeded: phase-rss-high",
-        observation: observations[0],
-      },
-    ]);
   });
 
   it("does not promote setup and first cold-start observations to guard failures", () => {

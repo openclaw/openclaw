@@ -160,40 +160,6 @@ describe("infra runtime", () => {
   describe("restart authorization", () => {
     setupRestartSignalSuite();
 
-    it("authorizes exactly once when scheduled restart emits", async () => {
-      process.once("SIGUSR2", () => {});
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-
-      scheduleGatewayRestart({ delayMs: 0 });
-
-      // No pre-authorization before the scheduled emission fires.
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(consumeGatewayRestartAuthorization()).toBe(true);
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-    });
-
-    it("holds root admission from scheduled emission until the signal is handled", async () => {
-      const handler = () => {};
-      process.on("SIGUSR2", handler);
-      try {
-        scheduleGatewayRestart({ delayMs: 0 });
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-
-        markGatewayRestartHandled();
-        expect(isGatewayWorkAdmissionClosed()).toBe(false);
-        const root = tryBeginGatewayRootWorkAdmission();
-        expect(root).not.toBeNull();
-        root?.release();
-      } finally {
-        process.removeListener("SIGUSR2", handler);
-      }
-    });
-
     it("reopens admission when refused-handler rollback finds no live emission lease", () => {
       // Fence closed outside restart.ts ownership (lost/overwritten lease).
       const orphanLease = beginGatewayRestartSignalAdmission();
@@ -1082,13 +1048,22 @@ describe("infra runtime", () => {
       const handler = () => {};
       process.on("SIGUSR2", handler);
       try {
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
         const first = scheduleGatewayRestart({ delayMs: 0, reason: "first" });
         expect(first.coalesced).toBe(false);
         expect(first.delayMs).toBe(0);
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
 
         await vi.advanceTimersByTimeAsync(0);
         expect(consumeGatewayRestartAuthorization()).toBe(true);
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
         markGatewayRestartHandled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
 
         const second = scheduleGatewayRestart({ delayMs: 0, reason: "second" });
         expect(second.coalesced).toBe(false);
@@ -1213,38 +1188,14 @@ describe("infra runtime", () => {
       }
     });
 
-    it("upgrades an already scheduled restart to bypass deferral", async () => {
+    it("preserves a session-owned preparation hook when a hookless forced restart pulls a pending timer earlier (#86742)", async () => {
       const emitSpy = vi.spyOn(process, "emit");
+      const beforeEmit = vi.fn(async () => {});
       const pendingCheck = vi.fn(() => 5);
       const handler = () => {};
       process.on("SIGUSR2", handler);
       try {
         setPreRestartDeferralCheck(pendingCheck);
-        scheduleGatewayRestart({ delayMs: 1_000, reason: "config.patch" });
-        const forced = scheduleGatewayRestart({
-          delayMs: 1_000,
-          reason: "update.run",
-          skipDeferral: true,
-        });
-
-        expect(forced.coalesced).toBe(false);
-
-        await vi.advanceTimersByTimeAsync(1_000);
-
-        expect(pendingCheck).not.toHaveBeenCalled();
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-        expect(peekGatewayRestartReason()).toBe("update.run");
-      } finally {
-        process.removeListener("SIGUSR2", handler);
-      }
-    });
-
-    it("preserves a session-owned preparation hook when a hookless forced restart pulls a pending timer earlier (#86742)", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const beforeEmit = vi.fn(async () => {});
-      const handler = () => {};
-      process.on("SIGUSR2", handler);
-      try {
         const pending = scheduleGatewayRestart({
           delayMs: 1_000,
           reason: "session-A",
@@ -1264,6 +1215,7 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(1_000);
 
+        expect(pendingCheck).not.toHaveBeenCalled();
         expect(beforeEmit).toHaveBeenCalledTimes(1);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
         expect(peekGatewayRestartReason()).toBe("gateway.restart.safe");

@@ -14,7 +14,7 @@ import {
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
 } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantIdentityName } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -102,7 +102,7 @@ export function* selectSessionEntries(
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
-  sessions: GatewaySessionRow[],
+  { sessions, previousRows }: { sessions: GatewaySessionRow[]; previousRows?: GatewaySessionRow[] },
   policyConfig: OpenClawConfig,
   client?: GatewayClient | null,
 ): SessionsListResult {
@@ -157,7 +157,7 @@ function buildSessionsListResult(
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
     ...(opts.rowMode === "sidebar"
-      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision)
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, previousRows)
       : { sessions }),
   };
 }
@@ -331,7 +331,7 @@ export async function prepareSessionSearchIdentityNames(
   }
   const identities = await pMap(
     [...agentIds],
-    (agentId) => resolveAssistantIdentity({ cfg: prepared.cfg, agentId }),
+    (agentId) => resolveAssistantIdentityName({ cfg: prepared.cfg, agentId }),
     { concurrency: 4 },
   );
   return {
@@ -566,7 +566,7 @@ export async function listProjectedSessions(params: {
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            params.acceptsSerializedJson ? presentation.list(sessions, opts) : sessions,
+            params.acceptsSerializedJson ? presentation.list(sessions, opts) : { sessions },
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );

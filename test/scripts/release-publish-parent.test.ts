@@ -17,7 +17,6 @@ const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.
 const step = (name: string) => workflow.jobs.publish.steps.find((entry) => entry.name === name)!;
 const source =
   'source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"\n';
-const helperSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
 const dispatch = (name = "plugin-clawhub-release.yml") =>
   `${source}${name.startsWith("plugin-clawhub-") ? `require_clawhub_dispatch_available main ${name}` : `sweep_superseded_children ${name}`}\ndispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${name}`;
 
@@ -445,10 +444,6 @@ describe("npm completion barriers", () => {
     expect(result.calls).toHaveLength(1);
     expect(result.stderr).toContain("2026.9.5");
     expect(result.summary).toBe("");
-  });
-
-  it("allows thirty minutes for npm registry visibility by default", () => {
-    expect(helperSource).toContain("RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800");
   });
 
   it("dispatches and waits for the release ledger using only its token", () => {

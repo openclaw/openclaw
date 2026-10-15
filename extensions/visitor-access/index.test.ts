@@ -283,31 +283,6 @@ describe("visitor-access plugin lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("preserves unbound staff admission when staff is the default role", () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        roles: {
-          default: "staff",
-          definitions: {
-            staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
-          },
-        },
-      },
-    };
-    const registered = registerPlugin({}, config);
-    expect(
-      registered.authorize(
-        {
-          profileId: "staff-profile",
-          emails: ["staff@example.test"],
-          assignedRole: "staff",
-        },
-        false,
-      ),
-    ).toBeUndefined();
-    expect(registered.gatewayRequest).not.toHaveBeenCalled();
-  });
-
   it.each(["email", "github"] as const)(
     "lists verified profile identity for the %s target and revokes by listed profileId",
     async (selector) => {

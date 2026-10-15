@@ -1,4 +1,3 @@
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { MemoryReference, MemoryCitation } from "openclaw/plugin-sdk/memory-host-search";
@@ -17,7 +16,7 @@ import {
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
-import { type WikiClaim, type WikiPageSummary, WIKI_PAGE_GROUPS } from "./markdown.js";
+import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 import { isPersonLikePage } from "./person-page.js";
 import {
   isMemoryReferenceLookup,
@@ -34,7 +33,6 @@ import {
   type QueryableWikiPage,
 } from "./query-pages.js";
 import {
-  normalizeLookupKey,
   readSharedMemoryPage,
   searchSharedMemory,
   shouldEnforceSessionVisibility,
@@ -658,22 +656,6 @@ function scorePage(params: {
   return score;
 }
 
-function resolveExactWikiPagePath(lookup: string): string | null {
-  const normalized = normalizeLookupKey(lookup);
-  const segments = normalized.split("/");
-  const [directory, ...pageSegments] = segments;
-  if (
-    !WIKI_PAGE_GROUPS.some(({ dir }) => dir === directory) ||
-    pageSegments.length === 0 ||
-    pageSegments.some((segment) => !segment || segment === "." || segment === "..") ||
-    !normalized.endsWith(".md") ||
-    path.posix.basename(normalized) === "index.md"
-  ) {
-    return null;
-  }
-  return normalized;
-}
-
 function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
   return (
     page.sourceType === "memory-bridge" ||
@@ -892,17 +874,6 @@ async function searchWikiCorpus(params: {
   return results;
 }
 
-async function readExactWikiPage(
-  rootDir: string,
-  lookup: string,
-): Promise<QueryableWikiPage | null> {
-  const relativePath = resolveExactWikiPagePath(lookup);
-  if (!relativePath) {
-    return null;
-  }
-  return (await readQueryableWikiPagesByPaths(rootDir, [relativePath]))[0] ?? null;
-}
-
 export async function searchMemoryWiki(
   input: WikiQueryParams & {
     query: string;
@@ -998,11 +969,8 @@ export async function getMemoryWikiPage(
     const page =
       digestLookupPage ??
       (await resolveQueryableWikiPageForLookup({
+        rootDir: effectiveConfig.vault.path,
         lookup: params.lookup,
-        readExactPage: () => readExactWikiPage(effectiveConfig.vault.path, params.lookup),
-        listFiles: () => listWikiMarkdownFiles(effectiveConfig.vault.path),
-        readPages: (relativePaths) =>
-          readQueryableWikiPagesByPaths(effectiveConfig.vault.path, relativePaths),
         canReadPage,
       }));
     if (page) {

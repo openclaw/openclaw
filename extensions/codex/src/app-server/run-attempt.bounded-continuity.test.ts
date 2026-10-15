@@ -220,7 +220,7 @@ describe("Codex bounded assistant continuity", () => {
     const wrappedPluginSystemContext = (text: string) =>
       `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
     expect(threadStartParams?.developerInstructions).toContain(
-      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
+      `custom codex system\n\n${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`,
     );
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as

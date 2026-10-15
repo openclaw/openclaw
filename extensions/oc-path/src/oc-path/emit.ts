@@ -1,4 +1,4 @@
-import type { MdAst } from "./ast.js";
+import type { AstBlock, MdAst } from "./ast.js";
 import { sourceLineEnding } from "./source.js";
 
 export function replaceMdSource(
@@ -29,6 +29,12 @@ export function replaceMdSource(
     })),
   });
   const lines = edited.raw.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const blocks: AstBlock[] = [];
+  for (const [index, block] of edited.blocks.entries()) {
+    const next = edited.blocks[index + 1];
+    const bodyText = lines.slice(block.line, next ? next.line - 1 : lines.length).join("\n");
+    blocks.push(bodyText === block.bodyText ? block : { ...block, bodyText });
+  }
   return {
     ...edited,
     preamble: lines
@@ -37,12 +43,7 @@ export function replaceMdSource(
         edited.blocks[0] ? edited.blocks[0].line - 1 : lines.length,
       )
       .join("\n"),
-    // oxlint-disable-next-line oxc/no-map-spread -- AST edits must not mutate the caller's nodes.
-    blocks: edited.blocks.map((block, index) => {
-      const next = edited.blocks[index + 1];
-      const bodyText = lines.slice(block.line, next ? next.line - 1 : lines.length).join("\n");
-      return bodyText === block.bodyText ? block : { ...block, bodyText };
-    }),
+    blocks,
   };
 }
 

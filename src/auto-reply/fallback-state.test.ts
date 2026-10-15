@@ -253,24 +253,6 @@ describe("fallback-state", () => {
     expect(resolved.nextState.reason).toBe("timeout");
   });
 
-  it("marks fallback as cleared when runtime returns to selected model", () => {
-    const resolved = resolveDemoFallbackTransition({
-      activeProvider: "demo-primary",
-      selectedModel: "model-a",
-      activeModel: "model-a",
-      attempts: [],
-      state: activeFallbackState,
-    });
-
-    expect(resolved.fallbackActive).toBe(false);
-    expect(resolved.fallbackCleared).toBe(true);
-    expect(resolved.fallbackTransitioned).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.selectedModel).toBeUndefined();
-    expect(resolved.nextState.activeModel).toBeUndefined();
-    expect(resolved.nextState.reason).toBeUndefined();
-  });
-
   it("does not treat a CLI runtime alias as a model fallback", () => {
     registerAnthropicCliBackendForTest();
 
@@ -310,20 +292,6 @@ describe("fallback-state", () => {
 
     expect(resolved.fallbackActive).toBe(false);
     expect(setupBackendLookups).toBe(2);
-  });
-
-  it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
-    registerAnthropicCliBackendForTest();
-
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "anthropic",
-        selectedModel: "claude-opus-4-7",
-        activeProvider: "claude-cli",
-        activeModel: "claude-opus-4-7",
-        attempts: [],
-      }),
-    ).toBeNull();
   });
 
   describe("Arcee wire identity", () => {

@@ -143,36 +143,46 @@ export function bindCronSelfRemovalCommitGuard(
   instance: OperationalRunInstanceRef,
   commitGuard: () => void,
   assertCallerActive: () => void,
-): void {
+): () => void {
   const { admittedJobRuns, selfRemovalOwners } = getCronActiveJobState();
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker && admittedJobRuns.get(marker);
-  if (
-    !marker ||
-    !owner ||
-    owner.context.operationalRunInstance.instanceId !== instance.instanceId ||
-    owner.context.operationalRunInstance.runId !== instance.runId
-  ) {
-    return;
-  }
-  selfRemovalOwners.set(commitGuard, () => {
+  const assertOwner = () => {
+    assertCallerActive();
+    if (
+      !marker ||
+      !owner ||
+      owner.context.operationalRunInstance.instanceId !== instance.instanceId ||
+      owner.context.operationalRunInstance.runId !== instance.runId ||
+      getCurrentCronActiveJobMarker(jobId) !== marker ||
+      admittedJobRuns.get(marker) !== owner
+    ) {
+      throw new TypeError(
+        "Cron self-removal requires the exact live run; the job was not removed.",
+      );
+    }
+    owner.assertActive();
+    return marker;
+  };
+  const selfRemovalGuard = () => {
+    commitGuard();
+    assertOwner();
+  };
+  selfRemovalOwners.set(selfRemovalGuard, () => {
     try {
-      assertCallerActive();
-      owner.assertActive();
-      return getCurrentCronActiveJobMarker(jobId) === marker &&
-        admittedJobRuns.get(marker) === owner
-        ? marker
-        : undefined;
+      return assertOwner();
     } catch {
       return undefined;
     }
   });
+  return selfRemovalGuard;
 }
 
 export type CronActiveJobMarker = {
   jobId: string;
   standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
+  sessionKey?: string;
   stateIdentityKey?: string;
   generation: number;
   token: number;
@@ -263,6 +273,7 @@ export function markCronJobActive(
   jobId: string,
   opts?: {
     agentId?: string;
+    sessionKey?: string;
     stateIdentityKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
@@ -278,6 +289,7 @@ export function markCronJobActive(
   const marker: CronActiveJobMarker = {
     jobId,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.sessionKey ? { sessionKey: opts.sessionKey } : {}),
     ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
@@ -471,17 +483,19 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   );
 }
 
-/** Returns whether any cron run is active in this process. */
-export function hasActiveCronJobs() {
-  return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
-}
-
 /** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
-export function hasActiveCronJobsExceptMarkers(markersToIgnore: readonly CronActiveJobMarker[]) {
+export function hasActiveCronJobsExceptMarkers(
+  markersToIgnore: readonly CronActiveJobMarker[],
+  matches: (marker: CronActiveJobMarker) => boolean = () => true,
+) {
   const state = getCronActiveJobState();
   const ignoredMarkers = new Set(markersToIgnore);
   for (const marker of state.activeJobs.values()) {
-    if (!ignoredMarkers.has(marker) && isMarkerActiveInGeneration(marker, state.generation)) {
+    if (
+      !ignoredMarkers.has(marker) &&
+      isMarkerActiveInGeneration(marker, state.generation) &&
+      matches(marker)
+    ) {
       return true;
     }
   }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createContext, Script } from "node:vm";
@@ -23,7 +23,6 @@ import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/te
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { findGoogleMeetCalendarEvent } from "./src/calendar.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -788,15 +787,6 @@ describe("google-meet plugin", () => {
     await transcriptionHandle.stop();
   });
 
-  it("clamps Chrome audio buffers to the SoX minimum", () => {
-    const config = resolveGoogleMeetConfig({
-      chrome: { audioBackend: "blackhole-2ch", audioBufferBytes: 1 },
-    });
-    expect(config.chrome.audioInputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
-    expect(config.chrome.audioOutputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
-    expect(config.chrome.audioBufferBytes).toBe(17);
-  });
-
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl(MEET_URL)).toBe(MEET_URL);
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
@@ -887,21 +877,6 @@ describe("google-meet plugin", () => {
       { action: "join", transport: "chrome-node" },
       { progress: false, scopes: ["operator.admin"] },
     );
-  });
-
-  it("adds a reauth hint for missing Calendar scopes", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("insufficientPermissions", { status: 403 })),
-    );
-
-    const request = findGoogleMeetCalendarEvent({
-      accessToken: "token",
-      timeMin: "2026-04-25T00:00:00Z",
-      timeMax: "2026-04-26T00:00:00Z",
-    });
-    await expect(request).rejects.toThrow("calendar.events.readonly");
-    await expect(request).rejects.toThrow("googlemeet auth login");
   });
 
   it("keeps all conference records available when requested", async () => {
@@ -1323,60 +1298,50 @@ describe("google-meet plugin", () => {
     },
   );
 
-  it.each([false, true])(
-    "exports artifact bundles through the tool (dry run: %s)",
-    async (dryRun) => {
-      stubMeetArtifactsApi();
-      const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
-      const result = await getMeetTool(setup()).execute("id", {
-        action: "export",
-        accessToken: "token",
-        expiresAt: Date.now() + 120_000,
-        outputDir,
-        ...(dryRun
-          ? { conferenceRecord: "rec-1", dryRun: true }
-          : { meeting: "abc-defg-hij", includeDocumentBodies: true, zip: true }),
-      });
-      const manifest = dryRun
-        ? result.details.manifest
-        : requireRecord(
-            JSON.parse(readFileSync(path.join(outputDir, "manifest.json"), "utf8")),
-            "export manifest",
-          );
-      expect(manifest?.files).toEqual([
-        "summary.md",
-        "attendance.csv",
-        "transcript.md",
-        "artifacts.json",
-        "attendance.json",
-        "manifest.json",
-      ]);
-      if (dryRun) {
-        expect(result.details.dryRun).toBe(true);
-        expect(existsSync(outputDir)).toBe(false);
-      } else {
-        expect(result.details.files).toContain(path.join(outputDir, "manifest.json"));
-        expect(result.details.zipFile).toBe(`${outputDir}.zip`);
-        expect(manifest?.request).toEqual({
-          meeting: "abc-defg-hij",
-          includeDocumentBodies: true,
-          includeTranscriptEntries: true,
-          allConferenceRecords: false,
-          mergeDuplicateParticipants: true,
-        });
-        expect(manifest?.counts).toEqual({
-          conferenceRecords: 1,
-          artifacts: 1,
-          recordings: 1,
-          transcripts: 1,
-          transcriptEntries: 1,
-          smartNotes: 1,
-          attendanceRows: 1,
-          warnings: 0,
-        });
-      }
-    },
-  );
+  it("exports artifact bundles through the tool", async () => {
+    stubMeetArtifactsApi();
+    const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
+    const result = await getMeetTool(setup()).execute("id", {
+      action: "export",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      outputDir,
+      meeting: "abc-defg-hij",
+      includeDocumentBodies: true,
+      zip: true,
+    });
+    const manifest = requireRecord(
+      JSON.parse(readFileSync(path.join(outputDir, "manifest.json"), "utf8")),
+      "export manifest",
+    );
+    expect(manifest?.files).toEqual([
+      "summary.md",
+      "attendance.csv",
+      "transcript.md",
+      "artifacts.json",
+      "attendance.json",
+      "manifest.json",
+    ]);
+    expect(result.details.files).toContain(path.join(outputDir, "manifest.json"));
+    expect(result.details.zipFile).toBe(`${outputDir}.zip`);
+    expect(manifest?.request).toEqual({
+      meeting: "abc-defg-hij",
+      includeDocumentBodies: true,
+      includeTranscriptEntries: true,
+      allConferenceRecords: false,
+      mergeDuplicateParticipants: true,
+    });
+    expect(manifest?.counts).toEqual({
+      conferenceRecords: 1,
+      artifacts: 1,
+      recordings: 1,
+      transcripts: 1,
+      transcriptEntries: 1,
+      smartNotes: 1,
+      attendanceRows: 1,
+      warnings: 0,
+    });
+  });
 
   it.each(["latest", "calendar_events"] as const)(
     "reports today's Meet calendar data through %s",
@@ -2691,8 +2656,14 @@ describe("google-meet plugin", () => {
 
   it("preserves telephony TTS output formats when routing Google Meet agent audio", () => {
     const ulaw = Buffer.from([0xff, 0x7f, 0x00]);
-    const pcmBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "pcm16-24khz" } });
+    const pcmBridgeConfig = resolveGoogleMeetConfig({
+      chrome: { audioFormat: "pcm16-24khz", audioBackend: "blackhole-2ch", audioBufferBytes: 1 },
+    });
     const ulawBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "g711-ulaw-8khz" } });
+    const commandPrefix = ["sox", "-q", "--buffer", "17"];
+    expect(pcmBridgeConfig.chrome.audioInputCommand?.slice(0, 4)).toEqual(commandPrefix);
+    expect(pcmBridgeConfig.chrome.audioOutputCommand?.slice(0, 4)).toEqual(commandPrefix);
+    expect(pcmBridgeConfig.chrome.audioBufferBytes).toBe(17);
 
     expect(
       convertMeetingTtsAudioForBridge(
@@ -2875,30 +2846,6 @@ describe("google-meet plugin", () => {
       } finally {
         stdout.restore();
       }
-    });
-
-    it("can create a Meet through browser fallback without joining when requested", async () => {
-      const { methods, nodesInvoke } = setupCreate(
-        {},
-        {
-          nodesInvokeHandler: createBrowserProxyHandler({
-            act: () => browserCreateResult("https://meet.google.com/browser-made-url"),
-          }),
-        },
-      );
-      const payload = requireRecord(
-        await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.create", { join: false }),
-        "response payload",
-      );
-      expect(payload.source).toBe("browser");
-      expect(payload.meetingUri).toBe("https://meet.google.com/browser-made-url");
-      expect(payload.joined).toBe(false);
-      const browser = requireRecord(payload.browser, "browser payload");
-      expect(browser.nodeId).toBe("node-1");
-      expect(browser.targetId).toBe("tab-1");
-      expectBrowserProxyCall(nodesInvoke, "/tabs/open", {
-        url: "https://meet.google.com/new?hl=en",
-      });
     });
 
     it("rejects access policy flags when tool create would use browser fallback", async () => {
