@@ -325,20 +325,23 @@ describe("Responses temperature support", () => {
 
 describe("Responses reasoning effort", () => {
   it.each([
-    { model: gpt56SolModel, reasoning: "max", expected: "max" },
+    { model: gpt56SolModel, reasoning: "max", resolvedEffort: "max", expected: "max" },
     {
       model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
       reasoning: "high",
+      resolvedEffort: "high",
       expected: "ProviderHigh",
     },
   ] satisfies Array<{
     model: Model<"openai-responses">;
     reasoning: "max" | "high";
+    resolvedEffort: string;
     expected: string;
   }>)(
     "normalizes $reasoning to $expected at the request boundary",
-    ({ model, reasoning, expected }) => {
+    ({ model, reasoning, resolvedEffort, expected }) => {
       const effort = resolveOpenAISimpleReasoningEffort(model, reasoning);
+      expect(effort).toBe(resolvedEffort);
       const params = {} as ResponseCreateParamsStreaming;
       applyCommonResponsesParams(params, model, { messages: [] }, { reasoningEffort: effort });
       expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
