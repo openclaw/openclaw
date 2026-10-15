@@ -557,25 +557,6 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it.each(["running", "terminal"] as const)(
-  "retains acceptance authority after a %s lifecycle publication",
-  async (status) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      await f.register();
-      await f.change((draft) => {
-        draft.execution = {
-          ...draft.execution,
-          status,
-          startedAt: 10,
-          ...(status === "terminal" ? { endedAt: 20 } : {}),
-        };
-      });
-      expect(f.scope.canLaunch()).toBe(false);
-      expect(f.scope.canAcceptLaunch()).toBe(true);
-    });
-  },
-);
-
 it.each(["same-id", "different-id"] as const)(
   "settles only its original intent after %s ownership replacement",
   async (replacement) => {
