@@ -12,6 +12,7 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { classifyMediaReferenceSource } from "../../media/media-reference.js";
 import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
@@ -68,6 +69,13 @@ function resolveTouchedFilePath(params: {
   filePath: string;
 }): string | undefined {
   if (!params.root) {
+    return undefined;
+  }
+  // A media-store identity such as media://inbound/<id> is not a workspace path. Resolving it
+  // against the root would land inside the root (as <root>/media:/inbound/<id>) and project a
+  // phantom file entry that no workspace route can open. The media store owns those bytes and
+  // serves them through the authenticated assistant-media route, not as a workspace file.
+  if (classifyMediaReferenceSource(params.filePath).isMediaStoreUrl) {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
@@ -374,18 +382,24 @@ export async function listSessionWorkspaceFiles(
       : params.diffCwd
         ? insideGitCheckout(params.diffCwd)
         : undefined;
+  // Media-store identities are never workspace files (see resolveTouchedFilePath). Exclude them
+  // at the listing input so an authorized host read, which skips the workspace filter below,
+  // cannot project them as phantom missing entries either.
+  const listableFiles = params.files.filter(
+    (file) => !classifyMediaReferenceSource(file.path).isMediaStoreUrl,
+  );
   const allowOutside =
     root &&
-    params.files.some(
+    listableFiles.some(
       (file) => !resolveTouchedFilePath({ root, fileRoot: params.fileRoot, filePath: file.path }),
     ) &&
     (await params.authorizeHostRead?.());
   const workspaceFiles =
     root && !allowOutside
-      ? params.files.filter((file) =>
+      ? listableFiles.filter((file) =>
           Boolean(resolveTouchedFilePath({ root, fileRoot: params.fileRoot, filePath: file.path })),
         )
-      : params.files;
+      : listableFiles;
   const files = await Promise.all(
     workspaceFiles.map((file) =>
       toSessionFileEntry(file, params.root, params.fileRoot, {
