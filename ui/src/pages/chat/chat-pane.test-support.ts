@@ -527,6 +527,7 @@ export function createTestChatPane(params: {
     value: true,
   });
   const requestUpdate = vi.fn();
+  const chatMessagesBySession: ChatMessageCache = new Map();
   const state = Object.assign(createChatErrorState(), {
     agentsList: null,
     assistantAgentId: null,
@@ -535,6 +536,7 @@ export function createTestChatPane(params: {
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatMessagesBySession,
     chatToolMessages: [],
     chatModelCatalog: [],
     chatModelCatalogError: null,
