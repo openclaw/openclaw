@@ -101,7 +101,7 @@ it("evaluates agent-scoped remembered consent each turn without copying it into 
         permissionMode: "guarded",
       }),
     ).rejects.toThrow("requires Full access");
-    await upsertSessionEntryCore(scope, { sandboxMode: "all" });
+    await upsertSessionEntryCore(scope, { sandboxMode: undefined });
     await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
       "outside the sandbox",
     );
