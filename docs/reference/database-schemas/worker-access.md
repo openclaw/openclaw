@@ -50,6 +50,12 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Retained session-entry cache hits reuse the admission owner's physical identity
+without inspecting the pathname again. Observer reads rely on that same admitted
+reader instead of capturing and rechecking every candidate file independently.
+Committed writes still invalidate retained entries; config routing, native-open
+replacement detection, and live disclosure authority remain with their owners.
+
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
@@ -5105,8 +5111,9 @@ The host retains the last trajectory session's next sequence and retained UTF-8 
 count per physical execution owner. It passes these facts through the existing
 append request inside the writer FIFO, consumes them before awaiting the write,
 and installs the returned committed facts before releasing that FIFO. An unknown
-append outcome leaves the next request cold. Run-start and run-end liveness notices
-preserve these facts. Lifecycle row publications invalidate them; retention
+append outcome leaves the next request cold. Metadata-only session notifications,
+including run-start and run-end liveness notices, preserve these facts. Lifecycle
+row publications and explicit storage invalidations discard them; retention
 invalidates them inside its existing writer operation.
 Ordinary under-budget appends need no window read. Cold appends and actual overflow
 retain the SQL-side byte projection and bounded suffix scan. An hourly retention

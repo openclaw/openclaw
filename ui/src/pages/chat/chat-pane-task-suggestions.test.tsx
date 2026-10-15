@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush, type Setter } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentsListResult,
@@ -15,11 +15,29 @@ import {
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createSessionCapabilityFixture,
   createTestChatPane as createChatPane,
 } from "./chat-pane.test-support.ts";
-import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
+import {
+  ChatTaskSuggestionTray,
+  type ChatTaskSuggestionTrayProps,
+} from "./components/chat-task-suggestions.tsx";
+
+const renders = new WeakMap<HTMLElement, Setter<ChatTaskSuggestionTrayProps>>();
+function renderSuggestions(view: ChatTaskSuggestionTrayProps, container: HTMLElement): void {
+  let setView = renders.get(container);
+  if (!setView) {
+    const [current, update] = createSignal(view);
+    mountSolid(() => <ChatTaskSuggestionTray view={current()} />, { container });
+    setView = update;
+    renders.set(container, setView);
+  } else {
+    setView(view);
+  }
+  flush();
+}
 
 const suggestion: TaskSuggestion = {
   id: "task_123",
@@ -208,8 +226,7 @@ describe("chat pane task suggestion lifecycle", () => {
     pane.onPaneSessionChange = navigate;
     pane.taskSuggestions = [suggestion, next];
     const container = document.createElement("div");
-    const draw = () =>
-      render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
+    const draw = () => renderSuggestions(pane.suggestionChatProps(true, false, false), container);
 
     const pending = pane.resolveTaskSuggestion(suggestion, "accept");
     draw();
@@ -277,8 +294,7 @@ describe("chat pane task suggestion lifecycle", () => {
     ]);
     pane.taskSuggestions = [suggestion];
     const container = document.createElement("div");
-    const draw = () =>
-      render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
+    const draw = () => renderSuggestions(pane.suggestionChatProps(true, false, false), container);
     await pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
     await vi.waitFor(() => {
       draw();
@@ -304,13 +320,13 @@ describe("chat pane task suggestion lifecycle", () => {
     draw();
     expect(input().value).toBe("/projects/app");
     input().value = "relative/path";
-    input().dispatchEvent(new Event("input"));
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     draw();
     expect(container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.disabled).toBe(
       true,
     );
     input().value = "/projects/app";
-    input().dispatchEvent(new Event("input"));
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     draw();
     container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.click();
     await vi.waitFor(() =>
@@ -396,10 +412,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const pending = pane.resolveTaskSuggestion(suggestion, "accept", "worktree");
     const container = document.createElement("div");
     const draw = (connected: boolean) =>
-      render(
-        renderChatTaskSuggestionTray(pane.suggestionChatProps(connected, false, false)),
-        container,
-      );
+      renderSuggestions(pane.suggestionChatProps(connected, false, false), container);
 
     pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null, selfUser: null });
     draw(false);
@@ -483,7 +496,7 @@ describe("chat pane task suggestion lifecycle", () => {
       expect(failure).toContain(result ? "Couldn't confirm" : "Synthetic session creation failed");
       expect(state.chatError).toBe(failure);
       const container = document.createElement("div");
-      render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
+      renderSuggestions(pane.suggestionChatProps(true, false, false), container);
       expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
       expect(container.textContent).toContain(suggestion.prompt);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain(
@@ -607,11 +620,7 @@ describe("chat pane task suggestion lifecycle", () => {
       pane.taskSuggestions = [suggestion];
       const pending = pane.resolveTaskSuggestion(suggestion, "accept");
       const container = document.createElement("div");
-      const draw = () =>
-        render(
-          renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)),
-          container,
-        );
+      const draw = () => renderSuggestions(pane.suggestionChatProps(true, false, false), container);
       recoveryReady = false;
       pane.applyGatewaySnapshot({
         ...snapshot,
@@ -669,7 +678,7 @@ describe("chat pane task suggestion lifecycle", () => {
       const container = document.createElement("div");
       const draw = () => {
         const props = pane.suggestionChatProps(true, false, false);
-        render(renderChatTaskSuggestionTray(props), container);
+        renderSuggestions(props, container);
         return props;
       };
       draw();
