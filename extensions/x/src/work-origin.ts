@@ -2,7 +2,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { XSenderTier } from "./guest-policy.js";
 
-export type XWorkOrigin = {
+type XWorkOrigin = {
   accountId: string;
   postId: string;
   postUrl: string;

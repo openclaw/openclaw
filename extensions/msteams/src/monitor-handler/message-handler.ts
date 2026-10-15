@@ -8,7 +8,6 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -98,8 +97,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       .filter(Boolean)
       .join("\n");
     log.info("received message", {
-      rawText: truncateUtf16Safe(rawText, 50),
-      text: truncateUtf16Safe(text, 50),
+      rawTextLength: rawText.length,
+      textLength: text.length,
       attachments: attachments.length,
       attachmentTypes,
       from: from?.id,

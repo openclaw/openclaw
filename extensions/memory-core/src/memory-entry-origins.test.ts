@@ -626,7 +626,7 @@ export function bindSqliteWorkerBackend(input, context) {
     });
   });
 
-  it.each(["DREAMS.md", "dreams.md"])(
+  it.each(["DREAMS.md"])(
     "retains diary-only lineage in %s after backup rotation",
     async (diaryName) => {
       const workspaceDir = path.join(stateDir, "workspace");

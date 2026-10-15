@@ -600,8 +600,9 @@ export function createWhatsAppReplyPlan(params: {
     didSendReply = true;
     if (shouldLogVerbose()) {
       const reply = resolveSendableOutboundReplyParts(payload);
-      const preview = payload.text != null ? reply.text : "<media>";
-      logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${conversationId}`);
+      logVerbose(
+        `Reply delivered: ${reply.text.length} chars${reply.hasMedia ? " (media)" : ""} -> ${conversationId}`,
+      );
     }
   };
 

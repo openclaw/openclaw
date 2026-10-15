@@ -11,6 +11,7 @@ import { renderJsoncValue } from "../jsonc/emit.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
+import { sourceLineOffset } from "../source.js";
 import type { JsonlAst } from "./ast.js";
 import { pickJsonlLineIndex } from "./line.js";
 import { parseJsonl } from "./parse.js";
@@ -51,11 +52,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     `oc://${path.file}/L${target.line}`,
     editPath.map(String),
   );
-  let lineOffset = 0;
-  for (let line = 0; line < lineIdx; line += 1) {
-    lineOffset = ast.raw.indexOf("\n", lineOffset) + 1;
-  }
-  const start = lineOffset + bomLength + node.offset;
+  const start = sourceLineOffset(ast.raw, target.line) + bomLength + node.offset;
   // Replace only the selected source token. Re-rendering parsed siblings rounds
   // large integers and removes comments, escapes, and record separators.
   const raw = ast.raw.slice(0, start) + replacement + ast.raw.slice(start + node.length);
