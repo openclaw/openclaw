@@ -797,6 +797,13 @@ a later request opens a replacement actor. An actor that returns from an
 operation with a tracked reader still active fails settlement and retires
 immediately.
 
+At the broker's 64-client limit, new opens can retire an owner-confirmed idle
+shared-state client before its normal deadline. Accepted scopes, pending commands,
+maintenance clients, and clients from another runtime generation are protected.
+Retirement joins native cleanup before admission resumes, and later use reopens
+the retired client transparently. If no client is eligible, the capacity refusal
+remains; the limit and stored data do not change.
+
 Observations belong to the open database handle in the Gateway process. They
 reset when that handle is replaced or the Gateway restarts. Status and Doctor
 read the recorded observation through the existing status RPC; they do not run

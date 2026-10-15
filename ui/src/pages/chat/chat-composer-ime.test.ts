@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createComposerContainer,
   createComposerProps,
   renderComposerFixture,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -59,7 +59,7 @@ describe("chat composer IME composition", () => {
       const onDraftChange = vi.fn();
       const props = createComposerProps({ onSend, onDraftChange, sendShortcut });
       const container = createComposerContainer();
-      render(renderChatComposer(props), container);
+      renderComposerInto(container, props);
       const textarea = getComposerTextarea(container);
       textarea.style.height = "42px";
       textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -73,7 +73,7 @@ describe("chat composer IME composition", () => {
       const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
       textarea.dispatchEvent(end);
       expect(textarea.style.height).not.toBe("42px");
-      render(renderChatComposer({ ...props, draft: "日本語" }), container);
+      renderComposerInto(container, { ...props, draft: "日本語" });
 
       for (const offset of [confirmOffset, 99, 100]) {
         const enter = new KeyboardEvent("keydown", {

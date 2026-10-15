@@ -85,6 +85,7 @@ export class SidebarSessionProjection {
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
   private readonly childModes = new Map<string, SidebarExpansionMode>();
+  private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredChildrenPending = false;
   private readonly heldSubtitles = new Map<
     string,
@@ -184,6 +185,7 @@ export class SidebarSessionProjection {
         previous.connectionIdentity !== input.connectionIdentity)
     ) {
       this.childModes.clear();
+      this.observedChildKeys.clear();
     }
     this.restoredChildrenPending = false;
     if (scopeChanged) {
@@ -204,12 +206,27 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const staleKeys = new Set([...this.childModes.keys(), ...this.heldSubtitles.keys()]);
+    const staleKeys = new Set([
+      ...this.childModes.keys(),
+      ...this.observedChildKeys.keys(),
+      ...this.heldSubtitles.keys(),
+    ]);
     const observeTree = (session: SidebarRecentSession) => {
       staleKeys.delete(session.key);
-      if (session.containsActiveDescendant && !this.childModes.has(session.key)) {
+      const previousChildren = this.observedChildKeys.get(session.key);
+      const mode = this.childModes.get(session.key);
+      // New children reveal their parent once; ordinary refreshes and reordering
+      // must not undo an explicit collapse or the operator's Show more choice.
+      const hasNewChild =
+        previousChildren !== undefined &&
+        session.childSessionKeys.some((key) => !previousChildren.includes(key));
+      if (
+        (mode === undefined && session.containsActiveDescendant) ||
+        (hasNewChild && mode !== "expanded-fully")
+      ) {
         this.childModes.set(session.key, "expanded");
       }
+      this.observedChildKeys.set(session.key, session.childSessionKeys);
       this.observeSubtitle(session, input.subtitle);
       for (const child of session.children) {
         observeTree(child);
@@ -218,6 +235,7 @@ export class SidebarSessionProjection {
     input.rows.forEach(observeTree);
     for (const key of staleKeys) {
       this.childModes.delete(key);
+      this.observedChildKeys.delete(key);
       this.heldSubtitles.delete(key);
     }
 
@@ -337,6 +355,7 @@ export class SidebarSessionProjection {
     rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[],
   ): void {
     this.childModes.clear();
+    this.observedChildKeys.clear();
     for (const row of rows) {
       if (row.childrenDisplayMode !== undefined) {
         this.childModes.set(row.key, row.childrenDisplayMode);

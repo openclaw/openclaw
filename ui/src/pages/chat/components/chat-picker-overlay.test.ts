@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
@@ -8,16 +9,25 @@ import {
   getRenderedModalDialog,
   installDialogPolyfill,
 } from "../../../test-helpers/modal-dialog.ts";
+import { settleWebAwesome } from "../../../test-helpers/web-awesome.ts";
 import "../../../components/modal-dialog.ts";
 import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
-  bindChatPickerOverlay,
+  createChatPickerOverlay,
   installChatComposerPickerDismissal,
-  handleChatComposerDetailsToggle,
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
+
+function bindPicker(details: HTMLDetailsElement): void {
+  const bind = createRoot((dispose) => {
+    onTestFinished(dispose);
+    return createChatPickerOverlay();
+  });
+  bind(details);
+  flush();
+}
 
 describe("chat picker overlay", () => {
   afterEach(() => {
@@ -184,7 +194,7 @@ describe("chat picker overlay", () => {
     document.addEventListener("keydown", dismissLegacyDetails, true);
     onTestFinished(() => document.removeEventListener("keydown", dismissLegacyDetails, true));
     onTestFinished(installChatComposerPickerDismissal(document));
-    onTestFinished(bindChatPickerOverlay(picker));
+    bindPicker(picker);
     const trigger = picker.querySelector("summary")!;
     const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
@@ -380,16 +390,17 @@ describe("chat picker overlay", () => {
     effortPicker.className = "chat-controls__effort-picker";
     const effortTrigger = document.createElement("summary");
     const effortControl = document.createElement("input");
-    effortPicker.append(effortTrigger, effortControl);
+    const effortSurface = document.createElement("div");
+    effortSurface.setAttribute("data-anchored-overlay", "");
+    effortSurface.setAttribute("popover", "manual");
+    effortSurface.append(effortControl);
+    effortPicker.append(effortTrigger, effortSurface);
     settings.append(modelPicker, effortPicker);
     composer.append(settings);
     document.body.append(composer);
 
     effortPicker.open = true;
-    effortPicker.addEventListener("toggle", handleChatComposerDetailsToggle);
-    onTestFinished(() =>
-      effortPicker.removeEventListener("toggle", handleChatComposerDetailsToggle),
-    );
+    bindPicker(effortPicker);
     effortPicker.dispatchEvent(new Event("toggle"));
     effortControl.focus();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -398,7 +409,7 @@ describe("chat picker overlay", () => {
     expect(document.activeElement).toBe(effortTrigger);
   });
 
-  it("keeps ancestor pickers open and dismisses nested menus from the inside out", () => {
+  it("keeps ancestor pickers open and dismisses nested menus from the inside out", async () => {
     onTestFinished(installChatComposerPickerDismissal(document));
     const composer = document.createElement("div");
     composer.className = "agent-chat__input";
@@ -417,6 +428,7 @@ describe("chat picker overlay", () => {
     dropdown.addEventListener("wa-show", handleChatComposerDropdownShow);
     dropdown.dispatchEvent(new Event("wa-show"));
 
+    await settleWebAwesome(composer);
     expect(model.open).toBe(true);
     expect(peer.open).toBe(false);
     accountTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

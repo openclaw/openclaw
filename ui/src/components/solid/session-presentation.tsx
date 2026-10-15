@@ -359,18 +359,17 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
       Boolean(idleChild()),
   );
   return (
-    <Show
-      when={(props.includeChildren && props.childCount > 0) || summary().unread > 0 || hasState()}
-    >
+    <Show when={props.childCount > 0 || summary().unread > 0 || hasState()}>
       <span class="sidebar-session-team-state">
-        <Show when={(props.includeChildren && props.childCount > 0) || summary().unread > 0}>
+        <Show when={props.childCount > 0 || summary().unread > 0}>
           <span class="sidebar-session-team-state__counts">
-            <Show when={props.includeChildren && props.childCount > 0}>
+            <Show when={props.childCount > 0}>
               <span
                 class="sidebar-child-session-toggle__count"
                 role="img"
                 aria-label={t("sessionsView.childSessions") + ": " + props.childCount}
               >
+                <Icon name="gitFork" />
                 {props.childCount}
               </span>
             </Show>

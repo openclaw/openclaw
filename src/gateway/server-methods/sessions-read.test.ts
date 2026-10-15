@@ -185,7 +185,8 @@ test("agents.list starts legacy scalar catalog reads before awaiting siblings", 
   const released = createDeferred();
   const started: Array<string | undefined> = [];
   const result = listAgentIdsViaRpc(false, {
-    readPreparedGatewayModelCatalog: async ({ agentId } = {}) => {
+    readPreparedGatewayModelCatalog: async (params = {}) => {
+      const { agentId } = params;
       started.push(agentId);
       firstStarted.resolve();
       await released.promise;

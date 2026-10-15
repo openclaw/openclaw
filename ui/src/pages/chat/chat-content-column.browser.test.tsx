@@ -1,13 +1,12 @@
-import { html, nothing, render } from "lit";
+import { createSignal, For } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
-import {
-  renderStreamGroup,
-  renderWorkGroupSummary,
-} from "./components/chat-message-stream.test-support.ts";
+import { MessageGroup } from "./components/chat-message-group-view.tsx";
+import { StreamGroup, WorkGroupSummary } from "./components/chat-message-stream-view.tsx";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat.ts";
@@ -30,7 +29,7 @@ const options = {
   showReasoning: false,
 };
 
-function group(key: string, role: string, content: unknown, extra: Partial<MessageGroup> = {}) {
+function group(key: string, role: string, content: unknown, extra: Partial<MessageGroupData> = {}) {
   const [prepared] = groupMessages([
     { kind: "message", key, message: { role, content, timestamp: 1_000 } },
   ]);
@@ -78,10 +77,12 @@ const fixtures = [
 describe("shared chat content column", () => {
   let container: HTMLDivElement | undefined;
   let previousTheme: string | undefined;
+  let view: ReturnType<typeof mountSolid> | undefined;
 
   afterEach(() => {
     if (container) {
-      render(nothing, container);
+      view?.unmount();
+      view = undefined;
       container.remove();
       container = undefined;
     }
@@ -102,6 +103,57 @@ describe("shared chat content column", () => {
         previousTheme = document.documentElement.dataset.themeMode;
         document.documentElement.dataset.themeMode = theme;
         document.body.append(container);
+        const [directLayout, setDirectLayout] = createSignal(false);
+        view = mountSolid(
+          () => (
+            <div
+              class={["chat-thread", { "chat-thread--direct": directLayout() }]}
+              style={{ height: "850px" }}
+            >
+              <div class="chat-thread-inner">
+                <MessageGroup
+                  group={group("own", "user", paragraph, {
+                    sender: {
+                      id: "alice",
+                      name: "Alice Chen",
+                      identity: { type: "profile", id: "alice" },
+                    },
+                  })}
+                  options={options}
+                />
+                <For each={fixtures}>
+                  {(fixture) => (
+                    <MessageGroup
+                      group={fixture}
+                      options={{ ...options, isToolExpanded: () => true }}
+                    />
+                  )}
+                </For>
+                <WorkGroupSummary
+                  item={{ key: "summary", durationMs: 2_000, groups: [] }}
+                  options={{ expanded: false, onToggle: () => {} }}
+                />
+                <StreamGroup
+                  options={{}}
+                  parts={[
+                    {
+                      kind: "stream",
+                      key: "stream",
+                      text: code,
+                      startedAt: 1_000,
+                      isStreaming: true,
+                    },
+                  ]}
+                />
+                <StreamGroup
+                  options={{}}
+                  parts={[{ kind: "reading-indicator", key: "working", startedAt: 1_000 }]}
+                />
+              </div>
+            </div>
+          ),
+          { container },
+        );
 
         for (const direct of [false, true]) {
           for (const direction of ["ltr", "rtl"]) {
@@ -122,43 +174,8 @@ describe("shared chat content column", () => {
               }
               container.dir = direction;
               container.style.width = narrow ? "min(100%, 480px)" : "100%";
-              render(
-                html`
-                  <div
-                    class=${`chat-thread${direct ? " chat-thread--direct" : ""}`}
-                    style="height: 850px"
-                  >
-                    <div class="chat-thread-inner">
-                      ${renderMessageGroup(
-                        group("own", "user", paragraph, {
-                          sender: {
-                            id: "alice",
-                            name: "Alice Chen",
-                            identity: { type: "profile", id: "alice" },
-                          },
-                        }),
-                        options,
-                      )}
-                      ${fixtures.map((fixture) =>
-                        renderMessageGroup(fixture, {
-                          ...options,
-                          isToolExpanded: () => true,
-                        }),
-                      )}
-                      ${renderWorkGroupSummary(
-                        { key: "summary", durationMs: 2_000, groups: [] },
-                        {
-                          expanded: false,
-                          onToggle: () => {},
-                        },
-                      )}
-                      ${renderStreamGroup([{ kind: "stream", key: "stream", text: code, startedAt: 1_000, isStreaming: true }])}
-                      ${renderStreamGroup([{ kind: "reading-indicator", key: "working", startedAt: 1_000 }])}
-                    </div>
-                  </div>
-                `,
-                container,
-              );
+              setDirectLayout(direct);
+              flush();
               await new Promise<void>((resolve) => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
               });

@@ -298,7 +298,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
             {childrenExpanded() ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}
           </span>
-          {childrenExpanded() || team() ? undefined : (
+          {team() ? undefined : (
             <span class="sidebar-child-session-toggle__count">
               {session().childSessionKeys.length}
             </span>

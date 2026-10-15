@@ -1,6 +1,7 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import type { TemplateResult, nothing } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -157,7 +158,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
-  composerControls?: TemplateResult | typeof nothing;
+  composerControls?: TemplateResult | DirectiveResult | typeof nothing;
   footerContent?: JSX.Element;
   composerRecovery?: TemplateResult | typeof nothing;
   notices?: JSX.Element;
