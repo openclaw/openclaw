@@ -1,14 +1,9 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
-/**
- * Projects OpenClaw context-engine assemblies into Codex prompt text while
- * preserving safety boundaries and redacting tool payloads.
- */
 import {
   isOpenClawRuntimeContextCustomMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
@@ -448,10 +443,12 @@ function renderMessageBody(
     if (options.toolPayloadMode === "elide") {
       return "";
     }
-    return truncateText(
-      `tool result: ${message.toolCallId}\n${stableJson(renderCanonicalToolResultPayload(message))}`,
-      options.maxTextPartChars,
-    );
+    const body = message.content
+      .map((part) => renderMessagePart(part, options))
+      .filter((value) => value.length > 0)
+      .join("\n")
+      .trim();
+    return `tool result: ${message.toolCallId}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`;
   }
   if (!hasMessageContent(message)) {
     return "";
@@ -529,31 +526,9 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
       continue;
     }
-    payload[key] = redactPreservedToolValue(key, value);
+    payload[key] = preserveToolResultValue(value);
   }
   return payload;
-}
-
-function renderCanonicalToolResultPayload(
-  message: Extract<AgentMessage, { role: "toolResult" }>,
-): Record<string, unknown> {
-  return {
-    toolCallId: redactSensitiveFieldValue("toolCallId", message.toolCallId),
-    toolName: redactSensitiveFieldValue("toolName", message.toolName),
-    isError: message.isError,
-    content: message.content.map((part) => {
-      if (part.type === "text") {
-        return {
-          type: "text",
-          text: redactSensitiveFieldValue("text", redactToolPayloadText(part.text)),
-        };
-      }
-      if (part.type === "image") {
-        return "[image omitted]";
-      }
-      return "[non-text content omitted]";
-    }),
-  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([
@@ -570,7 +545,7 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
-      payload[key] = redactSensitiveFieldValue(key, value);
+      payload[key] = value;
     }
   }
   return payload;
@@ -603,15 +578,9 @@ function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): 
   return `[${typeof value}]`;
 }
 
-// Tool results are the useful carried context for a fresh Codex thread, so keep
-// their content while applying the same text/field redaction used for tool logs.
-function redactPreservedToolValue(
-  key: string,
-  value: unknown,
-  seen = new WeakSet<object>(),
-): unknown {
+function preserveToolResultValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValue(key, redactToolPayloadText(value));
+    return value;
   }
   if (
     value === null ||
@@ -626,7 +595,7 @@ function redactPreservedToolValue(
       return "[Circular]";
     }
     seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+    return value.map((entry) => preserveToolResultValue(entry, seen));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
@@ -635,7 +604,7 @@ function redactPreservedToolValue(
     seen.add(value);
     const out: Record<string, unknown> = {};
     for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+      out[childKey] = preserveToolResultValue(child, seen);
     }
     return out;
   }

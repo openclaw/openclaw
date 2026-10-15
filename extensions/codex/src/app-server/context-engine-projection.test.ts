@@ -277,7 +277,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain('path: ".env"');
   });
 
-  it("preserves redacted tool payload context for thread bootstrap projections", async () => {
+  it("preserves readable tool payload context for thread bootstrap projections", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [
         {
@@ -318,13 +318,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain('"token": "[string]"');
     expect(result.promptText).toContain('"cmd": "[string]"');
     expect(result.promptText).toContain('"recursive": "[boolean]"');
-    expect(result.promptText).toContain("tool result: call-1");
-    expect(result.promptText).toContain('"content"');
-    expect(result.promptText).toContain("OPENAI_API_KEY=");
-    expect(result.promptText).toContain("status ok");
+    expect(result.promptText).toContain(
+      "tool result: call-1 (exec)\nOPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+    );
     expect(result.promptText).toContain("[image omitted]");
     expect(result.promptText).not.toContain("cat .env");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
     expect(result.promptText).not.toContain("private-base64");
     expect(result.promptText).not.toContain("private-detail");
     expect(result.promptText).not.toContain("1723456789");
