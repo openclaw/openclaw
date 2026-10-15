@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { incomingReview } from "./correction-review.mjs";
+import { incomingReview } from "./incoming-review.mjs";
 import { validateReviewArtifacts } from "./review-artifacts.mjs";
 import { worktreeEntry } from "./review-transition-state.mjs";
 
