@@ -1,28 +1,25 @@
 /** Leaf catalog cost rule shared by the catalog writer and the persisted-catalog repair owner. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-export type ProviderCatalogModelsConfig = NonNullable<OpenClawConfig["models"]>;
-export type ProviderCatalogModelConfig = NonNullable<
-  NonNullable<ProviderCatalogModelsConfig["providers"]>[string]["models"]
->[number];
+const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
 
-/** Completes a partial cost with zeroed rates; an absent cost stays absent. */
-export function normalizeModelCostForCatalog(
-  model: ProviderCatalogModelConfig,
-): ProviderCatalogModelConfig {
-  const cost = model.cost;
+/** Completes numeric partial costs; absent or malformed pricing stays unchanged. */
+export function normalizeModelCostForCatalog<T extends object>(model: T): T {
+  const cost = "cost" in model ? model.cost : undefined;
   if (
-    !cost ||
-    (["input", "output", "cacheRead", "cacheWrite"] as const).every(
-      (key) => cost[key] !== undefined,
-    )
+    !isRecord(cost) ||
+    COST_FIELDS.every((key) => cost[key] !== undefined) ||
+    COST_FIELDS.some((key) => {
+      const value = cost[key];
+      return value !== undefined && (typeof value !== "number" || !Number.isFinite(value));
+    })
   ) {
     return model;
   }
   return {
     ...model,
     cost: {
-      ...model.cost,
+      ...cost,
       input: cost.input ?? 0,
       output: cost.output ?? 0,
       cacheRead: cost.cacheRead ?? 0,

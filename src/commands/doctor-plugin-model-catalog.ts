@@ -52,8 +52,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     const migrations = inspected.catalogs;
     const repairablePluginIds = loadPersistedPluginModelCatalogsReadOnly(agentDir)
       .filter(({ contents }) => {
-        const repair = repairPluginModelCatalogTransportMetadata(contents);
-        return repair.removedModelCount > 0 || repair.completedCostModelCount > 0;
+        return repairPluginModelCatalogTransportMetadata(contents).contents !== contents;
       })
       .map(({ pluginId }) => pluginId);
     agents.push({ agentDir, migrations, warnings: agentWarnings, repairablePluginIds });
@@ -98,11 +97,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   }
 
   let migrated = 0;
-  const repairs: Array<{
-    pluginId: string;
-    removedModelCount: number;
-    completedCostModelCount: number;
-  }> = [];
+  const repairs: ReturnType<typeof repairPersistedPluginModelCatalogs> = [];
   for (const agent of agents) {
     // Fix also retires verified orphaned migration recovery rows when no sidecar remains.
     const result = migrateLegacyPluginModelCatalogs({

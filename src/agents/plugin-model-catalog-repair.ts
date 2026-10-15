@@ -10,8 +10,6 @@ type PluginModelCatalogRepair = {
   completedCostModelCount: number;
 };
 
-type CatalogModel = Parameters<typeof normalizeModelCostForCatalog>[0];
-
 function hasCatalogApi(value: unknown): boolean {
   return typeof value === "string" && value.length > 0;
 }
@@ -21,11 +19,7 @@ export function isGeneratedPluginModelCatalog(value: unknown): value is Record<s
   return isRecord(value) && value.generatedBy === PLUGIN_MODEL_CATALOG_GENERATED_BY;
 }
 
-/**
- * Removes model rows whose transport API cannot be derived without inventing semantics,
- * and completes a supplied-but-partial `cost` with the writer's own rule so a catalog
- * persisted before that rule existed still passes the registry schema.
- */
+/** Removes unusable transport rows and completes numeric partial costs with the writer's rule. */
 export function repairPluginModelCatalogTransportMetadata(
   contents: string,
 ): PluginModelCatalogRepair {
@@ -62,8 +56,7 @@ export function repairPluginModelCatalogTransportMetadata(
         models.push(model);
         continue;
       }
-      // SAFETY: isRecord(model) holds above; the helper only reads `cost` and spreads the row.
-      const completed = normalizeModelCostForCatalog(model as CatalogModel);
+      const completed = normalizeModelCostForCatalog(model);
       if (completed !== model) {
         completedCostModelCount += 1;
         providerChanged = true;

@@ -94,7 +94,7 @@ export function repairPersistedPluginModelCatalogs(params: {
 }): Array<{ pluginId: string; removedModelCount: number; completedCostModelCount: number }> {
   const repairs = params.catalogs.flatMap((catalog) => {
     const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
-    return repaired.removedModelCount > 0 || repaired.completedCostModelCount > 0
+    return repaired.contents !== catalog.contents
       ? [
           {
             ...catalog,

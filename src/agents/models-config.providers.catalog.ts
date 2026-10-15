@@ -8,18 +8,17 @@ import {
   mergeNormalizedProviderModel,
 } from "../config/model-provider-rows.js";
 import type { ModelProviderConfig as ProviderConfig } from "../config/types.models.js";
-import {
-  normalizeModelCostForCatalog,
-  type ProviderCatalogModelConfig,
-  type ProviderCatalogModelsConfig,
-} from "./model-cost-normalization.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
   type ModelManifestNormalizationContext,
 } from "./model-ref-shared.js";
 
-type ModelsConfig = ProviderCatalogModelsConfig;
-type ProviderModelConfig = ProviderCatalogModelConfig;
+type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ProviderModelConfig = NonNullable<
+  NonNullable<ModelsConfig["providers"]>[string]["models"]
+>[number];
 
 function normalizeProviderModelsForConfig(
   providerKey: string,
