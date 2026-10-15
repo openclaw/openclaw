@@ -5,7 +5,8 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { scopedAgentIdForSession, type SessionPatchResult } from "../../lib/sessions/index.ts";
+import type { SessionPatchResult } from "../../lib/sessions/index.ts";
+import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 registerModelControlsEnglish();
@@ -39,7 +40,7 @@ export async function confirmNativeRuntimePermissionRecovery(
     return null;
   }
   const scope = host.sessions.captureConnectionScope();
-  const agentId = options.agentId ?? scopedAgentIdForSession(host, sessionKey);
+  const agentId = options.agentId ?? resolveUiSelectedSessionAgentId(host, sessionKey);
   if (!scope || !agentId) {
     return null;
   }
