@@ -38,6 +38,11 @@ During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
 
+After the HTTP listener binds, interrupted main-session marking overlaps session
+projection preparation. Both settle before channels start and the Gateway reports
+ready. Post-ready recovery reuses the completed store checks instead of repeating
+that scan.
+
 ## What survives a restart
 
 | State                          | Storage                                            | Behavior across restart                                                 |

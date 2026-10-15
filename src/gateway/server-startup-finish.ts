@@ -82,11 +82,8 @@ export async function finishGatewayStartup(params: {
     workerPlacementRuntime,
     terminalLaunchPolicy,
     terminalSessions,
-    nodeRegistry,
-    nodeDesktopService,
     startChannel,
     stopChannel,
-    getAttachedGatewayMethodRegistry,
     lifecycle,
     startupState,
     pluginRuntime,
@@ -97,30 +94,17 @@ export async function finishGatewayStartup(params: {
     authRateLimiter,
     browserAuthRateLimiter,
     nodeReapprovalCoordinator,
-    isGatewayStartupPending,
-    attachedGatewayExtraHandlers,
-    startListening,
     gatewayPluginConfigAtStart,
     startupActivationSourceConfig,
     defaultWorkspaceDir,
-    coreGatewayMethodNames,
-    pluginHostServices,
-    baseMethods,
-    startupPluginIds,
     pluginManifestRecords,
     pluginMetadataSnapshot,
-    pluginLookUpTable,
     ambientEnvTriggers,
-    prepareAttachedPluginRuntime,
-    refreshAttachedGatewayDiscovery,
-    wss,
     startChannels,
     broadcastPluginEvent,
     controlUiRootLifecycle,
     sidecarStartup,
-    startEarlyRuntime,
     cfgAtStart,
-    preauthConnectionBudget,
     releaseStartupAccountStarts,
     cronReconciliation,
     cronStartState,
@@ -159,11 +143,11 @@ export async function finishGatewayStartup(params: {
   }
   await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsConnectionHandler({
-      wss,
+      wss: runtime.wss,
       clients,
       connectionWork: runtime.connectionWork,
       bootId: params.bootId,
-      preauthConnectionBudget,
+      preauthConnectionBudget: runtime.preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
@@ -173,7 +157,7 @@ export async function finishGatewayStartup(params: {
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
-      isStartupPending: isGatewayStartupPending,
+      isStartupPending: runtime.isGatewayStartupPending,
       isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
       admitsNodeSetupCompletion: workerEnvironmentService?.admitsNodeSetupCompletion,
       gatewayMethods: runtimeState.gatewayMethods,
@@ -181,18 +165,33 @@ export async function finishGatewayStartup(params: {
       logGateway: log,
       logHealth,
       logWsControl,
-      extraHandlers: attachedGatewayExtraHandlers,
-      getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
+      extraHandlers: runtime.attachedGatewayExtraHandlers,
+      getMethodRegistry: () => runtime.getAttachedGatewayMethodRegistry(),
       ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
       broadcast,
       refreshHealthSnapshot: gatewayRequestContext.refreshHealthSnapshot,
       buildRequestContext: () => gatewayRequestContext,
     }),
   );
-  await startupTrace.measure("http.listen", () => startListening());
+  await startupTrace.measure("http.listen", () => runtime.startListening());
   startupTrace.mark("http.bound");
-  // Projection preparation and early services are independent. Join both before
-  // failure cleanup so early-service handles are installed before they are closed.
+  const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
+  const mainSessionOrphansReady =
+    minimalTestGateway || opts.updateCanary
+      ? Promise.resolve()
+      : import("./server-startup-observers.js").then(({ markGatewayStartupMainSessionOrphans }) =>
+          markGatewayStartupMainSessionOrphans(
+            {
+              gatewayPluginConfigAtStart,
+              isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
+              scheduler: runtime.scheduler,
+              startupTrace,
+              log,
+            },
+            mainSessionRecoveryStartupCheckedStorePaths,
+          ),
+        );
+  // Join independent preparation before channels start or failure cleanup retires its owners.
   const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(async () => {
     kernel.setDispatchReady(true);
     if (!minimalTestGateway && !opts.updateCanary) {
@@ -213,10 +212,11 @@ export async function finishGatewayStartup(params: {
       });
     }
   });
-  const earlyRuntimeReady = startEarlyRuntime();
-  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady]);
+  const earlyRuntimeReady = runtime.startEarlyRuntime();
+  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady, mainSessionOrphansReady]);
   await requestRuntimeReady;
   const earlyRuntime = await earlyRuntimeReady;
+  await mainSessionOrphansReady;
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
@@ -291,7 +291,7 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
-          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
+          mainSessionRecoveryStartupCheckedStorePaths,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
@@ -304,11 +304,11 @@ export async function finishGatewayStartup(params: {
               activationSourceConfig: startupActivationSourceConfig,
               workspaceDir: runtime.pluginWorkspaceDir,
               log,
-              baseMethods,
-              coreGatewayMethodNames,
-              hostServices: pluginHostServices,
-              startupPluginIds,
-              pluginLookUpTable,
+              baseMethods: runtime.baseMethods,
+              coreGatewayMethodNames: runtime.coreGatewayMethodNames,
+              hostServices: runtime.pluginHostServices,
+              startupPluginIds: runtime.startupPluginIds,
+              pluginLookUpTable: runtime.pluginLookUpTable,
               startupTrace,
               ambientEnvTriggers,
               resolveGatewayContext: resolvePluginGatewayContext,
@@ -321,7 +321,7 @@ export async function finishGatewayStartup(params: {
           },
           onStartupPluginsLoaded: async (loaded) => {
             const activationCleanup: Promise<void>[] = [];
-            const prepared = await prepareAttachedPluginRuntime(loaded, (completion) =>
+            const prepared = await runtime.prepareAttachedPluginRuntime(loaded, (completion) =>
               activationCleanup.push(completion),
             );
             try {
@@ -340,7 +340,7 @@ export async function finishGatewayStartup(params: {
               for (const client of clients) {
                 reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
               }
-              await refreshAttachedGatewayDiscovery(
+              await runtime.refreshAttachedGatewayDiscovery(
                 loaded.pluginRegistry,
                 startupPluginRuntimeClaim,
               );
@@ -555,14 +555,14 @@ export async function finishGatewayStartup(params: {
           DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
       );
       disconnectDisallowedGatewayPolicyClients(clients.authorityClients, nextConfig);
-      for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
+      for (const nodeSession of runtime.nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
       const reconciled = await Promise.allSettled([
         runtime.hostDesktopService.reconcileRuntimePolicy(),
         runtime.gatewayComputerService.reconcileRuntimePolicy(),
         workerEnvironmentService?.reconcileDesktopPolicy(),
-        nodeDesktopService.reconcileRuntimePolicy(),
+        runtime.nodeDesktopService.reconcileRuntimePolicy(),
         runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
         (async () => {
           const customPluginUiEnabled =
