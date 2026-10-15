@@ -108,6 +108,7 @@ function writeExec(response: ServerResponse, command: string, ordinal: number) {
 
 async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   const toolStarted = createDeferred();
+  const resetResponseClosed = createDeferred();
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   let effects = 0;
@@ -200,6 +201,9 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             return;
           }
           expect(input).toContain("interrupted by a gateway restart");
+          if (scenario.name === "reset") {
+            response.once("close", () => resetResponseClosed.resolve());
+          }
           scenario.recoverySeen.resolve();
           if (scenario.phase === "held-recovery") {
             writePartial(response, scenario, ordinal);
@@ -254,6 +258,7 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
     baseUrl: `${origin}/v1`,
     failed: failed.promise,
     toolStarted: toolStarted.promise,
+    resetResponseClosed: resetResponseClosed.promise,
     effects: () => effects,
     forbiddenEffects: () => forbiddenEffects,
     close: () =>
@@ -513,20 +518,11 @@ it(
           void finishing.catch(() => {});
           await gate(reset.recoverySeen.promise);
           phase = "revoke-recovery";
-          const beforeReset = await client!.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const resetRunId = beforeReset.sessions.find((row) => row.key === reset.key)
-            ?.activeRunIds?.[0];
-          expect(resetRunId).toBeTypeOf("string");
-          const resetOutcome = client!.request("agent.wait", {
-            runId: resetRunId,
-            timeoutMs: 60_000,
-          });
-          void resetOutcome.catch(() => {});
-          await client!.request("sessions.reset", { key: reset.key, reason: "reset" });
+          expect(
+            await client!.request("sessions.reset", { key: reset.key, reason: "reset" }),
+          ).toMatchObject({ ok: true });
+          await gate(provider.resetResponseClosed);
           reset.releaseResponse.resolve();
-          expect(await gate(resetOutcome)).toMatchObject({ status: "error" });
           reset.phase = "cancelled";
           await gate(finishing);
           const afterReset = await client!.request<SessionsListResult>("sessions.list", {
