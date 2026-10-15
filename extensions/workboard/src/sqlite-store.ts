@@ -76,12 +76,11 @@ export function createWorkboardSqliteStores(options: {
     }
     return result;
   }
-  async function run<Args, T>(args: Args, operation: (captured: Args) => Promise<T>): Promise<T> {
+  async function run<T>(operation: () => Promise<T>): Promise<T> {
     if (sealed) {
       throw new Error("Workboard SQLite connection is closed.");
     }
-    const captured = structuredClone(args);
-    const pending = operation(captured);
+    const pending = operation();
     operations.add(pending);
     try {
       return await pending;
@@ -89,10 +88,9 @@ export function createWorkboardSqliteStores(options: {
       operations.delete(pending);
     }
   }
-  function bindOperation<Args extends unknown[], Result>(
-    operation: (input: { args: Args }) => Promise<Result>,
-  ): (...args: Args) => Promise<Result> {
-    return (...args) => run(args, (captured) => operation({ args: captured }));
+  function bindOperation<K extends keyof WorkboardSqliteOperations>(type: K, writes = false) {
+    return (...args: WorkboardSqliteOperations[K]["input"]["args"]) =>
+      run(() => execute(type, { args }, writes));
   }
   return {
     async runWithWriteAuthority(assertCurrent, operation) {
@@ -109,51 +107,43 @@ export function createWorkboardSqliteStores(options: {
     ready,
     readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
-      register: bindOperation((input) => execute("cards.register", input, true)),
-      registerIfAbsent: bindOperation((input) => execute("cards.registerIfAbsent", input, true)),
-      registerIfUpdatedAt: bindOperation((input) =>
-        execute("cards.registerIfUpdatedAt", input, true),
-      ),
-      claimIfOwnerAvailable: bindOperation((input) =>
-        execute("cards.claimIfOwnerAvailable", input, true),
-      ),
-      deleteIfUpdatedAt: bindOperation((input) => execute("cards.deleteIfUpdatedAt", input, true)),
-      lookup: bindOperation((input) => execute("cards.lookup", input)),
-      delete: bindOperation((input) => execute("cards.delete", input, true)),
-      entries: bindOperation((input) => execute("cards.entries", input)),
-      listCardStatuses: bindOperation((input) => execute("cards.listCardStatuses", input)),
-      listBoardAggregates: bindOperation((input) => execute("cards.listBoardAggregates", input)),
-      listStatsAggregates: bindOperation((input) => execute("cards.listStatsAggregates", input)),
-      hasCards: bindOperation((input) => execute("cards.hasCards", input)),
+      register: bindOperation("cards.register", true),
+      registerIfAbsent: bindOperation("cards.registerIfAbsent", true),
+      registerIfUpdatedAt: bindOperation("cards.registerIfUpdatedAt", true),
+      claimIfOwnerAvailable: bindOperation("cards.claimIfOwnerAvailable", true),
+      deleteIfUpdatedAt: bindOperation("cards.deleteIfUpdatedAt", true),
+      lookup: bindOperation("cards.lookup"),
+      delete: bindOperation("cards.delete", true),
+      entries: bindOperation("cards.entries"),
+      listCardStatuses: bindOperation("cards.listCardStatuses"),
+      listBoardAggregates: bindOperation("cards.listBoardAggregates"),
+      listStatsAggregates: bindOperation("cards.listStatsAggregates"),
+      hasCards: bindOperation("cards.hasCards"),
     },
     boards: {
-      register: bindOperation((input) => execute("boards.register", input, true)),
-      lookup: bindOperation((input) => execute("boards.lookup", input)),
-      delete: bindOperation((input) => execute("boards.delete", input, true)),
-      entries: bindOperation((input) => execute("boards.entries", input)),
+      register: bindOperation("boards.register", true),
+      lookup: bindOperation("boards.lookup"),
+      delete: bindOperation("boards.delete", true),
+      entries: bindOperation("boards.entries"),
     },
     sessionsBoard: {
-      get: bindOperation((input) => execute("sessionsBoard.get", input)),
-      update: bindOperation((input) => execute("sessionsBoard.update", input, true)),
-      listPlacements: bindOperation((input) => execute("sessionsBoard.listPlacements", input)),
-      repairPlacements: bindOperation((input) =>
-        execute("sessionsBoard.repairPlacements", input, true),
-      ),
-      writePlacement: bindOperation((input) =>
-        execute("sessionsBoard.writePlacement", input, true),
-      ),
+      get: bindOperation("sessionsBoard.get"),
+      update: bindOperation("sessionsBoard.update", true),
+      listPlacements: bindOperation("sessionsBoard.listPlacements"),
+      repairPlacements: bindOperation("sessionsBoard.repairPlacements", true),
+      writePlacement: bindOperation("sessionsBoard.writePlacement", true),
     },
     subscriptions: {
-      register: bindOperation((input) => execute("subscriptions.register", input, true)),
-      lookup: bindOperation((input) => execute("subscriptions.lookup", input)),
-      delete: bindOperation((input) => execute("subscriptions.delete", input, true)),
-      entries: bindOperation((input) => execute("subscriptions.entries", input)),
+      register: bindOperation("subscriptions.register", true),
+      lookup: bindOperation("subscriptions.lookup"),
+      delete: bindOperation("subscriptions.delete", true),
+      entries: bindOperation("subscriptions.entries"),
     },
     attachments: {
-      register: bindOperation((input) => execute("attachments.register", input, true)),
-      lookup: bindOperation((input) => execute("attachments.lookup", input)),
-      delete: bindOperation((input) => execute("attachments.delete", input, true)),
-      entries: bindOperation((input) => execute("attachments.entries", input)),
+      register: bindOperation("attachments.register", true),
+      lookup: bindOperation("attachments.lookup"),
+      delete: bindOperation("attachments.delete", true),
+      entries: bindOperation("attachments.entries"),
     },
     close() {
       sealed = true;
