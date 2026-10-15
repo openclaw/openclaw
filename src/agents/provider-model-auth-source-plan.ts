@@ -47,6 +47,16 @@ export type ProviderModelAuthSource =
   | ProviderModelAuthProfileSource
   | ProviderModelAuthDirectSource;
 
+/** A credentialless route or a key the operator configured in env or provider config. */
+export function isConfiguredKeyAuthSource(source: ProviderModelAuthSource | undefined): boolean {
+  return (
+    source?.kind === "direct" &&
+    (source.evidence === "synthetic" ||
+      source.evidence === "environment" ||
+      source.evidence === "provider-config")
+  );
+}
+
 /** Secret-free credential-source fact safe to carry across request boundaries. */
 export type ProviderModelAuthSourceClassification =
   | { kind: "profile" }

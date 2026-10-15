@@ -13,6 +13,7 @@ import {
 import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { isConfiguredKeyAuthSource } from "../../provider-model-auth-source-plan.js";
 import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
 import {
   createPreparedRuntimeModelMaterializer,
@@ -196,7 +197,13 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       runParams.trigger === "cron" &&
       !runParams.authProfileBinding &&
       !runParams.scheduledRuntimeAuthority &&
-      prepared.attempts.some(({ plan }) => plan.credentialSource?.kind === "profile")
+      prepared.attempts.some(({ plan }) => {
+        const source = plan.credentialSource;
+        return (
+          source?.kind === "profile" ||
+          (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
+        );
+      })
     ) {
       const refusal = new Error(
         "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",

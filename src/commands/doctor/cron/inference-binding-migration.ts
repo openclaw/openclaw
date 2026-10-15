@@ -22,6 +22,7 @@ import {
   resolveCliRuntimeExecutionProvider,
 } from "../../../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import { isConfiguredKeyAuthSource } from "../../../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../../../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../../agents/session-runtime-compat.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
@@ -196,8 +197,14 @@ export async function maybeRepairCronInferenceBindings(params: {
         });
         // Synthetic, env and provider-config routes have no stored account to record; the
         // runtime keeps such a job on that key and refuses it once a stored account is eligible.
-        if (currentAuth.attempts[0]?.plan.credentialSource?.kind === "direct") {
+        const firstSource = currentAuth.attempts[0]?.plan.credentialSource;
+        if (isConfiguredKeyAuthSource(firstSource)) {
           continue;
+        }
+        if (firstSource?.kind === "direct") {
+          throw new Error(
+            "The current route uses an ambient credential, not a durable stored account.",
+          );
         }
         if (!explicitProfileId) {
           const providerPin = resolveProviderEntryApiKeyProfileReference({

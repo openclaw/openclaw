@@ -94,15 +94,50 @@ it.each(["cron", "event"] as const)(
   },
 );
 
-it("refuses legacy adoption from a current stored account at the auth boundary", async () => {
+const bedrockModel: Model = {
+  ...model,
+  id: "anthropic.claude-sonnet",
+  provider: "amazon-bedrock",
+  api: "bedrock-converse-stream",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+};
+
+const awsSdkConfig = {
+  models: {
+    providers: {
+      "amazon-bedrock": {
+        api: "bedrock-converse-stream" as const,
+        auth: "aws-sdk" as const,
+        baseUrl: bedrockModel.baseUrl,
+        models: [],
+      },
+    },
+  },
+};
+
+it.each([
+  { source: "a current stored account", model, storedProfile: true, config: {} },
+  {
+    source: "ambient AWS SDK credentials",
+    model: bedrockModel,
+    storedProfile: false,
+    config: awsSdkConfig,
+  },
+])("refuses legacy adoption from $source at the auth boundary", async (testCase) => {
   await withOpenClawTestState(
     { label: "cron-unbound-auth", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       await state.writeAuthProfiles({
         version: 1,
-        profiles: {
-          "openai:current": { type: "api_key", provider: "openai", key: "synthetic-current-key" },
-        },
+        profiles: testCase.storedProfile
+          ? {
+              "openai:current": {
+                type: "api_key",
+                provider: "openai",
+                key: "synthetic-current-key",
+              },
+            }
+          : {},
       });
       const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
       const stores = modelRuntime.createEmptyAgentDiscoveryStores();
@@ -119,19 +154,19 @@ it("refuses legacy adoption from a current stored account at the auth boundary",
                 prompt: "Synthetic scheduled work",
                 timeoutMs: 1_000,
                 trigger: "cron",
-                config: {},
+                config: testCase.config,
               },
-              provider: model.provider,
-              modelId: model.id,
-              model,
+              provider: testCase.model.provider,
+              modelId: testCase.model.id,
+              model: testCase.model,
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,
               nativeModelOwned: false,
               ...stores,
               getAgentHarness: () => harness,
               setAgentHarness() {},
-              getRuntimeModel: () => model,
-              getEffectiveModel: () => model,
+              getRuntimeModel: () => testCase.model,
+              getEffectiveModel: () => testCase.model,
               applyResolvedRuntimeModel() {},
               selectHarnessForPreparedAttempts: () => harness,
             }),
