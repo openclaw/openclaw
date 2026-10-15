@@ -894,9 +894,9 @@ describe("SQLite worker store", () => {
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
 
-  it.each(["transaction", "commit", "schema-maintenance"] as const)(
-    "invalidates saved authority receipts when a %s-granted writer dies inside native COMMIT",
-    async (stage) => {
+  it.each(["native", "schema-maintenance"] as const)(
+    "invalidates saved authority receipts when a %s writer dies inside native COMMIT",
+    async (mode) => {
       const file = databasePath();
       const store = await open(file);
       const sibling = openNodeSqliteDatabase(file);
@@ -911,12 +911,15 @@ describe("SQLite worker store", () => {
             (scope) =>
               scope.execute({
                 type: "commitWithoutReceipt",
-                input: { value: "revoked", stage },
+                input: { value: "revoked", mode },
               }),
             undefined,
             undefined,
             () => ({
               admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+                if (mode === "native") {
+                  throw new Error("Native writes do not request separate domain admission");
+                }
                 grant();
               }),
               nativeLocations: [file],

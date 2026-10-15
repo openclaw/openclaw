@@ -55,6 +55,7 @@ export type Admission = {
   hostRevision?: number;
   writeScopes: Map<string, ScopedWriteRevision>;
   writeScopeRevision: number;
+  /** Each worker shares its handle count and unsettled native-write count. */
   references: Map<number, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
@@ -179,7 +180,7 @@ export class SqliteDatabaseAdmissionRegistry {
   changeReferences(record: Admission, change: 1 | -1): boolean {
     let references = record.references.get(threadId);
     if (!references) {
-      references = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
       record.references.set(threadId, references);
     }
     const count = Atomics.add(new Int32Array(references), 0, change) + change;

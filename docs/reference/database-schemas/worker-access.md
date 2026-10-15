@@ -189,11 +189,12 @@ from later admission snapshots; stale transfers cannot restore them. Recreated
 scope keys receive a fresh receipt identity, so old cached reads remain invalid.
 Worker exit releases handle references without advancing data revisions, so
 session and auth caches held by live siblings survive idle-worker retirement.
-Native writes settle their receipts before returning or closing. If an operation
-received a transaction, commit, or schema-maintenance grant but its outcome is unknown, the broker
-invalidates receipts for its admitted write locations before settling the caller.
-This covers a worker dying after durable COMMIT but before receipt publication;
-the operation owner still handles unknown-outcome recovery.
+Native writes retain a pending count in the existing worker reference metadata
+until their scoped and database-wide receipts are published. On worker exit, the
+receipt owner invalidates only databases with pending writes, before releasing
+handles and settling callers. This covers durable COMMIT followed by a crash
+before receipt publication, including writes without a separate domain grant.
+The operation owner still handles unknown-outcome recovery.
 Quarantine and schema changes still invalidate their admission facts and scoped
 receipts. Final-handle closure still retires facts for physical-file readmission.
 Canonical validation compares admitted catalog facts with the pending-table DDL

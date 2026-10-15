@@ -31,7 +31,6 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
-  retainedPathAdmission(this: void, location: string): Admission | undefined;
   writeListeners: WeakMap<Admission, Set<() => void>>;
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
@@ -55,10 +54,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return registerListener(listeners, listener);
   }
 
-  /** A granted writer can commit before dying without publishing its native receipt. */
-  function invalidateSqliteDatabaseWriteReceiptsForPath(location: string): void {
-    const record = owner.retainedPathAdmission(location);
-    if (record) {
+  /** An interrupted native write may have committed before its receipt was published. */
+  function settleWorker(record: Admission, worker: number): void {
+    const references = worker > 0 ? record.references.get(worker) : undefined;
+    if (references && Atomics.exchange(new Int32Array(references), 1, 0) > 0) {
       advanceSqliteDatabaseGeneration(record, "writeRevision");
       advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
       const listeners = owner.writeListeners.get(record);
@@ -385,7 +384,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         }
       }
     },
-    invalidateSqliteDatabaseWriteReceiptsForPath,
+    settleWorker,
     onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
     withSqliteDatabaseWriteScope,

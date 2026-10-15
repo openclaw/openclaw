@@ -117,7 +117,6 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
-  retainedPathAdmission: (location) => state.registry.forLocation(location),
   writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
@@ -129,7 +128,6 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
 });
 export const {
   onSqliteDatabaseWriteSettled,
-  invalidateSqliteDatabaseWriteReceiptsForPath,
   retireSqliteDatabaseWriteScopes,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -451,7 +449,10 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   if (state.dataWriters.has(database)) {
     return;
   }
-  state.dataWriters.set(database, admission(database));
+  state.dataWriters.set(database, record);
+  if (record) {
+    Atomics.add(new Int32Array(record.references.get(threadId)!), 1, 1);
+  }
 }
 
 /** Native settlement invalidates row caches, including failed or rolled-back writes. */
@@ -465,6 +466,8 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   scopedWrites.finish(database, record);
   if (record) {
     advanceSqliteDatabaseGeneration(record, "writeRevision");
+    // Clear only after publishing both receipts; a native COMMIT can outlive its worker.
+    Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
     const listeners = state.writeListeners.get(record);
     if (listeners) {
       notifyListeners(listeners, undefined);
@@ -499,13 +502,18 @@ export function readSqliteDatabaseSiblingWriteRevision(
     : (revision - (state.localWriteRevisions.get(database) ?? 0)) | 0;
 }
 
-/** Worker exit releases handle custody; native write settlement owns data revisions. */
+/** Settle interrupted native writes before releasing the departed worker's handles. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
   once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
-  worker.once("exit", () => state.registry.releaseWorker(owner));
+  worker.once("exit", () => {
+    for (const record of state.registry.records.values()) {
+      scopedWrites.settleWorker(record, owner);
+    }
+    state.registry.releaseWorker(owner);
+  });
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(

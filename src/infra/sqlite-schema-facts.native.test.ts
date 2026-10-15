@@ -273,7 +273,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const receipts = createSqliteDatabaseWriteReceipts({
       admission: () => sender.records.get(snapshot!.identity),
       pathAdmission: () => sender.records.get(snapshot!.identity),
-      retainedPathAdmission: () => sender.records.get(snapshot!.identity),
       writeListeners: new WeakMap(),
       readRevision: () => 0,
       writer: () => sender.records.get(snapshot!.identity),

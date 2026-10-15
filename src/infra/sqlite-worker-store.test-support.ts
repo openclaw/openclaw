@@ -77,7 +77,7 @@ export type FixtureOperations = {
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
   commitWithoutReceipt: {
-    input: { value: string; stage: "transaction" | "commit" | "schema-maintenance" };
+    input: { value: string; mode: "native" | "schema-maintenance" };
     output: never;
   };
   commitUnserializable: { input: { value: string }; output: symbol };
@@ -230,18 +230,12 @@ function createFixtureBackend(
         };
         const write = () =>
           runSqliteImmediateTransactionSync(db, () => {
-            if (command.input.stage !== "schema-maintenance") {
-              requestSqliteWorkerOperationAdmission({
-                stage: command.input.stage,
-                facts: undefined,
-              });
-            }
             executeSqliteQuerySync(
               db,
               query.insertInto("entries").values({ value: command.input.value }),
             );
           });
-        if (command.input.stage === "schema-maintenance") {
+        if (command.input.mode === "schema-maintenance") {
           withStateDatabaseSchemaMaintenance({ databasePath }, write);
         } else {
           write();
