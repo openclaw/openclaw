@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,28 +8,73 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gatewayCreation from "../gateway/session-create-service.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+const authority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
+let stateDir: string;
+let storePath: string;
 
-beforeAll(async () => {
-  const stateDir = path.join(dirs.make("plugin-incognito-"), "state");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  actor = await openIncognitoTestActor({ OPENCLAW_STATE_DIR: stateDir }, authority);
+async function withMemorySession<T>(sessionKey: string, run: () => T | Promise<T>): Promise<T> {
+  const binding = await acquireSessionActorStorage(
+    { agentId: "main", storePath, sessionKey },
+    { authority, lifetime, create: true },
+  );
+  if (!binding) {
+    throw new Error("Expected memory acquisition");
+  }
+  try {
+    return await runWithSessionActorStorage(binding, run);
+  } finally {
+    await binding.actor.release();
+  }
+}
+
+async function createMemoryEntry(input: { sessionKey: string; entry: InternalSessionEntry }) {
+  const binding = await acquireSessionActorStorage(
+    { agentId: "main", storePath, sessionKey: input.sessionKey },
+    { authority, lifetime, create: true },
+  );
+  if (!binding) {
+    throw new Error("Expected memory acquisition");
+  }
+  try {
+    await binding.actor.storage.mutate(
+      { type: "session.entry.create", input: { entry: input.entry } },
+      authority,
+    );
+  } finally {
+    await binding.actor.release();
+  }
+}
+
+beforeAll(() => {
+  stateDir = path.join(dirs.make("plugin-incognito-"), "state");
+  storePath = resolveIncognitoOpenClawAgentSqlitePath({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  });
 });
 
-afterAll(async () => {
-  await actor.close();
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+});
+
+afterAll(() => {
+  memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
   vi.unstubAllEnvs();
 });
 
@@ -42,6 +87,7 @@ function registry() {
   const runtime = createPluginRuntime({
     subagent: {
       complete: async () => ({ text: "" }),
+      forkSession: async () => ({ text: "" }),
       run: subagentRun,
       waitForRun: async () => ({ status: "ok" }),
       getSessionMessages: async () => ({ messages: [] }),
@@ -75,11 +121,11 @@ function registry() {
   return { runtime, owner, caller, harness, subagentRun };
 }
 
-it("keeps explicit actor ownership and by-ID checks out of host SQL", async () => {
+it("keeps memory ownership and by-ID checks out of host SQL", async () => {
   const { owner, caller, subagentRun } = registry();
   const key = "agent:main:dashboard:incognito-plugin-owned";
   const sessionId = "plugin-owned";
-  await actor.sessions.create(authority, {
+  await createMemoryEntry({
     sessionKey: key,
     entry: {
       sessionId,
@@ -91,21 +137,24 @@ it("keeps explicit actor ownership and by-ID checks out of host SQL", async () =
   });
   const sql = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      await expect(
-        caller.runtime.subagent.run({ sessionKey: key, message: "forbidden" }),
-      ).rejects.toThrow('owned by plugin "owner"');
+    await expect(
+      caller.runtime.subagent.run({ sessionKey: key, message: "forbidden" }),
+    ).rejects.toThrow('owned by plugin "owner"');
+    await withMemorySession(key, async () => {
       await expect(caller.runtime.gateway.request("sessions.abort", { sessionId })).rejects.toThrow(
         'owned by plugin "owner"',
       );
-      await expect(
-        owner.runtime.agent.session.patchSessionEntry({
-          sessionKey: key,
-          storePath: actor.path,
-          update: () => ({ displayName: "owned update" }),
-        }),
-      ).resolves.toMatchObject({ displayName: "owned update" });
     });
+    await expect(
+      owner.runtime.agent.session.patchSessionEntry({
+        sessionKey: key,
+        storePath,
+        update: () => ({ displayName: "owned update" }),
+      }),
+    ).resolves.toMatchObject({ displayName: "owned update" });
+    await expect(
+      owner.runtime.agent.session.getSessionEntryAsync({ sessionKey: key, storePath }),
+    ).resolves.toMatchObject({ displayName: "owned update" });
     expect(subagentRun).not.toHaveBeenCalled();
     expect(sql.queries).toEqual([]);
   } finally {
@@ -116,7 +165,7 @@ it("keeps explicit actor ownership and by-ID checks out of host SQL", async () =
 it("classifies sandbox authority from its captured actor despite a different configured store", async () => {
   const { owner } = registry();
   const sessionKey = "agent:main:dashboard:incognito-workspace-policy";
-  await actor.sessions.create(authority, {
+  await createMemoryEntry({
     sessionKey,
     entry: {
       sessionId: "workspace-policy",
@@ -137,10 +186,10 @@ it("classifies sandbox authority from its captured actor despite a different con
       entries: { main: {} },
     },
   };
-  const params = { config, agentId: "main", sessionKey, storePath: actor.path };
+  const params = { config, agentId: "main", sessionKey, storePath };
   const sql = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
+    await withMemorySession(sessionKey, async () => {
       const expected = {
         sandboxed: true,
         workspaceAccess: "ro",
@@ -162,7 +211,7 @@ it("rechecks delegated harness authority after admission waits", async () => {
   onTestFinished(clearRuntimeConfigSnapshot);
   const { runtime, caller, harness } = registry();
   const key = "agent:main:dashboard:incognito-delegated";
-  await actor.sessions.create(authority, {
+  await createMemoryEntry({
     sessionKey: key,
     entry: {
       sessionId: "delegated",
@@ -183,10 +232,10 @@ it("rechecks delegated harness authority after admission waits", async () => {
   const run = vi.fn(async () => "must-not-run");
   const sql = observeHostDataSql();
   try {
-    const work = withIncognitoSessionActor(actor, () =>
+    const work = withMemorySession(key, () =>
       caller.runtime.agent.session.runWithWorkAdmission(
         {
-          storePath: actor.path,
+          storePath,
           sessionKey: key,
         },
         run,
@@ -215,7 +264,7 @@ it.each(["finalize", "rollback", "changed" as const])(
       modelSelectionLocked: true as const,
       pluginExtensions: { test: { initializing: true } },
     };
-    await actor.sessions.create(authority, {
+    await createMemoryEntry({
       sessionKey: key,
       entry: {
         ...initialEntry,
@@ -227,7 +276,7 @@ it.each(["finalize", "rollback", "changed" as const])(
     });
     const sql = observeHostDataSql();
     try {
-      await withIncognitoSessionActor(actor, async () => {
+      await withMemorySession(key, async () => {
         const creation = owner.runtime.agent.session.createSessionEntry({
           cfg: {},
           key,
@@ -244,7 +293,7 @@ it.each(["finalize", "rollback", "changed" as const])(
             if (outcome === "changed") {
               await owner.runtime.agent.session.patchSessionEntry({
                 sessionKey: key,
-                storePath: actor.path,
+                storePath,
                 update: () => ({ displayName: "concurrent owner" }),
               });
               initialization.assertCurrent();
@@ -267,7 +316,7 @@ it.each(["finalize", "rollback", "changed" as const])(
         }
         const stored = await owner.runtime.agent.session.getSessionEntryAsync({
           sessionKey: key,
-          storePath: actor.path,
+          storePath,
         });
         if (outcome === "rollback") {
           expect(stored).toBeUndefined();
@@ -283,7 +332,7 @@ it.each(["finalize", "rollback", "changed" as const])(
   },
 );
 
-it("hands explicit bound creation to the existing Gateway creator", async () => {
+it("hands memory creation to the existing Gateway creator", async () => {
   const { owner, harness } = registry();
   const create = vi
     .spyOn(gatewayCreation, "createGatewaySession")
@@ -292,7 +341,7 @@ it("hands explicit bound creation to the existing Gateway creator", async () => 
   const sql = observeHostDataSql();
   try {
     await expect(
-      withIncognitoSessionActor(actor, () =>
+      withMemorySession(key, () =>
         owner.runtime.agent.session.createSessionEntry({
           cfg: {},
           key,

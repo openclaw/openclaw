@@ -53,7 +53,7 @@ openclaw update --channel dev --dry-run
 openclaw update --channel stable --dry-run
 ```
 
-`dev` ensures a git checkout, builds it, and installs the global CLI from that
+`dev` creates or reuses a git checkout, builds it, and installs the global CLI from that
 checkout. The `stable`, `extended-stable`, and `beta` channels use package
 installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
@@ -97,7 +97,7 @@ Already-running older updaters retain their own activation and finalization beha
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
-Bun 1.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+Bun 1.4.3+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
 service installation and restart. Bun's emulated Node version is never compared
 to the target's `engines.node` requirement. When the updater runs on Node, its
 Node must also pass the target's engine and SQLite checks before package
@@ -123,6 +123,7 @@ For the default profile, run these commands from the source checkout:
 ```bash
 openclaw gateway stop &&
 pnpm build &&
+openclaw doctor --fix &&
 openclaw gateway start
 ```
 
@@ -332,8 +333,10 @@ Prefer `openclaw update` for supervised installs: it can coordinate the package
 swap with the running Gateway service. If you update manually on a supervised
 install, stop the managed Gateway first. Package managers replace files in
 place, and a running Gateway can otherwise try to load core or plugin files
-mid-swap. Restart the Gateway after the package manager finishes so it picks up
-the new install.
+mid-swap. After the package manager finishes, run `openclaw doctor --fix` before
+restarting the Gateway so it picks up canonical config and migrated state. Check
+`openclaw update status` for unfinished plugin upgrades and their repair commands.
+Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
 
 On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
 30-second baseline package-fingerprint budget before replacing any files. It
@@ -457,7 +460,7 @@ intact.
 bun add -g --trust openclaw@latest
 ```
 
-`--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
+`--trust` allows OpenClaw's lifecycle scripts. The standard `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
 For Bun-owned updates, package-manager checks and installs use the verified
 service Bun when updating a managed service root. Otherwise they use

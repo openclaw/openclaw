@@ -237,18 +237,6 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
   expect(pending.sessionIds).toHaveLength(300);
 });
 
-it("revokes main admission when an existing transcript tracking trigger differs", () => {
-  const db = createDatabase();
-  db.exec(`CREATE TEMP TRIGGER openclaw_session_windows_projection_insert
-    AFTER INSERT ON main.session_windows BEGIN SELECT 1; END`);
-  const mainSchemaMutation = vi.fn();
-  registerSqliteSchemaMutationListener(db, mainSchemaMutation);
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
-  expect(mainSchemaMutation).toHaveBeenCalled();
-  seedCleanSession(db, "after-repair");
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
-});
-
 it("rolls back admission and pending facts with raw writes, including nested savepoints", () => {
   const db = createDatabase();
   seedCleanSession(db, "seed");

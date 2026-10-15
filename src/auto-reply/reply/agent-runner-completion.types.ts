@@ -11,6 +11,8 @@ export type AgentTurnRestartClaimCleanup = {
 };
 
 export type AgentTurnCompletion = {
+  /** The retained completion owner must still own its source before a transcript write. */
+  assertCurrent(): SessionEntry | undefined;
   current(): SessionEntry;
   refresh(): Promise<SessionEntry>;
   patch(

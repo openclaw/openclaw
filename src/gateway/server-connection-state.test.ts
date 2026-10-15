@@ -111,7 +111,7 @@ describe("gateway connection state", () => {
   });
 
   it("uses committed policy for projected and plain session events through tentative activation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reader = ensureProfileForEmail("event-policy-reader@example.test");
       const other = ensureProfileForEmail("event-policy-other@example.test");
       const config = (others: "none" | "view"): OpenClawConfig => ({
@@ -326,7 +326,7 @@ describe("gateway connection state", () => {
   });
 
   it("advertises online people only through live operator connections", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reads = { count: 0 };
       const requester = makeClient("requester", reads);
       const recipient = makeClient("recipient", reads);
@@ -389,7 +389,7 @@ describe("gateway connection state", () => {
   });
 
   it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = {};
       setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
@@ -530,7 +530,7 @@ describe("gateway connection state", () => {
   });
 
   it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const reader = ensureProfileForEmail("presence-reader@example.test");

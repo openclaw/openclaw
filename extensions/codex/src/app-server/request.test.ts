@@ -2,6 +2,10 @@
 import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   clearSessionStoreCacheForTest,
@@ -9,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexControlRequest } from "../command-rpc.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -39,6 +44,7 @@ const expectDeadlineOptions = () =>
 describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
@@ -46,6 +52,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -703,7 +710,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   });
 
   it("does not resume or publish a control attachment after its passive preflight times out", async () => {
-    const { codexControlRequest } = await import("../command-rpc.js");
     const root = sessionDirs.make();
     const authority = {
       config: {},

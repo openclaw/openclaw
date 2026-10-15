@@ -160,7 +160,7 @@ it.each(["kv", "health"] as const)(
         grant();
       });
       admission.bindDatabaseAuthority({
-        databasePath,
+        databasePath: context.admission.identity.canonicalPath,
         assertRequest: context.admission.assertCurrent,
         assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
         acquireSchema: () => acquireStateDatabaseSchemaLease(databasePath),

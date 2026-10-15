@@ -219,7 +219,8 @@ it("retains the shared pool after a resource drain fails until canonical retry",
   try {
     await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
     expect(mock.closePool).not.toHaveBeenCalled();
-    expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/closed/i);
+    // The retained pool stays live, so reads resume until the retry seals again.
+    captureOpenClawStateWorkerContext(options);
     await closeOpenClawStateDatabaseAsync();
     expect(close).toHaveBeenCalledTimes(2);
     expect(mock.closePool).toHaveBeenCalledOnce();
@@ -444,7 +445,6 @@ const captures = [
         ? {
             type,
             input: {
-              kind: "repository" as const,
               session: {
                 agentId: selector,
                 sessionKey: selector,

@@ -916,6 +916,7 @@ describe("session.message websocket events", () => {
     const profileState = await createOpenClawTestState({
       label: "session-message-current-profile-display",
       layout: "state-only",
+      prepareProfileCatalog: true,
     });
     cleanupTestStates.push(profileState);
     const storePath = await createSessionStoreFile();
@@ -2176,7 +2177,7 @@ describe("session.message websocket events", () => {
       storePath,
     });
     const { committer, identity, receiver, push, sessionTarget, source } =
-      createWorkerFanoutFixture({
+      await createWorkerFanoutFixture({
         storePath,
         sessionId,
         sessionKey,
@@ -2312,6 +2313,7 @@ describe("session.message websocket events", () => {
       clearAgentRunContext("local");
       ws.off("message", collectWorkerChats);
       ws.close();
+      await source.release();
     }
   });
 

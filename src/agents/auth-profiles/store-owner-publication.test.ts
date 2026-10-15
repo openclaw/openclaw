@@ -12,6 +12,7 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -26,6 +27,7 @@ import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } fr
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
@@ -36,6 +38,7 @@ import {
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
@@ -46,6 +49,7 @@ import {
   captureAuthProfileStorePersistenceSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
   withAuthProfileStoreAgentDir,
+  withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
@@ -54,6 +58,48 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("auth publication owner receipts", () => {
+  it.each(["native", "async"] as const)(
+    "publishes a cold default snapshot through %s",
+    async (mode) => {
+      const stateDir = tempDirs.make("openclaw-auth-cold-snapshot-");
+      const agentDir = path.join(stateDir, "shared-agent");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: agentDir },
+        async () => {
+          const snapshot = store("cold-default");
+          if (mode === "native") {
+            replaceRuntimeAuthProfileStoreSnapshots([{ store: snapshot }]);
+          } else {
+            await replaceRuntimeAuthProfileStoreSnapshotsAsync([{ store: snapshot }]);
+          }
+          expect(snapshotAt(resolveAuthProfileDatabasePath(agentDir))?.profiles).toEqual(
+            snapshot.profiles,
+          );
+        },
+      );
+    },
+  );
+
+  it("keeps an env-only runtime read outside an unreadable ambient owner", () => {
+    const assertOuterUnchanged = unreadableOuter("future");
+    expect(withEnvOnlyAuthProfileStore(() => loadAuthProfileStoreForRuntime())).toEqual({
+      version: 1,
+      profiles: {},
+    });
+    assertOuterUnchanged();
+  });
+
+  it("reads an explicit local owner without admitting an unrelated ambient owner", () => {
+    const agentDir = tempDirs.make("openclaw-auth-explicit-local-");
+    writePersistedAuthProfileStoreRaw(store("local-only"), agentDir);
+    const assertOuterUnchanged = unreadableOuter("future");
+    expect(
+      loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir: agentDir })
+        .profiles,
+    ).toEqual(store("local-only").profiles);
+    assertOuterUnchanged();
+  });
+
   it.each(["cold", "cached", "admitted"] as const)(
     "observes exact shared and local credential owners through a %s read",
     async (mode) => {
@@ -128,6 +174,7 @@ describe("auth publication owner receipts", () => {
       const legacyPath = path.join(agentDir, "auth.json");
       if (discoveredAt === "prepare") {
         fs.writeFileSync(legacyPath, "{}");
+        await refreshAuthProfileFileState();
       }
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: {},
@@ -307,6 +354,7 @@ describe("auth publication owner receipts", () => {
       }
       const legacyPath = path.join(oauthDir, "oauth.json");
       fs.writeFileSync(legacyPath, "{}");
+      await refreshAuthProfileFileState();
       withEnv(env, () =>
         saveAuthProfileStore(
           { version: 1, profiles: populated ? { shared: apiKey("updated") } : {} },

@@ -2,8 +2,7 @@ import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { settleToolBridges, renderToolCard } from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 let container: HTMLDivElement | undefined;

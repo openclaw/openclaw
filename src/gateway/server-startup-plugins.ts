@@ -3,6 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
   collectRegisteredEmbeddingProviderIds,
@@ -127,7 +128,9 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
       } catch (error) {
         if (!params.signal.aborted) {
-          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
+          params.log.warn(
+            `Gateway post-ready ${name} maintenance failed: ${formatErrorMessageWithCode(error)}`,
+          );
         }
       }
     }),
@@ -261,7 +264,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   for (const provider of unregistered) {
     const path = `memory.search.${provider.source}`;
     params.log.warn(
-      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Check that the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );
   }
 }

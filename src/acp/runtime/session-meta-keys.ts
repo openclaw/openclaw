@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
@@ -8,7 +7,10 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
@@ -30,21 +32,19 @@ import type {
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 
 const MAX_RETAINED_ACP_SESSION_ROWS = 128;
-type AcpMetadataReceipt = readonly string[];
+type AcpMetadataReceipt = Map<string, AcpSessionRow | undefined>;
 const metadataReceipt: SqliteDatabaseAdmissionKey<AcpMetadataReceipt> = {
   name: "acp.metadata",
   schemaDependent: true,
   read(value) {
-    if (Array.isArray(value) && value.every((key: unknown) => typeof key === "string")) {
-      return value;
-    }
-    return undefined;
+    // SAFETY: Committed postimages come only from the paired, typed ACP writer.
+    return value instanceof Map ? (value as AcpMetadataReceipt) : undefined;
   },
 };
-const pendingMetadataChanges = new WeakMap<DatabaseSync, AcpMetadataReceipt>();
-const localMetadataChanges = new WeakMap<DatabaseSync, AcpMetadataReceipt>();
+const pendingMetadataChanges = new WeakMap<EngineConnection, AcpMetadataReceipt>();
+const localMetadataChanges = new WeakMap<EngineConnection, AcpMetadataReceipt>();
 const metadataRows = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   {
     schema: SqliteReadOperationRevision["schema"];
     receipt: AcpMetadataReceipt | undefined;
@@ -52,24 +52,35 @@ const metadataRows = new WeakMap<
   }
 >();
 
-function publishAcpMetadataChanges(db: DatabaseSync, keys: readonly string[]) {
-  if (keys.length === 0) {
+function publishAcpMetadataRows(
+  db: EngineConnection,
+  rows: readonly (readonly [string, AcpSessionRow | undefined])[],
+) {
+  if (rows.length === 0) {
     return;
   }
-  const previous = pendingMetadataChanges.get(db);
-  const receipt = [...new Set([...(previous ?? []), ...keys])];
+  const anchor = sqlPublicationAnchor(db);
+  const previous = pendingMetadataChanges.get(anchor);
+  const receipt = new Map(previous ?? getSqliteDatabaseAdmission(db, metadataReceipt));
+  for (const [key, row] of rows) {
+    receipt.delete(key);
+    receipt.set(key, row);
+  }
+  while (receipt.size > MAX_RETAINED_ACP_SESSION_ROWS) {
+    receipt.delete(receipt.keys().next().value!);
+  }
   const commit = () => {
-    pendingMetadataChanges.delete(db);
-    localMetadataChanges.set(db, receipt);
+    pendingMetadataChanges.delete(anchor);
+    localMetadataChanges.set(anchor, receipt);
   };
-  const staged = stageSqliteTransactionState(db, {
-    stage: () => pendingMetadataChanges.set(db, receipt),
+  const staged = stageSqliteTransactionState(anchor, {
+    stage: () => pendingMetadataChanges.set(anchor, receipt),
     commit,
     rollback: () => {
       if (previous) {
-        pendingMetadataChanges.set(db, previous);
+        pendingMetadataChanges.set(anchor, previous);
       } else {
-        pendingMetadataChanges.delete(db);
+        pendingMetadataChanges.delete(anchor);
       }
     },
   });
@@ -79,11 +90,32 @@ function publishAcpMetadataChanges(db: DatabaseSync, keys: readonly string[]) {
   publishSqliteDatabaseAdmission(db, metadataReceipt, receipt);
 }
 
-export function getAcpSessionKysely(db: DatabaseSync) {
+/** Host readers consume committed postimages; unknown keys retain the worker read path. */
+export function readPublishedAcpSessionRows(
+  databasePath: string,
+  entries: readonly AcpSessionReadInput[],
+): Array<AcpSessionRow | null> | undefined {
+  const rows = getOrLoadSqliteDatabaseAdmissionForPath(
+    databasePath,
+    metadataReceipt,
+    () => undefined,
+  );
+  if (!rows || entries.some(({ keys }) => keys.some((key) => !rows.has(key)))) {
+    return undefined;
+  }
+  return entries.map(({ keys, entry }) => {
+    const row = keys
+      .map((key) => rows.get(key))
+      .find((candidate) => candidate && acpSessionRowMatchesEntry(candidate, entry));
+    return row ? { ...row } : null;
+  });
+}
+
+export function getAcpSessionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
 }
 
-export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
+export function selectAcpSessionRows(db: EngineConnection): AcpSessionRow[] {
   return executeSqliteQuerySync(
     db,
     getAcpSessionKysely(db)
@@ -95,7 +127,7 @@ export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
 }
 
 export function selectAcpSessionRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
 ): AcpSessionRow | undefined {
   return executeSqliteQueryTakeFirstSync(
@@ -108,7 +140,7 @@ export function selectAcpSessionRow(
 }
 
 export function* selectAcpSessionRowsByKeys(
-  db: DatabaseSync,
+  db: EngineConnection,
   keys: readonly string[],
   firstCohort?: readonly AcpSessionRow[],
 ) {
@@ -116,20 +148,22 @@ export function* selectAcpSessionRowsByKeys(
     keys.length <= MAX_RETAINED_ACP_SESSION_ROWS ? getSqliteReadOperationRevision(db) : undefined;
   let cached = metadataRows.get(db);
   if (revision) {
-    const receipt = getSqliteDatabaseAdmission(db, metadataReceipt) ?? localMetadataChanges.get(db);
+    const published = getSqliteDatabaseAdmission(db, metadataReceipt);
+    const receipt = published ?? localMetadataChanges.get(sqlPublicationAnchor(db));
     if (!cached) {
-      cached = { schema: revision.schema, receipt, rows: new Map() };
+      cached = { schema: revision.schema, receipt, rows: new Map(published) };
       metadataRows.set(db, cached);
-      registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
+      registerNodeSqliteDisposeCallback(sqlPublicationAnchor(db), () => metadataRows.delete(db));
     } else if (cached.schema !== revision.schema || cached.receipt !== receipt) {
       cached.schema = revision.schema;
       cached.receipt = receipt;
-      // A reader may skip several ACP receipts; invalidate the whole retained
-      // cohort rather than assuming the latest receipt contains every missed key.
-      cached.rows.clear();
+      // Receipts contain complete committed postimages for their bounded cohort.
+      // Uncovered reads remain local and never overwrite a newer writer receipt.
+      // The local fallback invalidates reads but cannot certify schema-dependent rows.
+      cached.rows = new Map(published);
     }
     const retainedRows = cached.rows;
-    if (!firstCohort && keys.every((key) => retainedRows.has(key))) {
+    if (keys.every((key) => retainedRows.has(key))) {
       const rows: AcpSessionRow[] = [];
       for (const key of new Set(keys)) {
         const row = retainedRows.get(key);
@@ -141,20 +175,29 @@ export function* selectAcpSessionRowsByKeys(
       return;
     }
   }
-  // Read the whole cohort on a miss: mixing retained and new rows would give
-  // callers a different view if another writer commits during this request.
   for (let index = 0; index < keys.length; index += 500) {
     const cohort = keys.slice(index, index + 500);
-    const rows =
+    const retained = revision && cached ? cached.rows : undefined;
+    const missing = retained ? cohort.filter((key) => !retained.has(key)) : cohort;
+    const selected =
       index === 0 && firstCohort
-        ? firstCohort
+        ? firstCohort.filter((row) => missing.includes(row.session_key))
         : executeSqliteQuerySync(
             db,
             getAcpSessionKysely(db)
               .selectFrom("acp_sessions")
               .selectAll()
-              .where("session_key", "in", sqliteStringSet(cohort)),
+              .where("session_key", "in", sqliteStringSet(missing)),
           ).rows;
+    const rows = retained
+      ? [
+          ...cohort.flatMap((key) => {
+            const row = retained.get(key);
+            return row ? [{ ...row }] : [];
+          }),
+          ...selected,
+        ]
+      : selected;
     if (revision && cached) {
       if (cached.rows.size + cohort.length > MAX_RETAINED_ACP_SESSION_ROWS) {
         cached.rows.clear();
@@ -224,7 +267,7 @@ export function acpSessionRowMatchesEntry(
 }
 
 export function selectAcpSessionRowForStoreEntry(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeSessionKey: string,
   agentId?: string,
   entry?: AcpSessionEntryBinding,
@@ -237,7 +280,7 @@ export function selectAcpSessionRowForStoreEntry(
 }
 
 export function selectAcpSessionRowForRead(
-  db: DatabaseSync,
+  db: EngineConnection,
   { keys, entry }: AcpSessionReadInput,
 ): AcpSessionRow | undefined {
   for (const key of keys) {
@@ -257,7 +300,7 @@ export function resolveReadableAcpSessionRow(params: {
   return row && acpSessionRowMatchesEntry(row, entry) ? row : undefined;
 }
 
-export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>) {
+export function upsertAcpSessionMetaRow(db: EngineConnection, row: Insertable<AcpSessionsTable>) {
   const written = executeSqliteQueryTakeFirstSync(
     db,
     getAcpSessionKysely(db)
@@ -270,6 +313,8 @@ export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSes
           agent: (eb) => eb.ref("excluded.agent"),
           runtime_session_name: (eb) => eb.ref("excluded.runtime_session_name"),
           identity_json: (eb) => eb.ref("excluded.identity_json"),
+          resume_agent_session_id: (eb) => eb.ref("excluded.resume_agent_session_id"),
+          resume_acpx_session_id: (eb) => eb.ref("excluded.resume_acpx_session_id"),
           mode: (eb) => eb.ref("excluded.mode"),
           runtime_options_json: (eb) => eb.ref("excluded.runtime_options_json"),
           cwd: (eb) => eb.ref("excluded.cwd"),
@@ -282,12 +327,12 @@ export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSes
       .returningAll(),
   );
   if (written) {
-    publishAcpMetadataChanges(db, [written.session_key]);
+    publishAcpMetadataRows(db, [[written.session_key, written]]);
   }
   return written;
 }
 
-export function deleteAcpSessionMetaRows(db: DatabaseSync, keys: readonly string[]): void {
+export function deleteAcpSessionMetaRows(db: EngineConnection, keys: readonly string[]): void {
   if (keys.length === 0) {
     return;
   }
@@ -298,8 +343,8 @@ export function deleteAcpSessionMetaRows(db: DatabaseSync, keys: readonly string
       .where("session_key", "in", sqliteStringSet(keys))
       .returning("session_key"),
   ).rows;
-  publishAcpMetadataChanges(
+  publishAcpMetadataRows(
     db,
-    deleted.map((row) => row.session_key),
+    deleted.map((row) => [row.session_key, undefined] as const),
   );
 }

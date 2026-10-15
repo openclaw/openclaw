@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSubagentSessionRow } from "../../shared/session-list-visibility.js";
+import type { SessionActivitySummary } from "./activity-summary.js";
 import {
   projectAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkUpdate,
@@ -8,6 +10,7 @@ import {
   projectSessionMetaPatch,
   type PreparedSessionMetaPatch,
 } from "./metadata-projection.js";
+import { resolveSessionObserverDigestForLifecycle } from "./observer-digest.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
@@ -66,6 +69,12 @@ type SessionEntryPatchStep = (
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "observer-digest";
+      digest: NonNullable<SessionEntry["observerDigest"]>;
+      sessionId?: string;
+    }
+  | { kind: "activity-summary"; summary: SessionActivitySummary; sessionKey: string }
   | { kind: "ambient-transcript-watermark"; watermark: AmbientTranscriptWatermarkUpdate }
   | {
       kind: "ensure-identity";
@@ -203,6 +212,30 @@ function reduceSessionEntryPatch(
       return operation.patch;
     case "public-fields":
       return preserveGenerationPrivateFields(entry, operation.patch);
+    case "observer-digest": {
+      const { digest, sessionId } = operation;
+      const hasSessionIdentity = sessionId !== undefined || digest.sessionId !== undefined;
+      if (
+        (sessionId !== undefined && entry.sessionId !== sessionId) ||
+        (digest.sessionId !== undefined && entry.sessionId !== digest.sessionId) ||
+        ((hasSessionIdentity || digest.lifecycleRevision !== undefined) &&
+          entry.lifecycleRevision !== digest.lifecycleRevision) ||
+        (resolveSessionObserverDigestForLifecycle(entry.observerDigest, entry)?.revision ?? 0) >=
+          digest.revision
+      ) {
+        return null;
+      }
+      return { observerDigest: digest };
+    }
+    case "activity-summary": {
+      const { summary } = operation;
+      return entry.initializationPending ||
+        isSubagentSessionRow(operation.sessionKey, entry) ||
+        entry.sessionId !== summary.sessionId ||
+        entry.lifecycleRevision !== summary.lifecycleRevision
+        ? null
+        : { activitySummary: summary };
+    }
     case "ambient-transcript-watermark":
       return projectAmbientTranscriptWatermark(entry, operation.watermark);
     case "compaction-accounting":

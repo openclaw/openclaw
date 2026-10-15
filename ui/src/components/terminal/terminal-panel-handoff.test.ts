@@ -56,6 +56,7 @@ async function mount(client: TerminalGatewayClient) {
   if (!panel.terminalPanelOpen) {
     panel.toggle();
   }
+  await panel.updateComplete;
   // SAFETY: expose the concrete panel's controller solely to inspect lifecycle state.
   const sessions = terminalSessionsForTest(panel);
   await vi.waitFor(() => expect(sessions.tabs).toHaveLength(1));

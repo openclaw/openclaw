@@ -1,6 +1,7 @@
 import { createSignal, For, merge, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
@@ -18,7 +19,6 @@ import {
 import { useSessionMenuControllers } from "./session-menu-controllers.ts";
 import { SessionMenuItem } from "./session-menu-item.tsx";
 import { SessionMenuShortcut, useSessionMenuView } from "./session-menu-view.tsx";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 
 /** Only resolved local worktree destinations are offered by the menu host. */
@@ -253,34 +253,38 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
   );
 }
 
-defineSolidBridge<SessionMenuProps>("openclaw-session-menu", SessionMenuContent, {
-  properties: {
-    session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },
-    compact: { default: false, attribute: false },
-    involvingMeContext: { default: false, attribute: false },
-    navigationAllowed: { default: false, attribute: false },
-    copyMarkdownAllowed: { default: false, attribute: false },
-    splitAllowed: { default: false, attribute: false },
-    selectionCount: { default: 1, attribute: false },
-    lastActive: { default: "", attribute: false },
-    anchor: { default: { x: 0, y: 0 }, attribute: false },
-    trigger: { default: null, attribute: false },
-    disabled: { default: false, attribute: false },
-    actionDisabledReasons: { default: {}, attribute: false },
-    forkDisabled: { default: false, attribute: false },
-    forkFromLastCompleted: { default: false, attribute: false },
-    archiveAllowed: { default: false, attribute: false },
-    snoozeAllowed: { default: false, attribute: false },
-    deleteAllowed: { default: false, attribute: false },
-    cloudWorkerStopAllowed: { default: false, attribute: false },
-    groups: { default: [], attribute: false },
-    currentOwner: { default: null, attribute: false },
-    work: { default: null, attribute: false },
-    pluginActions: { default: [], attribute: false },
-    onAction: { default: () => {}, attribute: false },
-    onClose: { default: () => {}, attribute: false },
+export const SessionMenu = defineSolidBridge<SessionMenuProps>(
+  "openclaw-session-menu",
+  SessionMenuContent,
+  {
+    properties: {
+      session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },
+      compact: { default: false, attribute: false },
+      involvingMeContext: { default: false, attribute: false },
+      navigationAllowed: { default: false, attribute: false },
+      copyMarkdownAllowed: { default: false, attribute: false },
+      splitAllowed: { default: false, attribute: false },
+      selectionCount: { default: 1, attribute: false },
+      lastActive: { default: "", attribute: false },
+      anchor: { default: { x: 0, y: 0 }, attribute: false },
+      trigger: { default: null, attribute: false },
+      disabled: { default: false, attribute: false },
+      actionDisabledReasons: { default: {}, attribute: false },
+      forkDisabled: { default: false, attribute: false },
+      forkFromLastCompleted: { default: false, attribute: false },
+      archiveAllowed: { default: false, attribute: false },
+      snoozeAllowed: { default: false, attribute: false },
+      deleteAllowed: { default: false, attribute: false },
+      cloudWorkerStopAllowed: { default: false, attribute: false },
+      groups: { default: [], attribute: false },
+      currentOwner: { default: null, attribute: false },
+      work: { default: null, attribute: false },
+      pluginActions: { default: [], attribute: false },
+      onAction: { default: () => {}, attribute: false },
+      onClose: { default: () => {}, attribute: false },
+    },
   },
-});
+);
 
 declare global {
   interface HTMLElementTagNameMap {

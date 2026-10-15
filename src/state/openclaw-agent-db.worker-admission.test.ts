@@ -5,13 +5,26 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  readSqliteWorkerExecutionAuthority,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
+import {
+  assertSqliteWriterBrokerAdmission,
+  createSqliteWriterAdmissionService,
+} from "../infra/sqlite-writer-admission-service.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
@@ -23,7 +36,6 @@ import {
   openOpenClawAgentDatabaseReadOnly,
   hasOpenClawAgentReadOnlySchema,
 } from "./openclaw-agent-db-readonly-open.js";
-import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -39,9 +51,12 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import {
+  readAgentDatabaseExecutionAuthority,
+  AgentDatabaseExecutionLifetime,
+} from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -108,11 +123,12 @@ it.each(["before handoff", "after handoff"] as const)(
       peer.agentId,
       peer.path,
       context,
+      new AgentDatabaseExecutionLifetime().state,
       () => context.admission.assertCurrent(),
       () => context.admission.assertCurrent(),
       undefined,
       () => {},
-      () => async () => {},
+      () => {},
     );
     let validation: ReturnType<typeof getOpenClawAgentDatabaseValidationForTransfer>;
     const publish = () => {
@@ -173,27 +189,6 @@ it.each(["before handoff", "after handoff"] as const)(
   },
 );
 
-it("retains the schema receipt after first-use TEMP generation tracking", () => {
-  const options = {
-    agentId: "main",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-temp-receipt-") },
-  };
-  const database = openOpenClawAgentDatabase(options);
-  const schema = getOpenClawAgentDatabaseValidation(database)?.schema;
-  expect(schema).toBeDefined();
-  expect(readSessionNodesGeneration(database.db)).toBe(0);
-  const observed = observeCallerSchemaInspections(database.path);
-  try {
-    refreshOpenClawAgentDatabaseSchema(database, () => {});
-    expect(readSessionNodesGeneration(database.db)).toBe(0);
-    openOpenClawAgentDatabase(options);
-    expect(observed.inspections).toEqual([]);
-    expect(Atomics.load(new Int32Array(schema!.valid), 0)).toBe(1);
-  } finally {
-    observed.restore();
-  }
-});
-
 it("adopts worker admission after a retained reader observes an already-revalidated schema", async () => {
   const options = {
     agentId: "main",
@@ -206,7 +201,7 @@ it("adopts worker admission after a retained reader observes an already-revalida
   const foreign = openNodeSqliteDatabase(database.path);
   foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
   foreign.close();
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
   const observeReader = vi.fn(() => {
     expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
@@ -305,12 +300,12 @@ it("admits cold storage in its worker and lends facts to every later native hand
   expect(freshValidation.schema?.facts.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
-  // A synchronous caller shares the live worker admission; final close retires its catalog.
+  // Native handles share the worker's physical admission across orderly close.
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
   expect(inspections).toEqual([]);
   await closeOpenClawAgentDatabaseByPathAsync(pathname);
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
-  expect(inspections).toEqual([expect.stringMatching(/\bFROM main\.sqlite_schema\b/iu)]);
+  expect(inspections).toEqual([]);
 });
 
 it("publishes freshly verified proof to a previously admitted alias after stale lease cleanup", async () => {
@@ -322,7 +317,7 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
   const aliasPath = path.join(options.env.OPENCLAW_STATE_DIR, "alias.sqlite");
   fs.symlinkSync(canonical.path, aliasPath);
   const alias = openOpenClawAgentDatabase({ ...options, path: aliasPath });
-  closeCachedOpenClawAgentDatabase(alias, { eviction: true });
+  closeCachedOpenClawAgentDatabase(alias);
   const staleLease = claimOpenClawAgentDatabaseLease({ ...options, path: canonical.path });
   openOpenClawStateDatabase({ env: options.env })
     .db.prepare("UPDATE agent_database_leases SET owner_start_time=-1 WHERE lease_id=?")
@@ -393,6 +388,7 @@ it.each([
   let retainedExecution = captureOpenClawAgentDatabaseExecution(options);
   try {
     const database = await withOpenClawAgentDatabaseWrite(options, (opened) => {
+      opened.db.exec("INSERT INTO auth_profile_state VALUES ('retained', '{}', 1)");
       if (change.endsWith("additive-table")) {
         opened.db.exec("CREATE TABLE coldadmit_fixture(value TEXT)");
       } else if (change.endsWith("missing-index") && !change.startsWith("foreign-")) {
@@ -426,7 +422,7 @@ it.each([
       fs.symlinkSync(database.path, acquisitionPath);
     }
     if (!change.startsWith("warm-")) {
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
     if (change === "foreign-missing-index") {
@@ -439,6 +435,19 @@ it.each([
     }
     nativeClaim.assertCurrent();
     const observed = observeCallerSchemaInspections(database.path, acquisitionPath);
+    let prepareRequests = 0;
+    const unsubscribe = onInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "worker.request" &&
+          event.requestClass === "database.prepareWrite" &&
+          event.phase === "queued"
+        ) {
+          prepareRequests++;
+        }
+      },
+      { include: ["worker.request"] },
+    );
     try {
       const count = await withOpenClawAgentDatabaseWrite(
         { ...options, path: acquisitionPath },
@@ -448,6 +457,13 @@ it.each([
           expect(facts?.tables.has("session_key_contract")).toBe(true);
           expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
           expect(facts?.indexes).toContain("idx_agent_cache_expiry");
+          expect(
+            reopened.db
+              .prepare(
+                "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
+              )
+              .get()?.updated_at,
+          ).toBe(2);
           return reopened.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
         },
       );
@@ -464,7 +480,26 @@ it.each([
       }
       nativeClaim.assertCurrent();
       expect(observed.inspections).toEqual([]);
+      if (change === "eviction") {
+        expect(prepareRequests).toBe(0);
+      }
+      if (change === "foreign-missing-index") {
+        prepareRequests = 0;
+        const repaired = await withOpenClawAgentDatabaseWrite(options, (opened) => opened);
+        closeCachedOpenClawAgentDatabase(repaired);
+        await expect(
+          withOpenClawAgentDatabaseWrite(
+            options,
+            ({ db }) =>
+              db
+                .prepare("SELECT updated_at FROM auth_profile_state WHERE state_key='retained'")
+                .get()?.updated_at,
+          ),
+        ).resolves.toBe(2);
+        expect(prepareRequests).toBe(0);
+      }
     } finally {
+      unsubscribe();
       observed.restore();
     }
     if (change.endsWith("missing-index")) {
@@ -514,7 +549,7 @@ it.each([
           "ALTER TABLE auth_profile_state RENAME COLUMN state_json TO drifted_state_json",
         );
       } else if (retainedExecution) {
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
@@ -532,7 +567,7 @@ it.each([
         fs.renameSync(`${pathname}.replacement`, pathname);
       }
       if (change === "damage") {
-        clearOpenClawAgentIntegrityVerification(pathname, options.env);
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
         fs.writeFileSync(pathname, "damaged SQLite fixture");
       } else if (change !== "warm-schema") {
         const editor = openNodeSqliteDatabase(pathname);
@@ -577,3 +612,238 @@ it.each([
     }
   },
 );
+
+it.each(["once", "always", "source-revoked", "after-entry"] as const)(
+  "recovers schema publication before execution without replaying admitted work: %s",
+  async (failure) => {
+    const options = {
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-schema-publication-") },
+    };
+    const database = openOpenClawAgentDatabase(options);
+    const expectedIdentity = readDatabasePathIdentitySync(database.path);
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Fixture request authority revoked");
+      }
+    };
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Fixture native admission expired");
+          }
+        }, binding.attachment),
+      }),
+    };
+    let publications = 0;
+    const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+    vi.spyOn(
+      validationCache,
+      "captureOpenClawAgentDatabaseAdmissionPublication",
+    ).mockImplementation((target) => {
+      const publish = capture(target);
+      return (identity, received) => {
+        publications += 1;
+        if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
+          // Revoke actual captured proof at the worker-to-host publication boundary.
+          validationCache.invalidateOpenClawAgentDatabaseValidation(target.path);
+          if (failure === "source-revoked") {
+            current = false;
+          }
+        }
+        publish(identity, received);
+      };
+    });
+    const operation = vi.fn(async () => {
+      if (failure === "after-entry") {
+        throw new AgentDatabaseSchemaAdmissionChangedError();
+      }
+      return "executed";
+    });
+    try {
+      const result = execution.runExisting(source, operation);
+      if (failure === "once") {
+        await expect(result).resolves.toBe("executed");
+        expect(operation).toHaveBeenCalledTimes(1);
+        expect(publications).toBe(2);
+      } else {
+        await expect(result).rejects.toThrow(
+          failure === "source-revoked"
+            ? "Fixture request authority revoked"
+            : "Agent schema admission changed before publication",
+        );
+        expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
+        expect(publications).toBe(failure === "always" ? 2 : 1);
+      }
+      expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
+    } finally {
+      await execution.release();
+    }
+  },
+);
+
+function executionAuthoritySource(
+  observe: (
+    request: SqliteWorkerAdmissionRequest,
+    authority: SqliteWorkerExecutionAuthority,
+  ) => void,
+  beforeRelease?: (request: SqliteWorkerAdmissionRequest) => void,
+): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent() {},
+    createAdmission(binding) {
+      return () => {
+        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          const authority = readSqliteWorkerExecutionAuthority(admission);
+          if (authority) {
+            observe(request, authority);
+          }
+          if (!grant(() => beforeRelease?.(request))) {
+            throw new Error("Execution authority fixture lost admission");
+          }
+        }, binding.attachment);
+        return { admission, nativeLocations: binding.nativeLocations };
+      };
+    },
+  };
+}
+
+it("retains accepted work across borrower release and refuses late registration after retirement", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("execution-authority-")) };
+  const options = {
+    agentId: "main",
+    env,
+    path: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const service = createSqliteWriterAdmissionService();
+  const connection = await service.connect();
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  let authority: SqliteWorkerExecutionAuthority | undefined;
+  const requestSource = executionAuthoritySource((_request, captured) => (authority = captured));
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  let release: Promise<void> | undefined;
+  try {
+    await execution.prepare(requestSource);
+    const work = execution.runExisting(requestSource, async (scope) => {
+      entered.resolve();
+      await resume.promise;
+      return scope.execute({
+        type: "session.transcript.initialize",
+        input: { sessionKey: "agent:main:accepted", sessionId: "accepted" },
+      });
+    });
+    await entered.promise;
+    release = execution.release();
+    expect(() => execution.assertCurrent()).toThrow(/released/);
+    resume.resolve();
+    await expect(work).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+    await release;
+    expect(authority).toBeDefined();
+    const captured = authority!;
+    assertSqliteWriterBrokerAdmission(connection, custody.descriptor, captured);
+
+    const closing = closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+    expect(readAgentDatabaseExecutionAuthority(captured)).toBe(false);
+    await closing;
+
+    // Delivery after retirement must read the original cells, even on a fresh service.
+    const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    connection.port.postMessage(
+      {
+        custody: custody.descriptor,
+        executionAuthority: structuredClone(captured),
+        decision,
+      },
+      [],
+    );
+    await Atomics.waitAsync(decision, 0, 0).value;
+    expect(Atomics.load(decision, 0)).toBe(2);
+
+    const replacement = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await replacement.prepare(requestSource);
+      await replacement.runExisting(requestSource, (scope) =>
+        scope.execute({
+          type: "session.entry.read",
+          input: { sessionKeys: ["agent:main:accepted"] },
+        }),
+      );
+      expect(authority!.native.buffer).not.toBe(captured.native.buffer);
+      expect(readAgentDatabaseExecutionAuthority(captured)).toBe(false);
+      assertSqliteWriterBrokerAdmission(connection, custody.descriptor, authority);
+    } finally {
+      await replacement.release();
+    }
+  } finally {
+    resume.resolve();
+    await release;
+    await execution.release();
+    connection.port.close();
+    await service.close();
+  }
+});
+
+it("publishes owner revocation before a host grant and rolls back the native write", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("execution-authority-")) };
+  const options = {
+    agentId: "main",
+    env,
+    path: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  await execution.prepare(executionAuthoritySource(() => {}));
+  let authority: SqliteWorkerExecutionAuthority | undefined;
+  let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+  const requestSource = executionAuthoritySource(
+    (_request, captured) => (authority = captured),
+    (request) => {
+      if (request.stage === "commit") {
+        closing = closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+        expect(authority).toBeDefined();
+        expect(readAgentDatabaseExecutionAuthority(authority!)).toBe(false);
+      }
+    },
+  );
+  try {
+    await expect(
+      execution.runExisting(requestSource, (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:main:revoked", sessionId: "revoked" },
+        }),
+      ),
+    ).rejects.toThrow(/execution authority is revoked/);
+    expect(closing).toBeDefined();
+    await closing;
+    const replacement = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await expect(
+        replacement.runExisting(
+          executionAuthoritySource(() => {}),
+          (scope) =>
+            scope.execute({
+              type: "session.entry.read",
+              input: { sessionKeys: ["agent:main:revoked"] },
+            }),
+        ),
+      ).resolves.toMatchObject({ entries: [] });
+    } finally {
+      await replacement.release();
+    }
+  } finally {
+    await closing;
+    await execution.release();
+  }
+});

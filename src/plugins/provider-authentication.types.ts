@@ -37,6 +37,10 @@ export type ProviderAuthResult = {
    */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
+  /** Setup routes the selected agent's model through this runtime, without changing global defaults. */
+  agentRuntimeId?: string;
+  /** Native runtimes whose permissions the user explicitly accepted during this sign-in. */
+  nativeRuntimeConsent?: string[];
   notes?: string[];
   /**
    * Opt in to replace `agents.defaults.models` wholesale with the patch map.
@@ -55,6 +59,8 @@ export type ProviderAuthContext = {
   credentialOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
+  /** Agent receiving this sign-in and any explicitly accepted native runtime permissions. */
+  agentId?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;

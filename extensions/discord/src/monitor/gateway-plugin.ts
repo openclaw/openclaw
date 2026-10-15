@@ -3,8 +3,8 @@ import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import {
+  captureWsEventAsync,
   resolveEffectiveDebugProxyUrl,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -28,9 +28,6 @@ import {
   type DiscordGatewayFetch,
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
-
-// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
-const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
 
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
@@ -249,19 +246,14 @@ function createGatewayPlugin(params: {
       };
       // Finalization retains capture failures; observe Promises returned by the SDK view.
       const captureEvent = (
-        event: () => Omit<
-          Parameters<typeof proxyCaptureSdk.captureWsEventAsync>[0],
-          "url" | "flowId" | "meta"
-        >,
+        event: () => Omit<Parameters<typeof captureWsEventAsync>[0], "url" | "flowId" | "meta">,
       ) => {
-        void captureSdk
-          .captureWsEventAsync?.({
-            url,
-            ...event(),
-            flowId: wsFlowId,
-            meta: { subsystem: "discord-gateway" },
-          })
-          .catch(() => {});
+        void captureWsEventAsync({
+          url,
+          ...event(),
+          flowId: wsFlowId,
+          meta: { subsystem: "discord-gateway" },
+        }).catch(() => {});
       };
       captureEvent(() => ({ direction: "local", kind: "ws-open" }));
       socket.on?.("message", (data: unknown) => {

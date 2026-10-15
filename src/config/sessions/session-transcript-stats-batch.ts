@@ -2,16 +2,11 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptStats,
 } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptStatsBatchReadOnlySync } from "./session-accessor.sqlite-read.js";
-import {
-  captureSessionEntryReadScope,
-  isNativeSessionEntryRead,
-} from "./session-entry-read-request.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
+import { captureSessionEntryReadScope } from "./session-entry-read-request.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionStoreWorkerReadInput } from "./session-entry-read-runtime.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 
 type TranscriptStatsBatch = {
   scope: SessionStoreWorkerReadInput & { env: NodeJS.ProcessEnv };
@@ -26,18 +21,20 @@ export async function readTranscriptStatsBatchReadOnlyAsync(
   const results: Array<SessionTranscriptStats | null> = scopes.map(() => null);
   const groups = new Map<string, TranscriptStatsBatch>();
   for (const [index, input] of scopes.entries()) {
-    if (captureIncognitoSessionSource(input)) {
-      results[index] = await readTranscriptStatsAsync(input);
+    const memory = captureSessionActorTranscriptRead(input);
+    if (memory) {
+      if (memory.missing) {
+        memory.assertCurrent();
+        results[index] = { eventCount: 0, maxSeq: 0, sizeBytes: 0 };
+      } else {
+        results[index] = await memory.read("session.history.stats", {});
+      }
       continue;
     }
     const { scope, agentId } = captureSessionEntryReadScope({
       ...input,
       sessionKey: input.sessionKey ?? "",
     });
-    if (isNativeSessionEntryRead(scope, agentId)) {
-      results[index] = readTranscriptStatsBatchReadOnlySync([input])[0] ?? null;
-      continue;
-    }
     const storePath = resolveSessionStorePathForScope(scope);
     const captured = { ...scope, agentId, storePath };
     const key = JSON.stringify([agentId, storePath, captured.env]);

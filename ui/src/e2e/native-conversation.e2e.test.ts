@@ -617,7 +617,19 @@ suite.define(() => {
             .waitFor();
           expect(new URL(page.url()).pathname).toBe("/settings");
         } else {
-          expect(await headerLeadingInset(page)).toBe(12);
+          if (mode === "dashboard") {
+            const controls = page.locator(".macos-titlebar-controls");
+            await controls.waitFor();
+            const controlsBox = await controls.boundingBox();
+            const leadingBox = await page.locator(".chat-pane__header-leading").boundingBox();
+            expect(controlsBox).not.toBeNull();
+            expect(leadingBox).not.toBeNull();
+            const gap = leadingBox!.x - (controlsBox!.x + controlsBox!.width);
+            expect(gap).toBeGreaterThanOrEqual(0);
+            expect(gap).toBeLessThanOrEqual(8);
+          } else {
+            expect(await headerLeadingInset(page)).toBe(12);
+          }
           expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
             y: 0,
             height: mode === "dashboard" ? 52 : 48,

@@ -1,10 +1,18 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  hashRuntimeConfigValue,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
@@ -173,10 +181,16 @@ export function preparedModelRuntimeConfigsMatch(
     return true;
   }
   try {
-    return hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right);
+    return modelRuntimeConfigFingerprint(left) === modelRuntimeConfigFingerprint(right);
   } catch {
     return false;
   }
+}
+
+function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
+  // Canonical values change at publication; caller-owned projections still need a fresh hash.
+  const published = config === getRuntimeConfigSnapshot() && getRuntimeConfigSnapshotMetadata();
+  return published ? published.fingerprint : hashRuntimeConfigValue(config);
 }
 
 function stampPreparedModelRuntimeSnapshotConfig(
@@ -205,6 +219,13 @@ export function advancePreparedModelRuntimeOwnerConfig(
 
 export function normalizeOptionalDir(dirname: string | undefined): string | undefined {
   return dirname ? path.resolve(dirname) : undefined;
+}
+
+export async function prepareModelRuntimeInput(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeInput> {
+  await prepareSharedAuthStoreOwnership(input.env);
+  return normalizePreparedModelRuntimeInput(input);
 }
 
 export function normalizePreparedModelRuntimeInput(
@@ -276,7 +297,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     env: environmentFingerprint(input.env),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     runtimePluginSelections: input.runtimePluginSelections,
-    config: input.readOnly ? hashRuntimeConfigValue(input.config) : undefined,
+    config: input.readOnly ? modelRuntimeConfigFingerprint(input.config) : undefined,
   });
 }
 
@@ -371,6 +392,9 @@ export function readPublishedModelRuntimeSnapshot(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    return undefined;
+  }
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const owner = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:

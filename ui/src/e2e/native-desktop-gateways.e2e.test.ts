@@ -200,9 +200,9 @@ suite.define(() => {
         .getByRole("menuitemradio", { name: /Local Gateway/ })
         .click({ modifiers: ["Control"] });
       await openMenu();
-      await page.locator('wa-dropdown-item[value="command:gateway-set-primary"]').click();
+      await page.locator('[data-value="command:gateway-set-primary"]').click();
       await openMenu();
-      await page.locator('wa-dropdown-item[value="command:gateway-settings"]').click();
+      await page.locator('[data-value="command:gateway-settings"]').click();
       await page
         .getByRole("alert")
         .filter({ hasText: "Could not open Gateway settings" })

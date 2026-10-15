@@ -38,6 +38,9 @@ export function Typography(
       labelStyle: `font-family: ${metadata.stack}`,
     })),
   );
+  // The value binding rewrites the DOM whenever it reruns. Track only the stored
+  // family so unrelated settings refreshes keep an uncommitted draft.
+  const terminalFontFamily = createMemo(() => props.terminalFontFamily ?? "");
   return (
     <>
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
@@ -112,17 +115,9 @@ export function Typography(
                     placeholder={t("configView.appearance.fonts.terminalDefault")}
                     maxlength={100}
                     spellcheck="false"
-                    value={props.terminalFontFamily ?? ""}
-                    onInput={(
-                      event: Event & {
-                        currentTarget: HTMLInputElement;
-                      },
-                    ) => event.currentTarget.setCustomValidity("")}
-                    onChange={(
-                      event: Event & {
-                        currentTarget: HTMLInputElement;
-                      },
-                    ) => {
+                    value={terminalFontFamily()}
+                    onInput={(event) => event.currentTarget.setCustomValidity("")}
+                    onChange={(event) => {
                       const input = event.currentTarget;
                       const family = normalizeTerminalFontFamily(input.value);
                       if (input.value.trim() && !family) {

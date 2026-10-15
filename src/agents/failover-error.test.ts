@@ -13,7 +13,6 @@ import {
   FailoverError,
   findCliTimeoutError,
   hasLocalWorkerTaskTimeout,
-  hasProviderRequestSizeCeiling,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -283,6 +282,34 @@ describe("failover-error", () => {
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
+  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+    "preserves provider text when enriching exhaustion (rawError=%s)",
+    (rawError) => {
+      const message = "429 rate limit exceeded. Retry in 221ms.";
+      const cause = new Error("provider request failed");
+      const original = new FailoverError(message, {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError,
+        cause,
+      });
+      const enriched = coerceToFailoverError(original, { rateLimitRetriesExhausted: 9 });
+      expect(enriched?.message).toContain("9 automatic retries");
+      expect(describeFailoverError(enriched)).toMatchObject({
+        rawError: rawError ?? message,
+        status: 429,
+        code: "rate_limit_exceeded",
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      });
+      expect(enriched?.cause).toBe(cause);
+      expect(original.message).toBe(message);
+      expect(original.rawError).toBe(rawError);
+      expect(original.rateLimitRetriesExhausted).toBeUndefined();
+    },
+  );
+
   it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
     const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const facts = {
@@ -452,13 +479,9 @@ describe("failover diagnostic isolation", () => {
       expect(coerceToFailoverError(candidate)).toBeNull();
       expect(isTimeoutError(candidate)).toBe(false);
       expect(diagnosticErrorFailureKind(candidate)).toBeUndefined();
-      expect(hasProviderRequestSizeCeiling(candidate)).toBe(false);
       expect(isLikelyContextOverflowError(formatErrorMessage(candidate))).toBe(false);
       expect(formatErrorMessage(candidate)).not.toContain(diagnostic);
     }
-    expect(
-      hasProviderRequestSizeCeiling(new AggregateError([{ error }], "Plugin execution failed")),
-    ).toBe(false);
   });
 
   describe("hasLocalWorkerTaskTimeout", () => {
@@ -679,21 +702,4 @@ describe("isNonProviderRuntimeCoordinationError", () => {
 it("does not treat an AbortError matching transport timeout wording as a signal timeout", () => {
   const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
   expect(isSignalTimeoutReason(err)).toBe(false);
-});
-
-describe("hasProviderRequestSizeCeiling", () => {
-  it("finds the recorded ceiling through nested error and aggregate wrappers", () => {
-    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
-      reason: "context_overflow",
-      rawError: "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098",
-    });
-    expect(
-      hasProviderRequestSizeCeiling(
-        new AggregateError(
-          [new Error("unrelated"), { error: { cause: ceiling } }],
-          "agent run failed",
-        ),
-      ),
-    ).toBe(true);
-  });
 });

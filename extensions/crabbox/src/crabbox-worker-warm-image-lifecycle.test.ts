@@ -11,6 +11,7 @@ import {
 import {
   captureWarmImage,
   checkpointResult,
+  createProjectOptions,
   createWarmProvider,
   provisionWarmProfile,
   CHECKPOINT_ID,
@@ -20,6 +21,141 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox warm-image lifecycle ownership", () => {
+  it("keeps idle renewal through capture admission and capture, then stops it before release", async () => {
+    vi.useFakeTimers();
+    const inspectionEntered = createDeferred<void>();
+    const finishInspection = createDeferred<void>();
+    const captureEntered = createDeferred<void>();
+    const finishCapture = createDeferred<void>();
+    let destroying = false;
+    let periodicHeartbeatCount = 0;
+    let heartbeatSignal: AbortSignal | undefined;
+    const { provider, calls } = createWarmProvider(async ({ argv, options }) => {
+      if (argv[1] === "heartbeat" && argv.includes("--idle-timeout")) {
+        periodicHeartbeatCount++;
+        heartbeatSignal = options.signal;
+      }
+      if (destroying && argv[1] === "inspect") {
+        inspectionEntered.resolve();
+        await finishInspection.promise;
+      }
+      if (destroying && argv[2] === "create") {
+        captureEntered.resolve();
+        await finishCapture.promise;
+      }
+      return undefined;
+    });
+    let teardown: Promise<void> | undefined;
+    try {
+      const lease = await provisionWarmProfile(provider);
+      await vi.advanceTimersByTimeAsync(0);
+      const beforeAdmission = periodicHeartbeatCount;
+      destroying = true;
+      teardown = destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
+      void teardown.catch(() => {});
+      await inspectionEntered.promise;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicHeartbeatCount).toBeGreaterThan(beforeAdmission);
+      expect(heartbeatSignal?.aborted).toBe(false);
+      finishInspection.resolve();
+      await captureEntered.promise;
+      const beforeCapture = periodicHeartbeatCount;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicHeartbeatCount).toBeGreaterThan(beforeCapture);
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      finishCapture.resolve();
+      await teardown;
+      expect(heartbeatSignal?.aborted).toBe(true);
+      const afterRelease = periodicHeartbeatCount;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(periodicHeartbeatCount).toBe(afterRelease);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    } finally {
+      finishInspection.resolve();
+      finishCapture.resolve();
+      try {
+        await teardown;
+      } finally {
+        await provider.dispose();
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it("enrolls after detected setup failure, records diagnostics, and suppresses teardown capture after restart", async () => {
+    const events: string[] = [];
+    const { options, observe } = createProjectOptions(events);
+    const recipePreparation = {
+      source: "detected" as const,
+      ignoredPropertiesNote: "devcontainer image ignored on cloud machines",
+      phaseDurationsMs: { detectedInstall: 75 },
+      failure: { reason: "npm ci failed", outputTail: "synthetic missing dependency" },
+    };
+    options.project.prepare.mockResolvedValue({
+      seedKey: "a".repeat(64),
+      cacheHit: false,
+      captureSkipped: "npm ci failed",
+      recipePreparation,
+    });
+    const initial = createWarmProvider(observe);
+    const lease = await provisionWarmProfile(
+      initial.provider,
+      PROFILE,
+      "detected-failure",
+      undefined,
+      options,
+    );
+
+    expect(events).toContain("enrollment-begun");
+    expect(events).not.toContain("capture");
+    expect(events).not.toContain("runtime-granted");
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      state: "no-image",
+      recipePreparation,
+      allocations: { [lease.leaseId]: { phase: "enrolled", captureSkipped: "npm ci failed" } },
+    });
+
+    await initial.provider.dispose();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    const restarted = createWarmProvider(undefined, initial.stateDir);
+    await destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE });
+    expect(
+      restarted.calls.some(({ argv }) => argv[1] === "checkpoint" && argv[2] === "create"),
+    ).toBe(false);
+    expect(restarted.calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.recipePreparation).toEqual(
+      recipePreparation,
+    );
+  });
+
+  it("retains declared recipe failure diagnostics while refusing dispatch", async () => {
+    const events: string[] = [];
+    const { options, observe } = createProjectOptions(events);
+    const recipePreparation = {
+      source: "devcontainer" as const,
+      phaseDurationsMs: { onCreate: 30 },
+      failure: { reason: "onCreateCommand failed", outputTail: "synthetic exit 7" },
+    };
+    options.project.prepare.mockImplementation(async (transport) => {
+      await transport.recordRecipePreparation?.(recipePreparation);
+      throw new Error("onCreateCommand failed");
+    });
+    const { provider, calls } = createWarmProvider(observe);
+
+    await expect(
+      provisionWarmProfile(provider, PROFILE, "declared-failure", undefined, options),
+    ).rejects.toThrow("onCreateCommand failed");
+    expect(events).not.toContain("enrollment-begun");
+    expect(events).not.toContain("capture");
+    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      state: "no-image",
+      recipePreparation,
+      allocations: {},
+    });
+  });
+
   it("replays a cold allocation after restart even after another lease publishes the first image", async () => {
     const initial = createWarmProvider();
     const lease = await provisionWarmProfile(initial.provider, PROFILE, "response-lost");

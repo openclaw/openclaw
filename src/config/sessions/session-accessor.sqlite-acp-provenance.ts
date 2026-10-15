@@ -56,6 +56,7 @@ export function readLegacyAcpMigrationContextInDatabase(
   };
 }
 
+/** Native ACP maintenance and offline import; runtime reads use the source worker. */
 export function readLegacyAcpMigrationContext(scope: SessionEntryReadScope) {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(

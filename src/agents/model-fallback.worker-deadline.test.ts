@@ -55,11 +55,13 @@ async function runPoolTaskWithDeadline(
       onNotification: () => started.resolve(),
     },
   );
+  // Handle the expected rejection before advancing timers yields to the event loop.
+  const deadline = pending.catch((value: unknown) => value);
   await started.promise;
   try {
     await vi.advanceTimersByTimeAsync(50);
     return {
-      deadline: (await pending.catch((value: unknown) => value)) as Error & { code?: string },
+      deadline: (await deadline) as Error & { code?: string },
       view,
     };
   } finally {

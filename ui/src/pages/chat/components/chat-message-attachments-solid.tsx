@@ -156,35 +156,30 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
         />
       }
     >
-      {(item) => (
-        <Show
-          when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
-          fallback={
-            <AttachmentContent
-              item={item()}
-              options={props.options}
-              onOpenSidebar={props.onOpenSidebar}
-              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-              presentation={props.presentation}
-            />
-          }
-        >
-          <ChatAttachmentAdmission
-            attachments={[item().attachment]}
+      {(item) => {
+        const content = (admission?: AttachmentAdmission) => (
+          <AttachmentContent
+            item={item()}
             options={props.options}
-            render={(admission) => (
-              <AttachmentContent
-                item={item()}
-                options={props.options}
-                onOpenSidebar={props.onOpenSidebar}
-                onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-                presentation={props.presentation}
-                admission={admission}
-              />
-            )}
+            onOpenSidebar={props.onOpenSidebar}
+            onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+            presentation={props.presentation}
+            admission={admission}
           />
-        </Show>
-      )}
+        );
+        return (
+          <Show
+            when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
+            fallback={content()}
+          >
+            <ChatAttachmentAdmission
+              attachments={[item().attachment]}
+              options={props.options}
+              render={content}
+            />
+          </Show>
+        );
+      }}
     </Show>
   );
 }
@@ -216,10 +211,11 @@ function prepareAttachment(
     attachment.kind === "video" && onOpenImage && safeAttachmentUrl
       ? (src: string) => {
           const requestVersion = onRequestOpenImage?.();
-          const videoItem = (video: AttachmentItem["attachment"]) =>
+          const videoItem = (video: AttachmentItem["attachment"], messageId = options.messageId) =>
             videoLightboxItem(
               video,
-              (onRequestUpdate) => resolveAttachmentSource(video, { ...options, onRequestUpdate }),
+              (onRequestUpdate) =>
+                resolveAttachmentSource(video, { ...options, messageId, onRequestUpdate }),
               options.onRequestUpdate,
             );
           const membership = options.galleryVideos?.(item);
@@ -232,9 +228,9 @@ function prepareAttachment(
                   gallery: {
                     index: membership.index,
                     items: membership.items.map(
-                      ({ attachment: video }) =>
+                      ({ attachment: video, messageId }) =>
                         async () =>
-                          videoItem(video),
+                          videoItem(video, messageId),
                     ),
                   },
                 }
@@ -270,6 +266,7 @@ function prepareAttachment(
                   resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
                     const next = resolveAttachmentSource(attachment, {
                       ...runtime,
+                      messageId: options.messageId,
                       onRequestUpdate: sidebarUpdate,
                     });
                     if (next.status === "available") {

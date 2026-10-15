@@ -48,7 +48,6 @@ import {
   isRetryableReefRelayFailure,
 } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
-import { LegacyReefTrustStore } from "./trust-store.legacy.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
 function resolveAccount(cfg: unknown): ReefAccount {
@@ -59,19 +58,6 @@ function resolveAccount(cfg: unknown): ReefAccount {
     configured: Boolean(config.handle && config.email && config.guard),
     config,
   };
-}
-
-/** @deprecated Retained for released hosts without asynchronous channel hooks. */
-function listTrustedPeersCurrent(config: ReefAccount["config"]): string[] {
-  if (!config.handle) {
-    return [];
-  }
-  // Read-only setup, doctor, and audit discovery can load the channel shape
-  // without initializing the live plugin runtime.
-  const runtime = getOptionalReefRuntime();
-  return runtime
-    ? new LegacyReefTrustStore(runtime, config).listCurrent().map((entry) => entry.peer)
-    : [];
 }
 
 async function listTrustedPeers(config: ReefAccount["config"]): Promise<string[]> {
@@ -159,17 +145,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     resolveAccount,
     isEnabled: (account) => account.enabled,
     isConfigured: (account) => account.configured,
-    /** @deprecated Retained for released hosts without resolveAllowFromAsync. */
-    resolveAllowFrom: ({ cfg }) => {
-      const config = resolveReefConfig(cfg as ReefCoreConfig);
-      return listTrustedPeersCurrent(config);
-    },
     resolveAllowFromAsync: ({ cfg }) => listTrustedPeers(resolveAccount(cfg).config),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
-    /** @deprecated Retained for released hosts without describeAccountAsync. */
-    describeAccount: (account) =>
-      describeReefAccount(account, listTrustedPeersCurrent(account.config).length),
     describeAccountAsync: async (account) =>
       describeReefAccount(account, (await listTrustedPeers(account.config)).length),
   },
@@ -242,8 +220,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     },
   },
   security: {
-    /** @deprecated Retained for released hosts without resolveDmPolicyAsync. */
-    resolveDmPolicy: ({ account }) => resolveReefDmPolicy(listTrustedPeersCurrent(account.config)),
     resolveDmPolicyAsync: async ({ account }) =>
       resolveReefDmPolicy(await listTrustedPeers(account.config)),
   },
@@ -320,7 +296,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
           });
           return;
         }
-        // Released hosts may ignore the forwarded authority hook.
+        // Refuse revoked peer trust before handing message content to the host.
         assertCurrent();
         await dispatchInboundDirectDm({
           channelIngress: "unsupported",
@@ -385,7 +361,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             authority.signal.throwIfAborted();
             notice.recovery.assertCurrent();
           };
-          // Reserve may yield; older dispatchers do not recheck this hook.
+          // Reservation may yield; check trust before handing the notice to the host.
           assertCurrent();
           await dispatchInboundDirectDm({
             channelIngress: "unsupported",
@@ -436,7 +412,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
               replyTo: notice.messageId,
               expectedRecipient: notice.recipient,
               resendDisabled: true,
-              prepareDelivery: notice.recovery.prepareOutboundDelivery.bind(notice.recovery),
               recovery: notice.recovery,
             });
           }
@@ -466,6 +441,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             sendPairingReply: async () => {},
           });
         }, signal);
+        await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.

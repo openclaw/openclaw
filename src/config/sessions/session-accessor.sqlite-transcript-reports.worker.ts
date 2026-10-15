@@ -95,12 +95,13 @@ export function bindSqliteWorkerBackend(
     }
     assertTransactionUsable(database.db);
   };
-  const readRefusal = () =>
-    resolveTranscriptAppendRefusal(
-      readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-      resolved,
-      { ...resolved, ...fence },
-    );
+  const readCurrentEntry = () => {
+    const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
+    return {
+      entry,
+      refusal: resolveTranscriptAppendRefusal(entry, resolved, { ...resolved, ...fence }),
+    };
+  };
   let prepared:
     | {
         facts: PreparedTranscriptReport;
@@ -115,7 +116,7 @@ export function bindSqliteWorkerBackend(
           Result<PreparedTranscriptReport, TranscriptAppendRefusal>
         >(database.db, () => {
           prepared = undefined;
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             return err(refusal);
           }
@@ -134,7 +135,7 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             admit("commit");
             return err(refusal);
@@ -218,7 +219,7 @@ export function bindSqliteWorkerBackend(
                   authorizeCommit,
                 )
               : false;
-          const rebound = readRefusal();
+          const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -227,6 +228,10 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
+            ...((cliHistoryChanged ||
+              (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
+              entry,
+            }),
             ...(abortedPartial
               ? {
                   abortedPartial,

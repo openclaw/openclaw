@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createAccountScopedConversationBindingManager,
   resetAccountScopedConversationBindingsForTests,
@@ -69,7 +67,7 @@ describe("account-scoped conversation binding expiry", () => {
   afterEach(async () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -134,7 +132,7 @@ describe("account-scoped conversation binding expiry", () => {
       }
 
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager({ cfg });
 
       expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
@@ -210,7 +208,7 @@ describe("account-scoped conversation binding expiry", () => {
         metadata: { label: "updated" },
       });
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager();
 
       expect(service.resolveByConversation(conversation)).toMatchObject({

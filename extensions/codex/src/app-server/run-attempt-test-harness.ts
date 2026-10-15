@@ -24,6 +24,10 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
@@ -301,6 +305,10 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
+  return { tools: { web: { search: { enabled: false } } } };
+}
+
 export function createParams(
   sessionFile: string,
   workspaceDir: string,
@@ -337,7 +345,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: { tools: { web: { search: { enabled: false } } } },
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -450,8 +458,7 @@ export {
 } from "./codex-app-server.test-fixtures.js";
 
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
-  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");
 }
 
 export function createAppServerHarness(
@@ -461,7 +468,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    persistedThreads?: string[];
+    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -601,6 +608,7 @@ export function createStartedThreadHarness(
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  persistedThread?: ReturnType<typeof threadStartResult> & { thread: { model?: string | null } },
 ) {
   return createAppServerHarness(
     async (method, params, requestOptions) => {
@@ -609,8 +617,6 @@ export function createResumeHarness(
         return override;
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; a different id is rejected as
-        // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
           ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
@@ -619,7 +625,7 @@ export function createResumeHarness(
       }
       return defaultAttemptHarnessResponse(method);
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [persistedThread ?? threadId] },
   );
 }
 
@@ -696,6 +702,7 @@ export function setupRunAttemptTestHooks(
       vi.stubEnv("HOME", nativeSkillTestHome);
       vi.stubEnv("CODEX_HOME", "");
     }
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
@@ -724,6 +731,7 @@ export function setupRunAttemptTestHooks(
     await context.codexAttemptRuntime.stop();
     // A run beyond the drain deadline still needs the original database revocation fence.
     await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
+    clearRuntimeConfigSnapshot();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
@@ -736,6 +744,7 @@ export function setupRunAttemptTestHooks(
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     if (pluginCleanup) {
       expect(pluginCleanup.failures).toEqual([]);

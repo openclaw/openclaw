@@ -157,19 +157,40 @@ describe("wrapQwenProviderStream", () => {
     },
   );
 
-  it("honors caller budgets and reasoning overrides after async payload replacement", async () => {
-    const capture = createAsyncPayloadCapture(createModel("qwen3.8-max"), "high", () => ({
-      messages: [],
-    }));
-    for (const [replacement, expected] of [
-      [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
-      [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
-      [{ reasoning_effort: "none" }, { enable_thinking: false }],
-    ]) {
-      const captured = await capture(async () => ({ ...replacement }));
-      expect(captured).toEqual(expected);
-    }
-  });
+  it.each(["in-place mutation", "sync replacement", "async replacement"] as const)(
+    "honors caller budgets and reasoning overrides after %s",
+    async (mode) => {
+      const capture = createAsyncPayloadCapture(createModel("qwen3.8-max"), "high", () => ({
+        messages: [],
+      }));
+      for (const [replacement, expected] of [
+        [{ thinking_budget: 512 }, { thinking_budget: 512, enable_thinking: true }],
+        [{ reasoning_effort: "low" }, { reasoning_effort: "low", enable_thinking: true }],
+        [{ reasoning_effort: "none" }, { enable_thinking: false }],
+      ]) {
+        const captured = await capture((payload) => {
+          expect(payload).toEqual({
+            messages: [],
+            enable_thinking: true,
+            reasoning_effort: "xhigh",
+          });
+          if (mode === "in-place mutation") {
+            if (!payload || typeof payload !== "object") {
+              throw new Error("Expected a Qwen request payload");
+            }
+            Object.assign(payload, replacement);
+            return undefined;
+          }
+          const next = { ...replacement };
+          return mode === "async replacement" ? Promise.resolve(next) : next;
+        });
+        expect(captured).toEqual({
+          ...(mode === "in-place mutation" ? { messages: [] } : {}),
+          ...expected,
+        });
+      }
+    },
+  );
 
   it("only registers for Qwen-family OpenAI-compatible providers", () => {
     const streamFn = wrapQwenProviderStream({

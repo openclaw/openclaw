@@ -25,7 +25,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { updatePersonActivityCard } from "../person-activity-card.ts";
+import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "../portaled-hovercard.ts";
@@ -141,7 +141,6 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     );
     portal.markTrigger(trigger);
     card.addEventListener("pointerleave", portal.handleCardPointerLeave);
-    // The unported helper alone owns the portal's children; Solid owns the trigger.
     portal.mount(trigger, card, "vertical", true, () => updatePersonActivityCard(card));
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("focusin", outside, true);

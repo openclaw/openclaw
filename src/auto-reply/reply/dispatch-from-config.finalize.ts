@@ -9,6 +9,7 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   setReplyPayloadMetadata,
@@ -43,6 +44,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deferFinalTtsText,
     deliveryChannel,
+    rawLlmResponse,
     dispatcher,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
@@ -153,7 +155,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
-        ...(heartbeat ? { skipTts: true } : {}),
+        ...(heartbeat ? { skipTts: !hasReplyPayloadSpeechContent(reply) } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,
@@ -168,10 +170,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             finalReply.blockDeliveryOutcome ?? finalReply.routedOutcome ?? "cancelled",
           );
         registerReplyDispatcherSettledTask(dispatcher, () => outcome.then(settle));
-      }
-      if (finalReply.sessionWriterDeliveryRevoked) {
-        sessionWriterDeliveryRevoked = true;
-        continue;
       }
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
@@ -521,7 +519,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ...(state.replyResolverError ? { error: state.replyResolverError } : {}),
   };
   state.recordAgentDispatchCompleted(dispatchOutcome, dispatchDetails);
-  state.recordProcessed(dispatchOutcome, dispatchDetails);
+  // output.value is model-authored text only; delivered text is never a substitute.
+  state.recordProcessed(dispatchOutcome, {
+    ...dispatchDetails,
+    ...(rawLlmResponse !== undefined ? { finalResponse: rawLlmResponse } : {}),
+  });
   state.markIdle(
     dispatchOutcome === "error"
       ? "message_error"

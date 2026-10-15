@@ -3,6 +3,7 @@ import { resolveConfiguredProviderDefaultApi } from "../agents/embedded-agent-ru
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NativeInferenceStartup } from "../worker/native-inference-startup.js";
 import {
@@ -20,11 +21,6 @@ type NodeWorkerNativeInferenceModel = {
 export type NodeWorkerNativeInferenceSnapshot = {
   models: ReadonlyMap<string, NodeWorkerNativeInferenceModel>;
 };
-
-export const NODE_WORKER_INFERENCE_SETUP_ERROR =
-  "Worker-local inference is not configured on this node. Add a compatible model under " +
-  "models.providers with a usable credential in the node openclaw.json, set " +
-  'nodeHost.workerRuns.isolation to "none", then restart the node host.';
 
 /** Capture worker-compatible models and their already-resolved node-local credentials. */
 export function snapshotNodeWorkerNativeInference(

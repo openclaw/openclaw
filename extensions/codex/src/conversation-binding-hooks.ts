@@ -76,14 +76,16 @@ export async function handleCodexConversationInboundClaim(
       const text = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
-          const { resolveCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
-          const blocked = resolveCodexNativeSandboxBlock({
+          const { prepareCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
+          const sandbox = await prepareCodexNativeSandboxBlock({
             config: options.config,
             sessionKey,
             surface: "Codex CLI node conversation binding",
           });
-          if (blocked) {
-            return blocked;
+          using cleanup = { [Symbol.dispose]: sandbox.release };
+          void cleanup;
+          if (sandbox.block) {
+            return sandbox.block;
           }
           const resume = options.resumeCodexCliSessionOnNode;
           if (!resume) {
@@ -91,6 +93,7 @@ export async function handleCodexConversationInboundClaim(
           }
           const { inspectConversationBinding } =
             await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+          await sandbox.assertCurrent();
           if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }

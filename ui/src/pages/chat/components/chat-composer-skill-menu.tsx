@@ -8,7 +8,6 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import {
@@ -312,8 +311,4 @@ export function SkillMenu(props: { args: Parameters<typeof renderSkillMenuConten
       </ComposerMenu>
     </Show>
   );
-}
-
-export function renderSkillMenu(...args: Parameters<typeof renderSkillMenuContents>) {
-  return solidTemplate(SkillMenu, { args });
 }

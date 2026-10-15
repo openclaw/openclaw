@@ -143,26 +143,26 @@ export function canRebasePreparedAssistantInTransaction(
           "active.message_position",
           "rewrite.generation",
           /* kysely-allow-raw: validate the canonical message role without hydrating content. */
-          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
+          sql<string>`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.role')`.as(
             "message_role",
           ),
           /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
           sql<
             number | null
-          >`json_type(${transcriptEventNavigationSql("event")}, '$.message.excludeFromContext') = 'true'
-            AND json_type(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
+          >`json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.excludeFromContext') = 'true'
+            AND json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
             "context_free_command",
           ),
           /* kysely-allow-raw: classify realtime voice records without hydrating content. */
           sql<
             string | null
-          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance.kind')`.as(
+          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.kind')`.as(
             "provenance_kind",
           ),
           /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
           sql<
             string | null
-          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance.sourceChannel')`.as(
+          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.sourceChannel')`.as(
             "provenance_source_channel",
           ),
         ])
@@ -315,7 +315,10 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
             .onRef("event.seq", "=", "active.event_seq"),
         )
         .select(
-          projectTranscriptNavigationSql(transcriptEventNavigationSql("event")).as("event_json"),
+          projectTranscriptNavigationSql(
+            database.db,
+            transcriptEventNavigationSql(database.db, "event"),
+          ).as("event_json"),
         )
         .where("active.session_id", "=", sessionId)
         .orderBy("active.active_position", "desc")
@@ -337,7 +340,11 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
     database.db,
     db
       .selectFrom("transcript_events")
-      .select(projectTranscriptNavigationSql(transcriptEventNavigationSql()).as("event_json"))
+      .select(
+        projectTranscriptNavigationSql(database.db, transcriptEventNavigationSql(database.db)).as(
+          "event_json",
+        ),
+      )
       .where("session_id", "=", sessionId)
       .where("seq", ">=", message.seq)
       .orderBy("seq", "asc"),
@@ -381,7 +388,10 @@ function readActiveTranscriptAppendParentId(
       )
       .select([
         "ti.event_type",
-        projectTranscriptNavigationSql(transcriptEventNavigationSql("te")).as("event_json"),
+        projectTranscriptNavigationSql(
+          database.db,
+          transcriptEventNavigationSql(database.db, "te"),
+        ).as("event_json"),
       ])
       .where("ti.session_id", "=", sessionId)
       .orderBy("ti.seq", "desc")
@@ -464,7 +474,11 @@ function readTranscriptNavigationEvents(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(projectTranscriptNavigationSql(transcriptEventNavigationSql()).as("event_json"))
+        .select(
+          projectTranscriptNavigationSql(database.db, transcriptEventNavigationSql(database.db)).as(
+            "event_json",
+          ),
+        )
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ),

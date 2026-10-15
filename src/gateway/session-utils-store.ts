@@ -22,7 +22,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
-import { insideGitCheckout } from "../agents/worktrees/git.js";
+import { hasWorkspaceGitCheckout } from "../agents/workspace-git.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -37,7 +37,11 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
@@ -50,8 +54,7 @@ import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   withGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveNativeGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import {
@@ -129,37 +132,36 @@ export function prepareDeletedAgentSessionCheck(params: {
   });
 }
 
-function loadSessionEntryWithMode(
+export function loadIncognitoGatewaySessionEntryReadOnly(
   sessionKey: string,
-  opts:
-    | (Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-        targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-      })
-    | undefined,
-  readOnly: boolean,
+  opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
+    includeStoreChildEntries?: boolean;
+    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  },
   cfg: OpenClawConfig = getRuntimeConfig(),
 ) {
   const key = normalizeOptionalString(sessionKey) ?? "";
-  const target = resolveGatewaySessionStoreTargetWithStore({
+  if (!isIncognitoSessionKey(key)) {
+    throw new Error("Durable session entries require the asynchronous Gateway reader");
+  }
+  const target = resolveNativeGatewaySessionStoreTargetWithStore({
     cfg,
     key,
     exactRead: true,
-    readOnly,
+    readOnly: true,
     projection: opts?.projection,
     env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
+    includeStoreChildEntries: opts?.includeStoreChildEntries,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
-  if (!readOnly) {
-    omitInternalSessionEffectsEntries(store, target.storeKeys);
-  }
   const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
-    readOnly && opts?.clone !== false && canonicalMatch?.entry
+    opts?.clone !== false && canonicalMatch?.entry
       ? structuredClone(canonicalMatch.entry)
       : canonicalMatch?.entry;
   return {
@@ -178,22 +180,16 @@ function loadSessionEntryWithMode(
   };
 }
 
-export function loadGatewaySessionEntry(
-  sessionKey: string,
-  opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
-  cfg?: OpenClawConfig,
-) {
-  return loadSessionEntryWithMode(sessionKey, opts, false, cfg);
-}
+export type GatewaySessionEntryRead = ReturnType<typeof loadIncognitoGatewaySessionEntryReadOnly>;
 
-export function loadGatewaySessionEntryReadOnly(
+export async function loadGatewaySessionEntryReadOnlyAsync(
   sessionKey: string,
-  opts?: {
-    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
-  cfg?: OpenClawConfig,
+  opts?: Parameters<typeof loadIncognitoGatewaySessionEntryReadOnly>[1],
+  cfg: OpenClawConfig = getRuntimeConfig(),
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
+  const { loadGatewaySessionEntryReadOnlyInWorker } =
+    await import("./session-utils-store-worker.js");
+  return loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: sessionKey, ...opts, readOnly: true });
 }
 
 /** Consume exact row facts synchronously while their physical worker owners remain retained. */
@@ -205,7 +201,7 @@ export async function withGatewaySessionEntry<T>(
       })
     | undefined,
   consume: (
-    session: ReturnType<typeof loadGatewaySessionEntry>,
+    session: GatewaySessionEntryRead,
     membership: ReadonlyMap<
       string,
       readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[]
@@ -295,13 +291,9 @@ export function resolveCanonicalGatewaySessionStoreKey(params: {
   key: string;
   store: Record<string, SessionEntry>;
   agentId?: string;
+  target: import("./session-utils-store.types.js").GatewaySessionStoreTarget;
 }) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
+  const target = params.target;
   const primaryKey = target.canonicalKey;
   findCanonicalStoreMatch(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
@@ -479,7 +471,7 @@ export async function listAgentsForGateway(
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
-    const workspaceGit = insideGitCheckout(workspace);
+    const workspaceGit = hasWorkspaceGitCheckout(workspace);
     const agent = Object.assign(
       {
         id,

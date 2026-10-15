@@ -1,13 +1,13 @@
-import { For, onSettled } from "solid-js";
+import { createMemo, createUniqueId, onCleanup } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { connectDropdownMenu } from "./dropdown-menu-controller.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
-import "./web-awesome.ts";
+import { Menu, type MenuEntry, type MenuHandle } from "./solid/menu.tsx";
+import { resolveTransientContainer } from "./transient-container.ts";
+import "./native-link-menu.css";
 
 type NativeLinkMenuAction = "inline" | "external" | "copy";
 type Props = {
@@ -22,47 +22,83 @@ export type NativeLinkMenu = SolidBridgeElement<Props>;
 export const NativeLinkMenu = defineSolidBridge<Props>(
   "openclaw-native-link-menu",
   (props, host) => {
-    const items = [
+    const id = createUniqueId();
+    let menu: MenuHandle | undefined;
+    const shortcut = (event: KeyboardEvent) => activateMenuShortcut(host, event);
+    onCleanup(() => menu?.overlay.surface.removeEventListener("keydown", shortcut, true));
+    const actions = [
       ["inline", "s", "openInline", "panelRightOpen"],
       ["external", "b", "openExternal", "externalLink"],
       ["copy", "c", "copy", "copy"],
     ] as const;
-    onSettled(() =>
-      connectDropdownMenu(
-        host,
-        {
-          getTrigger: () => props.trigger,
-          onClose: () => props.onClose(),
-          onKeydown: (event) => activateMenuShortcut(host, event),
-        },
-        () => host.updateComplete,
-      ),
+    const items = createMemo((): MenuEntry[] =>
+      actions.flatMap<MenuEntry>(([action, key, label, icon]) => {
+        const item = {
+          id: action,
+          label: t(`nativeLinkMenu.${label}`),
+          class: "session-menu__item",
+          attributes: {
+            "data-new-tab-action": action === "external" ? "" : undefined,
+            "data-shortcut": key,
+            "aria-keyshortcuts": key.toUpperCase(),
+          },
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name={icon} />
+            </span>
+          ),
+          content: <span class="session-menu__text">{t(`nativeLinkMenu.${label}`)}</span>,
+          details: (
+            <span class="session-menu__shortcut" aria-hidden="true">
+              <Kbd keys={key.toUpperCase()} inline />
+            </span>
+          ),
+        };
+        return action === "copy"
+          ? [
+              {
+                kind: "content",
+                id: "separator",
+                content: <div class="session-menu__separator" role="separator" />,
+              },
+              item,
+            ]
+          : [item];
+      }),
     );
     return (
-      <wa-dropdown
+      <Menu
+        id={id}
         class="session-menu native-link-menu"
-        prop:open={true}
+        panelClass="native-link-menu__panel"
         placement="bottom-start"
-        prop:distance={0}
-        aria-label={t("nativeLinkMenu.label")}
-        onWa-select={(event) => {
+        label={t("nativeLinkMenu.label")}
+        items={items()}
+        ref={(handle) => {
+          menu = handle;
+          if (props.trigger) {
+            handle.overlay.setReturnTarget(props.trigger);
+          }
+          handle.overlay.surface.addEventListener("keydown", shortcut, true);
+          handle.open();
+        }}
+        onSelect={(item, event) => {
           event.preventDefault();
-          const action = event.detail.item.value;
+          const action = item.id;
           if (action === "inline" || action === "external" || action === "copy") {
-            props.trigger?.focus();
-            props.onClose();
+            menu?.close();
             props.onAction(action);
           }
         }}
-        onWa-after-hide={() => props.onClose()}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label={t("nativeLinkMenu.label")}
-          style={{
+        onOpenChange={(open) => {
+          if (!open) {
+            props.onClose();
+          }
+        }}
+        triggerAttributes={{
+          tabindex: -1,
+          "aria-hidden": "true",
+          style: {
             position: "fixed",
             left: `${Math.max(8, Math.min(props.x, window.innerWidth - 264 - 8))}px`,
             top: `${Math.max(8, Math.min(props.y, window.innerHeight - 136 - 8))}px`,
@@ -70,31 +106,9 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
             height: "1px",
             opacity: 0,
             "pointer-events": "none",
-          }}
-        />
-        <For each={items}>
-          {([action, shortcut, label, icon]) => (
-            <>
-              {action === "copy" && <div class="session-menu__separator" role="separator" />}
-              <wa-dropdown-item
-                class="session-menu__item"
-                value={action}
-                data-new-tab-action={action === "external" ? "" : undefined}
-                data-shortcut={shortcut}
-                aria-keyshortcuts={shortcut.toUpperCase()}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                  <Icon name={icon} />
-                </span>
-                <span class="session-menu__text">{t(`nativeLinkMenu.${label}`)}</span>
-                <span slot="details" class="session-menu__shortcut" aria-hidden="true">
-                  <Kbd keys={shortcut.toUpperCase()} inline />
-                </span>
-              </wa-dropdown-item>
-            </>
-          )}
-        </For>
-      </wa-dropdown>
+          },
+        }}
+      />
     );
   },
   {
@@ -108,21 +122,6 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
   },
 );
 
-function menuContainer(path: EventTarget[]): HTMLElement {
-  const modalHost = path.find(
-    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
-  );
-  if (modalHost instanceof HTMLElement) {
-    return modalHost;
-  }
-  for (const target of path) {
-    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
-      return target;
-    }
-  }
-  return document.body;
-}
-
 /** Native-only menu placement and actions load with the menu, not the browser shell. */
 export function mountNativeLinkMenu(options: {
   path: EventTarget[];
@@ -134,8 +133,8 @@ export function mountNativeLinkMenu(options: {
   openExternal: () => void;
   openInline: () => void;
 }): NativeLinkMenu | null {
-  const container = menuContainer(options.path);
-  if (!container.isConnected) {
+  const container = resolveTransientContainer(options.path, options.anchor.ownerDocument);
+  if (!container?.isConnected) {
     return null;
   }
   const menu = document.createElement("openclaw-native-link-menu");
@@ -153,7 +152,6 @@ export function mountNativeLinkMenu(options: {
     }
   };
   container.append(menu);
-  promoteToPopoverTopLayer(menu);
   return menu;
 }
 

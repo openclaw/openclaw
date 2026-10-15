@@ -151,8 +151,8 @@ describe("execution decision facts", () => {
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`,
     ).run(
       "cron-receipt-1",
       "default",
@@ -525,7 +525,7 @@ describe("execution decision facts", () => {
     });
   });
 
-  it("pages equal-time facts by a bounded row key", () => {
+  it("pages equal-time facts by a bounded portable cursor and reuses a deleted maximum", () => {
     const database = databaseOptions();
     const context = seedExecutionContext(database);
     for (const id of ["same-time-a", "same-time-b", "same-time-c"]) {
@@ -535,6 +535,15 @@ describe("execution decision facts", () => {
         now: 100,
       });
     }
+
+    const db = openOpenClawStateDatabase(database).db;
+    db.exec("UPDATE execution_decision_facts SET rowid = 100 WHERE receipt_id = 'same-time-a'");
+    db.exec("DELETE FROM execution_decision_facts WHERE receipt_id = 'same-time-c'");
+    recordExecutionDecisionFactInDatabase(receipt("same-time-c", 100), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+      now: 100,
+    });
 
     const first = pageExecutionDecisionFactsForContextInDatabase(
       openOpenClawStateDatabase(database).db,

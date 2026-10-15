@@ -6,10 +6,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import {
   executeSqliteQuerySync,
@@ -21,28 +21,14 @@ import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
-import type { TrajectoryRuntimeRetentionPlan } from "./runtime-retention.contract.js";
-import {
-  beginTrajectoryRuntimeRetention,
-  captureTrajectoryRuntimeRetentionMutation,
-  selectTrajectoryRuntimeRetentionBatch,
-  deleteTrajectoryRuntimeRetention,
-  prepareTrajectoryRuntimeRetention,
-  trajectoryRuntimeRetentionDue,
-  trajectoryRuntimeRetentionState,
-} from "./runtime-retention.sqlite.js";
+import { captureTrajectoryRuntimeRetentionMutation } from "./runtime-retention.sqlite.js";
 import type {
   SqliteTrajectoryRuntimeAppend,
   SqliteTrajectoryRuntimeReadScope,
-  SqliteTrajectoryRuntimeScope,
 } from "./runtime-store.contract.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -64,76 +50,20 @@ type SqliteTrajectoryRuntimeEventRow = {
   seq: number;
 };
 
-type TrajectoryRuntimeWriter = <T>(
+type TrajectoryRuntimeAppendResult = {
+  database: OpenClawAgentDatabase;
+  receipt: {
+    kind: "trajectory-runtime-append";
+    sessionId: string;
+    appendedRange: { firstSeq: number; lastSeq: number } | undefined;
+    removedThroughSeq: number | undefined;
+  };
+};
+
+type TrajectoryRuntimeWriter = (
   label: string,
-  write: (database: OpenClawAgentDatabase) => T,
-) => T;
-
-const log = createSubsystemLogger("trajectory");
-
-/** Appends runtime trajectory events to the per-agent SQLite session store. */
-export function appendSqliteTrajectoryRuntimeEvents(
-  scope: SqliteTrajectoryRuntimeScope & Pick<SqliteTrajectoryRuntimeAppend, "discardPrevious">,
-  events: SqliteTrajectoryRuntimeAppend["events"],
-): void {
-  if (events.length === 0) {
-    return;
-  }
-  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
-  const write: TrajectoryRuntimeWriter = (label, operation) =>
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        scope.assertCommitAllowed?.();
-        const result = operation(database);
-        scope.assertCommitAllowed?.();
-        return result;
-      },
-      options,
-      { operationLabel: label },
-    );
-  const input = { ...scope, events };
-  const database = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
-  const state = trajectoryRuntimeRetentionState(database);
-  const now = Date.now();
-  // A nested append cannot commit maintenance independently of its caller.
-  if (!database.db.isTransaction && trajectoryRuntimeRetentionDue(state, now)) {
-    const lease = new Int32Array(new SharedArrayBuffer(4));
-    Atomics.store(lease, 0, 1);
-    try {
-      let refreshes = 0;
-      let sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepareTrajectoryRuntimeRetention(
-        database.db,
-        input,
-        now,
-      );
-      for (;;) {
-        const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
-        snapshot = undefined;
-        const result = batch.refresh
-          ? deleteTrajectoryRuntimeRetention(database, batch)
-          : write("trajectory.runtime.retention.delete", (current) =>
-              deleteTrajectoryRuntimeRetention(current, batch),
-            );
-        if (result.complete) {
-          state.sweptAt = now;
-          break;
-        }
-        if (result.refresh) {
-          if (++refreshes > 1) {
-            break;
-          }
-          sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-          snapshot = prepareTrajectoryRuntimeRetention(database.db, input, now);
-        }
-      }
-    } catch (error) {
-      log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
-    } finally {
-      Atomics.store(lease, 0, 0);
-    }
-  }
-}
+  write: (database: OpenClawAgentDatabase) => TrajectoryRuntimeAppendResult,
+) => TrajectoryRuntimeAppendResult;
 
 export function appendSqliteTrajectoryRuntimeEventsWithWriter(
   input: SqliteTrajectoryRuntimeAppend,
@@ -193,7 +123,15 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
         );
       }
       publishRetention?.(sessionId);
-      return database;
+      return {
+        database,
+        receipt: {
+          kind: "trajectory-runtime-append" as const,
+          sessionId,
+          appendedRange: rows.length ? { firstSeq: window.nextSeq, lastSeq: seq - 1 } : undefined,
+          removedThroughSeq: window.removeThroughSeq,
+        },
+      };
     }),
   );
 }
@@ -202,38 +140,30 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
 export async function loadSqliteTrajectoryRuntimeEvents(
   scope: SqliteTrajectoryRuntimeReadScope & { sessionActor?: SessionActorStorageBinding },
 ): Promise<TrajectoryEvent[]> {
-  const memory = getSessionActorStorageBinding(scope);
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(scope, authority);
   if (memory) {
-    return memory.actor.storage!.read(
-      {
-        type: "session.trajectory.read",
-        input: {
-          sessionId: scope.sessionId,
-          maxEventBytes: scope.maxEventBytes,
-          maxEventCount: scope.maxEventCount,
+    return (
+      (await withSessionActorStorage(
+        scope,
+        {
+          authority,
+          lifetime: { assertCurrent() {}, assertReadable() {} },
         },
-      },
-      memory.authority,
+        ({ actor, authority: current }) =>
+          actor.storage.read(
+            {
+              type: "session.trajectory.read",
+              input: {
+                sessionId: scope.sessionId,
+                maxEventBytes: scope.maxEventBytes,
+                maxEventCount: scope.maxEventCount,
+              },
+            },
+            current,
+          ),
+      )) ?? []
     );
-  }
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    const session = incognito.actor.sessions
-      .deadlines()
-      .find((entry) => entry.sessionId === scope.sessionId);
-    if (!session) {
-      incognito.actor.assertReadable();
-      return [];
-    }
-    return incognito.actor.sessions.sideData(incognito.authority, {
-      type: "session.trajectory.read",
-      input: {
-        sessionKey: session.sessionKey,
-        sessionId: scope.sessionId,
-        maxEventBytes: scope.maxEventBytes,
-        maxEventCount: scope.maxEventCount,
-      },
-    });
   }
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   return withSessionHistoryWorkerDatabase(options, (reader) =>
@@ -250,22 +180,26 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return memory.actor.storage!.readCurrent(
-      {
-        type: "session.trajectory.rows",
-        input: {
-          sessionId: scope.sessionId,
-          maxEventBytes: scope.maxEventBytes,
-          maxEventCount: scope.maxEventCount,
-          afterSeq: scope.afterSeq,
-          maxEvents: scope.maxEvents,
-          tailEvents: scope.tailEvents,
-        },
+  const source = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (source) {
+    const query = {
+      type: "session.trajectory.rows" as const,
+      input: {
+        sessionId: scope.sessionId,
+        maxEventBytes: scope.maxEventBytes,
+        maxEventCount: scope.maxEventCount,
+        afterSeq: scope.afterSeq,
+        maxEvents: scope.maxEvents,
+        tailEvents: scope.tailEvents,
       },
-      memory.authority,
-    );
+    };
+    if (!source.owner) {
+      return source.binding?.actor.storage?.readCurrent(query, source.authority) ?? [];
+    }
+    const session = source.owner.readSessionById(scope.sessionId, source.authority);
+    return session
+      ? (source.owner.readStorage(session.sessionKey, query, source.authority) ?? [])
+      : [];
   }
   const read = withOpenClawAgentDatabaseReadOnly(
     (database) => {

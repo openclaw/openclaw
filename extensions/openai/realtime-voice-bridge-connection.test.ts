@@ -171,11 +171,13 @@ describe("OpenAI realtime voice bridge connection", () => {
       const cfg = {} as never;
 
       expect(
-        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-          cfg,
-          providerConfig: { apiKey: "test-api-key-platform" },
-          model: "gpt-realtime-2.1",
-        }),
+        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
+          {
+            cfg,
+            providerConfig: { apiKey: "test-api-key-platform" },
+            model: "gpt-realtime-2.1",
+          },
+        ),
       ).toMatchObject({ supportsGatewayControl: true });
       await expect(
         provider.createBrowserSession?.({

@@ -138,7 +138,7 @@ function resolveXaiNativeTtsStreamEndpoint(baseUrl: string): URL {
   }
   const pathname = url.pathname.replace(/\/+$/, "");
   if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
-    throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
+    throw new Error(`xAI streaming TTS requires the supported ${XAI_BASE_URL} base URL`);
   }
   return url;
 }

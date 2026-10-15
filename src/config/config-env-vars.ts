@@ -292,20 +292,11 @@ type PublishedConfigRuntimeEnvState = {
   sourceConfig: OpenClawConfig | null;
 };
 
-type PendingConfigRuntimeEnvPublication = {
-  previousState: PublishedConfigRuntimeEnvState;
-  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>;
-  rollbackRequested: boolean;
-};
-
 let publishedConfigRuntimeEnvState: PublishedConfigRuntimeEnvState = {
   generation: 0,
   ownedEnv: {},
   sourceConfig: null,
 };
-// Membership is rollback authority. Commit retires that publication and its ancestors;
-// reset retires all of them, while overlapping failures unwind newest first.
-const pendingConfigRuntimeEnvPublications: PendingConfigRuntimeEnvPublication[] = [];
 
 export function getPublishedConfigRuntimeEnvState(): PublishedConfigRuntimeEnvState {
   return publishedConfigRuntimeEnvState;
@@ -382,7 +373,6 @@ export function initializePublishedConfigRuntimeEnv(
     ownedEnv,
     sourceConfig,
   };
-  pendingConfigRuntimeEnvPublications.length = 0;
 }
 
 export function resetPublishedConfigRuntimeEnv(
@@ -397,7 +387,6 @@ export function resetPublishedConfigRuntimeEnv(
         generation: publishedConfigRuntimeEnvState.generation + 1,
       }
     : { generation: 0, ownedEnv: {}, sourceConfig: null };
-  pendingConfigRuntimeEnvPublications.length = 0;
 }
 
 export function createConfigRuntimeEnvBase(
@@ -543,35 +532,22 @@ function prepareConfigRuntimeEnvPublication(params: {
       const processPublication = targetEnv === process.env;
       const previousPublishedState = publishedConfigRuntimeEnvState;
       const previousOwnedEnv = resolveAppliedConfigEnvOwnership(targetEnv);
-      const previousPublication = processPublication
-        ? pendingConfigRuntimeEnvPublications.at(-1)
-        : undefined;
       const published = new Map<string, PublishedConfigRuntimeEnvChange>();
-      const keys = new Set([
-        ...before.keys(),
-        ...afterByPlatformKey.keys(),
-        ...(previousPublication?.changes.keys() ?? []),
-      ]);
+      const keys = new Set([...before.keys(), ...afterByPlatformKey.keys()]);
       let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
       for (const key of keys) {
         const beforeEntry = before.get(key);
         const afterEntry = afterByPlatformKey.get(key);
         const currentEntry = (current ??= snapshotEnvByPlatformKey(targetEnv)).get(key);
-        const previousChange = previousPublication?.changes.get(key);
-        const continuesPreviousPublication =
-          previousChange !== undefined &&
-          envSnapshotEntriesEqual(currentEntry, previousChange.after) &&
-          envSnapshotEntriesEqual(beforeEntry, previousChange.preparedBefore);
-        const appliesToPreparedSnapshot =
-          !envSnapshotEntriesEqual(beforeEntry, afterEntry) &&
-          envSnapshotEntriesEqual(currentEntry, beforeEntry);
-        if (!continuesPreviousPublication && !appliesToPreparedSnapshot) {
+        if (
+          envSnapshotEntriesEqual(beforeEntry, afterEntry) ||
+          !envSnapshotEntriesEqual(currentEntry, beforeEntry)
+        ) {
           continue;
         }
         published.set(key, {
           before: currentEntry,
           after: afterEntry,
-          preparedBefore: beforeEntry,
         });
         if (!envSnapshotEntriesEqual(currentEntry, afterEntry)) {
           replaceEnvSnapshotEntry(targetEnv, currentEntry, afterEntry);
@@ -579,7 +555,7 @@ function prepareConfigRuntimeEnvPublication(params: {
       }
       normalizeFsSafeNativeEnv(targetEnv);
       const generation = processPublication ? publishedConfigRuntimeEnvState.generation + 1 : null;
-      let processPublicationState: PendingConfigRuntimeEnvPublication | null = null;
+      let processPublicationState: PublishedConfigRuntimeEnvState | null = null;
       if (generation !== null) {
         const ownedEnv: Record<string, string> = {};
         let owned: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
@@ -602,12 +578,7 @@ function prepareConfigRuntimeEnvPublication(params: {
           ownedEnv: params.configState ? ownedEnv : previousPublishedState.ownedEnv,
           sourceConfig: params.configState?.sourceConfig ?? previousPublishedState.sourceConfig,
         };
-        processPublicationState = {
-          previousState: previousPublishedState,
-          changes: published,
-          rollbackRequested: false,
-        };
-        pendingConfigRuntimeEnvPublications.push(processPublicationState);
+        processPublicationState = publishedConfigRuntimeEnvState;
       }
       let active = true;
       const settle = (commit: boolean) => {
@@ -615,30 +586,18 @@ function prepareConfigRuntimeEnvPublication(params: {
           return;
         }
         active = false;
-        if (!processPublicationState) {
-          if (!commit) {
-            rollbackConfigRuntimeEnvChanges(targetEnv, published);
-          }
-          return;
-        }
-        const index = pendingConfigRuntimeEnvPublications.indexOf(processPublicationState);
-        if (index === -1) {
-          return;
-        }
         if (commit) {
-          pendingConfigRuntimeEnvPublications.splice(0, index + 1);
           return;
         }
-        processPublicationState.rollbackRequested = true;
-        for (
-          let publication = pendingConfigRuntimeEnvPublications.at(-1);
-          publication?.rollbackRequested;
-          publication = pendingConfigRuntimeEnvPublications.at(-1)
-        ) {
-          pendingConfigRuntimeEnvPublications.pop();
-          rollbackConfigRuntimeEnvChanges(process.env, publication.changes);
+        // Reloads settle one publication. If another publication intervenes, leave
+        // its environment alone; overlapping failed reloads may require a restart to recover.
+        if (processPublicationState && publishedConfigRuntimeEnvState !== processPublicationState) {
+          return;
+        }
+        rollbackConfigRuntimeEnvChanges(targetEnv, published);
+        if (processPublicationState) {
           publishedConfigRuntimeEnvState = {
-            ...publication.previousState,
+            ...previousPublishedState,
             generation: publishedConfigRuntimeEnvState.generation + 1,
           };
         }

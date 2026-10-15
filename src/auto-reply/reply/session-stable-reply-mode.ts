@@ -9,12 +9,14 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
@@ -36,6 +38,7 @@ export async function resolveSessionStableReplyMode(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
@@ -61,6 +64,7 @@ export async function resolveSessionStableReplyMode(params: {
     sessionKey: params.sessionKey,
     sessionStore: params.sessionStore,
     turnModelOverride: params.turnModelOverride,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const candidateMode = resolveSourceReplyDeliveryMode({
     cfg,
@@ -72,7 +76,11 @@ export async function resolveSessionStableReplyMode(params: {
   }
   // Match dispatch's availability downgrade without letting sender-specific
   // permissions change the policy shared by all turns in this session.
-  return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
+  return (await withPreparedSessionCapabilityRead(() =>
+    resolveStableMessageToolAvailability(params),
+  ))
+    ? candidateMode
+    : "automatic";
 }
 
 /** Shared by dispatch and synthetic turns; sender denials apply only to the individual turn. */

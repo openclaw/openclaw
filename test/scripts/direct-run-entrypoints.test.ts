@@ -35,7 +35,10 @@ import {
   withShimFixture,
   writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
-import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import {
+  preparedScriptWrapperEnv,
+  testRunnerFixtureEnv,
+} from "./prepared-script-wrapper.test-support.js";
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -118,7 +121,7 @@ function runShimFixture(
       writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
       const modulesEnv = configureModules({ checkoutRoot, fixtureRoot });
 
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       delete env.NODE_OPTIONS;
       delete env.NODE_PATH;
       delete env.PNPM_CONFIG_MODULES_DIR;
@@ -193,7 +196,7 @@ sendReceipt(${JSON.stringify(ownerPath)}, "ready");
         const completion = runNode(
           [wrapperPath],
           {
-            ...process.env,
+            ...testRunnerFixtureEnv(),
             NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(clockPath).href}`]
               .filter(Boolean)
               .join(" "),
@@ -218,7 +221,7 @@ sendReceipt(${JSON.stringify(ownerPath)}, "ready");
       const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
       writeFileSync(implementationPath, writeEsmPluginFixture(fixtureRoot));
       const env: NodeJS.ProcessEnv = {
-        ...process.env,
+        ...testRunnerFixtureEnv(),
         PNPM_CONFIG_MODULES_DIR: path.dirname(
           path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
         ),
@@ -271,7 +274,7 @@ process.exitCode = await new Promise((resolve, reject) => {
         const bootstrapUrl = pathToFileURL(path.join(checkoutRoot, "scripts/tsx.mjs")).href;
         const expectedPreload = equals ? [`--import=${bootstrapUrl}`] : ["--import", bootstrapUrl];
         const env: NodeJS.ProcessEnv = {
-          ...process.env,
+          ...testRunnerFixtureEnv(),
           TMPDIR: fixtureRoot,
           TMP: fixtureRoot,
           TEMP: fixtureRoot,
@@ -390,7 +393,7 @@ process.exitCode = child.status ?? 1;
       const launches = preloads.map((preload) => ["--import", preload, implementationPath]);
       for (const cacheFlag of [undefined, ""]) {
         const env: NodeJS.ProcessEnv = {
-          ...process.env,
+          ...testRunnerFixtureEnv(),
           ...preservedEnv,
           PNPM_CONFIG_MODULES_DIR: modulesDir,
           NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
@@ -455,6 +458,7 @@ process.exitCode = child.status ?? 1;
       const state = path.join(fixtureRoot, "state");
       const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
       mkdirSync(binDir);
+      mkdirSync(home);
       mkdirSync(state);
       // A failed version probe must fail before managed installation can download anything.
       writeFileSync(path.join(state, "tools"), "managed installation disabled for this fixture\n");
@@ -578,7 +582,7 @@ record("stdout-write-returned");
   it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
     const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
     const result = await runShimFixture(
-      TSX_SHIM_WRAPPERS[2],
+      TSX_SHIM_WRAPPERS[1],
       ({ checkoutRoot, fixtureRoot }) => {
         const modulesDir = path.join(fixtureRoot, "hydrated-modules");
         writeTsxFixture(modulesDir, "hydrated");
@@ -660,7 +664,7 @@ it("retains fixture evidence when command cleanup is unconfirmed", async () => {
       writeFileSync(path.join(root, "evidence"), "keep");
       await runNode(
         ["-e", 'process.stdout.write("retained stdout"); process.stderr.write("retained stderr");'],
-        process.env,
+        testRunnerFixtureEnv(),
         root,
       );
     }).catch((cause: unknown) => cause);
@@ -730,7 +734,7 @@ child.once("message", () => {
 `,
         );
         const env: NodeJS.ProcessEnv = {
-          ...process.env,
+          ...testRunnerFixtureEnv(),
           PNPM_CONFIG_MODULES_DIR: path.dirname(
             path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
           ),

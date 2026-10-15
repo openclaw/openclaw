@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import {
@@ -228,19 +229,23 @@ describe("audit event persistence", () => {
   it("deduplicates replayed source events", async () => {
     const database = createDatabaseOptions();
     const input = auditInput();
-    expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
+    const first = recordAuditEventInDatabase(input, {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
+    expect(first?.sequence).toBe(1);
     expect(
       recordAuditEventInDatabase(input, {
         ...database,
         database: openOpenClawStateDatabase(database),
       }),
     ).toBeUndefined();
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
+    const next = recordAuditEventInDatabase(
+      auditInput({ sourceId: "after-replay", sourceSequence: 2 }),
+      { ...database, database: openOpenClawStateDatabase(database) },
+    );
+    expect(next?.sequence).toBe(3);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
   });
 
   it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
@@ -277,20 +282,49 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("rolls back an insert whose sequence cannot be represented safely", () => {
+  it("rehydrates the sequence after an enclosing transaction rolls back", async () => {
+    const database = createDatabaseOptions();
+    const options = { ...database, database: openOpenClawStateDatabase(database) };
+    const record = (sourceSequence: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence }), options);
+    const first = record(1);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(record(2)?.sequence).toBe(2);
+        throw new Error("rollback enclosing transaction");
+      }, options),
+    ).toThrow("rollback enclosing transaction");
+
+    const committed = record(3);
+    expect(committed?.sequence).toBe(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([committed, first]);
+  });
+
+  it.each([false, true])("rolls back an unsafe sequence (warmed: %s)", (warmed) => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      BigInt(Number.MAX_SAFE_INTEGER),
+      BigInt(Number.MAX_SAFE_INTEGER) - (warmed ? 1n : 0n),
     );
+    if (warmed) {
+      expect(
+        recordAuditEventInDatabase(auditInput({ sourceSequence: 1 }), {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        })?.sequence,
+      ).toBe(Number.MAX_SAFE_INTEGER);
+    }
 
     expect(() =>
-      recordAuditEventInDatabase(auditInput(), {
+      recordAuditEventInDatabase(auditInput({ sourceSequence: 2 }), {
         ...database,
         database: openOpenClawStateDatabase(database),
       }),
     ).toThrow("audit event sequence is outside the supported integer range");
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: warmed ? 1 : 0,
+    });
   });
 
   it("returns an expired append only while bounded pruning still retains it", () => {
@@ -374,19 +408,21 @@ describe("audit event persistence", () => {
     }
   });
 
-  it("forgets expiry changes when the pruning transaction rolls back", () => {
-    const database = createDatabaseOptions();
-    const owner = openOpenClawStateDatabase(database);
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const record = (sourceSequence: number) =>
-      recordAuditEventInDatabase(auditInput({ sourceSequence }), {
-        ...database,
-        database: owner,
-      });
-    try {
-      record(1);
-      owner.db.exec(`
+  it.each(["warm insert", "pruning"] as const)(
+    "forgets cached facts when %s fails to commit",
+    (mode) => {
+      const database = createDatabaseOptions();
+      const owner = openOpenClawStateDatabase(database);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const record = (sourceSequence: number) =>
+        recordAuditEventInDatabase(auditInput({ sourceSequence }), {
+          ...database,
+          database: owner,
+        });
+      try {
+        const first = record(1);
+        owner.db.exec(`
         CREATE TABLE audit_expiry_parent (id INTEGER PRIMARY KEY);
         CREATE TABLE audit_expiry_child (
           parent_id INTEGER NOT NULL,
@@ -399,18 +435,24 @@ describe("audit event persistence", () => {
           INSERT INTO audit_expiry_child (parent_id) VALUES (1);
         END;
       `);
-      clock.mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
-      expect(() => record(2)).toThrow(/FOREIGN KEY/u);
-      owner.db.exec("DROP TRIGGER reject_audit_expiry");
-      const committed = record(3);
-      expect(committed).toBeDefined();
-      expect(owner.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
-        { event_id: committed?.eventId },
-      ]);
-    } finally {
-      clock.mockRestore();
-    }
-  });
+        clock.mockReturnValue(
+          mode === "pruning" ? now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1 : now + 1,
+        );
+        expect(() => record(2)).toThrow(/FOREIGN KEY/u);
+        owner.db.exec("DROP TRIGGER reject_audit_expiry");
+        const committed = record(3);
+        expect(committed).toBeDefined();
+        expect(
+          owner.db.prepare("SELECT event_id FROM audit_events ORDER BY sequence").all(),
+        ).toEqual([
+          ...(mode === "warm insert" ? [{ event_id: first?.eventId }] : []),
+          { event_id: committed?.eventId },
+        ]);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("excludes and physically prunes records outside the fixed retention window", async () => {
     const database = createDatabaseOptions();

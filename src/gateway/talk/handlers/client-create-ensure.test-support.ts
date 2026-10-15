@@ -95,7 +95,9 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           Promise.race([
             prepared.promise,
             pending.then(() => {
-              throw new Error("Creation finished before its authority wait");
+              throw new Error(
+                `Creation finished before its authority wait: ${respond.mock.lastCall?.[2]?.message ?? "no error response"}`,
+              );
             }),
           ]),
           signal,
@@ -180,7 +182,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           context: fixture.context,
           client: fixture.client,
         } as never);
-        expect(changed).toBe(true);
+        expect(changed, respond.mock.lastCall?.[2]?.message).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
         if (phase === "preparation") {
           expect(entry).toBeUndefined();
@@ -298,7 +300,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         context: fixture.context,
         client: fixture.client,
       } as never);
-      expect(respond.mock.lastCall?.[0]).toBe(true);
+      expect(respond.mock.lastCall?.[0], JSON.stringify(respond.mock.lastCall?.[2])).toBe(true);
       const ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
       harness.ownVoice(ownedVoiceSessionId, key);
       expect(

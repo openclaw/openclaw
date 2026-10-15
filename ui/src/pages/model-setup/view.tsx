@@ -626,17 +626,17 @@ function EmbeddedModelSetup(props: {
       <openclaw-modal-dialog
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
-        onWa-after-show={(event: Event) =>
+        onOverlay-after-show={(event: Event) =>
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >
         <div class="model-setup-wizard model-setup-discovery">
           <div class="model-setup-wizard__body">{props.content}</div>
-          <div class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="model-setup-wizard__footer">
             <button class="btn" onClick={() => props.view.onClose?.()}>
               {t("common.close")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

@@ -134,8 +134,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
     expectWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
     expectWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
-    await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
-    await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
+    await fs.access(generatedCodex.wrapperPath);
+    await fs.access(generatedClaude.wrapperPath);
   });
 
   it.each([

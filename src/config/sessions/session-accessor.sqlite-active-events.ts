@@ -6,6 +6,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import {
+  readRecentSessionTranscriptMessageEventsFromProjection,
   readSessionTranscriptBoundedMessageTailPageFromProjection,
   withRecentSessionTranscriptActiveEventsInSnapshot,
 } from "./session-accessor.sqlite-active-events-read.js";
@@ -30,7 +31,6 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
-  iterateVisibleMessageMetadata,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
@@ -39,7 +39,6 @@ import { readActivePathEntryRelationFromProjection } from "./session-accessor.sq
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleDeltaLimits,
   parseVisibleMessageCursor,
 } from "./session-accessor.sqlite-visible-cursor.js";
@@ -135,10 +134,10 @@ export function everySessionTranscriptUserInputFrom(
     })
       .select(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', ${transcriptEventRunIdSql("event")}),
-          'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
+        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.role'),
+          'idempotencyKey', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.idempotencyKey'),
+          '__openclaw', json_object('runId', ${transcriptEventRunIdSql(projection.database.db, "event")}),
+          'provenance', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.provenance'))`.as(
           "message_json",
         ),
       )
@@ -347,44 +346,9 @@ export function readRecentSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
   options: { maxBytes: number; maxLines: number; maxMessages: number },
 ): SessionTranscriptMessageEventPage {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const visible = resolveVisibleMessagePositions(projection);
-    const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
-      min: 0,
-      max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-    });
-    const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
-    if (maxMessages === 0 || maxLines === 0) {
-      return {
-        activeLeafEntryId: projection.state.leafEventId,
-        events: [],
-        totalMessages: visible.total,
-      };
-    }
-    const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
-    const candidates = iterateVisibleMessageMetadata(
-      projection,
-      Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
-      visible.total,
-      "desc",
-    );
-    let selectedStart = visible.total;
-    let bytes = 0;
-    for (const row of candidates) {
-      // Keep the newest event even when oversized, then a contiguous suffix. Size stored JSONL
-      // before loading payloads so a small usage budget cannot materialize the entire line window.
-      if (selectedStart < visible.total && bytes + row.serialized_bytes > maxBytes) {
-        break;
-      }
-      selectedStart = row.logicalPosition;
-      bytes += row.serialized_bytes;
-    }
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleMessageRange(projection, selectedStart, visible.total),
-      totalMessages: visible.total,
-    };
-  });
+  return withCurrentProjectionSnapshot(scope, (projection) =>
+    readRecentSessionTranscriptMessageEventsFromProjection(projection, options),
+  );
 }
 
 /** Reads a message page from either end with index range predicates, never OFFSET scanning. */

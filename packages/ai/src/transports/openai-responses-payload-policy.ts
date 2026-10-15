@@ -1,3 +1,4 @@
+import { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * OpenAI Responses payload policy.
@@ -5,6 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
  * server-compaction, service-tier, and reasoning payload rules.
  */
 import {
+  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -181,22 +183,81 @@ function resolveOpenAIResponsesCompactThreshold(model: {
   return 80_000;
 }
 
+export type OpenAIServiceTier = "auto" | "default" | "flex" | "priority" | "ultrafast";
+
+export function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "auto" ||
+    normalized === "default" ||
+    normalized === "flex" ||
+    normalized === "priority" ||
+    normalized === "ultrafast"
+    ? normalized
+    : undefined;
+}
+
+function resolveOpenAIRequestedServiceTier(
+  extraParams?: Record<string, unknown>,
+  serviceTiers?: readonly string[],
+): OpenAIServiceTier | undefined {
+  const explicitTier = normalizeOpenAIServiceTier(
+    extraParams?.serviceTier ?? extraParams?.service_tier,
+  );
+  const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const fastMode = normalizeFastMode(
+    typeof rawFastMode === "function" ? rawFastMode() : rawFastMode,
+  );
+  // Authored tiers remain operator-owned; model restrictions apply to speed overrides.
+  return fastMode === undefined || fastMode === "auto"
+    ? explicitTier
+    : fastMode === "ultrafast" && (!serviceTiers || serviceTiers.includes("ultrafast"))
+      ? "ultrafast"
+      : fastMode
+        ? "priority"
+        : explicitTier
+          ? "default"
+          : undefined;
+}
+
+/** Resolve the same speed-override-before-default-tier precedence used at request egress. */
+export function resolveOpenAIResponsesRequestContextTokens(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+  serviceTiers?: readonly string[],
+): number | undefined {
+  return resolveOpenAIResponsesPayloadCapabilities(model).allowsOpenAIServiceTier
+    ? resolveModelServiceTierContextTokens(
+        normalizeOptionalLowercaseString(model.provider),
+        resolveOpenAIRequestedServiceTier(extraParams, serviceTiers),
+      )
+    : undefined;
+}
+
 /** Resolve the server-compaction gate and effective threshold for a Responses route. */
 export function resolveOpenAIResponsesServerCompactionPlan(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
 ): { enabled: boolean; threshold: number | undefined } {
   const provider = normalizeOptionalLowercaseString(model.provider);
-  const allowsResponsesStore =
-    resolveOpenAIResponsesPayloadCapabilities(model).allowsResponsesStore;
+  const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const configured = extraParams?.responsesServerCompaction;
   const enabled =
-    configured !== false && allowsResponsesStore && (configured === true || provider === "openai");
+    configured !== false &&
+    capabilities.allowsResponsesStore &&
+    (configured === true || provider === "openai");
   return {
     enabled,
     threshold: enabled
-      ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
-        resolveOpenAIResponsesCompactThreshold(model))
+      ? Math.min(
+          parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+            resolveOpenAIResponsesCompactThreshold(model),
+          (capabilities.allowsOpenAIServiceTier
+            ? resolveModelServiceTierContextTokens(
+                provider,
+                resolveOpenAIRequestedServiceTier(extraParams),
+              )
+            : undefined) ?? Infinity,
+        )
       : undefined,
   };
 }

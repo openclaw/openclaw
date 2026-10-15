@@ -10,6 +10,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { flush } from "../solid-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, roster, session, settleRoster } from "./roster.test-support.ts";
 
@@ -269,6 +270,7 @@ describe("AppSidebar session attention details", () => {
       }
       await sidebar.updateComplete;
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="main"]')?.click();
+      flush();
       await waitForFast(() =>
         expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull(),
       );
@@ -305,6 +307,7 @@ describe("AppSidebar session attention details", () => {
         ],
       });
       sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="main"]')!.click();
+      flush();
       if (!isHome) {
         await waitForFast(() =>
           expect(
@@ -314,6 +317,7 @@ describe("AppSidebar session attention details", () => {
         sidebar
           .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!
           .click();
+        flush();
       }
       const attention = (key: string) =>
         (isHome && key === parentKey
@@ -332,6 +336,7 @@ describe("AppSidebar session attention details", () => {
           isHome ? '[data-agent-collapse="main"]' : `[data-child-session-toggle="${parentKey}"]`,
         )!
         .click();
+      flush();
       await waitForFast(() =>
         expect(attention(parentKey)).toBe("3 questions need your answer\nWhich revision?\n+2 more"),
       );

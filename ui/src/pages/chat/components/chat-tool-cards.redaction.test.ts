@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
+import { renderToolFixture as render, renderToolCard } from "./chat-tool-render.test-support.ts";
 
 describe("tool-card source fidelity", () => {
   it.each([

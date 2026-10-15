@@ -25,6 +25,7 @@ type MaintenanceAdmission = {
   execute?: (request: SqliteWalPeriodicRequest) => Promise<SqliteWalPeriodicResult | undefined>;
   flush?: (assertCurrent: () => void) => void;
   cancel?: () => void | Promise<void>;
+  stopCheckpointTick?: () => void;
 };
 
 const admissions = resolveGlobalSingleton(
@@ -39,7 +40,9 @@ export function registerSqliteWalWorkerMaintenance(
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
   database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
+  const stopCheckpointTick = admissions.get(database)?.stopCheckpointTick;
   admissions.set(database, { execute, cancel });
+  stopCheckpointTick?.();
 }
 
 export function isSqliteWalWorkerMaintained(database: DatabaseSync): boolean {
@@ -57,7 +60,10 @@ export function createSqliteWalMaintenanceScheduler(
   observe: (snapshot: SqliteWalCheckpointSnapshot) => void,
   onError: (error: unknown) => void,
   pageBudget: () => number,
+  stopCheckpointTick: () => void,
 ): () => Promise<void> {
+  const existingAdmission = admissions.get(database);
+  admissions.set(database, { ...existingAdmission, stopCheckpointTick });
   let pending: Promise<void> | undefined;
   return () => {
     if (!pending) {
@@ -147,6 +153,7 @@ export function registerDeferredSqliteWalWriteAdmission(
     }
   };
   admissions.set(database, {
+    stopCheckpointTick: admissions.get(database)?.stopCheckpointTick,
     admit: (operation) =>
       new Promise<void>((resolve, reject) => {
         pending = { operation, resolve, reject };

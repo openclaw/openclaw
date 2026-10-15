@@ -79,13 +79,10 @@ describe("formatDocumentTitle", () => {
     );
   });
 
-  it("shows attention separately from the disconnected state", () => {
+  it("prefixes a pending attention count", () => {
     expect(formatDocumentTitle({ context: "Usage", attentionCount: 3 })).toBe(
       "(3) Usage — OpenClaw",
     );
-    expect(
-      formatDocumentTitle({ context: "Usage", attentionCount: 3, gatewayDisconnected: true }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -165,6 +162,12 @@ describe("routeIdFromPath", () => {
       label: "Alice",
       segment: "release%2Ejs",
       reference: "release.js",
+    },
+    {
+      personId: "team/alice",
+      label: undefined,
+      segment: "team%2Falice",
+      reference: "team/alice",
     },
   ])("round-trips Activity links for $personId", ({ personId, label, segment, reference }) => {
     const pathname = `/ui/activity/${segment}`;

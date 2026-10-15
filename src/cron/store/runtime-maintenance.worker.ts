@@ -18,6 +18,7 @@ import {
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
+import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
   CronRuntimeMutationContracts,
   CronRuntimeWorkerOperations,
@@ -49,16 +50,19 @@ export function maintainCronRunHistoryInWorker(
   const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
   const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (plan.reconciliations.length === 0 && !plan.prune) {
-    return { outcome: { reconciled: 0, pruned: 0 } };
+    return { outcome: { reconciled: 0, pruned: 0, nextSweepAtMs: plan.nextSweepAtMs } };
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => ({
-      outcome: applyCronRunHistoryMaintenanceInDatabase(
-        db,
-        plan,
-        nowMs,
-        prepareCronRunReceiptWriteSchema(db),
-      ),
+      outcome: {
+        ...applyCronRunHistoryMaintenanceInDatabase(
+          db,
+          plan,
+          nowMs,
+          prepareCronRunReceiptWriteSchema(db),
+        ),
+        nextSweepAtMs: plan.nextSweepAtMs,
+      },
     }),
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },
@@ -156,5 +160,40 @@ export function recordCronFailureAlertOutcomeInWorker(
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.failure-alert-outcome" },
+  );
+}
+
+export function recordCronFailureRepairSettlementInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["input"],
+): CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["output"] {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const committed = mutateCronRuntimeRowsInDatabase<
+        CronRuntimeMutationContracts["cron.recordFailureRepairSettlement"]["outcome"]
+      >({
+        database: db,
+        storeKey: input.storeKey,
+        jobIds: new Set([input.jobId]),
+        mutate({ jobs }) {
+          const job = jobs.get(input.jobId);
+          const repair = job?.state.failureAlertIncident?.repair;
+          if (
+            !job ||
+            !repair ||
+            repair.alerted ||
+            repair.atMs !== input.repairAtMs ||
+            job.state.lastFailureNotificationId !== input.repairId
+          ) {
+            return { value: {} };
+          }
+          repair.settledAtMs = input.settledAtMs;
+          return { upsertJobIds: [job.id], value: { job } };
+        },
+      });
+      return { outcome: committed.value };
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.failure-repair-settlement" },
   );
 }

@@ -862,6 +862,7 @@ describe("release child attempt composition", () => {
       runner_name: "GitHub Actions 1",
       steps: [{ name: "Run tests" }],
     };
+    const running = { ...completed, conclusion: null, status: "in_progress" };
     const ghostAttempt = {
       jobs: [ghost, completed, ghost, job("checks-ui", "failure")],
       runAttempt: 2,
@@ -919,6 +920,7 @@ describe("release child attempt composition", () => {
       label: string;
       attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
       effectiveRunAttempt: number;
+      effectiveRunStatus?: string;
       plannedRunAttempt: number;
     }>([
       {
@@ -939,11 +941,59 @@ describe("release child attempt composition", () => {
         effectiveRunAttempt: 2,
         plannedRunAttempt: 1,
       },
+      ...[
+        { label: "beside two running jobs", jobs: [ghost, running, running] },
+        {
+          label: "beside an assigned queued copy",
+          jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
+        },
+        { label: "with only queued copies", jobs: [ghost, ghost] },
+      ].map(({ label, jobs }) => ({
+        label,
+        attempts: [
+          { jobs: [job("test", "success")], runAttempt: 1 },
+          { jobs, runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      })),
+      {
+        label: "beside a running job in a completed run",
+        attempts: [
+          { jobs: [job("test", "success")], runAttempt: 1 },
+          { jobs: [ghost, running], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "completed",
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "beside a running job in an older attempt",
+        attempts: [
+          { jobs: [ghost, running], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "beside a running job without a rerun",
+        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
+        effectiveRunAttempt: 1,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
     ])(
       "still rejects duplicates $label",
-      ({ attempts, effectiveRunAttempt, plannedRunAttempt }) => {
+      ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
         expect(() =>
-          composeReleaseAttemptJobs(attempts, { effectiveRunAttempt, plannedRunAttempt }),
+          composeReleaseAttemptJobs(attempts, {
+            effectiveRunAttempt,
+            effectiveRunStatus,
+            plannedRunAttempt,
+          }),
         ).toThrow("duplicate job identity");
       },
     );
@@ -1085,6 +1135,61 @@ describe("release decision policy", () => {
       expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
       expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
     ]);
+  });
+
+  it("keeps a running rerun pending beside runnerless queued copies, then accepts its result", async () => {
+    const planned = child("normalCi");
+    const ghost = { name: "test", status: "queued", runner_id: null, runner_name: null };
+    let completed = false;
+    const options = {
+      readRun: async () =>
+        githubRun(planned, {
+          conclusion: completed ? "success" : null,
+          run_attempt: 2,
+          status: completed ? "completed" : "in_progress",
+          triggering_actor: { login: "release-operator" },
+        }),
+      readAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1
+          ? [
+              { name: "lint", status: "completed", conclusion: "success" },
+              { name: "test", status: "completed", conclusion: "failure" },
+            ]
+          : [
+              ghost,
+              {
+                name: "test",
+                status: completed ? "completed" : "in_progress",
+                conclusion: completed ? "success" : null,
+                runner_id: 42,
+                runner_name: "GitHub Actions 42",
+              },
+              ghost,
+            ],
+    };
+    const pending = await readChild(planned, undefined, undefined, options);
+    expect(classifyReleaseSnapshot({ children: [pending] })).toMatchObject({
+      activeRunIds: ["101"],
+      blockers: [],
+      errors: [],
+      state: "qualifying",
+    });
+    expect(pending.jobs).toEqual([
+      expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
+      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, status: "in_progress" }),
+    ]);
+
+    completed = true;
+    const settled = await readChild(planned, pending, undefined, options);
+    expect(classifyReleaseSnapshot({ children: [settled] })).toMatchObject({
+      activeRunIds: [],
+      blockers: [],
+      errors: [],
+      state: "passed",
+    });
+    expect(settled.jobs).toContainEqual(
+      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
+    );
   });
 
   it.each([
@@ -1727,6 +1832,56 @@ describe("release state artifacts", () => {
     }
     expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
   });
+
+  it.each(["retained", "retried", "removed"] as const)(
+    "verifies a %s blocker beyond the capped display list",
+    (scenario) => {
+      const sealedPlan = executionPlan(
+        { rerunGroup: "ci" },
+        { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
+      );
+      const retained = Array.from({ length: 26 }, (_, index) => ({
+        ...FAILED_JOB,
+        name: "retained-" + String(index).padStart(2, "0"),
+        url: "https://example.invalid/jobs/retained-" + index,
+      }));
+      const first = { runAttempt: 1, jobs: retained };
+      const later = [
+        ...Array.from({ length: 26 }, (_, index) => ({
+          ...FAILED_JOB,
+          name: "additional-" + String(index).padStart(2, "0"),
+          url: "https://example.invalid/jobs/additional-" + index,
+        })),
+        ...retained.map((job, index) =>
+          index !== 25 || scenario === "retained"
+            ? job
+            : scenario === "retried"
+              ? Object.assign({}, job, { url: "https://example.invalid/jobs/retried" })
+              : Object.assign({}, job, { conclusion: "success" }),
+        ),
+      ];
+      const decision = attemptedBlockedArtifact("decision", sealedPlan, [first]);
+      const drain = attemptedBlockedArtifact("drain", sealedPlan, [
+        first,
+        { runAttempt: 2, jobs: later },
+      ]);
+      expect(decision.blockers).toHaveLength(25);
+      expect(drain.blockers).toHaveLength(25);
+      expect(drain.blockers).toEqual(
+        Array.from({ length: 25 }, (_, index) =>
+          expect.objectContaining({ job: "additional-" + String(index).padStart(2, "0") }),
+        ),
+      );
+      if (scenario === "removed") {
+        expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
+      } else {
+        expect(selectPair(sealedPlan, decision, drain).drain.state).toBe("blocked_complete");
+        expect(() =>
+          verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected()),
+        ).toThrow("Full Release Validation state: blocked_complete");
+      }
+    },
+  );
 
   it("selects a terminal blocked pair when workflow evidence refines to failed jobs", () => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });

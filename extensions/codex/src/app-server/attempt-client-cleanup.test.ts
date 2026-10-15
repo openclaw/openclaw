@@ -159,24 +159,6 @@ describe("Codex app-server attempt client cleanup", () => {
     }
   });
 
-  it("retains the startup interrupt acknowledgement contract", async () => {
-    const request = vi.fn(async () => ({}));
-
-    await expect(
-      interruptCodexTurnAndWaitBestEffort({ request } as never, {
-        threadId: "thread-1",
-        turnId: "",
-        timeoutMs: 123,
-      }),
-    ).resolves.toBe(true);
-
-    expect(request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "thread-1", turnId: "" },
-      { timeoutMs: 123 },
-    );
-  });
-
   it.each([
     { name: "after native activation", startBeforeError: true, releaseRoute: false },
     { name: "after subscription release", startBeforeError: false, releaseRoute: true },

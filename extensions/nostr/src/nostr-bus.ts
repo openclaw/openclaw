@@ -177,10 +177,6 @@ function createRelayHealthTracker() {
       } // Unknown relay gets neutral score
 
       const total = s.successCount + s.failureCount;
-      if (total === 0) {
-        return 0.5;
-      }
-
       const successRate = s.successCount / total;
 
       // Recency bonus (prefer recently successful relays)

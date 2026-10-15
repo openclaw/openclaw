@@ -54,6 +54,54 @@ describe("memory manager agent database lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("joins the admitted publication worker when manager construction fails", async () => {
+    const failure = new Error("background context unavailable");
+    const workerEntered = createDeferred<void>();
+    const workerGate = createDeferred<void>();
+    let admitted: MemoryIndexDatabase | undefined;
+    const openPublished = MemoryIndexDatabase.openPublished.bind(MemoryIndexDatabase);
+    vi.spyOn(MemoryIndexDatabase, "openPublished").mockImplementation(async (...args) => {
+      admitted = await openPublished(...args);
+      const closeWorker = admitted.closePublicationWorker.bind(admitted);
+      vi.spyOn(admitted, "closePublicationWorker").mockImplementation(async () => {
+        workerEntered.resolve();
+        await workerGate.promise;
+        await closeWorker();
+      });
+      return admitted;
+    });
+    let settled = false;
+    const outcome = MemoryIndexManager.get({
+      cfg: createConfig(),
+      agentId: "main",
+      runInBackgroundContext: () => {
+        throw failure;
+      },
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await Promise.race([workerEntered.promise, outcome]);
+      expect(settled).toBe(false);
+      expect(admitted?.isOpen).toBe(true);
+    } finally {
+      workerGate.resolve();
+      await outcome;
+    }
+    expect(await outcome).toBe(failure);
+    expect(admitted?.isOpen).toBe(false);
+    const replacement = await fixture.getFreshManager(createConfig());
+    await replacement.sync({ reason: "test", force: true });
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
   it("isolates manager readers across settings replacement and keeps the shared writer alive", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     const first = await fixture.getFreshManager(createConfig());
@@ -166,6 +214,29 @@ describe("memory manager agent database lifecycle", () => {
     expect(managerDatabase(replacement).location()).toBe(shared.path);
     await first.close();
     await replacement.sync({ reason: "test", force: true });
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
+  it("re-admits a worker-only manager after terminal database revocation", async () => {
+    const cfg = createConfig();
+    const seed = await fixture.getFreshManager(cfg, "cli");
+    await seed.sync({ reason: "baseline", force: true });
+    await seed.close();
+
+    const first = await fixture.getFreshManager(cfg);
+    const database = Reflect.get(first, "publishedDatabase") as MemoryIndexDatabase;
+    expect(database.isOpen).toBe(true);
+    expect(await fixture.getFreshManager(cfg)).toBe(first);
+
+    // Keep this path worker-only: opening the compatibility reader would mask stale liveness.
+    await closeOpenClawAgentDatabasesAsync(fixture.paths.stateDir);
+    expect(database.isOpen).toBe(false);
+
+    const replacement = await fixture.getFreshManager(cfg);
+    expect(replacement).not.toBe(first);
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+    await first.close();
+    await replacement.sync({ reason: "after-revocation", force: true });
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
   });
 
@@ -703,12 +774,12 @@ describe("memory manager agent database lifecycle", () => {
         fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
       );
       const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
-      let shadow: { owner: MemoryIndexDatabase; path: string } | undefined;
+      let shadow: { owner: MemoryIndexDatabase; db: DatabaseSync; path: string } | undefined;
       const releaseFailure = new Error("controlled shadow release failure");
       const replacement = "replacement file must survive rejected identity";
       vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation(async (filename, ...args) => {
         const owner = await open(filename, ...args);
-        shadow = { owner, path: filename };
+        shadow = { owner, db: owner.db, path: filename };
         if (failure === "unreleased") {
           vi.spyOn(owner, "release").mockImplementation(() => {
             throw releaseFailure;
@@ -733,7 +804,7 @@ describe("memory manager agent database lifecycle", () => {
         );
         expect(shadow).toBeDefined();
         expect(shadow!.owner.shadowReleased).toBe(failure === "replaced");
-        expect(shadow!.owner.db.isOpen).toBe(failure === "unreleased");
+        expect(shadow!.db.isOpen).toBe(failure === "unreleased");
         if (failure === "unreleased") {
           expect((await fs.stat(shadow!.path)).isFile()).toBe(true);
         } else {
@@ -742,7 +813,7 @@ describe("memory manager agent database lifecycle", () => {
       } finally {
         vi.restoreAllMocks();
         // The injected release failure deliberately leaves this fixture-owned handle open.
-        if (shadow?.owner.db.isOpen) {
+        if (shadow?.db.isOpen) {
           shadow.owner.release();
         }
       }

@@ -517,7 +517,7 @@ describe("terminal resolution", () => {
     ]);
     expect(exhausted.result.meta.error).toMatchObject({
       kind: "incomplete_turn",
-      fallbackSafe: true,
+      fallbackSafe: false,
       terminalPresentation: true,
     });
   });

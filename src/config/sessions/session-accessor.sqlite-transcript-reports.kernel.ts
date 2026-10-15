@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUsage } from "../../agents/usage.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -18,7 +19,6 @@ import type {
   PreparedTranscriptReport,
   SelectedTranscriptReport,
   TranscriptReportSelection,
-  TranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
@@ -26,6 +26,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "./session-entry-codec.js";
+import { projectSessionUsageSnapshot } from "./session-entry-usage.js";
 import {
   decodeSessionTranscriptReportFacts,
   projectSessionTranscriptReportFacts,
@@ -90,6 +91,7 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   return navigation.facts();
 }
 
+// Only the report worker calls the selection and aborted-partial readers below.
 function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq: number) {
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -113,37 +115,6 @@ export function prepareTranscriptReportSelection(
     (seq) => readReportEvent(database, resolved.sessionId, seq),
     selection,
   );
-}
-
-/** Process-held reports select and append without crossing their native transaction boundary. */
-export function appendSessionTranscriptReportInTransaction(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  report: TranscriptReport,
-): void {
-  const facts = prepareTranscriptReportSelection(
-    database,
-    resolved,
-    report.kind === "assistant"
-      ? { kind: "assistant", responseId: report.message.responseId }
-      : report,
-  );
-  if (facts.suppressed) {
-    return;
-  }
-  if (report.kind === "assistant") {
-    appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
-    return;
-  }
-  const selected = report.selectReport(facts.latest);
-  if (selected) {
-    appendSelectedTranscriptReportInTransaction(
-      database,
-      resolved,
-      facts.appendParentId,
-      prepareCustomTranscriptReport(selected, facts.appendParentId),
-    );
-  }
 }
 
 /** The producer has settled; only its committed answer may replace the buffered fallback. */
@@ -204,7 +175,15 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     writeSessionEntry(
       database,
       resolved.sessionKey,
-      { ...current, updatedAt: Math.max(current.updatedAt ?? 0, Date.now()) },
+      {
+        ...current,
+        // The fallback and its unavailable usage are one committed observation.
+        ...projectSessionUsageSnapshot(
+          normalizeUsage(asOptionalRecord(preparedMessage.persistedMessage.usage)),
+          undefined,
+        ),
+        updatedAt: Math.max(current.updatedAt ?? 0, Date.now()),
+      },
       { canonicalPreviousEntry: current },
     );
   }

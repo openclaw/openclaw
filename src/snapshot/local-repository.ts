@@ -37,6 +37,14 @@ import {
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
+  capturePostgresBackup,
+  readBackupEngine,
+  runOfflineDatabaseBackup,
+  preparePostgresRestore,
+  verifyMatchedPostgresBackup,
+} from "./database-backup.js";
+import { readSnapshotExportEnvelope } from "./export-envelope.js";
+import {
   assertDirectory,
   assertDirectoryIdentity,
   assertDirectoryIdentitySync,
@@ -71,6 +79,7 @@ import {
   type SnapshotResult,
   type SnapshotSummary,
   type SnapshotVerificationResult,
+  type EngineSnapshotResult,
 } from "./snapshot-provider.js";
 
 const SNAPSHOT_DIRECTORY_MODE = 0o700;
@@ -95,6 +104,113 @@ type LocalSqliteSnapshotProviderOptions = {
 
 export function createLocalSqliteSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
   return new LocalSqliteSnapshotProvider(options);
+}
+
+export function createLocalSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
+  const native = createLocalSqliteSnapshotProvider(options);
+  const repository = path.resolve(options.repositoryPath);
+  const locate = async (snapshot: SnapshotRef) => {
+    const directory = path.resolve(snapshot.path);
+    if (path.dirname(directory) !== repository) {
+      throw new Error("Snapshot must be an immediate repository child.");
+    }
+    await assertTrustedStagingRoot(await fs.lstat(repository, { bigint: true }), repository);
+    assertDirectory(await fs.lstat(directory, { bigint: true }), directory, "Snapshot");
+    return directory;
+  };
+  const provider = {
+    async create(database: SnapshotDatabaseRef): Promise<EngineSnapshotResult> {
+      if (readBackupEngine(database.path).engine === "sqlite") {
+        return native.create(database);
+      }
+      const trusted = await ensurePrivateSnapshotRepositoryRoot(repository);
+      const directory = path.join(
+        trusted,
+        `${(options.now?.() ?? new Date()).toISOString().replaceAll(/[:.]/g, "-")}-${randomUUID()}`,
+      );
+      const identity = normalizeSnapshotIdentity(database.identity);
+      if (options.allowedDatabaseRoles && !options.allowedDatabaseRoles.includes(identity.role)) {
+        throw new Error("Snapshot database role is not allowed.");
+      }
+      const manifest = await capturePostgresBackup({ sourcePath: database.path, directory });
+      return { ref: { path: directory }, manifest };
+    },
+    async verify(snapshot: SnapshotRef) {
+      const directory = await locate(snapshot);
+      const envelope = await readSnapshotExportEnvelope(directory);
+      if (envelope.engine === "sqlite") {
+        return native.verify(snapshot);
+      }
+      return {
+        ok: true as const,
+        manifest: await verifyMatchedPostgresBackup(directory, "user-backup"),
+      };
+    },
+    async restoreFresh(snapshot: SnapshotRef, targetPath: string) {
+      const directory = await locate(snapshot);
+      const envelope = await readSnapshotExportEnvelope(directory);
+      if (envelope.engine === "sqlite") {
+        return native.restoreFresh(snapshot, targetPath);
+      }
+      const target = path.join(
+        await canonicalPathFromExistingAncestor(path.dirname(path.resolve(targetPath))),
+        path.basename(targetPath),
+      );
+      if (isPathInside(repository, target)) {
+        throw new Error("Restore target must be outside its repository.");
+      }
+      await assertFreshRestoreTarget(target);
+      const receipt = await ensureRestoreParentDirectory(path.dirname(target));
+      return runOfflineDatabaseBackup(target, ({ config, assertCurrent }) =>
+        withPrivateSqliteStagingDirectory({
+          rootReceipt: receipt,
+          prefix: ".tmp-restore-",
+          allowedEntries: RESTORE_STAGING_ENTRIES,
+          operation: async (staging) => {
+            const sourcePath = path.join(staging, SNAPSHOT_SQLITE_FILENAME);
+            const content = await preparePostgresRestore({
+              directory,
+              anchorPath: sourcePath,
+              config,
+              profile: "user-backup",
+              assertCurrent,
+            });
+            await publishVerifiedSqliteFile({
+              sourcePath,
+              sourceIdentity: await fs.lstat(sourcePath, { bigint: true }),
+              targetPath: target,
+              expectedContent: content,
+              requireAtomicPublication: true,
+              beforePublish: async () => {
+                assertCurrent();
+                await assertFreshRestoreTarget(target);
+              },
+              afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertCurrent),
+            });
+            return { ok: true as const, manifest: envelope.manifest };
+          },
+        }),
+      );
+    },
+    async list(): Promise<EngineSnapshotResult[]> {
+      const summaries: EngineSnapshotResult[] = [];
+      if (!(await lstatIfExists(repository))) {
+        return [];
+      }
+      for (const entry of await fs.readdir(repository, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".tmp-")) {
+          continue;
+        }
+        const ref = { path: path.join(repository, entry.name) };
+        if (await lstatIfExists(path.join(ref.path, ".pending"))) {
+          continue;
+        }
+        summaries.push({ ref, manifest: (await provider.verify(ref)).manifest });
+      }
+      return summaries.toSorted((a, b) => b.manifest.createdAt.localeCompare(a.manifest.createdAt));
+    },
+  };
+  return provider;
 }
 
 class LocalSqliteSnapshotProvider {

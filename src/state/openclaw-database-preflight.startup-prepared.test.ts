@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
@@ -18,7 +19,6 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -131,7 +131,7 @@ it.each(["historical", "retired shared"] as const)(
     openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    clearOpenClawAgentIntegrityVerification(historyPath, fleet.env);
+    revokeSqliteDatabaseAdmissionsForPath(historyPath);
     const history = new (requireNodeSqlite().DatabaseSync)(historyPath);
     try {
       history.exec("PRAGMA journal_mode=DELETE;");
@@ -166,59 +166,76 @@ it("isolates an unreadable configured path while inspecting healthy agents", asy
   );
 });
 
-it("keeps pending startup stores fenced without inspecting or copying them again in bootstrap", async () => {
-  const fleet = createFleet();
-  const pathname = fleet.paths[0]!;
-  const raw = new (requireNodeSqlite().DatabaseSync)(pathname);
-  raw.exec("PRAGMA journal_mode=WAL;");
-  raw.close();
-  const entered = createDeferred();
-  const release = createDeferred();
-  const createReader = schemaInspection.createAgentSchemaInspectionWorker;
-  let paused = false;
-  let selectedInspections = 0;
-  vi.spyOn(schemaInspection, "createAgentSchemaInspectionWorker").mockImplementation(() => {
-    const reader = createReader();
-    const inspect = reader.inspect;
-    return Object.assign(reader, {
-      inspect: async (...args: Parameters<typeof inspect>) => {
-        if (args[0].pathname === pathname) {
-          selectedInspections += 1;
-          if (!paused) {
-            paused = true;
-            entered.resolve();
-            await release.promise;
-          }
-        }
-        return inspect(...args);
-      },
-    });
-  });
-  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
-  await withAgentDatabaseStartupAdmission(async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const readiness = fleet.ready();
-    try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(5_000);
-      await readiness;
-      vi.useRealTimers();
-      const refusal = readAgentDatabaseAdmissionRefusal("first", { env: fleet.env });
-      expect(refusal?.code).toBe("agent-database-inspection-pending");
-      expect(selectedInspections).toBe(1);
-
-      const bootstrap = await fleet.inspect();
-      expect(bootstrap.agentRefusals).toContain(refusal);
-      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBe(refusal);
-      expect(selectedInspections).toBe(1);
-      expect(prepare.mock.calls.filter(([source]) => source === pathname)).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-      release.resolve();
-      await Promise.allSettled([readiness]);
+it.for(["native", "ACP-only"] as const)(
+  "keeps pending %s stores fenced without inspecting or copying them again in bootstrap",
+  async (kind) => {
+    const fleet = createFleet();
+    if (kind === "ACP-only") {
+      fleet.config.acp = { enabled: true, allowedAgents: ["codex"] };
     }
-  });
-});
+    const agentId = kind === "ACP-only" ? "codex" : "first";
+    const pathname =
+      kind === "ACP-only"
+        ? openOpenClawAgentDatabase({ agentId, env: fleet.env }).path
+        : fleet.paths[0]!;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const raw = new (requireNodeSqlite().DatabaseSync)(pathname);
+    raw.exec("PRAGMA journal_mode=WAL;");
+    raw.close();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const createReader = schemaInspection.createAgentSchemaInspectionWorker;
+    let paused = false;
+    let selectedInspections = 0;
+    vi.spyOn(schemaInspection, "createAgentSchemaInspectionWorker").mockImplementation(() => {
+      const reader = createReader();
+      const inspect = reader.inspect;
+      return Object.assign(reader, {
+        inspect: async (...args: Parameters<typeof inspect>) => {
+          if (args[0].pathname === pathname) {
+            selectedInspections += 1;
+            if (!paused) {
+              paused = true;
+              entered.resolve();
+              await release.promise;
+            }
+          }
+          return inspect(...args);
+        },
+      });
+    });
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+    await withAgentDatabaseStartupAdmission(async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const readiness = fleet.ready();
+      let settled = false;
+      void readiness.then(() => {
+        settled = true;
+      });
+      try {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(settled).toBe(true);
+        await readiness;
+        vi.useRealTimers();
+        const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env });
+        expect(refusal?.code).toBe("agent-database-inspection-pending");
+        expect(selectedInspections).toBe(1);
+
+        const bootstrap = await fleet.inspect();
+        expect(bootstrap.agentRefusals).toContain(refusal);
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toBe(refusal);
+        expect(selectedInspections).toBe(1);
+        expect(prepare.mock.calls.filter(([source]) => source === pathname)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await Promise.allSettled([readiness]);
+      }
+    });
+  },
+);
 
 it("carries fleet compatibility once into bootstrap while readiness always inspects fresh", async () => {
   const fleet = createFleet();
@@ -292,7 +309,7 @@ it("preserves configured ownership when reusing an unchanged inspected database"
   );
 });
 
-it("inspects a newly registered fleet member and still refuses its newer schema", async () => {
+it("reads newly registered stores without copying admitted state after startup writes", async () => {
   const fleet = createFleet();
   await withAgentDatabaseStartupAdmission(
     async () => {
@@ -308,6 +325,7 @@ it("inspects a newly registered fleet member and still refuses its newer schema"
       } finally {
         database.close();
       }
+      const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
       expect(await fleet.inspect()).toMatchObject({
         incompatible: [
           {
@@ -318,6 +336,10 @@ it("inspects a newly registered fleet member and still refuses its newer schema"
         ],
         indeterminate: [],
       });
+      const statePath = fs.realpathSync.native(
+        path.join(fleet.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+      );
+      expect(prepare.mock.calls.filter(([pathname]) => pathname === statePath)).toHaveLength(0);
       expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
         expect.objectContaining({ schemaInspectionCount: 1 }),
       );

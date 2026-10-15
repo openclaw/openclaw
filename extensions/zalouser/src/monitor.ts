@@ -831,22 +831,13 @@ export async function monitorZalouserProvider(
     return stopTask;
   };
 
-  let settled = false;
   const { promise: waitForExit, resolve: resolveRun, reject: rejectRun } = createDeferred<void>();
 
   const settleSuccess = () => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     void stop().then(resolveRun, rejectRun);
   };
 
   const settleFailure = (error: unknown) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     const failure = error instanceof Error ? error : new Error(String(error));
     void stop().then(
       () => rejectRun(failure),

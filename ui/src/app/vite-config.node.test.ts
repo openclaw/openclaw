@@ -19,7 +19,7 @@ import {
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
-import {
+import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
   resolveControlUiModulePreloadDependencies,
@@ -211,6 +211,27 @@ describe("Control UI Vite config", () => {
         hostType: "js",
       }),
     ).toBe(nestedTarget);
+  });
+
+  it("uses the supplied artifact identity without reading Git metadata", () => {
+    const buildInfo = {
+      version: "2026.7.10",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
+      builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
+      release: false,
+      buildId: "mock-artifact",
+    };
+    childProcessMocks.execFileSync.mockClear();
+
+    const config = controlUiViteConfig({ command: "serve", buildInfo });
+
+    expect(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]).toBe(
+      JSON.stringify(buildInfo),
+    );
+    expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
   });
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
@@ -558,6 +579,14 @@ describe("Control UI Vite config", () => {
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
+    const comparisonAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/session-key-comparison",
+    );
+    expect(aliases[comparisonAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/session-key-comparison",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/session-key-comparison.ts"),
+    });
+    expect(comparisonAliasIndex).toBeLessThan(rootAliasIndex);
     expect(aliases[resultAliasIndex]).toEqual({
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),

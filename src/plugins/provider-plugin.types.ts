@@ -238,7 +238,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
+   * @deprecated Use sanitizeReplayHistoryAsync; final compatibility day: 2026-12-31.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -605,9 +605,10 @@ export type ProviderPlugin = {
    * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
-   * core auth-profile code.
+   * core auth-profile code. The optional second argument is the caller's
+   * effective config; prefer it over reading global runtime config.
    */
-  refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  refreshOAuth?: (cred: OAuthCredential, config?: OpenClawConfig) => Promise<OAuthCredential>;
   /**
    * Provider-owned auth-doctor hint.
    *

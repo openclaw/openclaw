@@ -16,7 +16,7 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admi
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetWithStoreAsync,
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
@@ -35,8 +35,13 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
     addSessionMember(scope, { identityId: "first-member", addedBy: "owner", addedAt: 1 });
-    const selected = resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true });
-    const qualified = prepareQualifiedSessionEntryTarget(
+    const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
+      cfg,
+      key,
+      env,
+      exactRead: true,
+    });
+    const qualified = await prepareQualifiedSessionEntryTarget(
       {
         ...selected,
         requestedKey: key,
@@ -49,7 +54,7 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
         cfg,
-        target: qualified.target,
+        target: qualified,
         logicalStorePath: selected.storePath,
         env,
         includeMembership: true,
@@ -67,27 +72,23 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
           };
         },
       });
-    try {
-      await expect(read()).resolves.toEqual({
-        label: "before",
-        members: ["first-member"],
-        timestamps: {},
-      });
-      await replaceSessionEntry(scope, { ...entry, label: "after" });
-      addSessionMember(scope, { identityId: "second-member", addedBy: "owner", addedAt: 2 });
-      await expect(read()).resolves.toEqual({
-        label: "after",
-        members: ["first-member", "second-member"],
-        timestamps: {},
-      });
-      await expect(read(true)).resolves.toEqual({
-        label: "after",
-        members: ["first-member", "second-member"],
-        timestamps: { sessionStartedAt: 1_000, lastInteractionAt: 1_500 },
-      });
-    } finally {
-      qualified.release();
-    }
+    await expect(read()).resolves.toEqual({
+      label: "before",
+      members: ["first-member"],
+      timestamps: {},
+    });
+    await replaceSessionEntry(scope, { ...entry, label: "after" });
+    addSessionMember(scope, { identityId: "second-member", addedBy: "owner", addedAt: 2 });
+    await expect(read()).resolves.toEqual({
+      label: "after",
+      members: ["first-member", "second-member"],
+      timestamps: {},
+    });
+    await expect(read(true)).resolves.toEqual({
+      label: "after",
+      members: ["first-member", "second-member"],
+      timestamps: { sessionStartedAt: 1_000, lastInteractionAt: 1_500 },
+    });
   });
 });
 
@@ -102,10 +103,10 @@ it.for(["membership", "explicit", "qualified"] as const)(
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
       const selected =
         ordering === "qualified"
-          ? resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true })
+          ? await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key, env, exactRead: true })
           : undefined;
       const qualified = selected
-        ? prepareQualifiedSessionEntryTarget(
+        ? await prepareQualifiedSessionEntryTarget(
             {
               ...selected,
               requestedKey: key,
@@ -164,7 +165,7 @@ it.for(["membership", "explicit", "qualified"] as const)(
         const result =
           qualified && selected
             ? await withQualifiedGatewaySessionStoreTarget({
-                target: qualified.target,
+                target: qualified,
                 logicalStorePath: selected.storePath,
                 env,
                 includeMembership: true,
@@ -189,7 +190,6 @@ it.for(["membership", "explicit", "qualified"] as const)(
         expect(consumptions).toBe(1);
       } finally {
         read.mockRestore();
-        qualified?.release();
       }
     });
   },

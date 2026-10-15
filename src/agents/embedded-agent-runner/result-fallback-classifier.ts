@@ -1,7 +1,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { classifyFailoverReason } from "../failover/classify.js";
+import { classifyFailoverReason, isProviderRequestSizeCeilingError } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
@@ -157,6 +157,19 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
+  const terminalError = params.result.meta.error;
+  if (
+    (terminalError?.kind === "context_overflow" || terminalError?.kind === "compaction_failure") &&
+    !isProviderRequestSizeCeilingError(terminalError.message)
+  ) {
+    // The embedded recovery owner has already compacted/truncated, or found input it cannot shrink.
+    return {
+      message: terminalError.message,
+      reason: "context_overflow",
+      rawError: terminalError.message,
+      preserveResultOnExhaustion: true,
+    };
+  }
   if (
     isReplaySafeEmbeddedOpenAiCyberRefusal({
       provider: params.provider,
@@ -245,6 +258,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       reason: failoverReason,
       code: "embedded_error_payload",
       rawError,
+      rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,
     };
   }
 

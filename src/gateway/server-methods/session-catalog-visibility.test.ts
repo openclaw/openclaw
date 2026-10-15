@@ -27,11 +27,14 @@ type TestClient = {
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
+  profileRole: vi.fn((): string | null => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
   resolveSessionSharingRole: vi.fn<
     typeof import("../session-sharing-policy.js").resolveSessionSharingRole
   >(() => "viewer"),
-  resolveSessionSharingTarget: vi.fn(() => null as Record<string, unknown> | null),
+  resolveSessionSharingTargetAsync: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingTargetAsync
+  >(async () => null),
 }));
 
 vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
@@ -44,10 +47,20 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+  readResidentUserProfileId: (id: string) => id,
+  readResidentUserProfileIdentity: (id: string) => ({
+    profileId: id,
+    role: hoisted.profileRole(),
+  }),
+}));
 vi.mock("../session-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-sharing.js")>()),
   resolveSessionSharingRole: hoisted.resolveSessionSharingRole,
-  resolveSessionSharingTarget: hoisted.resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync: hoisted.resolveSessionSharingTargetAsync,
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
@@ -169,9 +182,10 @@ describe("session catalog caller visibility", () => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
+    hoisted.profileRole.mockReset().mockReturnValue(null);
     sessionEntries = [];
     hoisted.resolveSessionSharingRole.mockReset().mockReturnValue("viewer");
-    hoisted.resolveSessionSharingTarget.mockReset().mockReturnValue(null);
+    hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);
   });
 
   it("rejects hidden targets before read, import, continue, or archive dispatch", async () => {
@@ -533,7 +547,7 @@ describe("session catalog caller visibility", () => {
 
   it("permits a view-capped person to archive a foreign session after explicit membership", async () => {
     setActors([["agent:main:other", "profile-other"]]);
-    hoisted.resolveSessionSharingTarget.mockReturnValue({
+    hoisted.resolveSessionSharingTargetAsync.mockResolvedValue({
       agentId: "main",
       canonicalKey: "agent:main:other",
       storeKey: "agent:main:other",

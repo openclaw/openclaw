@@ -13,6 +13,33 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config capability", () => {
+  it("does not load configuration for session-only connections, including reconnect refresh", async () => {
+    const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
+    let auth: GatewayHelloOk["auth"] = { role: "operator", scopes: ["operator.sessions.read"] };
+    const client = {
+      request,
+      get auth() {
+        return auth;
+      },
+    } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+    await runtimeConfig.refreshSchema();
+    publish(false, client);
+    publish(true, client);
+    await runtimeConfig.refresh();
+    expect(request).not.toHaveBeenCalled();
+
+    auth = { role: "operator", scopes: ["operator.admin"] };
+    publish(false, client);
+    publish(true, client);
+    await runtimeConfig.ensureLoaded();
+    expect(request).toHaveBeenCalledWith("config.get", {});
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("ready");
+    runtimeConfig.dispose();
+  });
+
   it("config.set does not stage a default agent after access downgrades", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {

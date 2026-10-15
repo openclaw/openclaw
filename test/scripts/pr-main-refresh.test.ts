@@ -70,39 +70,32 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
-  it.each(["pr-42", "pr-42-verify"])(
-    "reuses the exact local %s commit without fetching or changing checkpoints",
-    (branch) => {
-      const f = fixture();
-      const destination = `refs/heads/${branch}`;
-      f.git(f.canonical, "update-ref", destination, f.head);
-      f.git(f.canonical, "config", `branch.${branch}.remote`, "origin");
-      f.git(f.canonical, "config", `branch.${branch}.merge`, "refs/heads/topic");
-      const config = readFileSync(join(f.canonical, ".git", "config"), "utf8");
-      const reflog = f.git(f.canonical, "reflog", "show", "--format=%H", destination);
-      const checkpoint = f.git(f.worktree, "rev-parse", "--git-path", "FETCH_HEAD");
-      writeFileSync(checkpoint, "unrelated private main checkpoint\n");
-      const shallow = join(f.canonical, ".git", "shallow");
-      if (branch === "pr-42") {
-        writeFileSync(shallow, `${f.head}\n`);
-      }
-      f.configure({ failPrFetch: true });
-      const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(f.git(f.canonical, "rev-parse", destination)).toBe(f.head);
-      expect(readFileSync(checkpoint, "utf8")).toBe("unrelated private main checkpoint\n");
-      expect(readFileSync(join(f.canonical, ".git", "config"), "utf8")).toBe(config);
-      expect(f.git(f.canonical, "reflog", "show", "--format=%H", destination)).toBe(reflog);
-      if (branch === "pr-42") {
-        expect(readFileSync(shallow, "utf8")).toBe(`${f.head}\n`);
-        expect(f.git(f.canonical, "rev-parse", "--is-shallow-repository")).toBe("true");
-      }
-      expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
-      expect(
-        f.events().filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
-      ).toHaveLength(2);
-    },
-  );
+  it("reuses the exact local PR commit without fetching or changing checkpoints", () => {
+    const f = fixture();
+    const destination = "refs/heads/pr-42";
+    f.git(f.canonical, "update-ref", destination, f.head);
+    f.git(f.canonical, "config", "branch.pr-42.remote", "origin");
+    f.git(f.canonical, "config", "branch.pr-42.merge", "refs/heads/topic");
+    const config = readFileSync(join(f.canonical, ".git", "config"), "utf8");
+    const reflog = f.git(f.canonical, "reflog", "show", "--format=%H", destination);
+    const checkpoint = f.git(f.worktree, "rev-parse", "--git-path", "FETCH_HEAD");
+    writeFileSync(checkpoint, "unrelated private main checkpoint\n");
+    const shallow = join(f.canonical, ".git", "shallow");
+    writeFileSync(shallow, `${f.head}\n`);
+    f.configure({ failPrFetch: true });
+    const result = f.shell(`cd .worktrees/pr-42\nfetch_pr_head 42 ${f.head} ${destination}`);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git(f.canonical, "rev-parse", destination)).toBe(f.head);
+    expect(readFileSync(checkpoint, "utf8")).toBe("unrelated private main checkpoint\n");
+    expect(readFileSync(join(f.canonical, ".git", "config"), "utf8")).toBe(config);
+    expect(f.git(f.canonical, "reflog", "show", "--format=%H", destination)).toBe(reflog);
+    expect(readFileSync(shallow, "utf8")).toBe(`${f.head}\n`);
+    expect(f.git(f.canonical, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(f.events().filter((event) => event.args?.includes("fetch"))).toEqual([]);
+    expect(
+      f.events().filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
+    ).toHaveLength(2);
+  });
 
   it.each([
     { dangling: false, fail: false },
@@ -351,9 +344,9 @@ describePosix("native PR main refresh boundaries", () => {
         branch: null,
       });
     }
-    const owner = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
-    expect(failed.stderr).toContain(`lock-recover 42 ${owner} --confirmed-no-running-tools`);
-    recoverFixtureLock(f, owner);
+    // The failed handoff drained, so its supervisor released the lock; the journal keeps custody.
+    expect(failed.stderr).toContain("Released the operation lock for PR #42");
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     f.configure({ failDetach: false, failPrFetch: false });
     const result = f.run("prepare-init");
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -401,6 +394,15 @@ describePosix("native PR main refresh boundaries", () => {
     expect(result.stdout).toContain("prepare-run complete for PR #42");
     expect(result.stdout).toContain("Remote branch already at local prep HEAD; skipping push.");
     expect(f.events().filter((e) => e.kind === "main-fetch")).toHaveLength(3);
+    const prFetches = f
+      .events()
+      .filter(
+        ({ kind, args }) =>
+          kind === "git-runtime" &&
+          args?.includes("fetch") &&
+          args.some((arg) => arg === f.head || arg.startsWith(`+${f.head}:`)),
+      );
+    expect(prFetches).toHaveLength(1);
     const apiReads = f.events().filter((event) => event.kind === "gh" && event.args?.[0] === "api");
     expect(
       apiReads.filter((event) => event.args?.includes("repos/fixture/repo/pulls/42")),
@@ -440,7 +442,7 @@ describePosix("native PR main refresh boundaries", () => {
     ).toBe(true);
   });
 
-  it("retains the publication receipt and operation lock on mismatched receipt ownership", () => {
+  it("retains the publication receipt and releases the drained lock on mismatched receipt ownership", () => {
     const f = fixture();
     const prepare = f.run("prepare-run");
     expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
@@ -449,7 +451,7 @@ describePosix("native PR main refresh boundaries", () => {
     writeFileSync(receiptPath, receipt);
     const result = f.run("prepare-sync-head");
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("Retaining the operation lock for PR #42");
+    expect(result.stderr).toContain("Released the operation lock for PR #42");
     expect(readFileSync(receiptPath, "utf8")).toBe(receipt);
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
     expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(f.head);
@@ -573,25 +575,18 @@ ${readFileSync(gitShim, "utf8")}
   });
 
   it.each([2, 3])(
-    "retains the operation lock when checkpoint %s fails after preparation mutated state",
+    "releases the drained operation lock when checkpoint %s fails after preparation mutated state",
     (checkpoint) => {
       const f = fixture();
       f.configure({ failFetchAt: checkpoint });
       const result = f.run("prepare-run");
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Retaining the operation lock for PR #42");
+      expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code 1");
       expect(existsSync(join(f.local, "prep-context.env"))).toBe(true);
       expect(existsSync(join(f.local, "gates.env"))).toBe(checkpoint === 3);
       expect(existsSync(join(f.local, "prep.env"))).toBe(false);
       expect(f.events().filter((e) => e.kind === "main-fetch")).toHaveLength(checkpoint);
-      expect(
-        f.git(
-          f.canonical,
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/openclaw/pr-operation-locks",
-        ),
-      ).toBe("refs/openclaw/pr-operation-locks/42");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     },
   );
 
@@ -935,9 +930,8 @@ ${readFileSync(gitShim, "utf8")}
         );
         expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
       }
-      const owner = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
-      expect(failed.stderr).toContain(`lock-recover 42 ${owner} --confirmed-no-running-tools`);
-      recoverFixtureLock(f, owner);
+      expect(failed.stderr).toContain("Released the operation lock for PR #42");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
       f.configure({ failFetchAt: 0 });
       const result = f.run("review-checkout-main");
       expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -968,8 +962,7 @@ ${readFileSync(gitShim, "utf8")}
     } finally {
       f.env.NODE_OPTIONS = nodeOptions;
     }
-    const owner = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
-    recoverFixtureLock(f, owner);
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("invalidates the previous snapshot when the same operation provisions a new worktree", () => {

@@ -28,6 +28,8 @@ import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 const routing = vi.hoisted(() => ({
   load: vi.fn<
@@ -129,16 +131,18 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         });
       }
     });
-    const admit = (id: string) =>
-      admitWorkerStopChat({
-        context,
-        storePath: target.storePath,
-        sessionKey: target.sessionKey,
-        sessionId,
-        agentId: "main",
-        entry,
-        runId: id,
-      }).promise;
+    const admit = async (id: string) =>
+      (
+        await admitWorkerStopChat({
+          context,
+          storePath: target.storePath,
+          sessionKey: target.sessionKey,
+          sessionId,
+          agentId: "main",
+          entry,
+          runId: id,
+        })
+      ).promise;
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
@@ -182,38 +186,39 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         },
         { once: true },
       );
-      heldWriter = patchSessionEntryCore(target, async () => {
-        writerEntered.resolve();
-        await releaseWriter.promise;
-        return null;
-      });
-      await writerEntered.promise;
-      const sessionTarget = {
-        storePath: target.storePath,
-        canonicalKey: target.sessionKey,
-        storeKeys: [target.sessionKey],
-        agentId: "main",
-        store: { [target.sessionKey]: entry },
-      };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements: {
           get: () => placement as never,
           getAsync: async () => placement as never,
           waitForTurnClaimRelease: async () => {},
         },
-        loadSessionRuntime: async () =>
-          ({
-            managedWorktrees: {
-              findLiveByOwner: async () => ({
-                id: "terminal-worktree",
-                ownerId: target.sessionKey,
-                path: root,
-              }),
-            },
-            resolveGatewaySessionStoreTargetWithStore: () => sessionTarget,
-            resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-          }) as never,
-        cancelSessionWork: (request) => cancelGatewayWorkerSessionWork(context, request),
+        loadSessionRuntime: async () => ({
+          managedWorktrees: {
+            findLiveByOwner: async () => ({
+              id: "terminal-worktree",
+              ownerId: target.sessionKey,
+              path: root,
+            }),
+          },
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: {
+                ...params.cfg,
+                session: { ...params.cfg.session, store: target.storePath },
+              },
+            }),
+          resolveCanonicalSessionEntryFromStoreKeys,
+        }),
+        cancelSessionWork: async (request) => {
+          heldWriter = patchSessionEntryCore(target, async () => {
+            writerEntered.resolve();
+            await releaseWriter.promise;
+            return null;
+          });
+          await writerEntered.promise;
+          await cancelGatewayWorkerSessionWork(context, request);
+        },
         revokeSessionAuthority: vi.fn(),
       });
       reclaim = barriers.runReclaimBarrier({

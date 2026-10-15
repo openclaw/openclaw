@@ -309,17 +309,25 @@ it.each([
         publishConfig(initialConfig);
       }
       const response = await pending;
-      expect(stages).toEqual([
-        "transport-retired",
-        "lookup-completed",
-        ...(verdictChange ? ["verdict-precommit"] : []),
-        ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
-      ]);
+      expect(stages).toEqual(
+        native && revoke
+          ? []
+          : [
+              "transport-retired",
+              "lookup-completed",
+              ...(verdictChange ? ["verdict-precommit"] : []),
+              ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
+            ],
+      );
       if (native) {
         expect(nativeGuard).toHaveBeenCalled();
       }
-      expect(client.connectionSignal.aborted).toBe(true);
-      expect(lookup).toHaveBeenCalledOnce();
+      if (native && revoke) {
+        expect(lookup).not.toHaveBeenCalled();
+      } else {
+        expect(client.connectionSignal.aborted).toBe(true);
+        expect(lookup).toHaveBeenCalledOnce();
+      }
       if (revoke) {
         expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });
         expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);

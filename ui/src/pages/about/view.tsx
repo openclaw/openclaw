@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
@@ -25,16 +25,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
-        "prop:branding": ReturnType<typeof currentThemeBranding>;
-      };
-    }
-  }
-}
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 type AboutProps = {
@@ -83,18 +73,18 @@ function Unavailable() {
 function CommitAge(props: { commitAt: string | null }) {
   const timestamp = createMemo(() => Date.parse(props.commitAt ?? ""));
   return (
-    <>
-      {Number.isFinite(timestamp()) && props.commitAt ? (
+    <Show when={Number.isFinite(timestamp()) && props.commitAt}>
+      {(commitAt) => (
         <time
           class="about-commit__age"
           dir="auto"
-          datetime={props.commitAt}
+          datetime={commitAt()}
           title={formatDateTimeMs(timestamp(), { dateStyle: "medium", timeStyle: "short" })}
         >
           {formatRelativeTimestamp(timestamp(), { fallback: "" })}
         </time>
-      ) : undefined}
-    </>
+      )}
+    </Show>
   );
 }
 
@@ -110,11 +100,11 @@ function Commit(props: AboutProps) {
     ),
   );
   return (
-    <>
-      {props.buildInfo.commit ? (
+    <Show when={props.buildInfo.commit} fallback={<Unavailable />}>
+      {(commit) => (
         <span class="about-commit">
-          <code dir="ltr" title={props.buildInfo.commit}>
-            {props.buildInfo.commit.slice(0, SHORT_COMMIT_LENGTH)}
+          <code dir="ltr" title={commit()}>
+            {commit().slice(0, SHORT_COMMIT_LENGTH)}
           </code>
           <CommitAge commitAt={props.buildInfo.commitAt} />
           <openclaw-tooltip prop:content={label()}>
@@ -135,10 +125,8 @@ function Commit(props: AboutProps) {
             {props.copyState === "copied" || props.copyState === "error" ? label() : ""}
           </span>
         </span>
-      ) : (
-        <Unavailable />
       )}
-    </>
+    </Show>
   );
 }
 

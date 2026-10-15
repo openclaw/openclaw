@@ -21,8 +21,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
-import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
+  collectActiveSessionWorkAdmissions,
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
@@ -40,9 +40,11 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
 import {
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
+  installReplyDispatchHook,
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
 } from "./server.chat-goal.test-support.js";
@@ -61,7 +63,6 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -171,26 +172,8 @@ async function useFreshSessionStore() {
   expect(loadSessionEntry(scope())).toBeUndefined();
 }
 
-function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
-  const handler = vi.fn(async () => ({
-    handled: true,
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  }));
-  const registry = getTestPluginRegistry();
-  registry.typedHooks.push({
-    pluginId: "goal-dispatch-fixture",
-    hookName: "reply_dispatch",
-    handler,
-    ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
-    source: "test",
-  });
-  initializeGlobalHookRunner(registry);
-  return handler;
-}
-
 async function rpc(
-  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.goal.update",
+  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.abort" | "sessions.goal.update",
   params: Record<string, unknown>,
   onResponse?: RespondFn,
   requestClient: GatewayClient = client,
@@ -241,13 +224,45 @@ async function waitForModelRun(count = 1) {
     getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
-  expect(
-    runEmbeddedAgent.mock.calls,
-    JSON.stringify(vi.mocked(context.logGateway.warn).mock.calls),
-  ).toHaveLength(count);
+  let failureDiagnostic: string | undefined;
+  if (runEmbeddedAgent.mock.calls.length !== count) {
+    const entry = loadSessionEntry(scope());
+    failureDiagnostic = JSON.stringify({
+      warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
+      abortControllers: context.chatAbortControllers.size,
+      admissionScopes: [...collectActiveSessionWorkAdmissions()]
+        .filter(([, identities]) => identities.has(sessionKey))
+        .slice(0, 5)
+        .map(([activeScope, identities]) => ({
+          file: path.basename(activeScope),
+          matchesExpected: activeScope === storePath,
+          identityCount: identities.size,
+          includesExpectedSessionId: identities.has(sessionId),
+        })),
+      dedupe: [...context.dedupe]
+        .filter(([key]) => key.startsWith("chat:"))
+        .slice(0, 5)
+        .map(([key, cached]) => ({
+          key,
+          ok: cached.ok,
+          status: isRecord(cached.payload) ? cached.payload.status : undefined,
+          error: cached.error && { code: cached.error.code, message: cached.error.message },
+        })),
+      entry: entry && {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        status: entry.status,
+        lastRunId: entry.lastRunId,
+        abortedLastRun: entry.abortedLastRun,
+      },
+    });
+  }
+  expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+
   registerGoalChatRestartSettlementCase({
     scope,
     createStorePath() {
@@ -880,39 +895,7 @@ describe("Goal chat admission and continuation", () => {
     }
   });
 
-  it("reports a completed Goal Resume as definitively rejected without dispatch", async () => {
-    const started = await rpc("chat.send", goalStart("A completed checklist"));
-    expect(started.mock.calls[0]?.[0]).toBe(true);
-    await waitForModelRun();
-    await waitForDispatchEnd();
-    await patchSessionEntryCore(scope(), (entry) => ({
-      status: "done",
-      agentHarnessId: "openclaw",
-      goal: entry.goal ? { ...entry.goal, status: "complete" } : undefined,
-    }));
-    const goal = loadSessionEntry(scope())?.goal;
-    const rejected = await rpc("sessions.goal.update", {
-      sessionKey,
-      sessionId,
-      goalId: goal?.id,
-      action: "resume",
-      operationId: "completed-resume",
-      issuedAtMs: Date.now(),
-    });
-    expect(rejected).toHaveBeenCalledWith(
-      false,
-      expect.anything(),
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        details: { code: "GOAL_OPERATION_REJECTED", reason: "invalid" },
-      }),
-      expect.anything(),
-    );
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
-  });
-
-  it("resumes once through the real reply pipeline despite failed postcommit notification", async () => {
+  it.each(["paused", "complete"] as const)("resumes %s Goals once", async (status) => {
     const objective = "Finish the release checklist";
     const profile = ensureProfileForEmail("goal-participant@example.test");
     const requestClient = profileClient(profile.id);
@@ -946,7 +929,9 @@ describe("Goal chat admission and continuation", () => {
     await patchSessionEntryCore(scope(), (entry) => ({
       status: "done",
       agentHarnessId: "openclaw",
-      goal: entry.goal ? { ...entry.goal, status: "paused" } : undefined,
+      goal: entry.goal
+        ? { ...entry.goal, status, ...(status === "complete" ? { completedAt: Date.now() } : {}) }
+        : undefined,
     }));
     expect(loadSessionEntry(scope())?.agentHarnessId).toBe("openclaw");
     const request = {
@@ -955,7 +940,7 @@ describe("Goal chat admission and continuation", () => {
       goalId: goal?.id,
       action: "resume",
       note: "Prioritize the changelog; keep /stop as quoted text.",
-      operationId: "goal-resume",
+      operationId: randomUUID(),
       issuedAtMs: Date.now(),
     };
     modelStarted = createDeferred();
@@ -976,14 +961,19 @@ describe("Goal chat admission and continuation", () => {
     }
     expect(resumed).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ status: "started", runId: "goal-resume", goalId: goal?.id }),
+      expect.objectContaining({ status: "started", runId: request.operationId, goalId: goal?.id }),
       undefined,
       expect.anything(),
     );
     await waitForModelRun(2);
     await waitForDispatchEnd();
     expect(participants()).toEqual(startParticipants);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      id: goal?.id,
+      status: "active",
+      createdAt: goal?.createdAt,
+    });
+    expect(loadSessionEntry(scope())?.goal?.completedAt).toBeUndefined();
     expect(userMessages()).toEqual([
       expect.objectContaining({ content: objective }),
       expect.objectContaining({
@@ -1002,7 +992,7 @@ describe("Goal chat admission and continuation", () => {
       expect.objectContaining({ content: objective }),
     ]);
     const replay = await rpc("sessions.goal.update", request, undefined, requestClient);
-    expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: "goal-resume" });
+    expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: request.operationId });
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
     expect(userMessages()).toHaveLength(2);
     expect(participants()).toEqual(startParticipants);

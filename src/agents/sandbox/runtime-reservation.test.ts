@@ -447,30 +447,51 @@ describe("durable sandbox runtime generations", () => {
 
   it("serializes concurrent creators onto one durable generation", async () => {
     const started = createDeferred();
+    const secondReservation = createDeferred();
     const finish = createDeferred();
     const runtimeIds: string[] = [];
     let active = 0;
     let maximumActive = 0;
-    install(async (params) => {
-      const backend = handle(params);
-      active++;
-      maximumActive = Math.max(maximumActive, active);
-      runtimeIds.push(backend.runtimeId);
-      started.resolve();
-      await finish.promise;
-      active--;
-      return backend;
+    disposeBackend = registerSandboxBackend("reserved-test", {
+      reserveRuntimeId: () => {
+        const id = `reserved-${++nextId}`;
+        if (nextId === 2) {
+          secondReservation.resolve();
+        }
+        return id;
+      },
+      factory: async (params: CreateReservedSandboxBackendParamsV1) => {
+        const backend = handle(params);
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        runtimeIds.push(backend.runtimeId);
+        started.resolve();
+        await finish.promise;
+        active--;
+        return backend;
+      },
     });
     const first = resolve();
-    await started.promise;
-    const second = resolve();
-    await vi.waitFor(() => expect(nextId).toBe(2));
-    finish.resolve();
-    const contexts = await Promise.all([first, second]);
-    expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
-    expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
-    expect(maximumActive).toBe(1);
-    expect((await readRegistry()).entries).toHaveLength(1);
+    let second: ReturnType<typeof resolve> | undefined;
+    try {
+      await awaitGateBeforeSettlement(started.promise, first, "First creator did not start");
+      second = resolve();
+      await awaitGateBeforeSettlement(
+        secondReservation.promise,
+        second,
+        "Second creator did not reserve a runtime",
+      );
+      expect(nextId).toBe(2);
+      finish.resolve();
+      const contexts = await Promise.all([first, second]);
+      expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
+      expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
+      expect(maximumActive).toBe(1);
+      expect((await readRegistry()).entries).toHaveLength(1);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it.each(["recreate", "prune"] as const)(

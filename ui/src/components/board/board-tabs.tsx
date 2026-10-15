@@ -1,6 +1,8 @@
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
 import type { BoardTab } from "../../lib/board/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { Menu } from "../solid/menu.tsx";
+import { Tabs } from "../solid/tabs.tsx";
 
 export function orderedBoardTabs(tabs: readonly BoardTab[]): BoardTab[] {
   return tabs.toSorted(
@@ -12,9 +14,9 @@ export function BoardTabs(props: {
   tabs: readonly BoardTab[];
   activeTabId: string;
   hoverTabId: string;
-  onTabShow: (event: CustomEvent<{ name: string }>) => void;
-  onOverflowSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
+  onSelect: (tabId: string) => void;
 }) {
+  const overflowId = createUniqueId();
   const visible = createMemo(() => {
     const tabs = props.tabs.slice(0, 6);
     const active = props.tabs.find((tab) => tab.tabId === props.activeTabId);
@@ -27,62 +29,70 @@ export function BoardTabs(props: {
     const visibleIds = new Set(visible().map((tab) => tab.tabId));
     return props.tabs.filter((tab) => !visibleIds.has(tab.tabId));
   });
+  let track: HTMLDivElement | undefined;
+  const layoutKey = createMemo(() =>
+    JSON.stringify([props.activeTabId, visible().map((tab) => tab.tabId)]),
+  );
+  createEffect(layoutKey, () => {
+    // Read selection after the keyed tab items have committed.
+    queueMicrotask(() => {
+      const scroller = track;
+      const selected = scroller?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      if (!scroller || !selected) {
+        return;
+      }
+      const viewport = scroller.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      if (tab.left < viewport.left) {
+        scroller.scrollLeft += tab.left - viewport.left;
+      } else if (tab.right > viewport.right) {
+        scroller.scrollLeft += tab.right - viewport.right;
+      }
+    });
+  });
   return (
     <Show when={props.tabs.length > 1}>
       <nav class="board-tabs" aria-label={t("board.tabsLabel")}>
-        <wa-tab-group
+        <Tabs
+          ref={(element) => {
+            track = element;
+          }}
           class="board-tabs__track"
-          prop:active={props.activeTabId}
+          active={props.activeTabId}
           activation="manual"
-          without-scroll-controls
-          onWa-tab-show={(event: CustomEvent<{ name: string }>) => props.onTabShow(event)}
-        >
-          <For each={visible()} keyed={(tab) => tab.tabId}>
-            {(tab) => (
-              <wa-tab
-                class={[
-                  "board-tabs__tab",
-                  {
-                    "board-tabs__tab--active": tab().tabId === props.activeTabId,
-                    "board-tabs__tab--drop": tab().tabId === props.hoverTabId,
-                  },
-                ]}
-                panel={tab().tabId}
-                prop:active={tab().tabId === props.activeTabId}
-                data-board-tab-id={tab().tabId}
-              >
-                {tab().title}
-              </wa-tab>
-            )}
-          </For>
-        </wa-tab-group>
+          ariaLabel={t("board.tabsLabel")}
+          items={visible().map((tab) => ({
+            value: tab.tabId,
+            label: tab.title,
+            className: [
+              "board-tabs__tab",
+              tab.tabId === props.activeTabId ? "board-tabs__tab--active" : "",
+              tab.tabId === props.hoverTabId ? "board-tabs__tab--drop" : "",
+            ]
+              .filter(Boolean)
+              .join(" "),
+            attributes: { "data-board-tab-id": tab.tabId },
+          }))}
+          onSelect={(tabId) => props.onSelect(tabId)}
+        />
         <Show when={overflow().length > 0}>
-          <wa-dropdown
+          <Menu
+            id={overflowId}
             class="board-tabs__overflow"
+            panelClass="board-tabs__overflow-panel"
+            triggerClass="board-tabs__overflow-trigger"
+            label={t("board.moreTabs")}
+            trigger="•••"
+            triggerAttributes={{ title: t("board.moreTabs") }}
             placement="bottom-end"
-            onWa-select={(event) => props.onOverflowSelect(event)}
-          >
-            <button
-              class="board-tabs__overflow-trigger"
-              slot="trigger"
-              type="button"
-              aria-label={t("board.moreTabs")}
-              title={t("board.moreTabs")}
-            >
-              •••
-            </button>
-            <For each={overflow()} keyed={(tab) => tab.tabId}>
-              {(tab) => (
-                <wa-dropdown-item
-                  class="board-tabs__overflow-item"
-                  value={tab().tabId}
-                  data-board-tab-id={tab().tabId}
-                >
-                  {tab().title}
-                </wa-dropdown-item>
-              )}
-            </For>
-          </wa-dropdown>
+            items={overflow().map((tab) => ({
+              id: tab.tabId,
+              label: tab.title,
+              class: "board-tabs__overflow-item",
+              attributes: { "data-board-tab-id": tab.tabId },
+            }))}
+            onSelect={(item) => props.onSelect(item.id)}
+          />
         </Show>
       </nav>
     </Show>

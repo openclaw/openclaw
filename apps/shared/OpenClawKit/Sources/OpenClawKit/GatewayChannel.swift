@@ -22,6 +22,12 @@ public actor GatewayChannelActor {
     private var task: WebSocketTaskBox?
     var pending: [String: PendingRequest] = [:]
     private var connected = false
+    private var connectDeviceId: String?
+
+    public func connectedDeviceId() -> String? {
+        self.connected ? self.connectDeviceId : nil
+    }
+
     private var connectAttemptTask: Task<Void, Never>?
     /// Socket ownership epoch. Every callback and send stays bound to the task
     /// that admitted it so a late failure cannot tear down a replacement socket.
@@ -542,6 +548,7 @@ public actor GatewayChannelActor {
         let identity = try Self.loadDeviceIdentityForConnect(
             includeDeviceIdentity: options.includeDeviceIdentity,
             profile: options.deviceIdentityProfile)
+        self.connectDeviceId = identity?.deviceId
         let selectedAuth = self.selectConnectAuth(options: options, deviceId: identity?.deviceId)
         let scopes = self.resolveConnectScopes(
             role: role,

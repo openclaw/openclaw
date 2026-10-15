@@ -133,7 +133,11 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
-  const workspaceOptions = { env, ephemeral: params?.ephemeral };
+  const workspaceOptions = {
+    env,
+    ephemeral: params?.ephemeral,
+    folders: config.nodeHost?.workerRuns?.folders,
+  };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -232,6 +236,9 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerRunsEnabled && workspaceOptions.folders?.length !== 0
+      ? { deviceFoldersEnabled: true as const }
+      : {}),
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
     nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
@@ -480,6 +487,7 @@ export async function prepareNodeHostRuntime(params?: {
                   client,
                   frame,
                   idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  signal: controller.signal,
                   onError: () => controller.abort(),
                 })
               : undefined;

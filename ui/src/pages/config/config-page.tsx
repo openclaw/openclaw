@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
@@ -324,3 +325,14 @@ export const ConfigPage = defineSolidBridge<ConfigPageProps>(
     },
   },
 );
+
+export type ConfigPageRouteData = ConfigRouteData & { pageId: ConfigPageId };
+
+// Keep renderer identity shared across subpages so route changes preserve this owner.
+export function ConfigRoute(props: SolidRouteProps<ConfigPageRouteData>) {
+  return (
+    <Show when={props.data}>
+      {(data) => <ConfigPage pageId={data().pageId} routeData={data()} />}
+    </Show>
+  );
+}

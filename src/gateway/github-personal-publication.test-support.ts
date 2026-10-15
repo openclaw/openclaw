@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserGitHubConnection } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -247,7 +248,6 @@ export async function callPersonalPublicationRpc(
   >,
   method: string,
   params: Record<string, unknown> = { sessionKey: SESSION_KEY },
-  hooks?: { duringPersonalStatus?: () => unknown },
 ) {
   const respond = vi.fn();
   const personal = createPersonalGitHubOAuthLifecycle();
@@ -261,10 +261,8 @@ export async function callPersonalPublicationRpc(
         githubOAuthService: {
           personal: {
             ...personal,
-            status: async (statusAction) => {
-              // Tests inject archive/restore interleavings here, inside the awaited
-              // options work that follows the request-start session snapshot.
-              await hooks?.duringPersonalStatus?.();
+            status: async (statusAction: Parameters<typeof personalGitHubStatus>[0]) => {
+              await prepareUserGitHubConnection(statusAction.owner);
               return personalGitHubStatus(statusAction);
             },
           },

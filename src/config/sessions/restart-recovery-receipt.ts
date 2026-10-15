@@ -2,19 +2,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import {
-  hasActiveRestartRecoveryDeliveryClaim,
-  hasExactRestartRecoveryDeliveryClaim,
-  projectRestartRecoveryDeliverySettlement,
-  resolveRestartRecoveryTerminalDeliveryDisposition,
-} from "./restart-recovery-receipt-state.js";
+import { resolveRestartRecoveryTerminalDeliveryDisposition } from "./restart-recovery-receipt-state.js";
 import { normalizeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
-import { updateSessionEntry } from "./session-accessor.js";
 import type { SessionActorAuthority, SessionActorOutcome } from "./session-actor-contract.js";
 import { runSessionActorCommand, withSessionActor } from "./session-actor-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
 
@@ -72,25 +64,16 @@ export function resolveRestartRecoverySteeringBlockReason(
 }
 
 function captureCurrent(input: RestartRecoveryTerminalDeliveryScope) {
-  const memory = getSessionActorStorageBinding(input);
-  if (memory) {
-    return {
-      scope: { ...input, storePath: memory.path, sessionActor: memory },
-      absent: false,
-    };
-  }
-  const source = captureIncognitoSessionSource(input);
-  const ownerPath = source && ("kind" in source ? source.path : source.actor.path);
-  const scope = {
-    ...input,
-    storePath: ownerPath ?? path.resolve(input.storePath),
-    env: captureSessionTranscriptStorageEnvironment(
-      ownerPath ? { OPENCLAW_STATE_DIR: path.resolve(ownerPath, "../../../..") } : process.env,
-    ),
-  };
+  const memory = captureSessionActorStorageOwner(input, receiptAuthority);
   return {
-    scope,
-    absent: source && "kind" in source,
+    scope: {
+      ...input,
+      storePath: memory?.path ?? path.resolve(input.storePath),
+      env: captureSessionTranscriptStorageEnvironment(
+        memory ? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") } : process.env,
+      ),
+    },
+    absent: memory !== undefined && !memory.owner && !memory.binding,
   };
 }
 
@@ -126,39 +109,7 @@ export async function beginRestartRecoveryTerminalDelivery(
   if (result !== undefined) {
     return result;
   }
-  // Native incognito retains the existing entry owner until its actor cutover.
-  let started = false;
-  const updated = await updateSessionEntry(
-    scope,
-    (entry) => {
-      if (resolveRestartRecoveryTerminalDeliveryDisposition(entry, scope) !== "startable") {
-        return null;
-      }
-      started = true;
-      return {
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-        restartRecoveryDeliveryToolCallId: toolCallId,
-        updatedAt: Date.now(),
-      };
-    },
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
-  if (
-    started &&
-    updated &&
-    hasExactRestartRecoveryDeliveryClaim(updated, scope) &&
-    updated.restartRecoveryDeliveryReceiptState === "terminal-pending"
-  ) {
-    return "started";
-  }
-  const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(
-    await readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" }),
-    scope,
-  );
-  if (disposition === "startable") {
-    throw new Error("failed to persist terminal delivery intent");
-  }
-  return disposition;
+  return "stale";
 }
 
 const receiptLifetime = { assertCurrent() {}, assertReadable() {} };
@@ -213,29 +164,7 @@ async function updatePendingTerminalDelivery(
   if (result !== undefined) {
     return result;
   }
-  await updateSessionEntry(
-    scope,
-    (entry) => projectRestartRecoveryDeliverySettlement(entry, scope, outcome, Date.now()),
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
-  const entry = await readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" });
-  if (!entry || !hasActiveRestartRecoveryDeliveryClaim(entry, scope)) {
-    return "stale";
-  }
-  if (
-    hasExactRestartRecoveryDeliveryClaim(entry, scope) &&
-    entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
-  ) {
-    return outcome === "confirmed" ? "recorded" : "stale";
-  }
-  if (
-    outcome === "not-sent" &&
-    !entry.restartRecoveryDeliveryReceiptState &&
-    !entry.restartRecoveryDeliveryToolCallId
-  ) {
-    return "cleared";
-  }
-  throw new Error("failed to persist terminal delivery settlement");
+  return "stale";
 }
 
 /** Resolves a pre-send ambiguity only after the provider confirms delivery. */

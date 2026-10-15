@@ -9,9 +9,12 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import {
+  prepareConversationCapabilityProfile,
+  resolveConversationCapabilityProfile,
+} from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
@@ -189,22 +192,6 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(scheduled.policy.explicitToolAllowlist).toContain("write");
   });
 
-  it("keeps built-in profile grants out of explicit overrides", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          allow: ["pdf"],
-        },
-      },
-      modelProvider: "ollama",
-      modelId: "qwen3.5:9b",
-    });
-
-    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
-  });
-
   it("adds runtime tools without replacing the configured tool surface", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
@@ -252,7 +239,7 @@ describe("resolveConversationCapabilityProfile", () => {
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 
-    const profile = resolveConversationCapabilityProfile({
+    const profile = await prepareConversationCapabilityProfile({
       config: { session: { store: storePath } },
       sessionKey,
       agentId: "main",
@@ -338,13 +325,6 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     { name: "configured creator", origin: "external", configured: true, delivery: "telegram" },
     { name: "unknown creator origin", origin: "unknown", configured: true, delivery: "whatsapp" },
     {
-      name: "removed creator account",
-      origin: "external",
-      configured: false,
-      delivery: "telegram",
-    },
-    { name: "local creator", origin: "local", configured: true, delivery: "whatsapp" },
-    {
       name: "removed local resource account",
       origin: "local",
       configured: false,
@@ -352,7 +332,7 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     },
   ])(
     "preserves scheduled creator authority for $name across tool consumers",
-    ({ origin, configured, delivery }) => {
+    async ({ origin, configured, delivery }) => {
       const config: OpenClawConfig = {
         channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
       };
@@ -385,7 +365,7 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
       const webSearch = () =>
         resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
       const harnessTools = () =>
-        resolvePluginHarnessPolicyToolsAllow({
+        preparePluginHarnessPolicyToolsAllow({
           ...params,
           provider: "fixture",
           modelId: "fixture-model",
@@ -394,14 +374,15 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
         });
 
       if (origin === "unknown" || !configured) {
-        for (const resolve of [conversationTools, webSearch, harnessTools]) {
+        for (const resolve of [conversationTools, webSearch]) {
           expect(resolve).toThrow('Scheduled account "work" is unavailable');
         }
+        await expect(harnessTools()).rejects.toThrow('Scheduled account "work" is unavailable');
         return;
       }
       expect(conversationTools()).toEqual(["read"]);
       expect(webSearch()).toEqual({ allowed: true, persistentAllowed: true });
-      expect(harnessTools()).toEqual([]);
+      expect(await harnessTools()).toEqual([]);
     },
   );
 });

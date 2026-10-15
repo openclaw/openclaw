@@ -25,7 +25,7 @@ import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-share
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   fakeTool,
   pluginToolWithExecute,
@@ -81,6 +81,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const target = fakeTool("read_record", "Read a record");
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
       const exec = expectDefined(harness.tools[0], "Code Mode exec");
+      const wait = expectDefined(harness.tools[1], "Code Mode wait");
       try {
         for (const value of ["first", "second"]) {
           const toolCall = {
@@ -95,11 +96,12 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             stopReason: "toolUse",
           });
           manager.appendMessage(assistantMessage);
-          const result = resultDetails(
+          const details = resultDetails(
             await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
               exec.execute(toolCall.id, toolCall.arguments),
             ),
           );
+          const result = await waitUntilCompleted({ details, waitTool: wait });
           expect(result.status, JSON.stringify(result)).toBe("completed");
           expect(result.value).toMatchObject({ input: { value } });
         }
@@ -700,7 +702,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       tools: [fakeTool("client_probe", "Client probe")],
     });
     expect(testing.activeRuns.get(runId)).toBe(initial);
-    expect(exec.description).toContain("client_probe");
+    expect(buildCodeModeCatalogPrompt(owner, owner.catalogRef.current?.entries ?? [])).toContain(
+      "client_probe",
+    );
 
     for (let index = 0; index < 2; index += 1) {
       const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");

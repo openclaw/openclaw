@@ -12,8 +12,11 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { ApplicationContext } from "../app/context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiInitialRoster,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -501,38 +504,41 @@ suite.define(() => {
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
+    let rejectedCatalogReplies = 0;
     const publish = async (page: Page, id: string) => {
-      const publication = await page.evaluateHandle(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          context: ApplicationContext;
-        };
-        const observed = { committed: false };
-        const stop = app.context.gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            observed.committed = true;
-          }
-        });
-        return { observed, stop };
-      });
-      const args = [
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(models(id)),
-        "--strict-json",
-        "--replace",
-      ];
+      const applicationHandle = await getControlUiContextHandle(page);
       try {
-        const result = await instance.cli(args);
-        commands.push({ args, ...result });
-        expect(result.code, result.stderr).toBe(0);
-        // Runtime rows can arrive before this accepted-config event retires them.
-        await expect
-          .poll(() => publication.evaluate(({ observed }) => observed.committed))
-          .toBe(true);
+        const publication = await applicationHandle.evaluateHandle((application) => {
+          const observed = { committed: false };
+          const stop = application.gateway.subscribeEvents((event) => {
+            if (event.event === "config.changed") {
+              observed.committed = true;
+            }
+          });
+          return { observed, stop };
+        });
+        const args = [
+          "config",
+          "set",
+          "models.providers.fixture.models",
+          JSON.stringify(models(id)),
+          "--strict-json",
+          "--replace",
+        ];
+        try {
+          const result = await instance.cli(args);
+          commands.push({ args, ...result });
+          expect(result.code, result.stderr).toBe(0);
+          // Runtime rows can arrive before this accepted-config event retires them.
+          await expect
+            .poll(() => publication.evaluate(({ observed }) => observed.committed))
+            .toBe(true);
+        } finally {
+          await publication.evaluate(({ stop }) => stop());
+          await publication.dispose();
+        }
       } finally {
-        await publication.evaluate(({ stop }) => stop());
-        await publication.dispose();
+        await applicationHandle.dispose();
       }
     };
     try {
@@ -567,6 +573,7 @@ suite.define(() => {
                 });
               }
               if (catalogReply && rejectCatalogReplies) {
+                rejectedCatalogReplies += 1;
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -582,6 +589,8 @@ suite.define(() => {
           });
           await page.goto(browserUrl);
           await waitForControlUiGatewayReady(page);
+          // The handshake can precede the lazy shell and its shortcut listener.
+          await waitForControlUiInitialRoster(page);
           await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
           await input.fill("palette-");
@@ -608,11 +617,16 @@ suite.define(() => {
           // Refresh the same catalog owner; a config write retires its display facts.
           providerModel = "read-failure-fixture:latest";
           const refreshParams = { agentId: "main", view: "configured", refresh: true };
-          commands.push({
-            method: "models.list",
-            params: refreshParams,
-            result: await readback.request("models.list", refreshParams),
+          const refreshed = requireRecord(await readback.request("models.list", refreshParams));
+          commands.push({ method: "models.list", params: refreshParams, result: refreshed });
+          expect(refreshed.providerOutcomes).toContainEqual({
+            provider: "ollama",
+            status: "ready",
           });
+          expect(refreshed.models).toContainEqual(
+            expect.objectContaining({ provider: "ollama", id: "read-failure-fixture:latest" }),
+          );
+          await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });

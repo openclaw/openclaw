@@ -103,10 +103,10 @@ export function startSessionCostUsageProjectionLifetime(params: {
       }
     }
   });
-  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig())?.revision;
   const offModels = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "published" || event.phase === "catalog-published") {
-      const next = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+      const next = getActiveRemoteModelCatalog(params.getConfig())?.revision;
       if (next === pricingRevision) {
         return;
       }

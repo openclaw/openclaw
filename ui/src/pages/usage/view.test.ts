@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageTotals } from "./types.ts";
 import {
@@ -171,7 +171,7 @@ describe("renderUsage", () => {
     );
   });
 
-  it("retains an open query menu while selecting multiple options", () => {
+  it("retains an open query menu while selecting multiple options", async () => {
     const base = createUsageProps();
     const sessions = ["clear", "second"].map((provider) =>
       usageSession(`session:${provider}`, "main", provider),
@@ -199,27 +199,30 @@ describe("renderUsage", () => {
       );
       flush();
       const first = [...container.querySelectorAll(".usage-filter-option")].find(
-        (item) => item.textContent?.trim() === "clear",
+        (item) => item.getAttribute("aria-label") === "clear",
       )!;
-      const dropdown = first.closest("wa-dropdown")!;
-      dropdown.open = true;
+      const dropdown = first.closest(".usage-filter-select")!;
+      const surface = dropdown.querySelector<HTMLElement>('[role="menu"]')!;
+      const trigger = dropdown.querySelector<HTMLButtonElement>(".usage-filter-trigger")!;
+      expect(trigger.getAttribute("aria-label")).toBe("Provider All");
+      // JSDOM has no scrolling layout; keep the real Menu click and focus paths.
+      for (const item of surface.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
+        item.scrollIntoView = vi.fn();
+      }
+      trigger.click();
+      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
-        const option = [...dropdown.querySelectorAll("wa-dropdown-item")].find(
-          (item) => item.textContent?.trim() === provider,
-        )!;
-        option.checked = true;
-        const event = new CustomEvent("wa-select", {
-          detail: { item: option },
-          bubbles: true,
-          cancelable: true,
-        });
-        dropdown.dispatchEvent(event);
-        flush();
-        expect(event.defaultPrevented).toBe(true);
-        expect(first.closest("wa-dropdown")).toBe(dropdown);
+        const option = [
+          ...dropdown.querySelectorAll<HTMLButtonElement>(".usage-filter-option"),
+        ].find((item) => item.getAttribute("aria-label") === provider)!;
+        option.click();
+        await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
+        expect(trigger.getAttribute("aria-label")).toBe(`Provider ${provider === "clear" ? 1 : 2}`);
+        expect(first.closest(".usage-filter-select")).toBe(dropdown);
+        expect(dropdown.querySelector('[role="menu"]')).toBe(surface);
         expect(container.contains(dropdown)).toBe(true);
-        expect(dropdown.open).toBe(true);
-        expect(option.checked).toBe(true);
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
     } finally {
@@ -284,11 +287,11 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = vi.fn();
     const providerOptions = () =>
       [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
-        .find(
-          (menu) => menu.querySelector(".usage-filter-trigger span")?.textContent === "Provider",
+        .find((menu) =>
+          menu.querySelector(".usage-filter-trigger")?.textContent?.trim().startsWith("Provider"),
         )!
-        .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
-    const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+        .querySelectorAll<HTMLElement>(".usage-filter-option");
+    const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
       [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
         (button) => button.textContent?.trim() === label,
@@ -313,9 +316,11 @@ describe("renderUsage", () => {
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
-    expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
-      "second",
-    );
+    expect(
+      [...providerOptions()]
+        .find((option) => option.getAttribute("aria-checked") === "true")
+        ?.getAttribute("aria-label"),
+    ).toBe("second");
     expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
       "provider:second",
     );

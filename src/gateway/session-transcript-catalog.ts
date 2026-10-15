@@ -334,7 +334,7 @@ async function readCatalogPageFromEntry(
   return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-/** Legacy SDK title contract; bundled callers use the worker-backed async replacement. */
+/** @deprecated Use readSessionTranscriptCatalogTitleAsync. */
 export function readLegacySessionTranscriptCatalogTitle(params: {
   agentId: string;
   sessionKey: string;

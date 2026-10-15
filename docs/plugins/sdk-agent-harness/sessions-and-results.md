@@ -38,10 +38,10 @@ Human mentions survive only when the entire `content` value exactly matches the
 prepared snapshot; changed text must not inherit the old selections.
 
 Restored metadata neither authorizes actions nor proves a fresh transcript append.
-After the canonical append, pass its committed message, anchor, and actual
+After the transcript append, pass its committed message, anchor, and actual
 `{ appended }` result to `userTurnTranscriptRecorder.markRuntimePersisted(...)`.
-Only `appended: true` can trigger an original-input commit notification; an
-idempotent history match must report `false`.
+Only `appended: true` can trigger an original-input commit notification; a
+duplicate history match must report `false`.
 
 Store native bindings in plugin state. Implement `reset(...)` for an in-place
 session reset and `withSessionDeletion(params, run)` for removal of a session
@@ -103,7 +103,8 @@ including awaited `lookup`, action-bound `withCurrent`, and the synchronous
 effect guard `assertLeaseCurrent`. Supply its `workerCodec`, record codec,
 acquisition/retention policy, errors, and timing. The old
 `createNativeSessionBindingLifecycle` and its synchronous store view remain
-deprecated compatibility until the next Plugin SDK major.
+deprecated compatibility through 2026-12-31, with removal in the first January
+2027 stable release.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.
@@ -114,14 +115,16 @@ Combine it with host authority for normal work. Cleanup may use retained lease
 ownership after host retirement, but must reject an expired, replaced, or closed
 lease even while the harness remains alive.
 
-Await `prepareNativeSessionGenerationAuthority`,
+Await `retainNativeSessionGenerationAuthority`,
 `reclaimNativeSessionGenerationWithAuthority`, and
-`resolveNativeSessionBindingWithAuthorityV2` to preserve the host generation and
+`resolvePreparedNativeSessionBinding` to preserve the host generation and
 predecessor across waits, adopting a verified predecessor before stale
-reclamation. The V2 resolver awaits `readBinding` and returns
-`{ binding, authority }`. A missing host entry permits an ephemeral session; a
+reclamation. The prepared resolver awaits `readBinding` and returns
+`{ binding, authority, release }`. Release the capture in `finally` after terminal
+cleanup; `authority.withLiveness` borrows that capture for cleanup with its own
+lifecycle check. A missing host entry permits an ephemeral session; a
 failed read cannot authorize a binding. The older generation helpers and the
-non-V2 `resolveNativeSessionBindingWithAuthority` retain synchronous binding
+released `resolveNativeSessionBindingWithAuthority` retain synchronous binding
 reads only for compatibility; see the
 [generation authority migration](/plugins/sdk-migration/compatibility-policy#native-session-generation-authority).
 
@@ -229,7 +232,7 @@ call it.
 
 Report facts from the execution boundary:
 
-- Pass the protocol call id when one exists, the canonical tool name, and the
+- Pass the protocol call id when one exists, the standard tool name, and the
   arguments that actually reached the tool after preparation or hook rewrites.
 - Pass the original host tool result or thrown error as `result`. Core reads
   private effect provenance from that object; serialized fields cannot provide
@@ -244,7 +247,7 @@ Report facts from the execution boundary:
   definition. Supply protocol-owned mutation and replay facts there; do not
   copy OpenClaw's mutation classifier into the harness.
 
-The callback returns the canonical resolution for that call. Carry its
+The callback returns the recorded resolution for that call. Carry its
 `lastToolError` into `AgentHarnessAttemptResult` and use its execution,
 arguments, and side-effect facts in the harness projection instead of deriving
 parallel state. The host keeps an unresolved mutating failure across unrelated
@@ -269,7 +272,7 @@ The callback is a separate capability, not another ordinary attempt. It must:
 - expose no tools, permission-grant or user-input capabilities, native execution
   hooks, agents, skills, memory, scheduling, extensions, or remote control;
 - send only the host-provided finalization prompt; and
-- fail closed if its selected transcript/isolation strategy cannot enforce
+- refuse to run if its selected transcript/isolation strategy cannot enforce
   those restrictions.
 
 OpenClaw invokes the callback once as a terminal sub-operation, outside the
@@ -285,11 +288,11 @@ ordinary attempt result. Its public fields are limited to the completed
 assistant message, finalization-call usage, transcript-ownership metadata, and
 diagnostic trace. Tool, delivery, media, spawn, lifecycle, replay, session, and
 fallback state cannot cross this result boundary. Unknown fields and assistant
-tool calls fail closed.
+tool calls are rejected.
 
 A harness that internally reuses its full attempt engine can call
 `projectSettledTurnFinalizationAttemptResult(...)` before returning. The helper
-rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
+rejects recorded failure, tool, delivery, replay, and lifecycle evidence, then
 projects only the narrow result. It is defense in depth after native isolation,
 not a substitute for removing the native capability surface.
 

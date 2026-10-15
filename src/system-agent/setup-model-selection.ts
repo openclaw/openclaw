@@ -1,7 +1,9 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -148,6 +150,75 @@ export async function applySystemAgentModelSelection(
   return update(params.config, params.previousConfig);
 }
 
+export function withCodexHomeScope(
+  config: OpenClawConfig,
+  homeScope: "agent" | "user",
+): OpenClawConfig {
+  const entry = config.plugins?.entries?.codex;
+  const pluginConfig = entry?.config ?? {};
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        codex: {
+          ...entry,
+          config: {
+            ...pluginConfig,
+            appServer: {
+              ...(isRecord(pluginConfig.appServer) ? pluginConfig.appServer : {}),
+              homeScope,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+export function prepareSetupModelRuntime(params: {
+  config: OpenClawConfig;
+  modelRef: string;
+  agentId: string;
+  agentRuntimeId?: string;
+}): { config: OpenClawConfig; agentRuntimeId?: string } {
+  const agentRuntimeId =
+    params.agentRuntimeId ??
+    resolveModelRuntimePolicy({
+      config: params.config,
+      modelId: params.modelRef,
+      agentId: params.agentId,
+    }).policy?.id;
+  if (!params.agentRuntimeId) {
+    return { config: params.config, agentRuntimeId };
+  }
+  const agents = params.config.agents;
+  const agent = agents?.entries?.[params.agentId];
+  return {
+    agentRuntimeId,
+    config: {
+      ...params.config,
+      agents: {
+        ...agents,
+        entries: {
+          ...agents?.entries,
+          [params.agentId]: {
+            ...agent,
+            models: {
+              ...agent?.models,
+              [params.modelRef]: {
+                ...agent?.models?.[params.modelRef],
+                agentRuntime: { id: params.agentRuntimeId },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 export function projectSetupInferenceConfig(params: {
   base: OpenClawConfig;
   prepared: OpenClawConfig;
@@ -157,6 +228,7 @@ export function projectSetupInferenceConfig(params: {
   profileId?: string;
   credential?: AuthProfileCredential;
   pluginId?: string;
+  agentRuntimeId?: string;
 }): OpenClawConfig {
   const config = structuredClone(params.base);
   if (params.profileId) {
@@ -188,12 +260,14 @@ export function projectSetupInferenceConfig(params: {
       providers: { ...config.models?.providers, [providerKey]: selectedProvider },
     };
   }
-  const plugin = params.pluginId ? params.prepared.plugins?.entries?.[params.pluginId] : undefined;
-  if (params.pluginId && plugin) {
-    config.plugins = {
-      ...config.plugins,
-      entries: { ...config.plugins?.entries, [params.pluginId]: structuredClone(plugin) },
-    };
+  for (const pluginId of new Set([params.pluginId, params.agentRuntimeId])) {
+    const plugin = pluginId ? params.prepared.plugins?.entries?.[pluginId] : undefined;
+    if (pluginId && plugin) {
+      config.plugins = {
+        ...config.plugins,
+        entries: { ...config.plugins?.entries, [pluginId]: structuredClone(plugin) },
+      };
+    }
   }
   const modelKey = params.sourceModelRef ?? params.modelRef;
   const defaultModel = params.prepared.agents?.defaults?.models?.[modelKey];

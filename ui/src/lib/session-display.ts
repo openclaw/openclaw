@@ -68,6 +68,7 @@ type SessionWorktreeDisplayRow = {
   placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;
+  deviceFolder?: { deviceId: string; path: string };
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
 };
@@ -88,6 +89,13 @@ export type SessionWorkContext =
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
 ): SessionWorkContext | undefined {
+  if (row.deviceFolder) {
+    return {
+      kind: "workspace",
+      name: pathDisplayName(row.deviceFolder.path),
+      path: row.deviceFolder.path,
+    };
+  }
   // Cloud repository identity is not a Gateway filesystem path. A bare node
   // cwd likewise must not borrow repository facts from a local worktree.
   const repoRoot =
@@ -122,6 +130,9 @@ export function resolveSessionWorkContext(
 
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+  if (row.deviceFolder) {
+    return `${row.deviceFolder.path} · ${shortenOpaqueIdRuns(row.deviceFolder.deviceId)}`;
+  }
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;

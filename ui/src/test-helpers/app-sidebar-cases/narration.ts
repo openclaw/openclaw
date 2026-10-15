@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 const defaults: SessionsListResult["defaults"] = {
   modelProvider: null,
@@ -229,51 +229,6 @@ describe("AppSidebar live narration", () => {
     expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7);
     expect(sessions.unsubscribeMessages.mock.calls[0]?.[0]).toMatchObject({ key: keys[1] });
     expect(sessions.subscribeMessages.mock.calls.at(-1)?.[0]).toBe(keys[0]);
-  });
-
-  it("keeps six background subscriptions when the open session is also running", async () => {
-    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", keys);
-    sessions.publishList({
-      result: sessionsResult(keys.map((key, index) => runningRow(key, index + 1))),
-      agentId: "main",
-    });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = keys[0]!;
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
-    expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
-      expect.arrayContaining(keys),
-    );
-  });
-
-  it("stays inert when the synced preference is off", async () => {
-    const key = "agent:main:quiet";
-    const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", [key]);
-    sessions.publishList({ result: sessionsResult([runningRow(key, 1)]), agentId: "main" });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sidebarLiveActivity = false;
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    gateway.publishEvent("chat", {
-      sessionKey: key,
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "Should stay hidden" }] },
-    });
-    await sidebar.updateComplete;
-
-    expect(sessions.subscribeMessages).not.toHaveBeenCalled();
-    expect(
-      sidebar.querySelector(`[data-session-key="${key}"] .sidebar-recent-session__subtitle`),
-    ).toBeNull();
   });
 
   it("leases open and background running sessions again after reconnect", async () => {

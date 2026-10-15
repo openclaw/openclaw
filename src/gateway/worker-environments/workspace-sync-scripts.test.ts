@@ -562,7 +562,7 @@ esac
 
       expect(failed.termination).toBe("exit");
       expect(failed.code).not.toBe(0);
-      await expect(fs.access(firstLeaseFile)).resolves.toBeUndefined();
+      await fs.access(firstLeaseFile);
 
       await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);

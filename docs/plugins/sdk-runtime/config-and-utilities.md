@@ -104,6 +104,18 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For plugin-owned long-lived children, use `spawnOomScoreAdjusted` from the same
+subpath with native `spawn` options. On Linux it raises the child's
+`oom_score_adj` to `1000` immediately after native spawn so memory pressure
+preferentially kills the child. This preserves custom `argv0`, the environment,
+and native launch errors. There is a brief window before the score write;
+descendants created in that window can retain the inherited score. The Gateway's
+score is never changed. `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` disables the policy,
+including for sanitized child environments; an explicit child value overrides the parent.
+Explicit `shell` launches remain caller-owned. Lower-level users of
+`prepareOomScoreAdjustedSpawn` must call its optional `afterSpawn(child.pid)`
+immediately after spawning to apply the custom-`argv0` adjustment.
+
 `reapOrphanedProcesses` from the same subpath supports recovery of plugin-owned
 macOS process trees after their original host dies. Supply the exact managed
 executable and an argument predicate for its configured instance; also supply
@@ -112,7 +124,7 @@ same-user, launchd-adopted roots, retains native birth identities and matching
 descendants, and joins bounded TERM-to-KILL cleanup. It never signals a process
 group or discovers new descendants after the root exits. Call it during managed
 service preparation, before health-based reuse, and leave externally managed
-endpoints outside that path. Unknown identities fail closed on supported hosts;
+endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
@@ -258,7 +270,7 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 `openclaw/plugin-sdk/interactive-runtime`. Import
 `applySessionModelSelection(...)` and its result types from
 `openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
-seam, including its authoritative conflict check and post-commit effects. The
+interface, including its authoritative conflict check and post-commit effects. The
 lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
 persistence API.
 
@@ -271,7 +283,7 @@ execution level in `resolved.thinkingLevel`.
 
 Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session
-transaction and already owns an atomic canonical session-entry patch. Pass the
+transaction and already owns an atomic stored session-entry patch. Pass the
 active config, resolved agent directory, entry, effective provider before the
 change, and validated selection. The helper mutates that entry only: it keeps a
 pinned auth profile when its recorded credential provider or configured alias is
@@ -280,11 +292,18 @@ The caller still owns model allowlist validation, atomic persistence,
 `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
 
+In an async session-entry patch, prepare an existing auth pin with
+`await prepareAuthProfileProvider({ agentDir, profileId })` from the same subpath
+and pass its result as `recordedProvider`. This reuses the runtime snapshot or
+reads persisted credentials through the auth owner. Pass the result even when
+its `provider` is `undefined`: it records completed preparation and prevents a
+synchronous fallback lookup. Skip preparation when the entry has no auth pin.
+
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in
 the channel's private authenticated envelope. Channel codecs opt into resolving
 these actions with `{ modelPicker: true }`; channels without a picker
-capability continue to fail closed instead of treating the action as an opaque
+capability continue to reject the action instead of treating it as an opaque
 callback.
 
 Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.

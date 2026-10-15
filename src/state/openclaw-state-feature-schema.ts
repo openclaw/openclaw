@@ -119,7 +119,7 @@ export function getOpenClawStateFeatureSchemaSql(table: string, options?: Schema
   );
 }
 
-export type OpenClawStateFeatureSchema = {
+type OpenClawStateFeatureSchema = {
   id: string;
   tables: readonly string[];
   indexes: readonly string[];

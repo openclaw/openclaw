@@ -388,6 +388,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
@@ -542,7 +543,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     ),
     resolvedApiKey: resolvedAttemptApiKey,
     authProfileId: runtime.lastProfileId,
-    authProfileIdSource: explicitAuthProfile ? "user" : "auto",
+    authProfileIdSource: params.authProfileBinding
+      ? params.authProfileIdSource
+      : explicitAuthProfile
+        ? "user"
+        : "auto",
+    authProfileBinding: params.authProfileBinding,
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,
@@ -550,6 +556,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelRegistry,
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
+    thinkingExplicit: params.thinkingExplicit,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -686,6 +693,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const postCompactionAbortError = input.getPostCompactionAbortError();
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
+  }
+  if (pluginWorkspace?.sandboxRuntime) {
+    rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },

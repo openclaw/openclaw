@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -22,7 +21,10 @@ type TestDebugOverlay = HTMLElement & {
   toggle: () => void;
 };
 
-type TestSparkline = LitElement & { samples: readonly SparklineSample[] };
+type TestSparkline = HTMLElement & {
+  readonly updateComplete: Promise<boolean>;
+  samples: readonly SparklineSample[];
+};
 
 async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   await overlay.updateComplete;
@@ -283,7 +285,19 @@ describe("DebugOverlay", () => {
       // Healthy event loop: no tile carries the degraded tint.
       expect(overlay.querySelector(".gateway-vital[data-degraded]")).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(900_000);
+      // Accumulate history without refreshing the unrelated expanded sections.
+      overlay.querySelector<HTMLButtonElement>('[aria-label="Minimize system busyness"]')!.click();
+      await vitalUpdated();
+      for (let interval = 0; interval < 90; interval += 1) {
+        const nextSample = sampleCount + 1;
+        vi.advanceTimersByTime(10_000);
+        await waitForSolid(() => {
+          expect(
+            overlay.querySelector<TestSparkline>(".gateway-vital--cpu")?.samples.at(-1)?.value,
+          ).toBe(1 + nextSample / 10);
+        });
+      }
+      overlay.querySelector<HTMLButtonElement>('[aria-label="Expand system busyness"]')!.click();
       await vitalUpdated();
 
       const points = overlay
@@ -396,6 +410,14 @@ describe("DebugOverlay", () => {
     document.body.append(overlay);
     try {
       overlay.toggle();
+      // The bridge commit precedes the lazy content and its first sample.
+      await overlay.updateComplete;
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => {
+        expect(overlay.querySelector<TestSparkline>(".gateway-vital--disk")?.samples).toHaveLength(
+          1,
+        );
+      });
       await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(overlay.querySelector<TestSparkline>(".gateway-vital--disk")?.samples).toHaveLength(2);

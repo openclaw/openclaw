@@ -3,7 +3,6 @@
 // grant is derivative correlation that lets the exact approved operation of
 // one cron job re-execute without re-prompting while it revalidates.
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
@@ -18,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -73,7 +73,7 @@ const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRAN
   tables: [STANDING_GRANT_TABLE, STANDING_GRANT_GENERATION_TABLE],
 });
 
-function ensureStandingGrantSchema(db: DatabaseSync): void {
+function ensureStandingGrantSchema(db: EngineConnection): void {
   const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
   // This retired, unshipped shape is recognized from admission's existing DDL facts.
   if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {
@@ -205,7 +205,7 @@ export function mintCronStandingGrantLocked(
 
 /** Worker snapshot lookup; only committed consumption authorizes a launch. */
 export function lookupCronStandingGrantInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: CronStandingGrantLookupInput,
   recordUse: boolean,
 ): ConsumeCronStandingGrantResult {
@@ -370,7 +370,7 @@ export function consumeCronStandingGrantInDatabase(
 
 /** Includes revoked and expired grants so the operator ledger retains history. */
 export function listCronStandingGrantsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { limit?: number } = {},
 ): CronStandingGrantListing[] {
   const limit = Math.max(1, Math.min(params.limit ?? 200, 500));

@@ -817,6 +817,8 @@ export function activateSecretsRuntimeSnapshotState(params: {
   runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
+  /** Provider-only refreshes retain admission when resolved config is unchanged. */
+  preserveRuntimeConfigPublication?: boolean;
 }): void {
   if (!hasCurrentAuthStoreCredentialsRevision(params.snapshot)) {
     throw new Error(
@@ -848,7 +850,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  if (!params.preserveRuntimeConfigPublication) {
+    setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  }
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
@@ -1006,6 +1010,17 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
     preparedSnapshotRefreshContext.set(snapshot, activeRefreshContext);
   }
   return snapshot;
+}
+
+/** Observation can evict live stores before their retained activation roster is refreshed. */
+export function hasActiveSecretsRuntimeAuthStorePath(databasePath: string): boolean {
+  return (
+    activeSnapshot?.authStores.some(
+      (entry) =>
+        entry.databasePath === databasePath ||
+        (entry.owner.kind === "resolved" && entry.owner.sharedDatabasePath === databasePath),
+    ) ?? false
+  );
 }
 
 /** Reuse resolved owners when only Control UI presentation changed. */

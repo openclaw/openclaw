@@ -363,7 +363,9 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
-      const chatMain = page.locator(".chat-workbench__main");
+      // Details reserves a column; the composer stays centered in the conversation,
+      // not across the combined conversation and rail.
+      const chatMain = page.locator(".chat-main__conversation");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
@@ -676,6 +678,8 @@ suite.define(() => {
         .toBe(true);
 
       await page.setViewportSize({ width: 1280, height: 900 });
+      // Details releases its reserved column after the resize reaches its layout owner.
+      await page.locator(".chat-details--docked").waitFor({ state: "detached" });
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         chatMain.boundingBox(),
         composerShell.boundingBox(),
@@ -890,8 +894,15 @@ suite.define(() => {
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
-      expect(mobileContextBox.y + mobileContextBox.height).toBeLessThanOrEqual(
-        mobileModelSettingsBox.y + 1,
+      expect(
+        Math.abs(
+          mobileContextBox.y +
+            mobileContextBox.height / 2 -
+            (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(mobileContextBox.x + mobileContextBox.width).toBeLessThanOrEqual(
+        mobileModelSettingsBox.x,
       );
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
@@ -987,7 +998,9 @@ suite.define(() => {
         );
       }
       await page.mouse.move(0, 0);
-      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".tooltip-surface[popover]:popover-open").count())
+        .toBe(0);
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
         .toBe(0);

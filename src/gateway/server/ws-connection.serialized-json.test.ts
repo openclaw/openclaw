@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { expect, it, vi } from "vitest";
 import * as Ws from "../../../packages/gateway-client/src/websocket.test-support.js";
-import { SerializedJsonArray } from "../serialized-json.js";
+import { SerializedJsonArray, SerializedJsonPayload } from "../serialized-json.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { attachGatewayWsForTest, type GatewayWsTestSocket } from "./ws-connection.test-helpers.js";
 import type { GatewayWsMessageHandlerParams } from "./ws-connection/message-handler-types.js";
@@ -12,7 +12,7 @@ vi.mock("./ws-connection/message-handler.js", () => ({
   attachGatewayWsMessageHandler: attachHandler,
 }));
 
-it("delivers transferred history bytes as a JSON text frame", async () => {
+it("delivers an owned shared history payload as a JSON text frame", async () => {
   const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
   const accepted = once(server, "connection");
@@ -29,12 +29,16 @@ it("delivers transferred history bytes as a JSON text frame", async () => {
     await challenge;
     const handler = attachHandler.mock.calls[0]![0];
     const messages = [{ role: "assistant", content: "é🦞\nready" }];
+    const bytes = Buffer.from(JSON.stringify(messages));
+    const payload = new SerializedJsonPayload({ messages: new SerializedJsonArray(bytes) });
+    // Shared responses own the assembled frame, independent of the worker's input bytes.
+    bytes.fill(0);
     const received = once(peer, "message");
     const result = handler.send({
       type: "res",
       id: "history",
       ok: true,
-      payload: { messages: new SerializedJsonArray(Buffer.from(JSON.stringify(messages))) },
+      payload,
     });
     const [data, isBinary] = (await received) as [Buffer, boolean];
     expect(result).toEqual({ kind: "sent", bytes: data.byteLength });

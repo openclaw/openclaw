@@ -1,17 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import type { Compilable } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 
-const mutations = new AsyncLocalStorage<{ db: DatabaseSync; changed: boolean }>();
+const mutations = new AsyncLocalStorage<{ db: EngineConnection; changed: boolean }>();
 
-export function captureWorkerEnvironmentChanges<Result>(db: DatabaseSync, run: () => Result) {
+export function captureWorkerEnvironmentChanges<Result>(db: EngineConnection, run: () => Result) {
   const mutation = { db, changed: false };
   const result = mutations.run(mutation, run);
   return { result, changed: mutation.changed };
 }
 
-export function executeWorkerEnvironmentWrite<Row>(db: DatabaseSync, query: Compilable<Row>) {
+export function executeWorkerEnvironmentWrite<Row>(db: EngineConnection, query: Compilable<Row>) {
   const result = executeSqliteQuerySync(db, query);
   const mutation = mutations.getStore();
   // RETURNING reports affected rows through the result set on both engines.

@@ -1,6 +1,5 @@
 import {
   createDefaultWorkboardSessionsBoardSpec,
-  normalizeWorkboardSessionsBoardSpec,
   patchWorkboardSessionsBoardSpec,
   type WorkboardSessionPlacement,
   type WorkboardSessionsBoard,
@@ -141,7 +140,7 @@ export class WorkboardSqliteSessionsBoardStore {
     placement: WorkboardSessionPlacementWrite,
     expectedSpec: WorkboardSessionsBoardSpec,
   ): boolean {
-    const expected = JSON.stringify(normalizeWorkboardSessionsBoardSpec(expectedSpec));
+    const expected = JSON.stringify(expectedSpec);
     return runSqliteImmediateTransactionSync(this.db, () => {
       const board = this.get(boardId);
       if (JSON.stringify(board.sessions) !== expected) {
@@ -149,15 +148,6 @@ export class WorkboardSqliteSessionsBoardStore {
       }
       if (!board.sessions.columns.some((column) => column.id === placement.columnId)) {
         throw new Error(`Unknown sessions board column: ${placement.columnId}`);
-      }
-      if (
-        !placement.sessionKey ||
-        placement.source !== "operator" ||
-        typeof placement.reason !== "string" ||
-        !Number.isSafeInteger(placement.updatedAt) ||
-        placement.updatedAt < 0
-      ) {
-        throw new Error("Invalid session pin.");
       }
       const query = getNodeSqliteKysely<SessionsBoardDatabase>(this.db);
       const current = executeSqliteQueryTakeFirstSync(

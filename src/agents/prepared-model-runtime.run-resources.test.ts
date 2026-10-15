@@ -65,6 +65,7 @@ async function withRunFixture(
     acquire: (
       options?: Parameters<typeof acquireAgentRunPreparedModelRuntime>[1],
       workspace?: string,
+      inputPatch?: Partial<Parameters<typeof acquireAgentRunPreparedModelRuntime>[0]>,
     ) => Promise<PreparedModelRuntimeLease>;
     original: () => Registration;
     finishDisposal: ReturnType<typeof createDeferredCore<void>>;
@@ -233,9 +234,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
             config,
             input,
             registrations,
-            acquire: async (leaseOptions, workspace) => {
+            acquire: async (leaseOptions, workspace, inputPatch) => {
               const lease = await acquireAgentRunPreparedModelRuntime(
-                { ...input, ...(workspace ? { workspaceDir: workspace } : {}) },
+                {
+                  ...input,
+                  ...inputPatch,
+                  ...(workspace ? { workspaceDir: workspace } : {}),
+                },
                 leaseOptions,
               );
               leases.push(lease);
@@ -433,13 +438,14 @@ it("preserves eight Gateway RUN retention entries without closing an evicted liv
       catalogMode: "static",
     });
     const configuredCount = registrations.length;
-    const first = await acquire({}, `${input.workspaceDir}/run-0`);
+    const uncovered = { loadRuntimePlugins: true } as const;
+    const first = await acquire({}, `${input.workspaceDir}/run-0`, uncovered);
     const oldest = expectDefined(
       registrations.slice(configuredCount).find((record) => record.id === providerId),
       "first dynamic registration",
     );
     for (let index = 1; index < 9; index++) {
-      const lease = await acquire({}, `${input.workspaceDir}/run-${index}`);
+      const lease = await acquire({}, `${input.workspaceDir}/run-${index}`, uncovered);
       await lease[Symbol.asyncDispose]();
     }
     expect(readAnswer(oldest)).toBe(42);

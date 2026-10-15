@@ -73,14 +73,14 @@ Bundled plugins and explicitly enabled installed plugins with matching
 manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before the selected
+interface is for async tool-result transforms that must run before the selected
 harness feeds tool output back into the model. Supported runtime ids are
 `agentsapi`, `codex`, and `openclaw`.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
-canonical OpenClaw tool ids; omit `matcher` to match all tools.
+standard OpenClaw tool ids; omit `matcher` to match all tools.
 
 Omitting `runtimes` uses every supported runtime declared in the plugin's
 `contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
@@ -303,7 +303,8 @@ prepares transcript anchors through the history reader before releasing the
 turn lease, then starts the portable `agent_end` hook without waiting for it.
 Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
 also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
-remains deprecated until the next Plugin SDK major. These helpers accept the
+remains deprecated through 2026-12-31, with removal in the first January 2027
+stable release. These helpers accept the
 same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.

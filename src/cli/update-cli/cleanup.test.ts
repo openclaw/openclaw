@@ -4,7 +4,10 @@ import {
   type RecoveryCleanupReport,
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
+import { DoctorSqliteMaintenanceLockUnavailableError } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import { readSourceConfigBestEffort } from "../../config/io.js";
+import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
@@ -79,4 +82,28 @@ it("still reports a genuine cleanup error once as blocked", async () => {
     2,
   );
   expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
+});
+
+it.each([
+  new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
+  new DoctorSqliteMaintenanceLockUnavailableError(
+    "update recovery cleanup",
+    new GatewayLockError("Gateway is running"),
+  ),
+])("reports stop-first guidance on cleanup contention: %s", async (error) => {
+  vi.mocked(readSourceConfigBestEffort).mockRejectedValueOnce(error);
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+  try {
+    await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      {
+        status: "blocked",
+        error: "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.",
+      },
+      2,
+    );
+    expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

@@ -50,7 +50,7 @@
   }
 
   .sidebar-recent-sessions__head:where(:hover, :focus-within) .sidebar-reorder-trigger,
-  .sidebar-reorder-menu[open] .sidebar-reorder-trigger {
+  .sidebar-reorder-menu:has([aria-expanded="true"]) .sidebar-reorder-trigger {
     opacity: 1;
   }
 }

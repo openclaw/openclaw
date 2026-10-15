@@ -16,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { runStartupSessionMaintenanceForTest } from "../../../gateway/server-startup-session-migration.test-support.js";
 import {
@@ -37,7 +38,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -49,6 +49,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.live-tail.test-support.js";
 import {
   registerAbsentChildRestoreOwnershipTest,
   registerRawChildRestoreOwnershipTest,
@@ -94,6 +95,11 @@ it.each(["durable", "incognito"] as const)(
           ? resolveIncognitoOpenClawAgentSqlitePath
           : resolveOpenClawAgentSqlitePath
       )({ agentId: "main", env: state.env });
+      if (storage === "incognito") {
+        onTestFinished(() =>
+          memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath }),
+        );
+      }
       const childSessionKey = `agent:main:subagent:${storage === "incognito" ? "incognito-" : ""}missing-store`;
       const entry = makeRunRecord({
         runId: "missing-store-run",
@@ -110,7 +116,9 @@ it.each(["durable", "incognito"] as const)(
           warn: vi.fn(),
         });
       expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+      expect(
+        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+      ).toBeUndefined();
       const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
       expect(await recover(running)).toEqual({ status: "ignored" });
       const result = await recover(entry);
@@ -135,7 +143,9 @@ it.each(["durable", "incognito"] as const)(
         }),
       ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
       expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+      expect(
+        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+      ).toBeUndefined();
 
       await replaceSessionEntry(
         { agentId: "main", sessionKey: childSessionKey },
@@ -145,9 +155,14 @@ it.each(["durable", "incognito"] as const)(
           updatedAt: Date.now(),
         },
       );
-      expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
-      expect(await result.recoveryCurrent?.prepare()).toBe(false);
-      expect(await result.sessionEffects?.isCurrent()).toBe(false);
+      if (storage === "durable") {
+        expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
+        expect(await result.recoveryCurrent?.prepare()).toBe(false);
+        expect(await result.sessionEffects?.isCurrent()).toBe(false);
+      } else {
+        // Old recovery bookkeeping may finish after creation; it cannot apply session effects.
+        expect(result.suppressSessionEffects).toBe(true);
+      }
       const missingRow = await recover({ ...entry, childSessionKey: `${childSessionKey}-other` });
       expect(missingRow.status).toBe("terminal");
       if (missingRow.status === "terminal") {
@@ -231,6 +246,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     );
   });
   registerRawChildRestoreOwnershipTest(fixture);
+  registerRecoveredTerminalTailTest(fixture);
 
   it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;

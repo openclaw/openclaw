@@ -363,6 +363,8 @@ describe("plugin board widget cells", () => {
         cell.active = true;
       }
 
+      await cell.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(
         () =>
           expect(request).toHaveBeenCalledWith("progressCard.get", {
@@ -400,6 +402,7 @@ describe("plugin board widget cells", () => {
 
   it("surfaces a failed session progress read and retries it", async () => {
     const sessionKey = "agent:main:protected";
+    const gatewayListeners = new Set<Parameters<ApplicationGateway["subscribe"]>[0]>();
     let attempts = 0;
     let onEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
     const deniedSessionKey = "agent:main:private";
@@ -446,7 +449,10 @@ describe("plugin board widget cells", () => {
             ],
           },
         },
-        subscribe: () => () => undefined,
+        subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
+          gatewayListeners.add(listener);
+          return () => gatewayListeners.delete(listener);
+        },
         subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
           onEvent = listener;
           return () => {
@@ -510,6 +516,15 @@ describe("plugin board widget cells", () => {
       "Recovered progress",
     );
     expect(request).toHaveBeenCalledTimes(3);
+    cell.session = { ...cell.session! };
+    for (const listener of gatewayListeners) {
+      listener(context.gateway.snapshot);
+    }
+    await cell.updateComplete;
+    await waitForSolid(() => {
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull();
+      expect(request).toHaveBeenCalledTimes(3);
+    });
     cell
       .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
       ?.click();

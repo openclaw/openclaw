@@ -310,6 +310,48 @@ it.each(["natural", "failure", "explicit", "signal"])(
   },
 );
 
+it("reclaims its captures during signal cleanup when the process outlives the drain", async () => {
+  const stateDir = temp.make("plugin-capture-signal-");
+  const source = createSource();
+  const live = await startCliCapture(stateDir, source, false);
+  const signalModule = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.signalExit).href;
+  const child = spawn(
+    process.execPath,
+    [
+      ...runtimeArgs,
+      "--input-type=module",
+      "-e",
+      `${childCapture}
+      import { installCliSignalExitHandlers, registerSignalExitFinalizer } from ${JSON.stringify(signalModule)};
+      installCliSignalExitHandlers();
+      registerSignalExitFinalizer(async () => fs.writeSync(1, "drained\\n"));
+      // Hung work keeps the process alive after the drain until its supervisor force-kills it.
+      setInterval(() => {}, 60_000);`,
+      source,
+      "cli",
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const exited = new Promise((resolve) => {
+    child.once("close", resolve);
+  });
+  try {
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    const boundaryRoot = (await lines.next()).value as string;
+    const signalled = capturePaths(stateDir, boundaryRoot, (await lines.next()).value as string);
+    expect(fs.existsSync(signalled.instanceRoot)).toBe(true);
+    child.kill("SIGTERM");
+    expect((await lines.next()).value).toBe("drained");
+    expect(child.exitCode).toBeNull();
+    expect(fs.existsSync(signalled.instanceRoot)).toBe(false);
+    expect(await live.read()).toBe(capturedSource.trimEnd());
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+    await live.stop();
+  }
+});
+
 async function startCliCapture(stateDir: string, source: string, worker: boolean, legacy = false) {
   const child = spawn(
     process.execPath,

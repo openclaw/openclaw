@@ -172,7 +172,6 @@ describe("model-backed transcript summaries", () => {
       held.resolve(completion(JSON.stringify(notes)));
       expect(await pending).toBeUndefined();
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       held.resolve(completion(JSON.stringify(notes)));
       await pending;

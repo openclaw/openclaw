@@ -27,6 +27,7 @@ export type SessionPreviewItem = {
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   appendSafe?: boolean;
+  source?: { sessionId: string; databaseIdentity: string };
 };
 
 export type SessionBranchSummaryReadResult =
@@ -36,7 +37,7 @@ export type SessionBranchSummaryReadResult =
 export type SessionModelContextLimits = {
   maxBytes: number;
   maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
+  /** Model views may omit result bodies to retain earlier requests; evidence and forks stay strict. */
   toolResultOverflow?: "omit";
 };
 

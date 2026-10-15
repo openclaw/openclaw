@@ -127,6 +127,27 @@ test("logging failures preserve the send error and retire unfinished scopes", ()
   );
 });
 
+test("lexical detail scopes stop on failure without extending later request time", async () => {
+  const log = { info: vi.fn() };
+  const diagnostics = startChatSendDiagnostics(log);
+  const resume = createDeferredCore();
+  const failure = new Error("synthetic owner failure");
+  const pending = (async () => {
+    using _ = diagnostics.scope("detail.persist.stage");
+    await resume.promise;
+    clock = 400;
+    throw failure;
+  })();
+  const rejected = expect(pending).rejects.toBe(failure);
+  resume.resolve();
+  await rejected;
+  clock = 1_200;
+  diagnostics.finish();
+  expect(log.info).toHaveBeenCalledExactlyOnceWith(
+    "slow chat send 1200ms stage=request detail.persist.stage=400ms",
+  );
+});
+
 test("startup spans stay request-owned and include unfinished parents without timeline logging", async () => {
   const firstLog = { info: vi.fn() };
   const secondLog = { info: vi.fn() };

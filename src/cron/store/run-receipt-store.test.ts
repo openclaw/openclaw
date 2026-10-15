@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   bindCronJobAdmittedRun,
   captureCronJobMessageActionAuthority,
@@ -84,6 +85,28 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("cron run receipt store", () => {
+  it("allocates portable cursors inside the claim and reuses a deleted maximum", async () => {
+    await withOpenClawTestState({ label: "cron-receipt-cursors" }, async (fixture) => {
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const jobs = ["first", "second", "third"].map((id) => makeCronReceiptJob(id));
+      await saveCronStore(storePath, { version: 1, jobs });
+      const first = claimCronRunReceiptForTest(storePath, jobs[0]!, 100);
+      const second = claimCronRunReceiptForTest(storePath, jobs[1]!, 100);
+      const db = openOpenClawStateDatabase().db;
+      db.prepare("UPDATE cron_run_receipts SET rowid = 100 WHERE receipt_id = ?").run(
+        first.receiptId,
+      );
+      db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = ?").run(second.receiptId);
+      const third = claimCronRunReceiptForTest(storePath, jobs[2]!, 100);
+      expect(
+        db.prepare("SELECT receipt_id, cursor_id FROM cron_run_receipts ORDER BY cursor_id").all(),
+      ).toEqual([
+        { receipt_id: first.receiptId, cursor_id: 1 },
+        { receipt_id: third.receiptId, cursor_id: 2 },
+      ]);
+    });
+  });
+
   it("checks force-disabled message access without host SQL until its admission closes", async () => {
     const { storePath, job } = await storeJob({
       ...makeCronReceiptJob("force-disabled-message"),
@@ -506,7 +529,6 @@ describe("cron run receipt store", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId!,
       }),
     );
     await saveCronStore(storePath, {
