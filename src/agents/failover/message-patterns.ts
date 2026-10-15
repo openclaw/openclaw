@@ -59,11 +59,7 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
   return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
 }
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
-// Chinese providers state the same exhaustion as a usage/quota cap being reached,
-// e.g. MiniMax 2056: "已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。"
-// Keep it to usage/quota wording so length or context caps do not match.
-const CJK_PERIODIC_USAGE_LIMIT_RE = /(?:用量|额度)\s*(?:已)?\s*(?:达到|达|超过|超出)?\s*上限/;
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
@@ -340,7 +336,7 @@ export function isProviderCompletedErrorFinishReasonMessage(raw: string): boolea
   return matchesErrorPatterns(raw, PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS);
 }
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
-  return PERIODIC_USAGE_LIMIT_RE.test(raw) || CJK_PERIODIC_USAGE_LIMIT_RE.test(raw);
+  return PERIODIC_USAGE_LIMIT_RE.test(raw);
 }
 export function isBillingErrorMessage(raw: string): boolean {
   const value = normalizeLowercaseStringOrEmpty(raw);
