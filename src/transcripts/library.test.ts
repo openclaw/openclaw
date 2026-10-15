@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
@@ -9,11 +11,13 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { activeSessions } from "./capture-startup.js";
+import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
@@ -37,6 +41,22 @@ function fixture() {
 }
 
 describe("transcript library SQLite reads", () => {
+  it("retains meeting chronology when reopened in another process timezone", async ({ signal }) => {
+    const stateDir = tempDirs.make("transcript-library-timezone-");
+    const argv = resolveRuntimeWorkerArgv(
+      resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint),
+    );
+    for (const [phase, timezone] of [
+      ["write", "America/Los_Angeles"],
+      ["read", "UTC"],
+    ] as const) {
+      await promisify(execFile)(process.execPath, [...argv, stateDir, phase], {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, TZ: timezone },
+        signal,
+      });
+    }
+  });
+
   it("skips empty transcription artifacts without losing pagination or rewriting the archive", async () => {
     const { store } = fixture();
     const target = session("transcription-artifacts");
@@ -119,6 +139,25 @@ describe("transcript library SQLite reads", () => {
         })
       ).sessions.map(({ sessionId }) => sessionId),
     ).toEqual(["basic", "fraction", "same", "same"]);
+  });
+
+  it("requests a fresh page when its cursor session was deleted", async () => {
+    const { store } = fixture();
+    const target = session("removed-cursor", {
+      startedAt: "2026-08-21T06:00:00Z",
+      stoppedAt: "2026-08-21T06:01:00Z",
+    });
+    const receipt = await store.writeSession(target);
+    await store.writeSession(session("older-cursor", { startedAt: "2026-08-20T06:00:00Z" }));
+    const first = await listTranscriptLibrary(store, { limit: 1 });
+    expect(first.nextCursor).toEqual(expect.any(String));
+    await store.deleteEmptySessionCandidate(target, {
+      expectedInputRevision: receipt.inputRevision,
+      assertCurrent() {},
+    });
+    await expect(
+      listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor! }),
+    ).rejects.toMatchObject({ type: "transcript_invalid_cursor" });
   });
 
   it("preserves ID-only stored speakers across legacy reads, pages, and exports", async () => {
