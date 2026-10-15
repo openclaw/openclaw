@@ -6,7 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { fetchPluginThemeArtworkBlobUrl } from "../pages/plugins/icon-loader.ts";
-import { dimmedBackgroundImage, syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
+import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 
 // mock-isolation: The validated loader owns authenticated HTTP admission; this owner fences publication.
 vi.mock("../pages/plugins/icon-loader.ts", () => ({ fetchPluginThemeArtworkBlobUrl: vi.fn() }));
@@ -19,7 +19,13 @@ const DARK = "/__openclaw__/plugin-theme-art/ghost/claw/background/dark?v=aaaaaa
 const OTHER = "/__openclaw__/plugin-theme-art/ghost/claw/background/dark?v=bbbbbbbbbbbb";
 const root = document.documentElement;
 const image = () => root.style.getPropertyValue("--app-background-image");
-const painted = (source: string) => dimmedBackgroundImage(source, 0.6, "dark");
+const LIGHT = "/__openclaw__/plugin-theme-art/ghost/claw/background/light?v=cccccccccccc";
+// Opacity limit 0.6 (mocked) × default visibility 0.5 = 30% image under a 70% scrim.
+const scrim = (percent: string) =>
+  `color-mix(in srgb, var(--bg-content, var(--bg)) ${percent}%, transparent)`;
+const dimmed = (source: string, percent: string) =>
+  `linear-gradient(${scrim(percent)}, ${scrim(percent)}), url("${source}")`;
+const painted = (source: string) => dimmed(source, "70");
 const branding = (backgrounds?: ThemeArtwork["backgrounds"]) => ({
   ...resolveThemeBranding(undefined),
   ...(backgrounds ? { artwork: { backgrounds } } : {}),
@@ -53,15 +59,16 @@ describe("plugin theme background artwork", () => {
     expect(root.dataset.themeBackground).toBeUndefined();
   });
 
-  it("dims plugin artwork like a default-strength custom upload", () => {
-    // Uploads paint at opacityLimit * visibility, with light mode at 65%.
-    expect(dimmedBackgroundImage("blob:night", 0.6, "dark")).toBe(
-      'linear-gradient(color-mix(in srgb, var(--bg-content, var(--bg)) 70%, transparent), color-mix(in srgb, var(--bg-content, var(--bg)) 70%, transparent)), url("blob:night")',
+  it("dims plugin artwork like a default-strength custom upload", async () => {
+    vi.mocked(fetchPluginThemeArtworkBlobUrl).mockImplementation(async ({ url }) =>
+      url === LIGHT ? "blob:day" : "blob:night",
     );
-    expect(dimmedBackgroundImage("blob:day", 0.6, "light")).toContain(
-      "var(--bg-content, var(--bg)) 80.5%, transparent",
-    );
-    expect(dimmedBackgroundImage("blob:none", 0, "dark")).toContain("var(--bg)) 100%");
+    const theme = branding({ dark: { url: DARK }, light: { url: LIGHT } });
+    syncThemeBackgroundArtwork(root, theme, "dark");
+    await vi.waitFor(() => expect(image()).toBe(dimmed("blob:night", "70")));
+    // Uploads paint light mode at 65% of the dark-mode strength: 0.3 × 0.65 = 19.5%.
+    syncThemeBackgroundArtwork(root, theme, "light");
+    await vi.waitFor(() => expect(image()).toBe(dimmed("blob:day", "80.5")));
   });
 
   it("ignores a slower superseded image", async () => {

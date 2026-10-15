@@ -60,11 +60,7 @@ export function syncThemeBackgroundArtwork(
 }
 
 /** Same strength as a custom upload at default visibility (session-background owns that formula). */
-export function dimmedBackgroundImage(
-  source: string,
-  opacityLimit: number,
-  mode: ThemeColorMode,
-): string {
+function dimmedBackgroundImage(source: string, opacityLimit: number, mode: ThemeColorMode): string {
   const opacity =
     opacityLimit * DEFAULT_BACKGROUND_PREFERENCE.visibility * (mode === "light" ? 0.65 : 1);
   const scrim = `color-mix(in srgb, var(--bg-content, var(--bg)) ${Math.round((1 - opacity) * 1000) / 10}%, transparent)`;
