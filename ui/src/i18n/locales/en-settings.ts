@@ -627,6 +627,8 @@ const enSettings = {
         "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
+      startChat: "Start a new chat with {model}",
+      modelReady: "{model} is ready for your agent.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
       chooseAccount: "Choose account",

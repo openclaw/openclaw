@@ -5,6 +5,7 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/ag
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
+import { findModelInCatalog, loadManifestModelCatalog } from "../agents/model-catalog.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -678,9 +679,15 @@ async function verifyAndActivateCandidate(
       lines.push(warning);
     }
   }
+  const modelName = findModelInCatalog(
+    loadManifestModelCatalog({ config: candidate, metadataSnapshot: metadata }),
+    route.provider,
+    route.model,
+  )?.name;
   return {
     ok: true,
     modelRef: staged.modelRef,
+    ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
     lines,

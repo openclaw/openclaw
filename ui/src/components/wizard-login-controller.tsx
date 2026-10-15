@@ -68,6 +68,8 @@ export class WizardLoginController {
       busy?: boolean;
       refreshWarning?: string | null;
       doneMessage?: string;
+      doneDescription?: string;
+      doneAction?: WizardViewProps["doneAction"];
     } = {},
   ): WizardViewProps {
     const state = this.runner.state;
@@ -77,6 +79,8 @@ export class WizardLoginController {
         state.phase === "step" ? { ...state, busy: state.busy || Boolean(options.busy) } : state,
       refreshWarning: options.refreshWarning ?? null,
       doneMessage: options.doneMessage,
+      doneDescription: options.doneDescription,
+      doneAction: options.doneAction,
       cancellationNotice: this.cancellationNotice,
       value: this.value,
       onValueChange: (value) => {
