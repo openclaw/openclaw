@@ -2441,7 +2441,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-prompt-build.provenance.test.ts","../../subagents/registry/subagent-registry-terminal-effects.js","5c1d2bd29ecd1207c12002d15959023e096598c8f37199ecdb66835cfb84cc62",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-build.provenance.test.ts","../../subagents/registry/subagent-registry.js","a2b2e4125283473f71164a48c14c3ff342b0b8decda2b432fbe2863a4b8e018b",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts","../logger.js","e0b514cf02f3e24f09c279c0c9dc0c303d5c0fc761c9c4315c7889c5f838351f",1]
-["src/agents/embedded-agent-runner/run/attempt-prompt-context.test.ts","../tool-result-truncation.js","8421befd879fa6f0d04ee40f2225b272d0bd6dfd9cc7f1eafcf0866a9bb90fda",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-error.test.ts","./attempt-sessions-yield.js","5afe0c9d7e5669c0c5ded4cf452996811ef73e4132d8463b7aa1a6eb48dc7ce9",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-error.test.ts","./attempt-subscription-cleanup.js","e0f09d85e927a95f5f90c5a6920bea70b6337b49fed8fbacf06c532ca1f16e06",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-error.test.ts","./midturn-precheck.js","8fd7c6a1e74d11c3da4c73a8e51f8f203610089b62d5443816555d57b6d63e5b",1]
