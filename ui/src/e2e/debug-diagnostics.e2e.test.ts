@@ -544,6 +544,12 @@ suite.define(() => {
         await widget.waitFor({ state: "detached" });
         await overlay.getByRole("heading", { name: "Lanes", exact: true }).waitFor();
         await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
+        await widget.waitFor();
+        await widget.evaluate(async (element) => {
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
+        });
         await overlay.getByRole("button", { name: "Close", exact: true }).click();
         await overlay.waitFor({ state: "detached" });
 

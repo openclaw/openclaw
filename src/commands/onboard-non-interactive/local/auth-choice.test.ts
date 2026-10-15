@@ -236,7 +236,7 @@ describe("applyNonInteractiveAuthChoice", () => {
         customBaseUrl: "https://models.custom.local/v1",
         customModelId: "local-large",
         customNoAuth: true,
-      } as never,
+      },
     });
 
     expect(result?.models?.providers?.["custom-models-custom-local"]).toMatchObject({

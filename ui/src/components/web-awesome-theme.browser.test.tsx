@@ -95,6 +95,8 @@ async function focusNextOption(select: HTMLElement) {
   const control = select as HTMLElementTagNameMap["wa-select"];
   await control.show();
   const { userEvent } = await import("vitest/browser");
+  // Palette checks use idle colors, independent of the previous pointer target.
+  await userEvent.unhover(select);
   control.focus();
   await userEvent.keyboard("{ArrowDown}");
   const current = control.querySelector<HTMLElement>("wa-option:state(current)");
@@ -165,6 +167,9 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
     )!;
     await prepareControls(host);
     const menuTrigger = menu.parentElement!.querySelector<HTMLButtonElement>(".oc-menu-trigger")!;
+    const { userEvent } = await import("vitest/browser");
+    // Exercise the idle-pointer precondition with the clear button initially hovered.
+    await userEvent.hover(select.shadowRoot!.querySelector<HTMLElement>('[part~="clear-button"]')!);
 
     for (const theme of [
       "dark",

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import * as currentPluginMetadataSnapshot from "../plugins/current-plugin-metadata-snapshot.js";
 import * as manifestContractEligibility from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -327,17 +328,6 @@ describe("applyCustomApiConfig", () => {
       expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
     })),
     {
-      name: "invalid compatibility values at runtime",
-      params: {
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "invalid" as unknown as "openai",
-      },
-      expectedMessage:
-        'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
-    },
-    {
       name: "explicit provider ids that normalize to empty",
       params: {
         config: {},
@@ -412,17 +402,53 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.apiKey).toBeUndefined();
   });
 
-  it("rejects no-auth on unsupported compatibilities before saving", () => {
+  it.each([
+    { baseUrl: "https://claude-compatible.example.ts.net", compatibility: "anthropic" },
+    { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
+  ] as const)("rejects no-auth on $baseUrl before saving", ({ baseUrl, compatibility }) => {
     expect(() =>
       applyCustomApiConfig({
         config: {},
-        baseUrl: "https://claude-compatible.example.ts.net",
+        baseUrl,
         modelId: "some-model",
-        compatibility: "anthropic",
+        compatibility,
         noAuth: true,
       }),
-    ).toThrow('auth: "none" currently supports OpenAI-compatible endpoints only');
+    ).toThrow(/auth: "none"/);
   });
+
+  it.each([true, false])(
+    "rejects a Responses model override with explicit no-auth: %s",
+    (noAuth) => {
+      const provider = {
+        baseUrl: "https://llm.example.com/v1",
+        api: "openai-completions",
+        auth: "none",
+        models: [
+          {
+            id: "foo-large",
+            name: "foo-large",
+            api: "openai-responses",
+            contextWindow: 128_000,
+            maxTokens: 4096,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            reasoning: false,
+          },
+        ],
+      } satisfies ModelProviderConfig;
+      expect(() =>
+        applyCustomApiConfig({
+          config: { models: { providers: { custom: provider } } },
+          baseUrl: provider.baseUrl,
+          modelId: "foo-large",
+          compatibility: "openai",
+          providerId: "custom",
+          noAuth,
+        }),
+      ).toThrow(/auth: "none"/);
+    },
+  );
 
   it("clears stale keys and auth modes when switching a provider to no-auth", () => {
     const providerId = "custom-studio-example-ts-net";
@@ -664,7 +690,7 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         compatibility: "anthropic",
         noAuth: true,
       }),
-    ).toThrow("--custom-no-auth currently supports --custom-compatibility openai only");
+    ).toThrow("--custom-no-auth requires the openai-completions adapter");
   });
 
   it.each([

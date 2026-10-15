@@ -315,7 +315,7 @@ async function validateResetAuthChoice(params: {
       applyCustomApiConfig({
         ...custom,
         config: params.baseConfig,
-        apiKey: undefined,
+        apiKey: customCredential?.key,
       });
     } catch (error) {
       const message =

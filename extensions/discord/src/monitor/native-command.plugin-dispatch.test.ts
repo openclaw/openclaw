@@ -24,7 +24,6 @@ import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import * as nativeCommandRoute from "./native-command-route.js";
 import {
@@ -1143,7 +1142,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
+  it("preserves fetched thread parent metadata when interaction omits parentId", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -1178,7 +1177,6 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "345678901234567890",
       guildName: "Test Guild",
     });
-    defineThrowingDiscordChannelGetter(interaction.channel, "parentId");
     (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
       async (channelId: string) => {
         if (channelId === "partial-thread-123") {

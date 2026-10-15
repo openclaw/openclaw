@@ -26,11 +26,6 @@ function completed(params: { value: unknown; output?: unknown[] }): CodeModeHead
   };
 }
 
-function abortReason(signal: AbortSignal | undefined): Error {
-  const reason: unknown = signal?.reason;
-  return reason instanceof Error ? reason : new Error("preparation aborted");
-}
-
 function createPreparedRuntime(config: OpenClawConfig) {
   const tool = wrapToolWithBeforeToolCallHook(
     {
@@ -286,78 +281,39 @@ describe("cron trigger script evaluator", () => {
     });
   });
 
-  it("retries shared runtime preparation for a still-live evaluator after its owner aborts", async () => {
-    const config = {} as OpenClawConfig;
-    const prepareRuntime = vi.fn(async (params: PrepareParams) => {
-      if (prepareRuntime.mock.calls.length === 1) {
-        return await new Promise<never>((_resolve, reject) => {
-          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
-            once: true,
-          });
-        });
-      }
-      return createPreparedRuntime(config);
-    });
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
+  it("starts cold after cancellation without waiting for the old preparation to settle", async () => {
+    const config: OpenClawConfig = {};
+    const entered = createDeferred();
+    const release = createDeferred();
     const controller = new AbortController();
-    const first = evaluate({
-      jobId: "job-shared-abort",
-      script: "return result",
-      state: null,
-      abortSignal: controller.signal,
-    });
-    const second = evaluate({
-      jobId: "job-shared-abort",
-      script: "return result",
-      state: null,
-    });
-    await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
-
-    controller.abort();
-    await expect(first).resolves.toMatchObject({ kind: "error", code: "aborted" });
-    await expect(second).resolves.toEqual({ kind: "evaluated", fire: false });
-    expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(runHeadless).toHaveBeenCalledOnce();
-  });
-
-  it("retries shared runtime preparation after an earlier evaluator reaches its deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const config = {} as OpenClawConfig;
-      const prepareRuntime = vi.fn(async (params: PrepareParams) => {
-        if (prepareRuntime.mock.calls.length === 1) {
-          return await new Promise<never>((_resolve, reject) => {
-            params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
-              once: true,
-            });
-          });
+    let first = true;
+    const evaluate = createCronTriggerEvaluator({
+      config,
+      prepareRuntime: async (params) => {
+        if (first) {
+          first = false;
+          entered.resolve();
+          await release.promise;
+          params.signal?.throwIfAborted();
         }
         return createPreparedRuntime(config);
-      });
-      const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-      const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
-      const first = evaluate({
-        jobId: "job-shared-timeout",
-        script: "return result",
-        state: null,
-      });
-      await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
-      await vi.advanceTimersByTimeAsync(1_000);
-      const second = evaluate({
-        jobId: "job-shared-timeout",
-        script: "return result",
-        state: null,
-      });
-
-      await vi.advanceTimersByTimeAsync(29_000);
-
-      await expect(first).resolves.toMatchObject({ kind: "error", code: "timeout" });
-      await expect(second).resolves.toEqual({ kind: "evaluated", fire: false });
-      expect(prepareRuntime).toHaveBeenCalledTimes(2);
-      expect(runHeadless).toHaveBeenCalledOnce();
+      },
+      runHeadless: async () => completed({ value: { fire: false } }),
+    });
+    const request = { jobId: "cancelled-preparation", script: "return {}", state: null };
+    const cancelled = evaluate({ ...request, abortSignal: controller.signal });
+    let next: ReturnType<typeof evaluate> | undefined;
+    try {
+      await entered.promise;
+      controller.abort();
+      await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
+      next = evaluate(request);
+      release.resolve();
+      await expect(next).resolves.toMatchObject({ kind: "evaluated", fire: false });
     } finally {
-      vi.useRealTimers();
+      controller.abort();
+      release.resolve();
+      await Promise.allSettled([cancelled, ...(next ? [next] : [])]);
     }
   });
 

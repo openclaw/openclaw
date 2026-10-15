@@ -40,6 +40,15 @@ function request(
 
 describe("OpenAI completions output budgets", () => {
   it.each([
+    ["ｺ", 7_499],
+    ["\u3400", 6_249],
+    ["\u{20000}", 4_999],
+  ] as const)("reserves weighted input space for repeated %s", (text, expected) => {
+    const params = request(proxy, undefined, emptyContext(text.repeat(1_000)));
+    expect(params.max_completion_tokens).toBe(expected);
+  });
+
+  it.each([
     { label: "non-reasoning", reasoning: false, effort: "off" },
     { label: "thinking off", reasoning: true, effort: "off" },
     { label: "thinking enabled", reasoning: true, effort: "medium" },

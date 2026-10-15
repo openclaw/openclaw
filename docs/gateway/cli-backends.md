@@ -124,6 +124,8 @@ plugin code registered with `api.registerCliBackend(...)`.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
 
+Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per

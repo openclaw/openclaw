@@ -116,9 +116,9 @@ describe("AppSidebar agent roster", () => {
       '[data-agent-group="working"] .sidebar-agent-roster__signals',
     )!;
     expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
-    for (const [phase, seq, expectedSignals] of [
-      ["finishing", 1, 0],
-      ["start", 2, 1],
+    for (const [phase, seq] of [
+      ["finishing", 1],
+      ["start", 2],
     ] as const) {
       gatewayHarness.publishEvent("agent", {
         sessionKey: "agent:working:pinned",
@@ -134,11 +134,11 @@ describe("AppSidebar agent roster", () => {
       expect(
         sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__signals'),
       ).toBe(summary);
-      expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(expectedSignals);
+      expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
     }
     result.sessions = result.sessions.map((row) =>
       row.agentId === "working" && row.isMain === false && row.archived !== true
-        ? { ...row, hasActiveRun: false, status: "done", unread: true }
+        ? { ...row, hasActiveRun: false, activeRunIds: [], status: "done", unread: true }
         : row,
     );
     await rosterActivityStore(context).refresh();

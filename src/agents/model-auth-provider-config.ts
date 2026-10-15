@@ -245,44 +245,38 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a no-auth provider (local, or explicitly `auth: "none"`). */
+/** True when configured or prepared route facts prove a no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
-  const noAuthOverride = authOverride === "none";
-  if (authOverride && authOverride !== "api-key" && !noAuthOverride) {
+  const route = params.route ?? {
+    api: params.modelApi ?? providerConfig?.api,
+    baseUrl: providerConfig?.baseUrl,
+  };
+  // Only this adapter clears the SDK-generated bearer header for the marker.
+  if (authOverride === "none") {
+    return route.api === "openai-completions" && typeof route.baseUrl === "string";
+  }
+  if (authOverride && authOverride !== "api-key") {
     return false;
   }
   if (
     (!params.route && (!providerConfig || !isCustomLocalProviderConfig(providerConfig))) ||
-    (providerConfig !== undefined &&
-      !noAuthOverride &&
-      hasExplicitProviderApiKeyConfig(providerConfig))
+    (providerConfig !== undefined && hasExplicitProviderApiKeyConfig(providerConfig))
   ) {
     return false;
   }
-  const route = params.route ?? providerConfig;
-  if (
-    !(
-      typeof route?.api === "string" &&
-      route.api.trim().length > 0 &&
-      typeof route.baseUrl === "string"
-    )
-  ) {
-    return false;
-  }
-  // `auth: "none"` is an explicit operator declaration, so it also covers
-  // reachable-but-private hosts (tailnet/VPN inference servers) that hostname
-  // classification cannot prove local. Only `openai-completions` transports
-  // suppress the Authorization header for the synthetic marker, so no-auth is
-  // restricted to that adapter.
-  return noAuthOverride
-    ? route.api === "openai-completions"
-    : isLocalAuthProviderBaseUrl(route.baseUrl);
+  return (
+    typeof route.api === "string" &&
+    route.api.trim().length > 0 &&
+    typeof route.baseUrl === "string" &&
+    isLocalAuthProviderBaseUrl(route.baseUrl)
+  );
 }
 
 export function resolveProviderAuthOverride(

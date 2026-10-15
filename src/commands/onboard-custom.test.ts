@@ -160,17 +160,20 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
   });
 
-  it("requires a key when no-auth is chosen but a non-openai compatibility is selected", async () => {
+  it.each([
+    { baseUrl: "https://claude-compatible.example.ts.net", compatibility: "anthropic" },
+    { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
+  ])("requires a key for the effective adapter at $baseUrl", async ({ baseUrl, compatibility }) => {
     const prompter = createTestPrompter({
       text: [
-        "https://claude-compatible.example.ts.net",
+        baseUrl,
         "",
         "qwen3.8",
         "custom",
         "",
         "placeholder-key", // pragma: allowlist secret
       ],
-      select: ["plaintext", "anthropic", "plaintext"],
+      select: ["plaintext", compatibility, "plaintext"],
       confirm: [true, true],
     });
     stubFetchSequence([]);

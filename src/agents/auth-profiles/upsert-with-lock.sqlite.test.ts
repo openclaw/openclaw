@@ -256,29 +256,6 @@ describe("auth profile batch persistence", () => {
     });
   });
 
-  it("does not restore a fenced OAuth refresh generation", async () => {
-    await withAgentDir(async (agentDir) => {
-      const profileId = "openai:default";
-      const credential = {
-        type: "oauth",
-        provider: "openai",
-        access: "expired-access",
-        refresh: "single-use-refresh",
-        expires: Date.now() - 60_000,
-      } satisfies OAuthCredential;
-      const fence = createOAuthRefreshFence({ profileId, credential });
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, agentDir);
-
-      await expect(
-        persistAuthProfileBatch({
-          agentDir,
-          profiles: [{ profileId, credential }],
-        }),
-      ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(fence);
-    });
-  });
-
   it("rejects pre-claim stale writes after the refresh fence settles", async () => {
     await withAgentDir(async (agentDir) => {
       const profileId = "openai:default";

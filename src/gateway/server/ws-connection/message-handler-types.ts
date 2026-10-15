@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type {
   ConnectParams,
   RequestFrame,
+  ResponseFrame,
   errorShape,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -122,7 +123,7 @@ export type GatewayConnectPhaseContext = {
     message: string,
     options?: Parameters<typeof errorShape>[2],
   ) => void;
-  sendFrame: (obj: unknown) => Promise<void>;
+  sendFrame: (obj: ResponseFrame) => Promise<void>;
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
   onPairingWait: () => void;

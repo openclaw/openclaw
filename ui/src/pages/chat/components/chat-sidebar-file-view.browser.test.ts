@@ -1,3 +1,4 @@
+import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
@@ -90,6 +91,48 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it("keeps CodeMirror idle during unrelated panel property updates", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "isolation.txt",
+      name: "isolation.txt",
+      line: 2,
+      content: "first\nsecond\nthird",
+      edit: { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() },
+    });
+    await userEvent.click(button(panel, "Edit file"));
+    const editor = panel.querySelector<HTMLElement>(".cm-content")!;
+    await userEvent.type(editor, "draft ");
+    const draft = readFileDraft(panel.content)?.content;
+    const updates = vi.spyOn(EditorView.prototype, "update");
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        Object.assign(panel, { execNode: `node-${index}` });
+        await panel.updateComplete;
+        await Promise.resolve();
+      }
+      expect(updates.mock.calls.length).toBe(0);
+      expect(panel.querySelector(".cm-content")).toBe(editor);
+      expect(document.activeElement).toBe(editor);
+      expect(readFileDraft(panel.content)?.content).toBe(draft);
+      await userEvent.type(editor, "more ");
+      expect(readFileDraft(panel.content)?.content).toContain("more ");
+      expect(updates.mock.calls.length).toBeGreaterThan(0);
+      await userEvent.click(button(panel, "Discard"));
+      panel.content.content = "Changed in-place file text\nsecond\nthird";
+      Object.assign(panel, { execNode: "latest-node" });
+      await panel.updateComplete;
+      await expect
+        .poll(() => [...editor.querySelectorAll(".cm-line")].map((line) => line.textContent))
+        .toEqual(["Changed in-place file text", "second", "third"]);
+      expect(editor.querySelector(".file-view__line--target")?.textContent).toBe("second");
+      expect(editor.querySelector(".file-view__line--target")?.getAttribute("data-line")).toBe("2");
+      expect(panel.querySelector(".cm-content")).toBe(editor);
+    } finally {
+      updates.mockRestore();
+    }
+  });
+
   it("wraps long lines at the panel width when word wrap is on and remembers the choice", async () => {
     localStorage.removeItem("openclaw.control.fileView.wrap.v1");
     const panel = await mountFile(

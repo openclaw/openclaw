@@ -95,11 +95,9 @@ function normalizeConvertedBlockTree(
   }
 
   const byId = new Map<string, FeishuDocxBlock>();
-  const originalOrder = new Map<string, number>();
-  for (const [index, block] of blocks.entries()) {
+  for (const block of blocks) {
     if (typeof block?.block_id === "string") {
       byId.set(block.block_id, block);
-      originalOrder.set(block.block_id, index);
     }
   }
 
@@ -119,11 +117,6 @@ function normalizeConvertedBlockTree(
       const parentId = typeof block?.parent_id === "string" ? block.parent_id : "";
       return !childIds.has(blockId) && (!parentId || !byId.has(parentId));
     })
-    .toSorted(
-      (a, b) =>
-        (originalOrder.get(a.block_id ?? "__missing__") ?? 0) -
-        (originalOrder.get(b.block_id ?? "__missing__") ?? 0),
-    )
     .map((block) => block.block_id)
     .filter((blockId): blockId is string => typeof blockId === "string");
 
@@ -739,6 +732,12 @@ async function writeTableCells(
         continue;
       }
 
+      const converted = await convertMarkdown(client, rowValues[c] ?? "");
+      const { orderedBlocks } = normalizeConvertedBlockTree(
+        converted.blocks,
+        converted.firstLevelBlockIds,
+      );
+
       // table cell is a container block: clear existing children, then create text child blocks
       const childrenRes = await client.docx.documentBlockChildren.get({
         path: { document_id: docToken, block_id: cellId },
@@ -749,13 +748,6 @@ async function writeTableCells(
       if (existingChildren.length > 0) {
         await deleteBlockChildren(client, docToken, cellId, 0, existingChildren.length);
       }
-
-      const text = rowValues[c] ?? "";
-      const converted = await convertMarkdown(client, text);
-      const { orderedBlocks } = normalizeConvertedBlockTree(
-        converted.blocks,
-        converted.firstLevelBlockIds,
-      );
 
       if (orderedBlocks.length > 0) {
         await insertBlocks(client, docToken, orderedBlocks, cellId);

@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
@@ -244,7 +245,9 @@ async function prepareStartupConfig(
 }
 
 function result(read: ConfigPreflightSnapshotRead) {
+  const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
+    ...(selection?.input ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

@@ -3,13 +3,23 @@ import { vi } from "vitest";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  publishTranscriptUpdate,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createChatSendReplyDispatch } from "../../gateway/server-methods/chat-send-reply-dispatch.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
@@ -320,6 +330,47 @@ export async function createAgentAccountingPersistenceFixture({
     },
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
     replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    persistLocalReply: async (text: string) => {
+      const scope = { agentId: "main", storePath, sessionKey, sessionId };
+      const userTurnRecorder = createUserTurnTranscriptRecorder({
+        input: { text: "Reply to this synthetic input.", idempotencyKey: `${runId}:user` },
+        target: { ...scope, sessionEntry: context.activeSessionEntry },
+      });
+      await userTurnRecorder.persistApproved();
+      const dispatch = createChatSendReplyDispatch({
+        getRuntimeConfig: () => cfg,
+        accountId: undefined,
+        isAgentRunStarted: () => true,
+        isRunCurrent: () => true,
+        logGateway: createSubsystemLogger("test/accounting-local-reply"),
+        session: {
+          ...scope,
+          entry: context.activeSessionEntry,
+          backingSessionId: sessionId,
+          cfg,
+          clientRunId: runId,
+          sessionLoadOptions: { agentId: "main" },
+        },
+        userTurnRecorder,
+      });
+      dispatch.captureAgentTranscriptStart(runId, null);
+      const message = attachSessionTranscriptRunId({ role: "assistant", content: text }, runId);
+      const appended = await appendTranscriptMessage(scope, { eventId: `${runId}:final`, message });
+      if (!appended.messageId) {
+        throw new Error("Expected a committed local assistant reply");
+      }
+      await publishTranscriptUpdate(scope, { message, messageId: appended.messageId });
+      context.sessionCtx = { Provider: "webchat", Surface: "webchat" };
+      context.opts = { resolveReplyDelivery: dispatch.resolveReplyDelivery };
+      context.execution.result.sourceReplyDeliveryState = "missing";
+      context.execution.result.payloads = [
+        setReplyPayloadMetadata(
+          { text },
+          { assistantMessageIndex: 0, assistantTranscriptOwned: true },
+        ),
+      ];
+      return scope;
+    },
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
@@ -342,6 +393,8 @@ export async function createAgentAccountingPersistenceFixture({
               // The reply was already delivered; exercise completion bookkeeping
               // without creating another pending delivery intent.
               completedSourceReplyDelivery: true,
+              terminalReplyDelivery: "delivered",
+              reminderNoteAppended: false,
               guardedReplyPayloads: [],
               responseUsageLine: undefined,
             },

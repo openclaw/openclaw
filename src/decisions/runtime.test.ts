@@ -35,6 +35,17 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it("routes a configured custom TypeSafe model without requiring a catalog preset", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate, undefined, "typesafe");
+    await expect(
+      host.run(options(), {
+        agents: { defaults: { decisionModel: "typesafe/nemotron-deciffusion" } },
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(evaluate.mock.calls[0]?.[1].model).toBe("nemotron-deciffusion");
+  });
   it("uses the adopted owner from a collected callback scope without reviving a retired instance", async () => {
     class RetiredRegistry {
       readonly fixtureLabel = "RetiredRegistry";

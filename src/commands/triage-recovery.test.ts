@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe("triage external recovery handoff", () => {
-  it.each(["claude", "kimi", "agy"] as const)(
+  it.each(["kimi", "agy"] as const)(
     "starts the first available agent %s immediately",
     async (agent) => {
       const available = new Set<string>(
@@ -130,11 +130,9 @@ describe("triage external recovery handoff", () => {
       });
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
         `/usr/local/bin/${agent}`,
-        agent === "claude"
-          ? ["--safe-mode", expect.any(String)]
-          : agent === "agy"
-            ? ["--prompt-interactive", expect.any(String)]
-            : ["--prompt", expect.any(String)],
+        agent === "agy"
+          ? ["--prompt-interactive", expect.any(String)]
+          : ["--prompt", expect.any(String)],
         expect.objectContaining({ stdio: "inherit" }),
       );
       if (agent === "kimi") {

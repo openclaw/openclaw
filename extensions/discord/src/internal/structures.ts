@@ -157,6 +157,9 @@ export class Message<IsPartial extends boolean = false> extends Base {
   get embeds(): APIEmbed[] {
     return this.rawDataValue?.embeds ?? [];
   }
+  get components() {
+    return this.rawDataValue?.components;
+  }
   get attachments() {
     return this.rawDataValue?.attachments ?? [];
   }

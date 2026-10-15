@@ -122,7 +122,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option(
       "--custom-no-auth",
-      "Mark the custom provider endpoint as not enforcing auth (optional; sends no Authorization header)",
+      "Use no auth for a custom OpenAI Chat Completions endpoint (sends no Authorization header)",
     )
     .option("--custom-model-id <id>", "Custom provider model ID")
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")

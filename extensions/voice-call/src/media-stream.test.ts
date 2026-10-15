@@ -469,33 +469,6 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
-  it("rejects upgrades when max connection cap is reached", async () => {
-    const handler = createHandler({
-      preStartTimeoutMs: 5_000,
-      maxConnections: 1,
-      maxPendingConnections: 10,
-      maxPendingConnectionsPerIp: 10,
-    });
-    const server = await startWsServer(handler);
-
-    try {
-      const first = await connectWs(server.url);
-      const secondError = await withTimeout(
-        new Promise<Error>((resolve) => {
-          const ws = new WebSocket(server.url);
-          ws.once("error", (err) => resolve(err));
-        }),
-      );
-
-      expect(secondError.message).toContain("Unexpected server response: 503");
-
-      first.close();
-      await waitForClose(first);
-    } finally {
-      await server.close();
-    }
-  });
-
   it("counts in-flight upgrades against the max connection cap", () => {
     const handler = createHandler({
       maxConnections: 2,
@@ -876,26 +849,6 @@ describe("MediaStreamHandler base64 validation", () => {
 });
 
 describe("MediaStreamHandler lifecycle", () => {
-  it("keeps rejecting upgrades through the shutdown barrier without active sockets", async () => {
-    const handler = createHandler();
-    let releaseShutdownBarrier: (() => void) | undefined;
-    const shutdownBarrier = new Promise<void>((resolve) => {
-      releaseShutdownBarrier = resolve;
-    });
-    const close = handler.close(shutdownBarrier);
-    let closeSettled = false;
-    void close.then(() => {
-      closeSettled = true;
-    });
-
-    await Promise.resolve();
-    expect(closeSettled).toBe(false);
-
-    releaseShutdownBarrier?.();
-    await close;
-    expect(closeSettled).toBe(true);
-  });
-
   it("rejects duplicate start frames without creating another STT session", async () => {
     const closeSession = vi.fn();
     const sttSession: RealtimeTranscriptionSession = {

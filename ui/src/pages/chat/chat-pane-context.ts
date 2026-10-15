@@ -415,20 +415,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     // Upload controls read the live config capability; refresh every policy publication.
     this.chatState.requestBackgroundUpdate();
-    const previousTerminalAvailable = state.terminalAvailable;
     state.terminalAvailable =
       config.terminalEnabled &&
       state.connected &&
       hasOperatorAdminAccess(state.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
-    if (
-      state.terminalAvailable === previousTerminalAvailable &&
-      state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
-      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons
-    ) {
-      return;
-    }
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;

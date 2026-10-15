@@ -2517,7 +2517,7 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=2`;
+    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=3`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(view, ".chat-message-image-button", HTMLButtonElement).click();
@@ -2596,7 +2596,7 @@ describe("grouped chat rendering", () => {
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
     const ticketedUrl = `${source}?mediaTicket=ticket`;
-    const thumbnailUrl = `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`;
+    const thumbnailUrl = `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=3`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
     stubObjectUrls(() => objectUrls.shift() ?? "blob:extra");
@@ -2670,7 +2670,7 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = requireFetchCallForUrl(
       fetchMock,
-      `${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=2`,
+      `${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=3`,
     );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
@@ -2698,7 +2698,7 @@ describe("grouped chat rendering", () => {
       | undefined;
     const response = { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
     const fetchMock = vi.fn((url: string) => {
-      if (deferEvictedRefetch && url === `${imageUrls[1]?.replace(/\/full$/u, "/thumbnail")}?v=2`) {
+      if (deferEvictedRefetch && url === `${imageUrls[1]?.replace(/\/full$/u, "/thumbnail")}?v=3`) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;
         });

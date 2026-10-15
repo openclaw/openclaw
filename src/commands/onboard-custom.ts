@@ -20,6 +20,7 @@ import {
   resolveCustomModelAliasError,
   resolveCustomModelImageInputInference,
   resolveCustomProviderId,
+  resolveCustomProviderApi,
   type CustomApiCompatibility,
   type CustomApiResult,
 } from "./onboard-custom-config.js";
@@ -360,7 +361,15 @@ export async function promptCustomApiConfig(params: {
           initialValue: imageInputInference.supportsImageInput,
         });
   const resolvedCompatibility = compatibility ?? "openai";
-  if (noAuth && resolvedCompatibility !== "openai") {
+  const { providerId } = resolveCustomProviderId({ config, baseUrl, providerId: providerIdInput });
+  const modelApi = config.models?.providers?.[providerId]?.models.find(
+    (model) => model.id === modelId,
+  )?.api;
+  if (
+    noAuth &&
+    resolveCustomProviderApi({ baseUrl, compatibility: resolvedCompatibility, modelApi }) !==
+      "openai-completions"
+  ) {
     // The no-auth confirmation happens before compatibility is chosen, and only
     // openai-completions transports can suppress the auth header, so require a
     // real key instead of persisting an unsupported no-auth combination.

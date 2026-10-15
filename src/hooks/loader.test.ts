@@ -11,7 +11,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
   createInternalHookEvent,
   registerInternalHook,
@@ -153,9 +153,8 @@ describe("loader", () => {
       // The typo'd key never fires, but validation is advisory: the hook still
       // loads and its valid subscriptions keep working.
       expect(count).toBe(1);
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:nwe");
-      expect(keys).toContain("command:new");
+      expect(hasInternalHookListeners("command", "nwe")).toBe(true);
+      expect(hasInternalHookListeners("command", "new")).toBe(true);
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(event.messages).toEqual(["typo-hook"]);
@@ -615,7 +614,7 @@ describe("loader", () => {
 
       const disabledCount = await commitPreparedHooks(createEnabledHooksConfig(), tmpDir);
       expect(disabledCount).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
+      expect(hasInternalHookListeners("command", "new")).toBe(false);
 
       const enabledCount = await commitPreparedHooks(
         createEnabledHooksConfig("workspace-hook"),

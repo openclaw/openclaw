@@ -805,6 +805,56 @@ describe("setupWizardCommand", () => {
     );
   });
 
+  it("rejects Azure no-auth before reset", async () => {
+    await expectAuthPreflightError(
+      {
+        customBaseUrl: "https://resource.openai.azure.com",
+        customModelId: "test-model",
+        customNoAuth: true,
+      },
+      () =>
+        "--custom-no-auth requires the openai-completions adapter. Choose a compatible endpoint or configure an API key.",
+    );
+  });
+
+  it("accepts replacing no-auth with a keyed Responses provider before reset", async () => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        customProviderId: "custom",
+        customBaseUrl: "https://example.com/v1",
+        customModelId: "test-model",
+        customCompatibility: "openai-responses",
+        customApiKey: "synthetic-replacement-key",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(mocks.handleReset).toHaveBeenCalledOnce();
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+  });
+
   it("rejects ambiguous interactive provider flags before reset", async () => {
     const runtime = makeRuntime();
     await setupWizardCommand({ reset: true, nvidiaApiKey: "n", openaiApiKey: "o" }, runtime);

@@ -2343,6 +2343,8 @@ if [ "$SCENARIO" = "cron-owner-doctor" ]; then
   phase assert-cron-owner-idempotence node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs assert-idempotent
   phase prepare-cron-owner-runtime node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs prepare-runtime
   OPENCLAW_SKIP_CRON=0 phase cron-owner-candidate-gateway-start start_gateway
+  # /readyz can precede optional-agent admission; continuity reads require settled startup.
+  phase cron-owner-candidate-startup probe_gateway_endpoint /startupz started "$ARTIFACT_ROOT/cron-owner-startup.json"
   phase cron-owner-candidate-gateway-probes check_gateway_probes
   phase run-cron-owner-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs run-runtime

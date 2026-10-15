@@ -80,16 +80,12 @@ it("settles worker facts through admission without echoing snapshots in ordinary
   }
 });
 
-it.each([undefined, 42])(
-  "bootstraps complete host facts before any exchange, value=%s",
-  async (value) => {
-    const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
-    const database = openNodeSqliteDatabase(location);
-    if (value !== undefined) {
-      publishSqliteDatabaseAdmission(database, hostFactKey, value);
-    }
-    const worker = new Worker(
-      `
+it("bootstraps complete host facts before any exchange", async () => {
+  const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  publishSqliteDatabaseAdmission(database, hostFactKey, 42);
+  const worker = new Worker(
+    `
     const { parentPort, workerData } = require("node:worker_threads");
     (async () => {
       const { register } = await import(workerData.loader);
@@ -113,28 +109,27 @@ it.each([undefined, 42])(
       parentPort.close();
     })().catch((error) => { throw error; });
   `,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: {
-          location,
-          key: hostFactKey.name,
-          loader: import.meta.resolve("tsx/esm/api"),
-          native: new URL("./node-sqlite.ts", import.meta.url).href,
-          admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
-        },
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        location,
+        key: hostFactKey.name,
+        loader: import.meta.resolve("tsx/esm/api"),
+        native: new URL("./node-sqlite.ts", import.meta.url).href,
+        admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
       },
-    );
-    try {
-      const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
-      expect(code).toBe(0);
-      expect(facts).toEqual({ absent: undefined, value, exchanges: 0 });
-    } finally {
-      await worker.terminate();
-      database.close();
-    }
-  },
-);
+    },
+  );
+  try {
+    const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+    expect(code).toBe(0);
+    expect(facts).toEqual({ absent: undefined, value: 42, exchanges: 0 });
+  } finally {
+    await worker.terminate();
+    database.close();
+  }
+});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");

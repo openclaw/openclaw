@@ -10,7 +10,7 @@ import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 export const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 export const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 export const CACHE_SAVE_V5 = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
-export const SETUP_GO_V6 = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e";
+export const SETUP_GO_V6 = "actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af";
 export const UPLOAD_ARTIFACT_V7 =
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 export const DOWNLOAD_ARTIFACT_V8 =

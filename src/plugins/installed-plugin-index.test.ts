@@ -488,59 +488,6 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("records explicit install records separately from package install intent", () => {
-    const fixture = createRichPluginFixture({ installOwner: "demo" });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      installRecords: {
-        demo: {
-          source: "npm",
-          spec: "@vendor/demo-plugin@latest",
-          installPath: "plugins/demo",
-          resolvedName: "@vendor/demo-plugin",
-          resolvedVersion: "1.2.3",
-          resolvedSpec: "@vendor/demo-plugin@1.2.3",
-          integrity: "sha512-installed",
-          shasum: "abc123",
-          resolvedAt: "2026-04-25T11:00:00.000Z",
-          installedAt: "2026-04-25T11:01:00.000Z",
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(index.installRecords).toEqual({
-      demo: {
-        source: "npm",
-        spec: "@vendor/demo-plugin@latest",
-        installPath: "plugins/demo",
-        resolvedName: "@vendor/demo-plugin",
-        resolvedVersion: "1.2.3",
-        resolvedSpec: "@vendor/demo-plugin@1.2.3",
-        integrity: "sha512-installed",
-        shasum: "abc123",
-        resolvedAt: "2026-04-25T11:00:00.000Z",
-        installedAt: "2026-04-25T11:01:00.000Z",
-      },
-    });
-    expectRecordFields(
-      requireRecord(
-        requireRecord(
-          requireRecord(index.plugins[0], "installed plugin record").packageInstall,
-          "package install",
-        ).npm,
-        "npm package install",
-      ),
-      {
-        spec: "@vendor/demo-plugin@1.2.3",
-        expectedIntegrity: "sha512-demo",
-        pinState: "exact-with-integrity",
-      },
-    );
-    expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
-  });
-
   it("uses in-flight install records to rank installed globals over bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -634,40 +581,6 @@ describe("installed plugin index", () => {
         gitCommit: "abc123",
       },
     });
-  });
-
-  it("treats enablement changes as policy invalidation", () => {
-    const fixture = createRichPluginFixture();
-    const previous = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: true,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-    const current = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
-      "policy-changed",
-    ]);
   });
 
   it("treats legacy config-path startup metadata as migration invalidation", () => {

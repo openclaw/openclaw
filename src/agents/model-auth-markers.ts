@@ -7,9 +7,12 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
+import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
@@ -132,4 +135,47 @@ export function isNonSecretApiKeyMarker(
   // Do not treat arbitrary ALL_CAPS values as markers; only recognize the
   // known env-var markers we intentionally persist for compatibility.
   return listKnownEnvApiKeyMarkers().has(trimmed);
+}
+
+/** Explicit no-auth is terminal before any credential lookup or plugin preparation. */
+export function resolveExplicitProviderNoAuth(params: {
+  provider: string;
+  providerConfig?: Pick<ModelProviderConfig, "auth" | "api" | "baseUrl">;
+  modelApi?: string;
+}): ResolvedProviderAuth | null {
+  if (params.providerConfig?.auth !== "none") {
+    return null;
+  }
+  if ((params.modelApi ?? params.providerConfig.api) !== "openai-completions") {
+    throw new Error(
+      `Provider "${params.provider}" with auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.`,
+    );
+  }
+  return {
+    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+    source: `models.providers.${params.provider} (synthetic local key)`,
+    mode: "api-key",
+  };
+}
+
+/** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
+export function applyLocalNoAuthHeaderOverride<T extends Model>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
+  }
+  // Null every spelling: SDK callers may merge these headers over the original model headers.
+  const headers: Record<string, string | null> = {
+    ...Object.fromEntries(
+      Object.entries(model.headers ?? {}).map(([name, value]) => [
+        name,
+        name.toLowerCase() === "authorization" ? null : value,
+      ]),
+    ),
+    Authorization: null,
+  };
+  // SAFETY: OpenAI accepts null to delete headers; the shared Model header type omits that SDK value.
+  return { ...model, headers: headers as Record<string, string> };
 }

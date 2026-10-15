@@ -715,17 +715,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
         : undefined,
     runProviderDynamicModel: (params: {
       provider: string;
-      context: {
-        modelId: string;
-        modelRegistry: ModelRegistryLike;
-        agentRuntimeId?: string;
-        authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
-        providerConfig?: {
-          api?: string | null;
-          auth?: ModelProviderAuthMode;
-          baseUrl?: string;
-        };
-      };
+      context: Omit<DynamicModelContext, "provider">;
     }) =>
       handledDynamicProviders.has(params.provider)
         ? buildDynamicModel(

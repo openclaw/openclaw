@@ -49,9 +49,11 @@ Onboarding covers the same choice: leaving the API key blank on a non-local
 host prompts to confirm no-auth mode (loopback/RFC1918 hosts treat a blank
 key as no-auth automatically), or pass `--custom-no-auth` with
 `--custom-base-url`/`--custom-model-id` in non-interactive mode.
-`auth: "none"` applies to OpenAI-compatible
-(`openai-completions`) routes; Anthropic-compatible endpoints without auth
-still need a placeholder key.
+`auth: "none"` applies only to the effective `openai-completions` adapter,
+including a model-level `api` override. It takes precedence over retained inline,
+environment, stored-profile, and SecretRef credentials. Unsupported adapters fail
+before credential fallback. Responses, Azure OpenAI, and Anthropic-compatible
+endpoints without auth still need a placeholder key.
 
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 

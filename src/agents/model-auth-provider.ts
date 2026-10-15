@@ -28,7 +28,7 @@ import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-d
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, resolveExplicitProviderNoAuth } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
@@ -227,6 +227,14 @@ export async function resolveApiKeyForProviderCore(input: {
   const changedAuthProvider = modelAuthConfig !== input.cfg;
   const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
+  const noAuth = resolveExplicitProviderNoAuth({
+    provider,
+    providerConfig: resolveMergedModelProviderConfig(cfg, provider),
+    modelApi: params.modelApi,
+  });
+  if (noAuth) {
+    return noAuth;
+  }
   const modelPolicy = {
     provider,
     modelApi: params.modelApi,
@@ -240,23 +248,6 @@ export async function resolveApiKeyForProviderCore(input: {
     ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   assertProviderAuthReady({ cfg, provider, agentDir });
-  // `auth: "none"` is an authoritative operator declaration: never hand stored,
-  // pinned, env, or inline credentials to a host explicitly marked keyless, so
-  // real secrets cannot egress to it. Unusable declarations (no OpenAI-compatible
-  // route) fall through to the normal resolution paths.
-  if (authConfig.resolveProviderAuthOverride(cfg, provider) === "none") {
-    const noAuthRuntimeAuth = await prepareSyntheticLocalProviderAuth({
-      cfg,
-      provider,
-      modelApi: params.modelApi,
-      workspaceDir: params.workspaceDir,
-      secretSentinels: params.secretSentinels,
-      signal: params.signal,
-    });
-    if (noAuthRuntimeAuth) {
-      return noAuthRuntimeAuth;
-    }
-  }
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = async (requestedProfileId?: string) =>
     (scopedStore ??= await resolveScopedAuthProfileStoreAsync({

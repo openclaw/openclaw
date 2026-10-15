@@ -26,7 +26,6 @@ type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconn
 
 const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
 const OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT = "unable_to_socket_mode_start";
-const OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY = "__openclawNativeReconnectFailureObserver";
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
 const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
@@ -64,28 +63,17 @@ function isConstructorFunction<
   return typeof value === "function";
 }
 
-function installSlackNativeReconnectFailureObserver(receiver: unknown) {
-  const client = asOptionalObjectRecord(asOptionalObjectRecord(receiver)?.client);
-  if (!client) {
-    return;
-  }
-  if (Reflect.get(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY)) {
-    return;
-  }
-  const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
-  const emit = Reflect.get(client, "emit");
-  if (typeof delayReconnectAttempt !== "function" || typeof emit !== "function") {
-    return;
-  }
-
-  Reflect.set(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY, true);
+function installSlackNativeReconnectFailureObserver(
+  receiver: InstanceType<SlackSocketModeReceiverConstructor>,
+) {
+  const client = receiver.client;
   Reflect.set(
     client,
     "delayReconnectAttempt",
-    function patchedDelayReconnectAttempt(this: object, callback: unknown) {
-      if (typeof callback !== "function") {
-        return delayReconnectAttempt.call(this, callback);
-      }
+    function patchedDelayReconnectAttempt(
+      this: typeof client,
+      callback: (this: typeof client) => Promise<unknown>,
+    ) {
       const failureCount = Number(Reflect.get(this, "numOfConsecutiveReconnectionFailures") ?? 0);
       const nextFailureCount = failureCount + 1;
       Reflect.set(this, "numOfConsecutiveReconnectionFailures", nextFailureCount);
@@ -107,10 +95,10 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
             return;
           }
           logger?.debug?.("Continuing with reconnect...");
-          emit.call(this, "reconnecting");
-          Promise.resolve(callback.call(this)).then(resolve, (error: unknown) => {
+          this.emit("reconnecting");
+          callback.call(this).then(resolve, (error: unknown) => {
             if (callback === Reflect.get(this, "start")) {
-              emit.call(this, OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
+              this.emit(OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
               resolve(undefined);
               return;
             }
@@ -324,7 +312,15 @@ export function createSlackBoltApp(params: {
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
   onContextIdentity?: (identity: SlackContextIdentity) => void | Promise<void>;
-}) {
+}): {
+  app: InstanceType<SlackAppConstructor>;
+  receiver:
+    | InstanceType<SlackSocketModeReceiverConstructor>
+    | InstanceType<SlackHttpReceiverConstructor>
+    | SlackReceiver;
+  socketClient: InstanceType<SlackSocketModeReceiverConstructor>["client"] | undefined;
+  socketModeLogger: SlackSocketModeLogger;
+} {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
@@ -342,9 +338,10 @@ export function createSlackBoltApp(params: {
     | InstanceType<SlackSocketModeReceiverConstructor>
     | InstanceType<SlackHttpReceiverConstructor>
     | SlackReceiver;
+  let socketClient: InstanceType<SlackSocketModeReceiverConstructor>["client"] | undefined;
   if (params.slackMode === "socket") {
     const socketReceiver = new params.interop.SocketModeReceiver(socketModeReceiverOptions);
-    const socketClient = socketReceiver.client;
+    socketClient = socketReceiver.client;
     // Slack's declarations hide the private acknowledgement sender's signature.
     // Validate and bind the SDK method before constructing the receive guard.
     const send: unknown = Reflect.get(socketClient, "send");
@@ -390,11 +387,12 @@ export function createSlackBoltApp(params: {
     }
     await args.next();
   });
-  return { app, receiver, socketModeLogger };
+  return { app, receiver, socketClient, socketModeLogger };
 }
 
 export async function startSlackSocketAndWaitForDisconnect(params: {
   app: { start: () => unknown };
+  socketClient: Parameters<typeof waitForSlackSocketDisconnect>[0];
   abortSignal?: AbortSignal;
   onStarted?: () => void | Promise<void>;
 }) {
@@ -402,12 +400,13 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
   const relayAbort = () => waiterAbortController.abort();
   let disconnect: SlackSocketDisconnect | undefined;
   params.abortSignal?.addEventListener("abort", relayAbort, { once: true });
-  const disconnected = waitForSlackSocketDisconnect(params.app, waiterAbortController.signal).then(
-    (value) => {
-      disconnect = value;
-      return value;
-    },
-  );
+  const disconnected = waitForSlackSocketDisconnect(
+    params.socketClient,
+    waiterAbortController.signal,
+  ).then((value) => {
+    disconnect = value;
+    return value;
+  });
   try {
     await Promise.resolve(params.app.start());
     if (params.abortSignal?.aborted) {
@@ -439,12 +438,10 @@ function isMissingSocketStartErrorDetail(err: unknown): boolean {
   );
 }
 
-export async function gracefulStopSlackApp(app: { stop: () => unknown }) {
-  const receiver = asOptionalObjectRecord(asOptionalObjectRecord(app)?.receiver);
-  const socketClient = asOptionalObjectRecord(receiver?.client);
+export async function gracefulStopSlackApp(app: { stop: () => unknown }, socketClient?: object) {
   if (socketClient) {
     // Fence ping-timeout reconnects before Bolt begins asynchronous shutdown (#56508).
-    socketClient.shuttingDown = true;
+    Reflect.set(socketClient, "shuttingDown", true);
   }
   await Promise.resolve(app.stop()).catch(() => undefined);
 }

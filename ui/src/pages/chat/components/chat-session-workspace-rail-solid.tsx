@@ -328,25 +328,20 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
           }
         >
           <div class="chat-workspace-rail__scroll">
-            <Show when={visible("changed") && data().changed.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.changed")}
-                count={data().changed.length}
-                defaultOpen
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().changed} />
-              </WorkspaceGroup>
-            </Show>
-            <Show when={visible("read") && data().read.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.read")}
-                count={data().read.length}
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().read} />
-              </WorkspaceGroup>
-            </Show>
+            <For each={["changed", "read"] as const}>
+              {(kind) => (
+                <Show when={visible(kind) && data()[kind].length > 0}>
+                  <WorkspaceGroup
+                    title={t(`chat.workspaceFiles.${kind}`)}
+                    count={data()[kind].length}
+                    defaultOpen={kind === "changed"}
+                    forcedOpen={data().forcedOpen}
+                  >
+                    <FileRows rows={data()[kind]} />
+                  </WorkspaceGroup>
+                </Show>
+              )}
+            </For>
             <Show when={visible("artifacts") && data().artifacts.length > 0}>
               <WorkspaceGroup
                 title={t("chat.workspaceFiles.artifacts")}

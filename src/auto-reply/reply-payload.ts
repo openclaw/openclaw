@@ -332,6 +332,8 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * the live delivery vehicle unless transcriptOwner identifies an already

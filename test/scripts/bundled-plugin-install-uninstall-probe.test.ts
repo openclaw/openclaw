@@ -971,7 +971,8 @@ describe("bundled plugin install/uninstall probe", () => {
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }));",
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
         "",
       ].join("\n"),
       "utf8",
@@ -992,33 +993,6 @@ describe("bundled plugin install/uninstall probe", () => {
     const rpcStateDir = fs.readFileSync(statePath, "utf8");
     expect(path.basename(rpcStateDir)).toMatch(/^openclaw-plugin-runtime-rpc-/u);
     expect(fs.existsSync(rpcStateDir)).toBe(false);
-  });
-
-  it("ignores structured logs after gateway RPC payloads", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const root = makePackageRoot();
-    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
-    fs.writeFileSync(
-      entrypoint,
-      [
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
-        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await expect(
-      runtimeSmoke.rpcCall(
-        "health",
-        {},
-        {
-          entrypoint,
-          env: {},
-          port: 19001,
-        },
-      ),
-    ).resolves.toEqual({ status: "ok" });
   });
 
   it("accepts successful runtime HTTP probes", async () => {
