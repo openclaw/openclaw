@@ -218,15 +218,27 @@ describe("findOcPaths — JSONL", () => {
     '{"event":"start","userId":"u1"}\n{"event":"action","userId":"u1"}\n{"event":"end","userId":"u1"}\n',
   ).ast;
 
-  it("returns each value target once while retaining physical line addresses", () => {
+  it.each([
+    { pattern: "*/**/**", prefix: ["oc://session/L1"], nextLine: ["oc://session/L3"] },
+    {
+      pattern: "**/**/**",
+      prefix: ["oc://session", "oc://session/L1", "oc://session/L3"],
+      nextLine: [],
+    },
+    {
+      pattern: "{L1,$first,$last}/**/**",
+      prefix: ["oc://session/L1"],
+      nextLine: ["oc://session/L3"],
+    },
+  ])("retains distinct physical-line targets for $pattern", ({ pattern, prefix, nextLine }) => {
     const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n').ast;
-    const out = findOcPaths(lineAst, parseOcPath("oc://session/*/**/**"));
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/" + pattern));
     expect(out.map(({ path }) => formatOcPath(path))).toEqual([
-      "oc://session/L1",
+      ...prefix,
       "oc://session/L1/a",
       "oc://session/L1/a.b",
       'oc://session/L1/"a.b"',
-      "oc://session/L3",
+      ...nextLine,
       "oc://session/L3/a",
       "oc://session/L3/a.b",
       'oc://session/L3/"a.b"',
@@ -248,11 +260,17 @@ describe("findOcPaths — JSONL", () => {
       { union: '{a,"a"}', paths: ["oc://session/L1/a", "oc://session/L1/a/b"] },
       { union: '{"a",a}', paths: ['oc://session/L1/"a"', 'oc://session/L1/"a"/b'] },
     ]) {
-      const out = findOcPaths(lineAst, parseOcPath("oc://session/L1/" + union + "/**"));
-      expect(out.map(({ path }) => formatOcPath(path))).toEqual(paths);
-      expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
-      for (const { path, match } of out) {
-        expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+      for (const suffix of ["", "/**"]) {
+        const out = findOcPaths(lineAst, parseOcPath("oc://session/L1/" + union + suffix));
+        expect(out.map(({ path }) => formatOcPath(path))).toEqual(
+          suffix ? paths : paths.slice(0, 1),
+        );
+        if (suffix) {
+          expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+        }
+        for (const { path, match } of out) {
+          expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+        }
       }
     }
   });
@@ -262,6 +280,45 @@ describe("findOcPaths — JSONL", () => {
     const out = findOcPaths(lineAst, parseOcPath("oc://session/**/**/event"));
     expect(out.map(({ path }) => formatOcPath(path))).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("bounds JSONL expansion across recursive slot partitions", () => {
+    const depth = 32;
+    const wildcardsPerSlot = 8;
+    let value: unknown = 1;
+    for (let level = depth - 1; level >= 0; level--) {
+      value = { ["k" + level]: value };
+    }
+    const lineAst = parseJsonl(JSON.stringify(value) + "\n").ast;
+    const line = lineAst.lines[0];
+    if (line?.kind !== "value") {
+      throw new Error("Expected a parsed JSONL value line");
+    }
+    const maxEntryReads = 3 * (depth + 1) ** 2 * wildcardsPerSlot;
+    let entryReads = 0;
+    for (let node = line.value; node.kind === "object";) {
+      const entries = node.entries;
+      Object.defineProperty(node, "entries", {
+        get() {
+          if (++entryReads > maxEntryReads) {
+            throw new Error("JSONL recursive wildcard exceeded the AST expansion budget");
+          }
+          return entries;
+        },
+      });
+      const child = entries[0]?.value;
+      if (!child) {
+        break;
+      }
+      node = child;
+    }
+    const slot = Array(wildcardsPerSlot).fill("**").join(".");
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/" + [slot, slot, slot].join("/")));
+    expect(out).toHaveLength(depth + 2);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
     for (const { path, match } of out) {
       expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
@@ -324,6 +381,42 @@ describe("findOcPaths — Markdown", () => {
     ]);
     for (const { path, match } of out) {
       expect(resolveOcPath(md, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("bounds Markdown expansion across repeated recursive wildcards", () => {
+    const blockCount = 4;
+    const itemsPerBlock = 8;
+    const wildcardsPerSlot = 32;
+    const raw = Array.from({ length: blockCount }, (_, block) => {
+      const items = Array.from(
+        { length: itemsPerBlock },
+        (_, item) => `- key-${item}: ${block * itemsPerBlock + item}`,
+      );
+      return `## Block ${block}\n\n${items.join("\n")}\n`;
+    }).join("\n");
+    const document = parseMd(raw).ast;
+    const maxItemReads = 20 * blockCount * wildcardsPerSlot * 3;
+    let itemReads = 0;
+    for (const block of document.blocks) {
+      const items = block.items;
+      Object.defineProperty(block, "items", {
+        get() {
+          if (++itemReads > maxItemReads) {
+            throw new Error("Markdown recursive wildcard exceeded the AST expansion budget");
+          }
+          return items;
+        },
+      });
+    }
+    const slot = Array(wildcardsPerSlot).fill("**").join(".");
+    const out = findOcPaths(document, parseOcPath("oc://tools.md/" + [slot, slot, slot].join("/")));
+    expect(out).toHaveLength(1 + blockCount + 2 * blockCount * itemsPerBlock);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(
+      Array.from({ length: blockCount * itemsPerBlock }, (_, index) => String(index)),
+    );
+    for (const { path, match } of out) {
+      expect(resolveOcPath(document, parseOcPath(formatOcPath(path)))).toEqual(match);
     }
   });
 

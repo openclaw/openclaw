@@ -55,7 +55,7 @@ type OnMatch = (subs: readonly SlotSub[]) => void;
 interface WalkContext {
   onMatch: OnMatch;
   visited: WeakMap<object, Set<string>>;
-  flatPaths: boolean;
+  kind: OcAst["kind"];
 }
 
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
@@ -83,7 +83,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       flatPaths
         ? slotSubs.map(({ value }) => unquoteSeg(value))
         : ast.kind === "jsonl"
-          ? [path.section, splitOcPathSlots(path.item, path.field)]
+          ? [path.section, splitOcPathSlots(path.item, path.field).map(unquoteSeg)]
           : [path.section, path.item, path.field],
     );
     if (!seen.has(key)) {
@@ -91,7 +91,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       concretePaths.push(path);
     }
   };
-  const context: WalkContext = { onMatch, visited: new WeakMap(), flatPaths };
+  const context: WalkContext = { onMatch, visited: new WeakMap(), kind: ast.kind };
   switch (ast.kind) {
     case "jsonc":
       if (ast.root !== null) {
@@ -195,20 +195,36 @@ function dispatchSeg<T extends object, Child extends object>(
   i: number,
   walked: readonly SlotSub[],
   context: WalkContext,
+  memoIdentity: object = node,
 ): void {
   // Different recursive routes can reach the same node and remaining pattern.
-  const key = JSON.stringify(
-    context.flatPaths
-      ? [subs.slice(i).map(({ value }) => value), walked.map(({ value }) => unquoteSeg(value))]
-      : [subs.slice(i), walked],
-  );
-  let visited = context.visited.get(node);
+  const remaining = subs.slice(i);
+  let key: string;
+  if (context.kind === "jsonc" || context.kind === "yaml") {
+    key = JSON.stringify([
+      remaining.map(({ value }) => value),
+      walked.map(({ value }) => unquoteSeg(value)),
+    ]);
+  } else if (context.kind === "jsonl") {
+    // Preserve the complete physical-line slot; later slots share value-path semantics.
+    const firstSlot = walked[0]?.slot;
+    const firstChange = walked.findIndex(({ slot }) => slot !== firstSlot);
+    const boundary = firstChange < 0 ? walked.length : firstChange;
+    key = JSON.stringify([
+      remaining,
+      walked.slice(0, boundary),
+      walked.slice(boundary).map(({ value }) => unquoteSeg(value)),
+    ]);
+  } else {
+    key = JSON.stringify([remaining, walked]);
+  }
+  let visited = context.visited.get(memoIdentity);
   if (visited?.has(key)) {
     return;
   }
   if (!visited) {
     visited = new Set();
-    context.visited.set(node, visited);
+    context.visited.set(memoIdentity, visited);
   }
   visited.add(key);
   const cur = expectDefined(subs[i], "dispatch index checked by walker");
@@ -540,7 +556,15 @@ function walkMd(
     return;
   }
 
-  dispatchSeg(level, mdOps, subs, i, walked, context);
+  dispatchSeg(
+    level,
+    mdOps,
+    subs,
+    i,
+    walked,
+    context,
+    level.kind === "root" ? level.ast : level.block,
+  );
 }
 
 function walkMdItemField(
