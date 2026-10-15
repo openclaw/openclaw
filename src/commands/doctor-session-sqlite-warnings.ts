@@ -41,6 +41,31 @@ export function formatSessionSqliteMigrationWarnings(
   });
 }
 
+/** Blocking findings are what stop archive. The warning list above does not include them. */
+export function formatSessionSqliteMigrationBlockingIssues(
+  targets: readonly Pick<DoctorSessionSqliteTargetReport, "storePath" | "issues">[],
+  env = process.env,
+): string[] {
+  return targets.flatMap((target) => {
+    const blocking = target.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue));
+    const lines = blocking
+      .slice(0, MIGRATION_WARNING_EXAMPLE_LIMIT)
+      .map((issue) => `${target.storePath}: [${issue.code}] ${issue.message}`);
+    if (blocking.length > MIGRATION_WARNING_EXAMPLE_LIMIT) {
+      lines.unshift(
+        formatMigrationWarningSummary({
+          summary: `${target.storePath}: ${blocking.length} blocking session SQLite issue(s)`,
+          count: blocking.length,
+          detail:
+            "These issues prevent archive of this legacy store. " +
+            `Inspect all findings with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json", env)}".`,
+        }),
+      );
+    }
+    return lines;
+  });
+}
+
 /** Published updaters may predate the warning result channel; Doctor owns this durable report. */
 export function readSessionSqliteMigrationWarnings(env = process.env): string[] {
   const warnings: string[] = [];

@@ -32,7 +32,10 @@ import {
 import { repairLegacySessionExecPolicy } from "./doctor-session-exec-policy.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
-import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
+import {
+  formatSessionSqliteMigrationBlockingIssues,
+  formatSessionSqliteMigrationWarnings,
+} from "./doctor-session-sqlite-warnings.js";
 import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { repairLegacySessionWorktreeWorkspaces } from "./doctor-session-worktree-workspace.js";
 import {
@@ -495,6 +498,8 @@ export async function noteSessionTranscriptHealth(options?: {
     );
   }
   if (actionableIssues > 0) {
+    const blocking = formatSessionSqliteMigrationBlockingIssues(actionableTargets, params.env);
+    lines.push(...blocking.map((issue) => `- ${issue}`));
     const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
     params.onWarnings?.(warnings);
     lines.push(...warnings.map((warning) => `- ${warning}`));

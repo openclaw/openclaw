@@ -931,6 +931,14 @@ async function inspectOrMigrateTarget(params: {
         operation: "import-finalize",
       });
     }
+  } else if (
+    params.mode === "import" &&
+    !retainedImport &&
+    countBlockingSessionSqliteIssues(report) > 0
+  ) {
+    // Import already refused this store, so the before-archive check did not run.
+    // Record the refusal. The manifest otherwise stays at its creation-time value.
+    updateManifest("failed");
   }
   if (params.mode === "import") {
     const indexIdentity = params.expectedIndexIdentity;
