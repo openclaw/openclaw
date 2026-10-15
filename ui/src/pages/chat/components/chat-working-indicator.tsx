@@ -86,11 +86,21 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
       : props.options.startupLabel || t("common.working");
   return (
     <div
-      class={["chat-working-indicator", { "chat-working-indicator--continuation": continuation() }]}
+      class={[
+        "chat-working-indicator",
+        {
+          "chat-working-indicator--continuation": continuation(),
+          "chat-working-indicator--supporting": props.options.subagentActivity !== undefined,
+        },
+      ]}
       role="status"
       aria-live="off"
     >
-      <Show when={!continuation() && indicator() !== "none"}>
+      <Show
+        when={
+          !continuation() && props.options.subagentActivity === undefined && indicator() !== "none"
+        }
+      >
         <div
           class={[
             "chat-bubble chat-reading-indicator",
@@ -185,10 +195,10 @@ export function ChatWorkingIndicator(props: WorkingProps) {
           when={props.options.bubbleMode && working() && !(props.options.runningSubagents ?? 0)}
           fallback={
             <>
-              <WorkingStatus {...props} branding={branding.read()} />
               <Show when={props.options.subagentActivity !== undefined}>
                 <LitContent value={props.options.subagentActivity} />
               </Show>
+              <WorkingStatus {...props} branding={branding.read()} />
             </>
           }
         >
@@ -205,10 +215,10 @@ export function ChatWorkingIndicator(props: WorkingProps) {
               </span>
             </summary>
             <div class="chat-bubble-activity__details">
-              <WorkingStatus {...props} branding={branding.read()} />
               <Show when={props.options.subagentActivity !== undefined}>
                 <LitContent value={props.options.subagentActivity} />
               </Show>
+              <WorkingStatus {...props} branding={branding.read()} />
             </div>
           </details>
         </Show>
