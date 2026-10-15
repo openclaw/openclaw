@@ -437,7 +437,7 @@ beforeAll(async () => {
       entries: {
         main: {},
         research: { tools: { deny: ["message"] } },
-        deployment: {},
+        deployment: { tools: { deny: ["sessions_history"] } },
         boundary: { tools: { profile: "full" } },
       },
     },

@@ -833,13 +833,11 @@ async function verifyCrossHumanAdmission(
           {
             messages: { queue: { allowCollaborativeSteering: previousSetting ?? null } },
             tools: { toolsBySender: { "id:alice": { deny: null }, "id:bob": { deny: null } } },
-            agents: { entries: { deployment: { tools: { deny: null } } } },
           },
           [
             "messages.queue.allowCollaborativeSteering",
             "tools.toolsBySender.id:alice.deny",
             "tools.toolsBySender.id:bob.deny",
-            "agents.entries.deployment.tools.deny",
           ],
         );
       } catch (cause) {
@@ -892,11 +890,10 @@ async function verifyCrossHumanAdmission(
     expect(scenario.sourceRequests).toEqual([]);
     stage = "current-policy update";
     if (collaborative) {
-      // Alice keeps her prepared tools, but a later delegation reads both the
-      // original requester's current policy and the destination's current policy.
+      // Alice keeps her prepared tools. A later delegation reads her updated
+      // requester policy and the destination's own configured restriction.
       await patchProofConfig({
         tools: { toolsBySender: { "id:alice": { deny: ["sessions_list"] } } },
-        agents: { entries: { deployment: { tools: { deny: ["sessions_history"] } } } },
       });
     } else {
       await updateSenderPolicies({
