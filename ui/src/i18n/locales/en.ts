@@ -1645,6 +1645,7 @@ export const en: TranslationMap & {
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
+    resizeHint: "Drag to resize. Double-click or press Enter to reset width.",
     more: "More",
     home: "Home",
     pages: "Pages",

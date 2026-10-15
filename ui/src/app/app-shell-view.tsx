@@ -260,7 +260,14 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
-            title={t("nav.resize")}
+            title={t("nav.resizeHint")}
+            onDblClick={() => props.host.viewCallbacks.resetNavigationWidth()}
+            onKeyDown={(event: KeyboardEvent) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                props.host.viewCallbacks.resetNavigationWidth();
+              }
+            }}
             onResize-start={() => {
               props.host.navResizing = true;
               props.host.invalidate();

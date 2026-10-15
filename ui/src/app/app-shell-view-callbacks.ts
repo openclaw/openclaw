@@ -2,6 +2,7 @@ import { isRouteId } from "../app-routes.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ApplicationContext } from "./context.ts";
+import { NAV_WIDTH_DEFAULT } from "./settings.ts";
 import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
 
 type ShellViewCallbackHost = {
@@ -15,6 +16,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
   return {
     retryGateway: () => host.context?.gateway.connect(),
     toggleSidebar: () => host.toggleNavigationSurface(),
+    resetNavigationWidth: () => host.context?.navigation.update({ navWidth: NAV_WIDTH_DEFAULT }),
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),
     openDevicePairSetup: () => void host.context?.overlays.openDevicePairSetup(),

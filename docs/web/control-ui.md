@@ -22,6 +22,11 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+On desktop, drag the sidebar divider to change its width. Double-click the divider,
+or focus it and press **Enter**, to restore the default width. The chosen width
+is saved across reloads. Arrow keys adjust the width; **Home** and **End** select
+the minimum and maximum widths.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
