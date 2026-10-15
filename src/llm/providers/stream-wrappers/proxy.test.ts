@@ -1,10 +1,12 @@
 // Proxy stream wrapper tests cover wrapper selection and provider passthrough.
+import { createAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { assert, describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
+import { resolveProviderRequestCapabilities } from "../../../agents/provider-attribution.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
 
 const openRouterModel: Model<"openai-completions"> = {
@@ -19,6 +21,7 @@ const openRouterModel: Model<"openai-completions"> = {
   contextWindow: 200000,
   maxTokens: 8192,
 };
+const transportHost = createAiTransportHost({ resolveProviderRequestCapabilities });
 
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   let payload: ReturnType<typeof buildOpenAICompletionsParams> | undefined;
@@ -31,13 +34,12 @@ function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   };
 
   const wrapped = createOpenRouterSystemCacheWrapper(baseStreamFn);
-  void wrapped(
-    {
-      ...openRouterModel,
-      ...model,
-    },
-    { systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`, messages: [] },
-    {},
+  void runWithAiTransportHost(transportHost, () =>
+    wrapped(
+      { ...openRouterModel, ...model },
+      { systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`, messages: [] },
+      {},
+    ),
   );
 
   assert(payload);
