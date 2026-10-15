@@ -3,10 +3,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 export function bindHarnessTrajectory(
-  attempt: Pick<
-    EmbeddedRunAttemptParams,
-    "trajectoryRecorder" | "admittedRunContext" | "abortSignal"
-  >,
+  attempt: Pick<EmbeddedRunAttemptParams, "trajectoryRecorder" | "abortSignal">,
   assertActive: () => void,
   assertScopeCurrent: () => void,
 ): Pick<AgentHarnessHostCapabilities, "trajectory"> {
@@ -16,13 +13,9 @@ export function bindHarnessTrajectory(
   }
   const workSignal = getAsyncWorkSignal();
   const attemptSignal = attempt.abortSignal;
-  const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const assertCleanupActive = () => {
     assertScopeCurrent();
-    if (
-      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      attempt.trajectoryRecorder !== recorder
-    ) {
+    if (attempt.trajectoryRecorder !== recorder) {
       throw new Error("agent harness trajectory cleanup is no longer active");
     }
   };

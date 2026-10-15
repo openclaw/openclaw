@@ -82,7 +82,7 @@ export async function buildExecutionHostRuntimeFacts(
     })
       .toSorted((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0))
       .map((session) => {
-        const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+        const pid = session.pid !== undefined ? ` pid=${session.pid}` : "";
         const cwd = session.cwd
           ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
           : "";

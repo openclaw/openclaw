@@ -171,28 +171,67 @@ describe("Claude CLI model-call diagnostics", () => {
     expect(Buffer.byteLength(outputJson, "utf8")).toBeLessThanOrEqual(CONTENT_LIMIT_BYTES + 512);
   });
 
-  it("keeps the fallback reserve after empty text content", async () => {
-    let outputMessages: unknown;
-    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
-      outputMessages = messages;
-    });
+  it.each([{ content: "" }, { content: [{ type: "text", text: "" }] }])(
+    "keeps the fallback reserve after empty text content (%j)",
+    async ({ content }) => {
+      let outputMessages: unknown;
+      const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+        outputMessages = messages;
+      });
 
-    diagnostics.emitStarted();
-    diagnostics.observeAssistantMessage({ content: "" });
-    diagnostics.observeAssistantMessage({
-      content: Array.from({ length: 200 }, (_, index) => ({
-        type: "thinking",
-        thinking: `reason-${index}`,
-      })),
-    });
-    diagnostics.emitCompleted({ text: "final visible answer" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
+      diagnostics.emitStarted();
+      diagnostics.observeAssistantMessage({ content });
+      diagnostics.observeAssistantMessage({
+        content: Array.from({ length: 200 }, (_, index) => ({
+          type: "thinking",
+          thinking: `reason-${index}`,
+        })),
+      });
+      diagnostics.emitCompleted({ text: "final visible answer" } as CliOutput);
+      await waitForDiagnosticEventsDrained();
+      stop();
 
-    const outputJson = JSON.stringify(outputMessages);
-    expect(outputJson).toContain("final visible answer");
-    expect(outputJson).toContain("...(truncated)");
-  });
+      const outputJson = JSON.stringify(outputMessages);
+      expect(outputJson).toContain("final visible answer");
+      expect(outputJson).toContain("...(truncated)");
+    },
+  );
+
+  it.each(["tool_use", "server_tool_use", "mcp_tool_use"])(
+    "captures visible assistant content without opaque %s fields",
+    async (toolType) => {
+      let outputMessages: unknown;
+      const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+        outputMessages = messages;
+      });
+      diagnostics.emitStarted();
+      diagnostics.observeAssistantMessage({
+        content: [
+          { type: "text", text: "Visible reply" },
+          { type: "thinking", thinking: "Visible reasoning", signature: "opaque-signature" },
+          { type: toolType, name: "lookup", id: "call-1", input: { hidden: "tool arguments" } },
+          { type: "text", text: 42 },
+          null,
+        ],
+        stop_reason: "tool_use",
+      });
+      diagnostics.emitCompleted({ text: "Visible reply" } as CliOutput);
+      await waitForDiagnosticEventsDrained();
+      stop();
+
+      expect(outputMessages).toEqual([
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Visible reply" },
+            { type: "thinking", thinking: "Visible reasoning" },
+            { type: "tool_call", name: "lookup", id: "call-1" },
+          ],
+          stopReason: "tool_use",
+        },
+      ]);
+    },
+  );
 
   it("bounds text probing after the capture budget is exhausted", async () => {
     let outputMessages: unknown;

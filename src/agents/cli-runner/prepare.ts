@@ -366,7 +366,7 @@ async function prepareCliRunContextWithinReadFence(
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
-    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim();
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
   const loadScopedAuthStore = (options: { profileId?: string } = {}) => {

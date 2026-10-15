@@ -820,7 +820,7 @@ export class AuthStorage {
     }
 
     if (options?.includeFallback !== false) {
-      return resolved(this.fallbackResolver?.(providerId) ?? undefined);
+      return resolved(this.fallbackResolver?.(providerId));
     }
 
     return resolved(undefined);

@@ -566,7 +566,7 @@ export function buildAgentSystemPrompt(params: {
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    }).filter((file) => file.path.trim().length > 0),
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);

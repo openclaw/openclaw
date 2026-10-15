@@ -189,10 +189,10 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryIdentity(value: unknown) {
+function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[]) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
-  visitPluginEnvelope(value, (record) => {
+  for (const record of records) {
     primaryPlatformMessageId ??= [
       record.messageId,
       record.pollId,
@@ -203,8 +203,7 @@ function readPluginDeliveryIdentity(value: unknown) {
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
-    return false;
-  });
+  }
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
@@ -214,24 +213,31 @@ function readPluginDeliveryIdentity(value: unknown) {
 export function projectPluginMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
-  if (pluginEnvelopeHas(value, "dryRun")) {
+  const envelopes: Array<{ record: Record<string, unknown>; status: string | undefined }> = [];
+  visitPluginEnvelope(value, (record, status) => {
+    envelopes.push({ record, status });
+    return false;
+  });
+  const has = (signal: keyof typeof PLUGIN_SIGNALS) =>
+    envelopes.some(({ record, status }) => PLUGIN_SIGNALS[signal](record, status));
+  if (has("dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "partial")) {
+  if (has("partial")) {
     return { status: "settled", partialDelivery: true, createdThreadIds: [] };
   }
-  if (pluginEnvelopeHas(value, "nonDelivery")) {
+  if (has("nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
+  if (has("noOp") || has("failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
-  if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
+  if (!has("delivery") && !has("ok")) {
     return undefined;
   }
   return {
     status: "settled",
-    ...readPluginDeliveryIdentity(value),
+    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
     ...EMPTY_DELIVERY_FACT,
   };
 }
@@ -287,9 +293,7 @@ export function projectEmbeddedMessageDeliveryFact(
     : projectPluginMessageDeliveryFact(result.payload);
   const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
-    return result.dryRun
-      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
-      : projectPluginMessageDeliveryFact(result.payload);
+    return result.dryRun ? { status: "dryRun", ...EMPTY_DELIVERY_FACT } : payloadDelivery;
   }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult

@@ -191,11 +191,10 @@ export function installContextEngineLoopHook(params: {
 
   mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
-    const transformed = originalTransformContext
+    const sourceMessages = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     signal?.throwIfAborted();
-    const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = sourceMessages;
     const providerMessages = sourceMessages;
     const sourceHistoryChanged =
@@ -334,11 +333,10 @@ export function installToolResultContextGuard(params: {
   const originalTransformContext = mutableAgent.transformContext;
 
   mutableAgent.transformContext = async (messages, signal) => {
-    const transformed = originalTransformContext
+    const sourceMessages = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
 
-    const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const estimateCache = createMessageCharEstimateCache();
     return projectMessages(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),

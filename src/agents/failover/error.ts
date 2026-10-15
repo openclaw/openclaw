@@ -164,7 +164,7 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? undefined;
+    return err.description;
   }
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }

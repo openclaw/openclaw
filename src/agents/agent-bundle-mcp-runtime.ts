@@ -115,19 +115,14 @@ function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): 
 }
 
 function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
-  bundleMcpCatalogListTimeoutMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : undefined;
+  bundleMcpCatalogListTimeoutMs = timeoutMs === undefined ? undefined : Math.floor(timeoutMs);
 }
 
 function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
   // Non-isolated test workers can reload this module while a facade still
   // references an older copy. Share the override across those copies.
   getBundleMcpTestState().disposeTimeoutMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : undefined;
+    timeoutMs === undefined ? undefined : Math.floor(timeoutMs);
 }
 
 function disposeBundleMcpSession(session: BundleMcpSession): Promise<"closed" | "uncertain"> {
@@ -736,9 +731,7 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const toolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
+        const toolFilter = normalizeMcpToolFilter(rawServer.toolFilter);
         const denialMap = params.toolOverrides?.mcpToolsDeny;
         const deniedToolNames = new Set(
           denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],

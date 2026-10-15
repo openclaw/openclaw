@@ -29,7 +29,7 @@ export function compileGlobPatterns(params: {
   raw?: string[] | undefined;
   normalize: (value: string) => string;
 }): CompiledGlobPattern[] {
-  if (!Array.isArray(params.raw)) {
+  if (params.raw === undefined) {
     return [];
   }
   return params.raw

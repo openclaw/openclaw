@@ -130,7 +130,7 @@ export function createQueuedRegistrationSettlement(params: {
           params.assertRegistryCurrent,
         );
         const published = await publish("cancelled launch", (current) => {
-          const draft = structuredClone(current);
+          const draft = { ...current };
           prepareTerminatedCollectorLaunch(
             draft,
             current.execution.endedAt!,

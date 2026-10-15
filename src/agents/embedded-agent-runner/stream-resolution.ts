@@ -48,7 +48,7 @@ function isDefaultOpenClawStreamFnForModel(
   if (!streamFn || streamFn === llmRuntime.streamSimple) {
     return true;
   }
-  const api = typeof model.api === "string" ? model.api.trim() : "";
+  const api = model.api.trim();
   if (!api) {
     return false;
   }

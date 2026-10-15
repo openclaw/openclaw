@@ -38,7 +38,7 @@ export const getCompactionSafeguardRuntime = registry.get;
 
 /** Records cancellation atomically; intentional declines carry no provider error. */
 export function setCompactionSafeguardCancellation(
-  sessionManager: unknown,
+  sessionManager: object | null | undefined,
   reason: string | undefined,
   error?: unknown,
 ): void {
@@ -58,7 +58,7 @@ export function setCompactionSafeguardCancellation(
 
 /** Consumes this attempt's cancellation without clearing session configuration. */
 export function consumeCompactionSafeguardCancellation(
-  sessionManager: unknown,
+  sessionManager: object | null | undefined,
 ): CompactionSafeguardCancellation | null {
   const cancellation = getCompactionSafeguardRuntime(sessionManager)?.cancellation;
   if (cancellation) {

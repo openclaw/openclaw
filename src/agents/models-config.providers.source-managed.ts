@@ -6,7 +6,6 @@ import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { isRecord } from "../utils.js";
 import { resolveEnvSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { normalizeProviderMapKeys } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -28,12 +27,12 @@ export function normalizeSourceProviderLookup(
     return new Map();
   }
   const validProviders = Object.fromEntries(
-    Object.entries(providers)
-      .filter(([, provider]) => isRecord(provider))
-      .map(([providerKey, providerConfig]): [string, SourceProviderEntry] => [
+    Object.entries(providers).map(
+      ([providerKey, providerConfig]): [string, SourceProviderEntry] => [
         providerKey,
         { providerKey, providerConfig },
-      ]),
+      ],
+    ),
   );
   // Use the merge boundary's collision rule so a case alias cannot displace the
   // canonical SecretRef owner and expose its resolved runtime value to models.json.
@@ -63,7 +62,7 @@ function resolveSourceManagedHeaderMarkers(params: {
   sourceConfig: OpenClawConfig | undefined;
 }): Record<string, string> {
   const sourceHeaders = params.sourceProvider.providerConfig.headers;
-  if (!isRecord(sourceHeaders)) {
+  if (!sourceHeaders) {
     return {};
   }
   const markers: Record<string, string> = {};
@@ -107,9 +106,6 @@ export function enforceSourceManagedProviderSecrets(params: {
 
   let nextProviders: Record<string, ProviderConfig> | null = null;
   for (const [providerKey, provider] of Object.entries(providers)) {
-    if (!isRecord(provider)) {
-      continue;
-    }
     const canonicalProviderKey = normalizeProviderId(providerKey);
     const sourceProvider = sourceProvidersByKey.get(canonicalProviderKey);
     if (!sourceProvider) {
@@ -135,7 +131,7 @@ export function enforceSourceManagedProviderSecrets(params: {
       sourceProvider,
       sourceConfig: params.sourceConfigForSecrets,
     });
-    const currentHeaders = isRecord(nextProvider.headers) ? nextProvider.headers : undefined;
+    const currentHeaders = nextProvider.headers;
     if (
       Object.entries(sourceHeaderMarkers).some(
         ([headerName, marker]) => currentHeaders?.[headerName] !== marker,

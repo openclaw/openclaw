@@ -62,11 +62,10 @@ export async function discardSuspendedPendingFinalDelivery(params: {
 }): Promise<void> {
   const { runId, entry, now, resumedRuns } = params;
   const stateContext = captureOpenClawStateWorkerContext();
-  const generation = entry.generation;
   const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return entry.generation === generation && params.isCurrent();
+    return params.isCurrent();
   };
   const assertCurrent = () => {
     if (!isCurrent()) {

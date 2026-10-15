@@ -1,9 +1,10 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { settlesWithin } from "../../../shared/settle-within.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import {
   createModelLifecycle,
   type ModelCallDiagnosticContext,
@@ -15,19 +16,6 @@ import {
 } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
-function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
-  if (value === null || typeof value !== "object") {
-    return undefined;
-  }
-  try {
-    const asyncIterator = (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator];
-    return typeof asyncIterator === "function"
-      ? () => asyncIterator.call(value) as AsyncIterator<unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 async function safeReturnIterator(
   iterator: AsyncIterator<unknown>,
@@ -50,7 +38,7 @@ function throwModelCallError(lifecycle: ModelCallLifecycle, error: unknown): nev
 function observeModelCallIterator<T>(
   iterator: AsyncIterator<T>,
   lifecycle: ModelCallLifecycle,
-  observeSharedResult: (() => Promise<unknown>) | undefined,
+  observeSharedResult: () => Promise<unknown>,
 ): AsyncIterableIterator<T> {
   const trackCleanup = captureAsyncWorkTracker();
   let started = false;
@@ -105,7 +93,7 @@ function observeModelCallIterator<T>(
       }
       // EOF can precede result decorators' settlement. Retain that work through
       // owner cleanup without delaying drain-only consumers or losing failures.
-      if (observeSharedResult && !lifecycle.observer.state.terminalError) {
+      if (!lifecycle.observer.state.terminalError) {
         void trackCleanup(observeSharedResult).catch(() => undefined);
       } else {
         lifecycle.emitCompleted();
@@ -128,20 +116,17 @@ function observeModelCallIterator<T>(
 }
 
 function createSharedResultObserver(
-  stream: unknown,
+  stream: MutableAssistantMessageEventStream,
   lifecycle: ModelCallLifecycle,
-): (() => Promise<unknown>) | undefined {
-  if (!isRecord(stream) || typeof stream.result !== "function") {
-    return undefined;
-  }
-  const resultFn = stream.result;
+): MutableAssistantMessageEventStream["result"] {
+  const resultFn = stream.result.bind(stream);
   // The stream contract exposes one no-argument final result. Share observation
   // across iterator exhaustion and explicit callers, including rejected results.
-  let cached: Promise<unknown> | undefined;
+  let cached: ReturnType<MutableAssistantMessageEventStream["result"]> | undefined;
   return () => {
     if (!cached) {
       cached = Promise.resolve()
-        .then(() => lifecycle.runInTransportContext(() => resultFn.call(stream)))
+        .then(() => lifecycle.runInTransportContext(resultFn))
         .then(
           (resolved) => {
             try {
@@ -167,15 +152,14 @@ function createSharedResultObserver(
 }
 
 function observeModelCallStream(
-  stream: AsyncIterable<unknown>,
-  createIterator: () => AsyncIterator<unknown>,
+  stream: MutableAssistantMessageEventStream,
   lifecycle: ModelCallLifecycle,
-): AsyncIterable<unknown> {
+): MutableAssistantMessageEventStream {
   const observedResult = createSharedResultObserver(stream, lifecycle);
   const observedIterator = () => {
     try {
       return observeModelCallIterator(
-        lifecycle.runInTransportContext(createIterator),
+        lifecycle.runInTransportContext(() => stream[Symbol.asyncIterator]()),
         lifecycle,
         observedResult,
       );
@@ -187,22 +171,8 @@ function observeModelCallStream(
   // StreamFn exposes iteration and its final result, not provider implementation methods.
   return {
     [Symbol.asyncIterator]: observedIterator,
-    ...(observedResult ? { result: observedResult } : {}),
+    result: observedResult,
   };
-}
-
-function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
-  try {
-    const createIterator = asyncIteratorFactory(result);
-    if (createIterator) {
-      return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
-    }
-    lifecycle.emitCompleted();
-    return result;
-  } catch (error) {
-    lifecycle.emitError(error);
-    throw error;
-  }
 }
 
 export function wrapStreamFnWithDiagnosticModelCallEvents(
@@ -210,9 +180,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   const measurePromptStats = createModelPromptStats();
-  return ((model, streamContext, options) => {
+  return (
+    model: Parameters<StreamFn>[0] & Pick<ProviderRuntimeModel, "requestTimeoutMs">,
+    streamContext,
+    options,
+  ) => {
     const requestTimeoutMs = clampPositiveTimerTimeoutMs(
-      (isRecord(model) ? model.requestTimeoutMs : undefined) ?? ctx.requestTimeoutMs,
+      model.requestTimeoutMs ?? ctx.requestTimeoutMs,
     );
     const lifecycle = createModelLifecycle({
       ctx,
@@ -235,13 +209,19 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       );
       if (isPromiseLike(result)) {
         return result.then(
-          (resolved) => observeModelCallResult(resolved, lifecycle),
+          (resolved) => {
+            try {
+              return observeModelCallStream(resolved, lifecycle);
+            } catch (error) {
+              return throwModelCallError(lifecycle, error);
+            }
+          },
           (err: unknown) => throwModelCallError(lifecycle, err),
         );
       }
-      return observeModelCallResult(result, lifecycle);
+      return observeModelCallStream(result, lifecycle);
     } catch (err) {
       return throwModelCallError(lifecycle, err);
     }
-  }) as StreamFn;
+  };
 }

@@ -92,8 +92,7 @@ export async function setAuthProfileOrder(params: {
   sharedStoreWrite?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
-  const sanitized =
-    params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
+  const sanitized = params.order ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
   const order = deduped.length > 0 ? deduped : undefined;
 

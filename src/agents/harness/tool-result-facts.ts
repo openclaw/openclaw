@@ -13,11 +13,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
-import {
-  isToolResultError,
-  resolveToolResultFailureKind,
-  type ToolResultFailureKind,
-} from "../tool-result-error.js";
+import { resolveToolResultFailureKind, type ToolResultFailureKind } from "../tool-result-error.js";
 
 export function recordAgentHarnessToolResultTelemetry(params: {
   toolName: string;
@@ -149,7 +145,7 @@ export function resolveAgentHarnessToolResultPresentation(params: {
       : params.result;
   return {
     result,
-    isError: params.executionIsError || isToolResultError(params.result),
+    isError: params.executionIsError || presentationFailureKind !== undefined,
     failureKind,
   };
 }
@@ -273,7 +269,7 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
   return undefined;
 }
 
-function isCronAddAction(args: Record<string, unknown>): boolean {
+export function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }

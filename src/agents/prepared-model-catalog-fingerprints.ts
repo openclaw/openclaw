@@ -1,18 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import type {
-  PreparedModelCatalogWorkerInput,
-  PreparedModelWorkerRequest,
-} from "./prepared-model-catalog-worker.types.js";
+import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
-
-export function fingerprintPreparedModelWorkerRequest(
-  input: PreparedModelCatalogWorkerInput,
-  request: PreparedModelWorkerRequest,
-): string {
-  return fingerprintPreparedRuntimeFacts([input.generationFingerprint, request]);
-}
 
 function fingerprintPreparedModelCatalogPlugins(
   snapshot: PreparedModelCatalogWorkerInput["pluginMetadataSnapshot"],
@@ -40,25 +30,6 @@ function fingerprintPreparedModelCatalogConfig(config: OpenClawConfig): string {
     immutableGenerationConfigFingerprints.set(config, fingerprint);
   }
   return fingerprint;
-}
-
-export function fingerprintPreparedModelCatalogGeneration(
-  params: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint">,
-): string {
-  return fingerprintPreparedRuntimeFacts({
-    remoteCatalogSource: params.remoteCatalog?.sourceUrl,
-    remoteCatalogRevision: params.remoteCatalog?.revision,
-    input: { ...params.input, config: fingerprintPreparedModelCatalogConfig(params.input.config) },
-    sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(params.sourceConfigForSecrets),
-    configResolutionFacts: params.configResolutionFacts,
-    sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
-    authStore: params.authStore,
-    sharedAuthStoreOwnership: params.sharedAuthStoreOwnership,
-    providerIds: params.providerIds,
-    catalogFacts: params.catalogFacts,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
-  });
 }
 
 /** Registrations follow their loader context; agent credentials remain request-local. */

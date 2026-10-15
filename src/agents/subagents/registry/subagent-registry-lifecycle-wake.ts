@@ -162,7 +162,7 @@ export async function cancelRequesterSettleWake(
             "Subagent completion changed during cancellation; retry.",
           );
         }
-        const next = structuredClone(current);
+        const next = { ...current };
         next.suppressCompletionDelivery = true;
         next.requesterSettleWake = undefined;
         return { value: next, postimages: new Map([[next.runId, next]]) };

@@ -46,6 +46,18 @@ import type {
 const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
 
+const BINDING_FIELDS = [
+  "path",
+  "repoRoot",
+  "repoFingerprint",
+  "branch",
+  "ownerKind",
+  "ownerId",
+  "createdAt",
+  "lastActiveAt",
+  "removedAt",
+] as const;
+
 export type WorktreeRegistryPatch = Partial<
   Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
 > & {
@@ -232,22 +244,13 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
       }
       return;
     case "binding":
+    case "exact-snapshot":
       if (
         !current ||
-        (
-          [
-            "path",
-            "repoRoot",
-            "repoFingerprint",
-            "branch",
-            "baseRef",
-            "ownerKind",
-            "ownerId",
-            "createdAt",
-            "lastActiveAt",
-            "removedAt",
-          ] as const
-        ).some((key) => current[key] !== predicate.record[key])
+        BINDING_FIELDS.some((key) => current[key] !== predicate.record[key]) ||
+        (predicate.kind === "binding"
+          ? current.baseRef !== predicate.record.baseRef
+          : current.snapshotRef !== predicate.record.snapshotRef)
       ) {
         throw registryAuthorityChanged(predicate.kind);
       }
@@ -262,25 +265,6 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
         throw registryAuthorityChanged(predicate.kind);
       }
       return;
-    case "exact-snapshot": {
-      const record = predicate.record;
-      if (
-        !current ||
-        current.ownerKind !== record.ownerKind ||
-        current.ownerId !== record.ownerId ||
-        current.createdAt !== record.createdAt ||
-        current.lastActiveAt !== record.lastActiveAt ||
-        current.removedAt !== record.removedAt ||
-        current.path !== record.path ||
-        current.repoRoot !== record.repoRoot ||
-        current.repoFingerprint !== record.repoFingerprint ||
-        current.branch !== record.branch ||
-        current.snapshotRef !== record.snapshotRef
-      ) {
-        throw registryAuthorityChanged(predicate.kind);
-      }
-      return;
-    }
     case "exact-owner": {
       const record = predicate.record;
       if (

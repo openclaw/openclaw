@@ -6,13 +6,16 @@ export type SessionModelUsageSink = (usage: Usage) => void;
 const sinkBySessionManager = createSessionManagerRuntimeRegistry<SessionModelUsageSink>();
 
 /** Records one auxiliary model completion at the session that owns the request. */
-export function recordSessionModelUsage(sessionManager: unknown, usage: Usage): void {
+export function recordSessionModelUsage(
+  sessionManager: object | null | undefined,
+  usage: Usage,
+): void {
   sinkBySessionManager.get(sessionManager)?.(usage);
 }
 
 /** Sets the active accounting owner for auxiliary model usage. */
 export function setSessionModelUsageSink(
-  sessionManager: unknown,
+  sessionManager: object | null | undefined,
   sink: SessionModelUsageSink | null,
 ): void {
   sinkBySessionManager.set(sessionManager, sink);

@@ -330,12 +330,12 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (isAgentPlanProgressToolName(params.toolKey)) {
     return {};
   }
-  // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
-  const action = normalizeOptionalString(asRecord(params.args)?.action);
+  const record = asRecord(args);
+  const action = normalizeOptionalString(record?.action);
   const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
     params;
-  const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
+  const actionSpec = spec && action ? spec.actions?.[action] : undefined;
   const fallbackVerb =
     toolKey === "web_search"
       ? "search"
@@ -351,7 +351,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  const record = asRecord(args);
   if (record && !detail) {
     if (toolKey === "read") {
       detail = resolveReadDetail(record);

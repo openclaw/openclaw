@@ -3576,9 +3576,7 @@ describe("prepareCliRunContext", () => {
       });
 
       await prepareCliBundleMcpCaptureAttempt({
-        mode: "claude-config-file",
-        backend: merged.backend,
-        env: merged.env,
+        preparedBackend: merged,
         captureKey: "attempt-timeout-proof",
       });
 

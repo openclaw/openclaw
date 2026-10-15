@@ -829,7 +829,7 @@ export function abortEmbeddedAgentRun(
   sessionId?: string,
   opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
-  if (typeof sessionId === "string" && sessionId.length > 0) {
+  if (sessionId) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
       if (abortReplyRunBySessionId(sessionId)) {

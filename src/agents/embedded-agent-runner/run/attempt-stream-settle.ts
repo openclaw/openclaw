@@ -153,10 +153,9 @@ export async function settleEmbeddedAttemptStream(input: {
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
-  const wasCompactingBefore = activeSession.isCompacting;
+  const wasCompacting = activeSession.isCompacting;
   const snapshot = activeSession.messages.slice();
-  const wasCompactingAfter = activeSession.isCompacting;
-  const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+  const preCompactionSnapshot = wasCompacting ? null : snapshot;
   const preCompactionSessionId = activeSession.sessionId;
   const aggregateTimeoutMs = 60_000;
 

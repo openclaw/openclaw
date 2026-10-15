@@ -496,10 +496,10 @@ export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   ownerPluginId: string;
   create: AgentHarnessScheduledToolProjectionFactory;
 }): void {
-  scheduledToolProjectionCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, create: params.create }),
-  );
+  scheduledToolProjectionCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    create: params.create,
+  });
 }
 
 /** Resolves a private issuer only for the exact authoritative plugin owner. */
@@ -516,10 +516,10 @@ export function registerAgentHarnessTtsProvenanceTransferCapability(params: {
   ownerPluginId: string;
   transfer: AgentHarnessTtsProvenanceTransfer;
 }): void {
-  ttsProvenanceTransferCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, transfer: params.transfer }),
-  );
+  ttsProvenanceTransferCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    transfer: params.transfer,
+  });
 }
 
 /** Resolves private TTS delivery transfer only for the exact authoritative plugin owner. */

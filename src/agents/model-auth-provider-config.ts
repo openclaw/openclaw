@@ -595,13 +595,8 @@ export function assertInlineProviderApiKeyUsable(params: {
 }
 
 function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
-  return (
-    typeof providerConfig.baseUrl === "string" &&
-    providerConfig.baseUrl.trim().length > 0 &&
-    typeof providerConfig.api === "string" &&
-    providerConfig.api.trim().length > 0 &&
-    Array.isArray(providerConfig.models) &&
-    providerConfig.models.length > 0
+  return Boolean(
+    providerConfig.baseUrl?.trim() && providerConfig.api?.trim() && providerConfig.models?.length,
   );
 }
 

@@ -11,7 +11,10 @@ import {
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
+import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
+
+type ModelCallRequestContext = Partial<Parameters<StreamFn>[1]>;
 
 export type ModelCallEventBase = Omit<
   Extract<DiagnosticEventInput, { type: "model.call.started" }>,
@@ -110,19 +113,19 @@ function responseStreamChunkByteLength(chunk: unknown): number | undefined {
 
 function streamContextModelContentFields(
   policy: DiagnosticModelContentCapturePolicy | undefined,
-  streamContext: unknown,
+  streamContext: ModelCallRequestContext,
 ): DiagnosticModelCallContent | undefined {
-  if (!policy?.anyModelContent || !isRecord(streamContext)) {
+  if (!policy?.anyModelContent) {
     return undefined;
   }
   const content = {
-    ...(policy.inputMessages && Array.isArray(streamContext.messages)
+    ...(policy.inputMessages && streamContext.messages
       ? { inputMessages: cloneDiagnosticContentValue(streamContext.messages) }
       : {}),
-    ...(policy.systemPrompt && typeof streamContext.systemPrompt === "string"
+    ...(policy.systemPrompt && streamContext.systemPrompt !== undefined
       ? { systemPrompt: streamContext.systemPrompt }
       : {}),
-    ...(policy.toolDefinitions && Array.isArray(streamContext.tools)
+    ...(policy.toolDefinitions && streamContext.tools
       ? { toolDefinitions: cloneDiagnosticContentValue(streamContext.tools) }
       : {}),
   };
@@ -133,7 +136,7 @@ export function createModelPromptStats() {
   // The attempt owns this cache; each field's exact text is its revision. Keep
   // walking containers so compaction and in-place hook edits retain JSON semantics.
   let previous: PromptStringLengths = new WeakMap();
-  return (streamContext: unknown) => {
+  return (streamContext: ModelCallRequestContext) => {
     const current: PromptStringLengths = new WeakMap();
     const stats = streamContextModelPromptStats(streamContext, { previous, current });
     // Drop deleted fields and compacted history even if their holders remain alive.
@@ -143,16 +146,10 @@ export function createModelPromptStats() {
 }
 
 function streamContextModelPromptStats(
-  streamContext: unknown,
+  streamContext: ModelCallRequestContext,
   promptStringLengths?: PromptStringLengthPass,
 ): ModelCallPromptStats | undefined {
-  if (!isRecord(streamContext)) {
-    return undefined;
-  }
-  const messages = Array.isArray(streamContext.messages) ? streamContext.messages : undefined;
-  const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
-  const systemPrompt =
-    typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
+  const { messages, tools, systemPrompt } = streamContext;
   const inputMessagesChars = messages
     ? jsonLength(messages, false, promptStringLengths)
     : undefined;
@@ -311,7 +308,7 @@ function isSemanticModelCallResult(result: unknown): boolean {
 
 export function createModelObserver(params: {
   config?: OpenClawConfig;
-  streamContext: unknown;
+  streamContext: ModelCallRequestContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;

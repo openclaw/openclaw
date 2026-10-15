@@ -240,7 +240,7 @@ export async function runBridgeRequest(params: {
   });
   try {
     params.signal?.throwIfAborted();
-    const values = Array.isArray(params.request.args) ? params.request.args : [];
+    const values = params.request.args;
     let value: unknown;
     switch (params.request.method) {
       case "resultSave":

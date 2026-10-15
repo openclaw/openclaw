@@ -446,10 +446,7 @@ export function createAgentHarnessHostCapabilities(params: {
     const tools = bindTools(sourceTools, bindingOptions, observeCoreTtsToolResult);
     for (const tool of tools) {
       if (tool.name === "exec" || tool.name === "process") {
-        scheduledToolSources.set(
-          tool,
-          Object.freeze({ targetTool: tool.name, execute: tool.execute }),
-        );
+        scheduledToolSources.set(tool, { targetTool: tool.name, execute: tool.execute });
       }
     }
     return tools;

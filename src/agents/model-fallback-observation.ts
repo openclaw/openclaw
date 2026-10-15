@@ -182,7 +182,7 @@ function buildFallbackStepFields(
     ...(to ? { fallbackStepToModel: formatModelRef(to) } : {}),
     ...(reason ? { fallbackStepFromFailureReason: reason } : {}),
     ...(detail ? { fallbackStepFromFailureDetail: detail } : {}),
-    ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
+    ...(params.attempt !== undefined ? { fallbackStepChainPosition: params.attempt } : {}),
     fallbackStepFinalOutcome: succeeded
       ? "succeeded"
       : params.nextCandidate
@@ -303,8 +303,7 @@ export function logModelFallbackChainStopped(params: {
   }
   let errorName: string | undefined;
   try {
-    const name: unknown = params.error instanceof Error ? params.error.name : undefined;
-    errorName = typeof name === "string" && name ? name : undefined;
+    errorName = params.error instanceof Error ? params.error.name || undefined : undefined;
   } catch {
     // Optional diagnostic metadata must not replace the original stop error.
   }

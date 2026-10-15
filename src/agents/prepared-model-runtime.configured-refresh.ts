@@ -47,8 +47,6 @@ export type PreparedModelRuntimeCatalogPublicationHost = {
   getCancellationSignal: () => AbortSignal;
   getPendingReplacement: () => Promise<void> | undefined;
   getBuildTimeoutMs: () => number;
-  /** Same recovery configured publication installs; adopted owners replace those owners. */
-  onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
   pending?: {
     catalog: ActiveRemoteModelCatalog;
     /** Ends the adoption: a newer catalog or shutdown supersedes it. */
@@ -180,7 +178,6 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     gatewayLifecycleActive: boolean;
     isPublicationCurrent: () => boolean;
     acquisitionSignal: AbortSignal;
-    onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
@@ -227,7 +224,6 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
-    owner.onPluginGenerationRetired = context.onPluginGenerationRetired.bind(context, owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );
@@ -273,12 +269,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
-    // Unpublished loan retirement is checked at commit; published owners use normal recovery.
-    candidate.onPluginGenerationRetired = () => {
-      if (committed) {
-        host.onPluginGenerationRetired(candidate);
-      }
-    };
     return candidate;
   });
   const retireCandidates = () => {

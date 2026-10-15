@@ -521,7 +521,7 @@ function isPendingBridgeRequestReplaySafe(
   if (request.method !== "callValue") {
     return false;
   }
-  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
+  const callableName = request.args[0];
   if (typeof callableName !== "string") {
     return false;
   }

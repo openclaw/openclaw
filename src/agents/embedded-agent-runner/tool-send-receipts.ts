@@ -11,7 +11,7 @@ type EmbeddedToolReceiptResult = {
 const registry = createSessionManagerRuntimeRegistry<Map<string, EmbeddedToolReceiptResult>>();
 
 export function recordEmbeddedToolReceipt(
-  sessionManager: unknown,
+  sessionManager: object | null | undefined,
   toolCallId: string,
   details: unknown,
   includeMessageDelivery: boolean,
@@ -37,7 +37,7 @@ export function recordEmbeddedToolReceipt(
 }
 
 export function consumeEmbeddedToolReceipt(
-  sessionManager: unknown,
+  sessionManager: object | null | undefined,
   toolCallId: string,
 ): EmbeddedToolReceiptResult | undefined {
   const receipts = registry.get(sessionManager);

@@ -59,8 +59,8 @@ function resolveSkillReadRoots(skills?: SkillSnapshot["resolvedSkills"]): string
     if (resolveSkillFileHost(skill) === "workspace") {
       continue;
     }
-    const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
-    const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
+    const baseDir = skill.baseDir.trim();
+    const filePath = skill.filePath.trim();
     const root = baseDir || (filePath ? path.dirname(filePath) : "");
     if (!root || !path.isAbsolute(root)) {
       continue;

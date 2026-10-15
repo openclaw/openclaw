@@ -54,7 +54,7 @@ function wrapPromptDataBlockWithTag(params: PromptDataBlockParams & { tagName: s
   if (!trimmed) {
     return "";
   }
-  const maxChars = typeof params.maxChars === "number" && params.maxChars > 0 ? params.maxChars : 0;
+  const maxChars = params.maxChars && params.maxChars > 0 ? params.maxChars : 0;
   const rawTruncated = maxChars > 0 && trimmed.length > maxChars;
   const capped = rawTruncated && maxChars > 0 ? truncateUtf16Safe(trimmed, maxChars) : trimmed;
   const maxEscapedChars = Math.max(0, params.maxEscapedChars ?? 0);

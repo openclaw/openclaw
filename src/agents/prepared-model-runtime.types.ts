@@ -287,8 +287,6 @@ export type PreparedModelRuntimeOwner = {
     retryAfter: number;
     replacementGateId?: PreparedModelRuntimeReplacementGateId;
   };
-  /** The configured publication owner recovers when an idle Gateway lender retires. */
-  onPluginGenerationRetired?: () => void;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Explicit generation admitted for the current publication, when known. */

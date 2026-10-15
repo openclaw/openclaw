@@ -66,7 +66,7 @@ function readCodeModeRawConfig(
   agentId?: string,
   model?: { provider: string; modelId: string },
 ): Record<string, unknown> {
-  const tools = isRecord(config?.tools) ? config.tools : undefined;
+  const tools = config?.tools;
   const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? { enabled: "auto" };
   const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
   const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);

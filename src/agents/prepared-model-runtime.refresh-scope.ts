@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
@@ -206,32 +205,6 @@ export function createPreparedModelRuntimeRecovery(host: {
   ) => Promise<void>;
 }) {
   const { owners, publish } = host;
-  function recoverPlugin(owner: PreparedModelRuntimeOwner): void {
-    if (
-      !host.canRecover() ||
-      host.getReplacement() ||
-      owner.provenance !== "configured" ||
-      owner.pending ||
-      owners.get(ownerKey(owner.input)) !== owner
-    ) {
-      return;
-    }
-    // The publication queue owns recovery, not the closing caller or its retired
-    // cache. Install its barrier synchronously; serialized builds join prior cleanup.
-    void runInDetachedAsyncContext(async () => {
-      try {
-        await publish(() => owner.input.config, {
-          catalogMode: "static",
-          allowGatewaySubagentBinding: true,
-        });
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-          log.warn(`retired plugin generation refresh failed: ${formatErrorMessage(error)}`);
-        }
-      }
-    });
-  }
-
   async function recoverCatalog(
     borrowers: readonly { agentDir: string; isCurrent: () => boolean }[],
   ): Promise<void> {
@@ -363,6 +336,5 @@ export function createPreparedModelRuntimeRecovery(host: {
   return {
     ensureReady: ensureGatewayPreparedModelRuntimeReady,
     recoverCatalog,
-    recoverPlugin,
   };
 }

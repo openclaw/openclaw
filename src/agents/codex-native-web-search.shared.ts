@@ -3,7 +3,6 @@
  */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord } from "../utils.js";
 
 /** Whether native Codex search may use cached or live external web access. */
 type CodexNativeSearchMode = "cached" | "live";
@@ -43,15 +42,17 @@ function normalizeMode(value: unknown): CodexNativeSearchMode {
   return value === "live" ? "live" : "cached";
 }
 
-function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | undefined {
-  if (!isRecord(value)) {
+function normalizeUserLocation(
+  value: CodexNativeSearchUserLocation | undefined,
+): CodexNativeSearchUserLocation | undefined {
+  if (!value) {
     return undefined;
   }
   const location = {
-    country: typeof value.country === "string" ? value.country.trim() || undefined : undefined,
-    region: typeof value.region === "string" ? value.region.trim() || undefined : undefined,
-    city: typeof value.city === "string" ? value.city.trim() || undefined : undefined,
-    timezone: typeof value.timezone === "string" ? value.timezone.trim() || undefined : undefined,
+    country: value.country?.trim() || undefined,
+    region: value.region?.trim() || undefined,
+    city: value.city?.trim() || undefined,
+    timezone: value.timezone?.trim() || undefined,
   };
   return location.country || location.region || location.city || location.timezone
     ? location

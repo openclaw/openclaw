@@ -285,7 +285,6 @@ export function scheduleSessionMaintenance(
                   abortSignal: owner.signal,
                 });
                 const memory = await loadAgentRunnerMemoryRuntime();
-                assertCurrent();
                 followupRun.run.timeoutMs = budget.remainingMs();
                 assertCurrent();
                 const flushed = await memory.runMemoryFlushIfNeeded({

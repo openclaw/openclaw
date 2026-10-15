@@ -86,6 +86,7 @@ function buildSandboxShortcutBridgeHtml(): string {
 // Best-effort mitigation of the documented WebRTC residual, not a security
 // boundary. Board widgets remove same-realm constructors and the common APIs
 // that create descendant browsing realms with pristine constructors.
+// Read-only browser descriptors may reject replacement; leave them unchanged in this best-effort guard.
 function buildSandboxDocumentGuardHtml(blockDescendantFrames: boolean): string {
   if (!blockDescendantFrames) {
     return "";

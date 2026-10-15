@@ -7,7 +7,7 @@ import { normalizeAgentId } from "../../../routing/session-key.js";
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
 function normalizeAllowAgents(allowAgents: readonly string[] | undefined): Set<string> | undefined {
-  if (!Array.isArray(allowAgents)) {
+  if (allowAgents === undefined) {
     return undefined;
   }
   return new Set(

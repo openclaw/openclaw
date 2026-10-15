@@ -128,7 +128,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
     scheduler: options.scheduler,
     idleSweepJob: undefined,
   };
-  const schedulers = new Set<GatewayScheduler>();
   let schedulerScope = store.scheduler.scope();
   const reserveRuntimeSlot = (
     existing: SessionMcpRuntime | undefined,
@@ -363,44 +362,18 @@ export function createSessionMcpRuntimeManagerLifecycle(
     store.idleSweepJob = undefined;
   };
 
-  const selectScheduler = async () => {
-    const scheduler = [...schedulers].findLast((candidate) => !candidate.signal.aborted);
+  const setScheduler = async (scheduler: GatewayScheduler): Promise<void> => {
+    scheduler.signal.throwIfAborted();
     if (scheduler === store.scheduler) {
       return;
     }
     const previous = schedulerScope;
     previous.beginClose();
-    if (scheduler) {
-      store.scheduler = scheduler;
-    }
-    const selected = store.scheduler;
-    // The closed scope fences rearming while acquisitions use the successor host.
+    store.scheduler = scheduler;
     await previous.stop();
-    if (schedulerScope !== previous || store.scheduler !== selected) {
-      return;
-    }
     store.idleSweepJob = undefined;
-    if (scheduler) {
-      schedulerScope = scheduler.scope();
-    }
+    schedulerScope = scheduler.scope();
     ensureIdleSweepTimer();
-  };
-
-  const setScheduler = (scheduler: GatewayScheduler): Promise<void> => {
-    scheduler.signal.throwIfAborted();
-    if (schedulers.has(scheduler)) {
-      return Promise.resolve();
-    }
-    schedulers.add(scheduler);
-    scheduler.signal.addEventListener(
-      "abort",
-      () => {
-        schedulers.delete(scheduler);
-        void selectScheduler();
-      },
-      { once: true },
-    );
-    return selectScheduler();
   };
 
   const disposeRuntimeKeyNow = async (runtimeKey: string): Promise<void> => {
@@ -534,14 +507,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
     catalog: McpToolCatalog,
   ): void => {
     const { runtime, advertisedCatalogConfigFingerprint } = handle;
-    // An older requester may finish after reconciliation; reject its catalog
-    // instead of allowing stale tools to repopulate the session cache.
+    // Config reconciliation replaces the cache; publish only for its matching config.
     const entry = store.advertisedScopedCatalogBySessionId.get(runtime.sessionId);
-    if (
-      entry?.configFingerprint !== advertisedCatalogConfigFingerprint ||
-      sessionMcpRuntimeOwners.get(runtime)?.isCurrent() === false ||
-      ![...store.runtimesBySessionId.values()].includes(runtime)
-    ) {
+    if (entry?.configFingerprint !== advertisedCatalogConfigFingerprint) {
       return;
     }
     const toolsByServerName = new Map<string, McpCatalogTool[]>();
@@ -602,7 +570,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
     });
   };
 
-  void setScheduler(store.scheduler);
   return {
     store,
     runtimeKeysForSessionId,
