@@ -519,8 +519,8 @@ describe("models.list plugin metadata handoff", () => {
           result.models.map((model) => [`${model.provider}/${model.id}`, model.agentRuntime?.id]),
         ).toEqual([
           ["anthropic/claude-opus-5", "claude-cli"],
-          ["claude-cli/claude-haiku-4-5", undefined],
-          ...(cliOnly ? [["claude-cli/claude-opus-5", undefined]] : []),
+          ["claude-cli/claude-haiku-4-5", "claude-cli"],
+          ...(cliOnly ? [["claude-cli/claude-opus-5", "claude-cli"]] : []),
         ]);
       } finally {
         restoreActivePluginRegistrySnapshot(previousRegistry);

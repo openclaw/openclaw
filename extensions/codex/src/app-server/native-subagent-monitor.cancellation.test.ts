@@ -2,6 +2,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
+import {
+  claimCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  isCodexAppServerLiveThreadClaimed,
+  protectCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CodexAppServerRpcError } from "./client.js";
 import type { ParentOwner } from "./native-subagent-monitor-types.js";
 import {
   CodexNativeSubagentMonitor,
@@ -43,6 +50,14 @@ const registration = {
 
 async function nativeChild(startChild = true, keepParent = false, attributed = true) {
   const client = createClient();
+  ensureCodexAppServerClientRuntime(client.client, {
+    agentDir: "/synthetic/native-stop-agent",
+    authMode: "prepared-api-key",
+  });
+  const parentOwnership = await claimCodexAppServerLiveThread(client.client, parentThreadId);
+  if (!parentOwnership) {
+    throw new Error("Missing parent subscription owner");
+  }
   const runtime = createRuntime();
   const interrupted = createDeferred<void>();
   const original = client.request.getMockImplementation();
@@ -62,6 +77,7 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   const claimDirectChild = vi.fn(() => releaseChild);
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     recoveryPollDelaysMs: [],
+    retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
     interruptChildAndWait: (threadId, turnId, assertCurrent, timeoutMs) => {
       interruptBudgets.push(timeoutMs);
       return interruptCodexTurnAndWaitBestEffort(client.client, {
@@ -102,17 +118,71 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   );
   if (!keepParent) {
     await parent.unregister();
+    await parentOwnership.release(parentThreadId);
   }
   return {
     client,
     runtime,
     monitor,
+    parentOwnership,
     releaseChild,
     claimDirectChild,
     interruptBudgets,
     interrupted: interrupted.promise,
   };
 }
+
+it.each([true, false])(
+  "retires only selected already-interrupted children and releases their parent claim (selected=%s)",
+  async (selected) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const f = await nativeChild();
+    await f.client.notify(childTurnCompletedNotification({ status: "interrupted" }));
+    expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(true);
+    const original = f.client.request.getMockImplementation();
+    if (!original) {
+      throw new Error("Missing transport fixture");
+    }
+    f.client.request.mockImplementation((method, params, options) => {
+      if (method === "turn/interrupt") {
+        throw new CodexAppServerRpcError(
+          { code: -32_600, message: "no active turn to interrupt" },
+          method,
+        );
+      }
+      return original(method, params, options);
+    });
+    const stop = f.monitor.withDescendantCancellation(
+      {
+        ...requester,
+        requesterTurnRunId: undefined,
+        acceptsRequest: (custody) => selected && custody === requestCustody,
+      },
+      (cancel) => cancel(),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stop).toEqual({
+      killed: selected ? 1 : 0,
+      cancelledRequesters: selected
+        ? [
+            {
+              agentId: requester.agentId,
+              sessionKey,
+              sessionId: requester.sessionId,
+              lifecycleRevision: requester.lifecycleRevision,
+              requesterTurnRunId: requester.requesterTurnRunId,
+            },
+          ]
+        : [],
+    });
+    expect(f.interruptBudgets).toEqual([]);
+    expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(!selected);
+    expect(f.runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["interrupted", "preturn", "natural success"] as const)(
   "settles accepted Stop through the actual %s native completion owner",

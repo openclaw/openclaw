@@ -26,7 +26,10 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
+import {
+  openClawStateDatabaseCache,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
 import type {
   GatewaySessionStoreReadSources,
@@ -191,17 +194,22 @@ type SourcePreparation = {
 };
 type SourceMemo = {
   registry: symbol;
+  registryIdentity: string | undefined;
   current: boolean;
   observations: Map<string, { close(): void }>;
+  /** Superseded generation whose watches stay until this one observes the same paths. */
+  replaced?: SourceMemo;
   pathsCurrent?: () => boolean;
   observedThisTurn?: boolean;
   prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
 };
 const sourcePreparations = new Map<string, SourceMemo>();
 registerOpenClawStateDatabaseAsyncResource({
-  close: async () => {
+  close: async (identity) => {
     for (const [key, memo] of sourcePreparations) {
-      retireSourcePreparation(key, memo);
+      if (!identity || !memo.registryIdentity || memo.registryIdentity === identity.key) {
+        retireSourcePreparation(key, memo);
+      }
     }
   },
 });
@@ -212,12 +220,16 @@ function retireSourcePreparation(key: string, memo: SourceMemo): void {
     observation.close();
   }
   memo.observations.clear();
+  if (memo.replaced) {
+    retireSourcePreparation(key, memo.replaced);
+    memo.replaced = undefined;
+  }
   if (sourcePreparations.get(key) === memo) {
     sourcePreparations.delete(key);
   }
 }
 
-function observeSourcePath(key: string, memo: SourceMemo, pathname: string): void {
+function observeSourcePath(memo: SourceMemo, pathname: string): void {
   if (!memo.current) {
     return;
   }
@@ -249,12 +261,13 @@ function observeSourcePath(key: string, memo: SourceMemo, pathname: string): voi
               queueMicrotask(() => {
                 memo.observedThisTurn = false;
               });
+              // Invalidate only; the next preparation inherits these watches.
               try {
                 if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                  retireSourcePreparation(key, memo);
+                  memo.current = false;
                 }
               } catch {
-                retireSourcePreparation(key, memo);
+                memo.current = false;
               }
             }
           },
@@ -278,15 +291,23 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
   const registry = readOpenClawAgentDatabaseRegistryToken(registryOptions);
   const key = JSON.stringify([routing, env, params.currentSource, registryOptions.path]);
   let memo = sourcePreparations.get(key);
-  if (memo && memo.registry !== registry) {
-    retireSourcePreparation(key, memo);
+  let replaced: SourceMemo | undefined;
+  if (memo && (!memo.current || memo.registry !== registry)) {
+    // Closing a native directory watch can block the main thread for seconds on
+    // macOS. Keep shared watches until the replacement observes the same paths.
+    replaced = memo;
+    replaced.current = false;
     memo = undefined;
   }
   if (!memo) {
     const created: SourceMemo = {
       registry,
+      registryIdentity: openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
+        registryOptions.path,
+      )?.key,
       current: true,
       observations: new Map(),
+      replaced,
       prepared: Promise.resolve(undefined),
     };
     memo = created;
@@ -296,11 +317,20 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       routing,
       env,
       created,
-      (pathname) => observeSourcePath(key, created, pathname),
+      (pathname) => observeSourcePath(created, pathname),
     ).catch((error: unknown) => {
       retireSourcePreparation(key, created);
       throw error;
     });
+    if (replaced) {
+      const releaseReplaced = () => {
+        if (created.replaced === replaced) {
+          created.replaced = undefined;
+          retireSourcePreparation(key, replaced);
+        }
+      };
+      void created.prepared.then(releaseReplaced, releaseReplaced);
+    }
     while (sourcePreparations.size > 128) {
       const [oldestKey, oldest] = sourcePreparations.entries().next().value!;
       retireSourcePreparation(oldestKey, oldest);
@@ -318,7 +348,8 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       !captured.current ||
       captured.registry !== readOpenClawAgentDatabaseRegistryToken(registryOptions)
     ) {
-      retireSourcePreparation(key, captured);
+      // The next preparation replaces this generation and inherits its watches.
+      captured.current = false;
       throw storeChanged();
     }
   };

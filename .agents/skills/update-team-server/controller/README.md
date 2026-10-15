@@ -313,7 +313,7 @@ publication is not a deployment or a request to restart the Gateway.
 
 ## Standalone tests
 
-Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4+, Bash, Python 3, GNU
+Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4.3+, Bash, Python 3, GNU
 coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
 namespaces. Tests use synthetic temporary state, services, processes, and
 Gateways; they do not contact Team. Some boundary tests extract Bash functions;

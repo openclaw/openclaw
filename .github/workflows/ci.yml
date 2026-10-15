@@ -2475,7 +2475,7 @@ jobs:
     if: needs.preflight.outputs.run_ui_real_gateway == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # Current preparation omits SDK declarations; frozen targets retain their capacity.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.frozen_target == 'false' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-32vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.frozen_target == 'false' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-32vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
-    timeout-minutes: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.run_attempt > 1) || github.repository != 'openclaw/openclaw') && 40 || (needs.preflight.outputs.frozen_target == 'false' && matrix.shard == 1 && 24 || 20) }}
+    timeout-minutes: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.run_attempt > 1) || github.repository != 'openclaw/openclaw') && 40 || (needs.preflight.outputs.frozen_target == 'false' && (matrix.shard == 1 && 24 || matrix.shard == 2 && 25) || 20) }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -4589,7 +4589,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14.8"
 
       - name: Install Python tooling
         id: python_tooling
@@ -6356,7 +6356,7 @@ jobs:
           print(selected)
           PY
           )"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 "$apk"
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}
@@ -6552,6 +6552,9 @@ jobs:
       - name: Classify completed PR failures
         id: report
         env:
+          OPENCLAW_CI_JOB_RESULTS_JSON: ${{ toJSON(needs.*.result) }}
+          OPENCLAW_CI_PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          OPENCLAW_CI_SECURITY_FAST_RESULT: ${{ needs.security-fast.result }}
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}

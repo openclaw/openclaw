@@ -757,8 +757,8 @@ describe("createImageGenerateTool", () => {
     resolveLateSave(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(1, "late.png", "tool-image-generation");
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(2, "saved.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("saved.png", "tool-image-generation");
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {

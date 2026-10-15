@@ -2523,10 +2523,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const content = Array.isArray(rewritten?.content)
         ? (rewritten.content as Array<Record<string, unknown>>)
         : [];
-      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
+      expect(content[0]).toEqual({
+        type: "text",
+        text: "Dinner options",
+        textSignature: "msg_final",
+      });
       expect(content.filter((block) => block.type === "image")).toHaveLength(1);
       expect((await readRawActiveAssistantTranscriptMessages())[1]?.content).toEqual([
         { type: "text", text: "Dinner options", textSignature: "msg_final" },
+        { type: "text", text: `MEDIA:${mediaUrl}` },
       ]);
       expect(rewritten?.openclawDelivery).toEqual({
         audioAsVoice: true,
@@ -2559,6 +2564,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           { type: "text", text: `MEDIA:${mediaUrl}` },
           { type: "toolCall", id: "call-1", name: "read", arguments: {} },
         ];
+        const originalRuntimeContent = JSON.stringify(
+          mockState.runtimeAssistantContentBeforeDelivery,
+        );
         mockState.runtimeAssistantTextsBeforeDelivery = [`Later reply\nMEDIA:${mediaUrl}`];
         mockState.dispatchedReplies = [
           {
@@ -2601,12 +2609,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           "image",
           "toolCall",
         ]);
-        expect(rawMessages[1]?.content).toEqual([
-          { type: "thinking", thinking: "preserve runtime reasoning" },
-          { type: "text", text: "Earlier chunk" },
-          { type: "text", text: "Image reply" },
-          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-        ]);
+        expect(JSON.stringify(rawMessages[1]?.content)).toBe(originalRuntimeContent);
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
         expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });

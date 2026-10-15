@@ -303,7 +303,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
             {childrenExpanded() ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}
           </span>
-          {childrenExpanded() || team() ? undefined : (
+          {team() ? undefined : (
             <span class="sidebar-child-session-toggle__count">
               {session().childSessionKeys.length}
             </span>
@@ -423,20 +423,7 @@ export function renderSessionTree(params: {
       data-session-tree={session().key}
       role={listItem() ? "listitem" : undefined}
     >
-      {renderRecentSession({
-        get host() {
-          return host();
-        },
-        get session() {
-          return session();
-        },
-        get listItem() {
-          return false;
-        },
-        get icon() {
-          return icon();
-        },
-      })}
+      <RecentSession host={host()} session={session()} listItem={false} icon={icon()} />
       {expanded() ? (
         <div class="sidebar-session-tree__children">
           {visibleChildren().length > 0 ? (
@@ -446,19 +433,7 @@ export function renderSessionTree(params: {
               aria-label={listItem() ? t("sessionsView.childSessions") : undefined}
             >
               <For each={visibleChildren()} keyed={(child) => child.key}>
-                {(child) =>
-                  renderSessionTree({
-                    get host() {
-                      return host();
-                    },
-                    get session() {
-                      return child();
-                    },
-                    get listItem() {
-                      return listItem();
-                    },
-                  })
-                }
+                {(child) => <SessionTree host={host()} session={child()} listItem={listItem()} />}
               </For>
             </div>
           ) : undefined}
@@ -494,3 +469,5 @@ export function renderSessionTree(params: {
   );
 }
 export { renderSidebarSessionIndicators };
+const RecentSession = renderRecentSession;
+const SessionTree = renderSessionTree;

@@ -1365,9 +1365,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.30.0",
+        OPENGREP_VERSION: "v1.30.1",
         OPENGREP_LINUX_X64_SHA256:
-          "35779bdd72e92129c8df2a77f0c55e8c08356801ea92591ef32108d6b28d564c",
+          "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4",
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
@@ -2176,10 +2176,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     );
 
     expect(sdkRestoreStep.with?.key).toBe(
-      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
+      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
     );
     expect(String(sdkRestoreStep.with?.["restore-keys"]).trim().split("\n")).toEqual([
-      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}",
+      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-base', runner.os) || '' }}",
     ]);
     expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
     expect(setupStep.run).toContain(
@@ -2604,9 +2604,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     ["current shard 1", {}, 24],
-    ["current shard 2", { matrix: { shard: 2 } }, 20],
+    ["current shard 2", { matrix: { shard: 2 } }, 25],
     ["frozen shard 1", { frozenTarget: true }, 20],
+    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 20],
     ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
+    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 20],
     ["hosted override", { runnerBackend: "github" }, 40],
     ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
     ["manual fallback", { eventName: "workflow_dispatch" }, 40],
@@ -6491,9 +6493,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
-    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(
-      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+      "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
     );
     expect(job.steps.slice(3, 5)).toMatchObject([
       {
@@ -6645,7 +6647,8 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
       ["openclaw-release-promote.yml", "finalize"],
     ] as const
   ).map(([file, job]) => readWorkflow(`.github/workflows/${file}`).jobs[job]);
-  for (const job of [...finalizers, linux.jobs.publish, linux.jobs.mirror_legacy]) {
+  const mirror = readWorkflow(".github/workflows/linux-app-mirror.yml");
+  for (const job of [...finalizers, linux.jobs.publish, mirror.jobs.mirror_legacy]) {
     expect(job.concurrency).toEqual({
       group: "linux-app-release-publish",
       "cancel-in-progress": false,
@@ -6818,16 +6821,20 @@ fi
 
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {
   const linux = readWorkflow(".github/workflows/linux-app-release.yml");
+  expect(Object.keys(linux.on)).toEqual(["workflow_run"]);
+  const mirror = readWorkflow(".github/workflows/linux-app-mirror.yml");
+  expect(Object.keys(mirror.on)).toEqual(["workflow_dispatch"]);
+  expect(Object.keys(mirror.jobs)).toEqual(["mirror_legacy"]);
   for (const event_name of ["push", "pull_request", "workflow_run", "workflow_dispatch"]) {
     expect(
-      runInNewContext(linux.jobs.mirror_legacy.if.slice(3, -2), {
+      runInNewContext(mirror.jobs.mirror_legacy.if.slice(3, -2), {
         github: { repository: "openclaw/openclaw", event_name },
       }),
     ).toBe(event_name === "workflow_dispatch");
   }
   expect(linux.on.push).toBeUndefined();
   expect(linux.on.pull_request).toBeUndefined();
-  const mirrorSteps = linux.jobs.mirror_legacy.steps as WorkflowStep[];
+  const mirrorSteps = mirror.jobs.mirror_legacy.steps as WorkflowStep[];
   expect(JSON.stringify(mirrorSteps)).not.toContain("TAURI_SIGNING_PRIVATE_KEY");
   expect(JSON.stringify(mirrorSteps)).not.toContain("linux-app-channel.mjs publish");
   expect(JSON.stringify(mirrorSteps)).not.toContain("cargo");
@@ -6864,6 +6871,63 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
   expect(preparedDispatch).toContain(".releaseRunAttempt");
   expect(preparedDispatch).toContain(".tooling.fullRef");
   expect(preparedDispatch).not.toContain("$GITHUB_RUN_ID");
+  const directory = tempDirs.make("openclaw-linux-mirror-dispatch-");
+  const toolingSha = "a".repeat(40);
+  const sourceSha = "b".repeat(40);
+  const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-123`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `source scripts/lib/release-publish-children.sh
+       verify_release_tag_target() { return 0; }
+       node() { return 0; }
+       dispatch_workflow_at_ref() {
+         printf '%s\\n' "$@" > "$RUNNER_TEMP/dispatch-args"
+         printf '456\\n'
+       }
+       dispatch_linux_mirror "$GITHUB_REF_NAME" "$GITHUB_REF" "$PARENT_WORKFLOW_SHA" 123 2`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_REF_NAME: toolingRef,
+        GITHUB_REF: `refs/tags/${toolingRef}`,
+        PARENT_WORKFLOW_SHA: toolingSha,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_STEP_SUMMARY: path.join(directory, "summary"),
+        RUNNER_TEMP: directory,
+        RELEASE_TAG: "v2026.8.2",
+        TARGET_SHA: sourceSha,
+      },
+    },
+  );
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  expect(readFileSync(path.join(directory, "dispatch-args"), "utf8").trim().split("\n")).toEqual([
+    toolingRef,
+    toolingSha,
+    "linux-app-mirror.yml",
+    "-f",
+    "release_tag=v2026.8.2",
+    "-f",
+    `source_sha=${sourceSha}`,
+    "-f",
+    `tooling_sha=${toolingSha}`,
+    "-f",
+    "release_publish_run_id=123",
+    "-f",
+    "release_publish_run_attempt=2",
+  ]);
+  expect(
+    JSON.parse(readFileSync(path.join(directory, "linux-mirror-dispatch.json"), "utf8")),
+  ).toEqual({
+    tag: "v2026.8.2",
+    sourceSha,
+    state: "dispatched",
+    mirrorVerified: false,
+    childRunId: "456",
+  });
 });
 
 it("reports stale Linux release requests before selected code runs", () => {
@@ -6925,6 +6989,126 @@ it("reports stale Linux release requests before selected code runs", () => {
       );
     }
   }
+});
+
+it.each(["success", "failure"])(
+  "records the exact Linux request and builder admission (%s)",
+  (status) => {
+    const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+    const step = (workflow.jobs.validate_release.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Record Linux builder admission",
+    );
+    const directory = tempDirs.make("openclaw-linux-admission-");
+    const summary = path.join(directory, "summary");
+    const result = spawnSync("bash", ["-c", expectDefined(step?.run, "admission owner")], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: directory,
+        GITHUB_STEP_SUMMARY: summary,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_RUN_ID: "456",
+        GITHUB_RUN_ATTEMPT: "2",
+        REQUEST_RUN_ID: "123",
+        REQUEST_RUN_ATTEMPT: "1",
+        REQUEST_HEAD_SHA: "a".repeat(40),
+        WORKFLOW_SHA: "a".repeat(40),
+        RELEASE_TAG: status === "success" ? "v2026.8.2" : "",
+        TAG_SHA: status === "success" ? "b".repeat(40) : "",
+        ADMISSION_STATUS: status,
+      },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(
+      JSON.parse(readFileSync(path.join(directory, "linux-release-admission.json"), "utf8")),
+    ).toEqual({
+      schemaVersion: 1,
+      repository: "openclaw/openclaw",
+      request: { runId: "123", runAttempt: "1", headSha: "a".repeat(40) },
+      builder: { runId: "456", runAttempt: "2", toolingSha: "a".repeat(40) },
+      tag: status === "success" ? "v2026.8.2" : null,
+      sourceSha: status === "success" ? "b".repeat(40) : null,
+      admission: status === "success" ? "admitted" : "rejected",
+    });
+  },
+);
+
+it("retains exact completed Linux bundle bytes after packaging fails without admitting signing", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const steps = workflow.jobs.build_linux.steps as WorkflowStep[];
+  const step = steps.find(({ name }) => name === "Retain completed unqualified Linux bundles");
+  const directory = tempDirs.make("openclaw-linux-unqualified-");
+  const runner = path.join(directory, "runner");
+  mkdirSync(runner);
+  for (const [kind, filename, bytes] of [
+    ["deb", "OpenClaw.deb", "completed deb bytes"],
+    ["appimage", "OpenClaw.AppImage", "completed appimage bytes"],
+  ] as const) {
+    const bundleDirectory = path.join(
+      directory,
+      "apps/linux/src-tauri/target/release/bundle",
+      kind,
+    );
+    mkdirSync(bundleDirectory, { recursive: true });
+    writeFileSync(path.join(bundleDirectory, filename), bytes);
+  }
+  const result = spawnSync("bash", ["-c", expectDefined(step?.run, "diagnostic retention")], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      RUNNER_TEMP: runner,
+      GITHUB_STEP_SUMMARY: path.join(runner, "summary"),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ID: "456",
+      GITHUB_RUN_ATTEMPT: "1",
+      RELEASE_TAG: "v2026.8.2",
+      TAG_SHA: "b".repeat(40),
+      WORKFLOW_SHA: "a".repeat(40),
+      FINALIZE_OUTCOME: "success",
+      STAGING_OUTCOME: "success",
+      RUNTIME_OUTCOME: "failure",
+    },
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  const retained = path.join(runner, "linux-unqualified-bundles");
+  expect(readFileSync(path.join(retained, "bundles/OpenClaw.deb"), "utf8")).toBe(
+    "completed deb bytes",
+  );
+  expect(readFileSync(path.join(retained, "bundles/OpenClaw.AppImage"), "utf8")).toBe(
+    "completed appimage bytes",
+  );
+  expect(JSON.parse(readFileSync(path.join(retained, "identity.json"), "utf8"))).toMatchObject({
+    qualification: "unqualified",
+    sourceSha: "b".repeat(40),
+    toolingSha: "a".repeat(40),
+    runId: "456",
+    runAttempt: "1",
+    checks: { packagedRuntime: "failure" },
+  });
+  const hashes = spawnSync("sha256sum", ["--check", "SHA256SUMS"], {
+    cwd: retained,
+    encoding: "utf8",
+  });
+  expect(hashes.status, hashes.stderr).toBe(0);
+  // Model the Actions failure boundary: normal uploads skip, and failed build
+  // blocks the signing dependency. Diagnostic retention has no promoted outputs.
+  const context = {
+    eventName: "workflow_run" as const,
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    failed: true,
+    steps: { "bundle-build": { outcome: "success" as const, outputs: {} } },
+  };
+  expect(evaluateWorkflowExpression(expectDefined(step?.if, "retention condition"), context)).toBe(
+    true,
+  );
+  for (const name of ["Upload Debian bundle", "Upload finalized unsigned AppImage"]) {
+    expect(steps.find((entry) => entry.name === name)?.if).toBeUndefined();
+  }
+  expect(workflow.jobs.sign_linux.needs).toContain("build_linux");
+  expect(workflow.jobs.sign_linux.if).toBeUndefined();
+  expect(workflow.jobs.build_linux.outputs).not.toHaveProperty("unqualified_artifact_id");
 });
 
 it("isolates release credentials and verifies trusted AppImage and signing tools", () => {
@@ -6998,7 +7182,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
           (job as { permissions?: { contents?: string } }).permissions?.contents === "write",
       )
       .map(([name]) => name),
-  ).toEqual(["mirror_legacy"]);
+  ).toEqual([]);
   expect(linux.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
   expect(
     Object.entries(linux.jobs)

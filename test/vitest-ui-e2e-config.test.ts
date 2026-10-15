@@ -26,6 +26,7 @@ afterEach(() => {
 const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
 const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
+const workboardFile = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
@@ -41,6 +42,7 @@ const realGatewayFiles = [
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-flow.catalog-bootstrap",
   "chat-loading-performance.real-gateway",
+  "chat-managed-media-order.real-gateway",
   "chat-project-media.real-gateway",
   "chat-session-diff-folding.real-gateway",
   "chat-stop-finished-run.real-gateway",
@@ -71,7 +73,7 @@ const realGatewayFiles = [
   "worker-initial-setup.real-gateway",
 ]
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles);
+  .concat(qaLabFiles, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -446,6 +448,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -517,6 +526,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: workboardFile,
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

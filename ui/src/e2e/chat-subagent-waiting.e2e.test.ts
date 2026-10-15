@@ -250,11 +250,11 @@ suite.define(() => {
         await closePanel();
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
-        const reportUsage = (usageRunId: string, outputTokens: number) =>
+        const reportUsage = (usageRunId: string, outputTokens: number, seq = 1) =>
           gateway.emitGatewayEvent("agent", {
             stream: "usage",
             runId: usageRunId,
-            seq: 1,
+            seq,
             sessionKey: parent.key,
             data: { outputTokens },
             ts: now,
@@ -263,6 +263,21 @@ suite.define(() => {
           (await indicator.locator(".chat-working-indicator__tokens").textContent())?.trim();
         await reportUsage(runId, 4_100);
         await expect.poll(workingTokens).toBe("4.1k output tokens");
+        if (artifactDir) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [activityRow, indicator],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "working-light-1280.png"), frame.png);
+        }
+        const activityBounds = await activityRow.boundingBox();
+        const statusBounds = await indicator.boundingBox();
+        expect(activityBounds).not.toBeNull();
+        expect(statusBounds).not.toBeNull();
+        expect(activityBounds!.y + activityBounds!.height).toBeLessThanOrEqual(statusBounds!.y);
+        expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
         const yieldCall = {
           role: "assistant",
           content: [
@@ -535,9 +550,23 @@ suite.define(() => {
           .locator(
             ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",
           )
-          .waitFor();
-        expect(await indicator.textContent()).not.toContain("Waiting on");
+          .waitFor({ state: "detached" });
+        expect(await indicator.count()).toBe(0);
+        const visibleAnswer = activePane
+          .locator(".chat-text")
+          .getByText(answerText, { exact: true });
+        expect(await visibleAnswer.count()).toBe(1);
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
+        await gateway.emitGatewayEvent("agent", {
+          sessionKey: parent.key,
+          runId: "parent-resumed-run",
+          seq: 2,
+          stream: "assistant",
+          ts: now + 65_500,
+          data: { phase: "commentary", text: "Reviewing the delegated backend result." },
+        });
+        await indicator.waitFor();
+        expect(await indicator.textContent()).not.toContain("Waiting on");
         if (artifactDir) {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -552,7 +581,7 @@ suite.define(() => {
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await requestClock()).toBe(history[0]!.timestamp);
-        await reportUsage("parent-resumed-run", 256);
+        await reportUsage("parent-resumed-run", 256, 3);
         await expect.poll(workingTokens).toBe("4.4k output tokens");
 
         const answer = {
@@ -606,9 +635,13 @@ suite.define(() => {
         // resumed run's own 2s, with both runs' tokens.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
-        expect((await recap.textContent())?.replace(/\s+/g, " ").trim()).toMatch(
-          /^Done in 1 minute,? 17 seconds · 4\.4k output tokens$/,
-        );
+        expect(
+          await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
+        ).toEqual([
+          "4.4k output tokens",
+          "·",
+          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
+        ]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // The finished subagent's row shows how long it took, and its name shows it in the panel.

@@ -86,10 +86,11 @@ describe("cron view list pane", () => {
       "at",
       "every",
       "cron",
+      "event",
       "on-exit",
       "stream",
     ]);
-    for (const scheduleKind of ["on-exit", "stream"] as const) {
+    for (const scheduleKind of ["on-exit", "stream", "event"] as const) {
       scheduleFilter.value = scheduleKind;
       scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onJobsFiltersChange).toHaveBeenCalledWith({

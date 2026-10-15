@@ -419,6 +419,10 @@ async function prepareCliRunContextWithinReadFence(
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
+  } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
+    throw new Error(
+      "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+    );
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&

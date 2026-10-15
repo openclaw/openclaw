@@ -440,9 +440,6 @@ async function runPreparedSqliteSessionReclamation(
 ): Promise<SqliteSessionReclamationResult> {
   const { claim, worker, assertRequestCurrent } = owner;
   const identity = claim.identity;
-  if (typeof identity !== "string") {
-    throw new Error("SQLite reclamation Worker requires an admitted file generation");
-  }
   const { plan } = params;
   const assertCommitAllowed = () => {
     worker.assertCurrent(plan.databaseOptions, claim);
