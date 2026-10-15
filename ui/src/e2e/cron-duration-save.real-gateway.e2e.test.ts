@@ -44,10 +44,10 @@ const suite = createControlUiE2eSuite({
       await owner.state.writeAuthProfiles({
         version: 1,
         profiles: {
-          "openai:cron-fixture": {
+          "openai:cron-duration-fixture": {
             type: "api_key",
             provider: "openai",
-            key: "synthetic-cron-inference-key",
+            key: "synthetic-cron-duration-inference-key",
           },
         },
       });
@@ -306,7 +306,7 @@ async function withGatewayCommands(artifactName: string, run: (cliJson: CliJson)
       stdout:
         args[0] === "dashboard" ? "[one-time browser handoff omitted]" : redact(result.stdout),
     });
-    expect(result.code, `${args.join(" ")}\n${redact(result.stderr)}`).toBe(0);
+    expect(result.code, args.join(" ")).toBe(0);
     expect(result.signal).toBeNull();
     return requireRecord(JSON.parse(result.stdout));
   };

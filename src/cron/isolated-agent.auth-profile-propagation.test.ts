@@ -76,6 +76,8 @@ function setupClaudeCliBackend(): void {
         modelProvider: "anthropic",
         pluginId: "anthropic",
         config: { command: "claude" },
+        authEpochMode: "profile-only",
+        autoSelectAuthProfile: false,
       },
     ],
     resolvePluginSetupCliBackend: () => undefined,
@@ -312,6 +314,26 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a native Claude CLI job without adopting an unrelated host account", async () => {
+    await saveProfiles({ [platformId]: apiKey() });
+    setupClaudeCliBackend();
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "claude-cli", model: "sonnet" });
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
+    mockRunCronFallbackPassthrough();
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "native account reply" }],
+      meta: { agentMeta: { provider: "claude-cli", model: "sonnet" } },
+    });
+
+    const result = await runWithConfig(config("claude-cli/sonnet"));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("rejects a legacy CLI fallback rather than adopting its currently ordered account (#144047)", async () => {
