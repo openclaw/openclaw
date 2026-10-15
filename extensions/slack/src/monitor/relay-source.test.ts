@@ -220,7 +220,9 @@ describe("Slack relay source", () => {
 
   it("settles durable acceptance before recovering from a websocket error", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
     const connected = deferred<WebSocket>();
     const socketClosed = deferred<void>();
     server.once("connection", (socket) => {
@@ -271,7 +273,9 @@ describe("Slack relay source", () => {
       for (const client of server.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
