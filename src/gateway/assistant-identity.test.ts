@@ -13,10 +13,31 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   DEFAULT_ASSISTANT_IDENTITY,
   resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
   resolveAssistantIdentityName,
 } from "./assistant-identity.js";
 
 describe("resolveAssistantIdentity", () => {
+  it.each([
+    { avatar: " https://example.com/avatar.png ", expected: "https://example.com/avatar.png" },
+    { emoji: "🦞", expected: "🦞" },
+    { avatar: "slack://avatar.png", emoji: "🦞", expected: "🦞" },
+    { avatar: "slack://avatar.png", expected: "workspace.png" },
+    { avatar: " ", expected: "workspace.png" },
+  ])("preserves avatar-only source precedence: $expected", async ({ expected, ...identity }) => {
+    const read = vi
+      .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
+      .mockResolvedValue({ avatar: "workspace.png" });
+    try {
+      const cfg: OpenClawConfig = { agents: { entries: { main: { identity } } } };
+      expect(
+        await resolveAssistantIdentityAvatar({ cfg, workspaceDir: "/synthetic/workspace" }),
+      ).toEqual({ agentId: "main", avatar: expected });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("reads workspace fallbacks only when configured identity leaves a field unresolved", async () => {
     const read = vi
       .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
