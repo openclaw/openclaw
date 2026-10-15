@@ -591,9 +591,9 @@ describe("prepareEmbeddedRunTerminal", () => {
       { text: finalText },
     ]);
     expect(getReplyPayloadMetadata(partialPayload)?.localTranscriptDeliveryConfirmed).toBe(true);
-    const recovered = prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout!;
-    expect(getReplyPayloadMetadata(recovered[0])?.localTranscriptDeliveryConfirmed).toBe(true);
-    expect(getReplyPayloadMetadata(recovered[1])?.localTranscriptDeliveryConfirmed).toBeUndefined();
+    const [kept, text] = prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout!;
+    expect(getReplyPayloadMetadata(kept!)?.localTranscriptDeliveryConfirmed).toBe(true);
+    expect(getReplyPayloadMetadata(text!)?.localTranscriptDeliveryConfirmed).toBeUndefined();
   });
 
   it("does not recover stale session text after the current prompt times out", async () => {

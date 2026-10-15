@@ -302,7 +302,7 @@ it.each([
     reason === "unconfirmed transcript" ? "missing" : "assistant",
     reason === "generated text",
   );
-  const payload = context.execution.result.payloads![0];
+  const payload = context.execution.result.payloads![0]!;
   if (reason === "media" || reason === "failed media warning") {
     payload.mediaUrl = "https://example.invalid/final.png";
     if (reason === "failed media warning") {
