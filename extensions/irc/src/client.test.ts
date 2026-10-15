@@ -634,6 +634,76 @@ describe("irc client inbound line bound", () => {
   });
 });
 
+describe("irc client liveness", () => {
+  async function connectToQuietServer(answerPing: boolean) {
+    const serverLines: string[] = [];
+    const server = await startIrcTestServer((socket) => {
+      socket.on("error", () => {});
+      onIrcTestLine(socket, (line) => {
+        serverLines.push(line);
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+        } else if (answerPing && line.startsWith("PING ")) {
+          socket.write(`:server PONG server ${line.slice("PING ".length)}\r\n`);
+        }
+      });
+    });
+    const errors: Error[] = [];
+    let disconnects = 0;
+    const disconnected = createDeferred<void>();
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      livenessTimeoutMs: 400,
+      onError: (error) => errors.push(error),
+      onDisconnect: () => {
+        disconnects += 1;
+        disconnected.resolve();
+      },
+    });
+    return {
+      server,
+      serverLines,
+      client,
+      errors,
+      disconnected: disconnected.promise,
+      disconnects: () => disconnects,
+    };
+  }
+
+  it("drops a connection whose server goes silent and reports a disconnect", async () => {
+    const { server, serverLines, client, errors, disconnected } = await connectToQuietServer(false);
+    try {
+      await withTimeout(disconnected, 2000, "IRC disconnect after a silent server");
+      expect(serverLines).toContain("PING :openclaw");
+      expect(errors.some((error) => error.message.includes("sent nothing"))).toBe(true);
+      expect(client.isReady()).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a quiet connection whose server answers PING", async () => {
+    const { server, serverLines, client, errors, disconnects } = await connectToQuietServer(true);
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1200);
+      });
+      expect(serverLines).toContain("PING :openclaw");
+      expect(disconnects()).toBe(0);
+      expect(errors).toEqual([]);
+      expect(client.isReady()).toBe(true);
+    } finally {
+      client.quit("test complete");
+      await server.close();
+    }
+  });
+});
+
 describe("irc client inbound CTCP", () => {
   it("hands ACTION and plain messages to ingress but not CTCP queries", async () => {
     const inbound = [
