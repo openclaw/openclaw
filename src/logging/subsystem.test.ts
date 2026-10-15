@@ -56,6 +56,28 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it.each([
+    ["guest", undefined, "WARN"],
+    ["input", undefined, "WARN"],
+    ["bridge", "invalid_input", "WARN"],
+    ["bridge", "input_contract", "WARN"],
+    ["bridge", "tool_error", "ERROR"],
+    ["bridge", "output_contract", "ERROR"],
+    ["host", "runtime_unavailable", "ERROR"],
+  ] as const)("logs %s/%s failures at %s", async (failurePhase, failureCode, level) => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+    logCodeModeFailure(new Error("synthetic failure"), { failurePhase, failureCode });
+    await testApi.flushFileLogQueueForTests();
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(records[0]._meta.logLevelName).toBe(level);
+  });
+
   it("records raw Code Mode causes and correlation ids without a debug flag", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "error", consoleLevel: "silent", file });
@@ -147,7 +169,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     }
   });
 
-  it("tracks diagnostic log interest and enablement for a retained subsystem logger", async () => {
+  it("exports INFO diagnostics without call sites while retaining warning locations", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
     const log = createSubsystemLogger("gateway/stack");
@@ -158,6 +180,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info("unrelated listener");
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
+    log.warn("warning with listener");
     await yieldToEventLoop();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
@@ -177,23 +200,32 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
       false,
       false,
-      true,
       false,
       true,
+      false,
+      false,
       false,
     ]);
     expect(listener.mock.calls.map(([event]) => event)).toEqual([
       expect.objectContaining({
         type: "log.record",
         message: "log listener",
+      }),
+      expect.objectContaining({
+        type: "log.record",
+        message: "warning with listener",
         code: { line: expect.any(Number), functionName: expect.any(String) },
       }),
       expect.objectContaining({
         type: "log.record",
         message: "enabled diagnostics",
-        code: { line: expect.any(Number), functionName: expect.any(String) },
       }),
     ]);
+    for (const [event] of listener.mock.calls) {
+      if (event.level === "INFO") {
+        expect(event).not.toHaveProperty("code");
+      }
+    }
   });
 
   it("resolves sink enablement from thresholds and console-only subsystem filters", () => {

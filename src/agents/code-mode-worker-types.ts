@@ -127,7 +127,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest" | "bridge">;
+      failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: false;
       output: Output;
     }

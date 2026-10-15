@@ -198,6 +198,16 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         };
       }
       if (request.stateContext) {
+        const retained = stateContexts.get(request.actor);
+        if (retained) {
+          if (Object.hasOwn(request.stateContext, "stateIntegrity")) {
+            request.stateContext.stateIntegrity ??= retained.stateIntegrity;
+          }
+          if (Object.hasOwn(request.stateContext, "scheduledMaintenanceSuspension")) {
+            request.stateContext.scheduledMaintenanceSuspension ??=
+              retained.scheduledMaintenanceSuspension;
+          }
+        }
         stateContexts.set(request.actor, request.stateContext);
       }
     }

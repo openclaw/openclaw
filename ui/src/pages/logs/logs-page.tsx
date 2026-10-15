@@ -62,7 +62,6 @@ export function LogsPage() {
   let cursor: number | null = null;
   let request: AbortController | null = null;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let connected = false;
   let disposed = false;
   let atBottom = true;
   let stream: HTMLElement | undefined;
@@ -74,7 +73,8 @@ export function LogsPage() {
     setRequestState("idle");
   };
   const updatePolling = () => {
-    const shouldPoll = connected && document.visibilityState !== "hidden";
+    const shouldPoll =
+      gateway.connected && gateway.client !== null && document.visibilityState !== "hidden";
     if (!shouldPoll && pollTimer !== undefined) {
       clearInterval(pollTimer);
       pollTimer = undefined;
@@ -95,13 +95,12 @@ export function LogsPage() {
       atBottom = true;
     },
     invalidateRequests: cancelRequest,
-    onSnapshot: (change) => {
-      connected = change.snapshot.phase === "connected" && change.snapshot.client !== null;
-      updatePolling();
-    },
+    onSnapshot: updatePolling,
     ensureInitialData: (change) => {
       const quiet = !change.identityChanged && untrack(status).hasLoaded;
-      void loadLogs({ reset: true, quiet }).then((current) => {
+      // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
+      // file read and redaction pass per reconnect.
+      void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
         if (current && !quiet) {
           setForceFollow((revision) => revision + 1);
         }

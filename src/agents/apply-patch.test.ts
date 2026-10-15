@@ -17,6 +17,7 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { isTrustedToolInputError } from "./tool-input-error.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -101,6 +102,34 @@ async function expectMissingPath(operation: Promise<unknown>) {
 }
 
 describe("applyPatch", () => {
+  it.each([
+    { name: "empty", input: "", message: "Provide a patch input." },
+    { name: "syntax", input: "bad patch", message: "The first line of the patch" },
+    {
+      name: "missing anchor",
+      input: "*** Begin Patch\n*** Update File: source.txt\n@@\n-absent\n+after\n*** End Patch",
+      message: "Failed to find expected lines",
+    },
+    {
+      name: "ambiguous anchor",
+      input: "*** Begin Patch\n*** Update File: source.txt\n@@\n-target\n+after\n*** End Patch",
+      message: "Found 2 occurrences",
+    },
+  ])("classifies $name failures as trusted tool input errors", async ({ input, message }) => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "source.txt");
+      const content = "target\ntarget\n";
+      await fs.writeFile(file, content);
+      const error = await createApplyPatchTool({ cwd: dir })
+        .execute("invalid-patch", { input })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toHaveProperty("message", expect.stringContaining(message));
+      expect(isTrustedToolInputError(error)).toBe(true);
+      expect(await fs.readFile(file, "utf8")).toBe(content);
+    });
+  });
+
   const priceUpdatePatch = `*** Begin Patch
 *** Update File: source.txt
 @@

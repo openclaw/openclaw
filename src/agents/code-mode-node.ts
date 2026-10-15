@@ -321,7 +321,11 @@ async function run(
           if (isRecord(value) && value.status === "failure") {
             inlineHost?.onFailure?.(
               value.error,
-              value.failurePhase === "bridge" ? "bridge" : "guest",
+              value.failurePhase === "bridge" ||
+                value.failurePhase === "guest" ||
+                value.failurePhase === "input"
+                ? value.failurePhase
+                : "host",
               pool.id,
             );
           }
@@ -375,18 +379,19 @@ async function run(
     retained = true;
     return result;
   } catch (error) {
-    inlineHost?.onFailure?.(error, "host", pool.id);
     const reason = signal.aborted ? signal.reason : error;
-    if (
+    const timedOut =
       reason instanceof CodeModeHeadlessTimeoutError ||
-      (error instanceof WorkerTaskError && error.code === "timeout")
-    ) {
+      (error instanceof WorkerTaskError && error.code === "timeout");
+    const failurePhase = timedOut && progress.deadline ? "guest" : "host";
+    inlineHost?.onFailure?.(error, failurePhase, pool.id);
+    if (timedOut) {
       if (progress.networkContentObserved) {
         inlineHost?.onNetworkContent?.();
       }
       return {
         ...failure("code mode timeout exceeded", "timeout"),
-        failurePhase: progress.deadline ? "guest" : "host",
+        failurePhase,
         output: progress.output(),
         ...(progress.networkContentObserved ? { networkContentObserved: true } : {}),
       };

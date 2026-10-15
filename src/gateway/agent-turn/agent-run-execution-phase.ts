@@ -202,8 +202,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           : undefined;
       const finishFailure = async (err: unknown, recordCompletion = true) => {
         const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
-        const renderedErr = error.message;
-        const outcome = buildAgentRunTerminalOutcome({ status: "error", error: renderedErr });
+        const outcome = buildAgentRunTerminalOutcome({ status: "error", error: error.message });
         if (recordCompletion) {
           try {
             await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
@@ -212,7 +211,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           }
         }
         await settleUnstartedFollowup(outcome);
-        const payload = { runId: params.runId, status: "error" as const, summary: renderedErr };
+        const payload = { runId: params.runId, status: "error" as const, summary: error.message };
         publishFinalAfterCleanup = () => {
           setGatewayDedupeEntries({
             dedupe: params.context.dedupe,
@@ -222,7 +221,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           });
           params.io.emitFinal([false, payload, error], {
             runId: params.runId,
-            ...diagnostics.errorMeta(renderedErr),
+            ...diagnostics.errorMeta(error.message),
           });
         };
       };
@@ -462,6 +461,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               commandRuntimeContext: {
                 config: replyDispatchRuntime.config,
                 pluginGeneration: replyDispatchRuntime.pluginGeneration,
+                freshChild: params.freshChild,
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {

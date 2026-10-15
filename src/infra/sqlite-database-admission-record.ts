@@ -170,6 +170,7 @@ function changedAdmissionEntries<Key, Value>(
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
+  private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
   readonly descriptors = new Map<string, number>();
@@ -289,8 +290,12 @@ export class SqliteDatabaseAdmissionRegistry {
     return true;
   }
 
-  publish(record?: Admission): void {
-    if (record && this.records.get(record.identity) !== record) {
+  publish(selected?: Admission | Set<Admission>): void {
+    if (
+      selected &&
+      !(selected instanceof Set) &&
+      this.records.get(selected.identity) !== selected
+    ) {
       return;
     }
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
@@ -300,10 +305,10 @@ export class SqliteDatabaseAdmissionRegistry {
         this.forget(current.identity);
         continue;
       }
-      if (record && current !== record) {
+      if (selected && selected !== current && !(selected instanceof Set && selected.has(current))) {
         continue;
       }
-      let changed = current === record;
+      let changed = selected === current || selected instanceof Set;
       for (const [owner, references] of current.references) {
         if (Atomics.load(new Int32Array(references), 0) < 0) {
           current.references.delete(owner);
@@ -340,8 +345,16 @@ export class SqliteDatabaseAdmissionRegistry {
 
   capture(
     cursor?: SqliteDatabaseAdmissionCursor,
-    identities?: ReadonlySet<string>,
+    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
   ): SqliteDatabaseAdmissions {
+    const identities = scope
+      ? new Set([
+          ...(scope.admissions?.map((record) => record.identity) ?? []),
+          ...(scope.location === undefined
+            ? []
+            : [this.forLocation(scope.location)?.identity].filter((value) => value !== undefined)),
+        ])
+      : undefined;
     if (!identities && !cursor) {
       this.publish();
     }
@@ -382,12 +395,26 @@ export class SqliteDatabaseAdmissionRegistry {
     });
   }
 
-  install(admissions: SqliteDatabaseAdmissions): void {
+  captureExchange(
+    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+    target?: string | Admission,
+  ) {
+    return target && typeof target !== "string" && isSqliteDatabaseAdmissionRetired(target)
+      ? [{ ...target, facts: new Map(), writeScopes: new Map(), references: new Map() }]
+      : this.capture(this.exchangeCursor, scope);
+  }
+
+  resetExchangeCursor(): void {
+    this.exchangeCursor = createSqliteDatabaseAdmissionCursor();
+  }
+
+  install(admissions: SqliteDatabaseAdmissions): boolean {
+    const changedRecords = new Set<Admission>();
     for (const incoming of admissions) {
       let record = this.records.get(incoming.identity);
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
         if (record && isSqliteDatabaseAdmissionRetired(record)) {
-          this.publish(record);
+          changedRecords.add(record);
         }
         continue;
       }
@@ -452,8 +479,13 @@ export class SqliteDatabaseAdmissionRegistry {
         changed = true;
       }
       if (changed) {
-        this.publish(record);
+        changedRecords.add(record);
       }
     }
+    if (changedRecords.size > 0) {
+      this.publish(changedRecords);
+      return true;
+    }
+    return false;
   }
 }

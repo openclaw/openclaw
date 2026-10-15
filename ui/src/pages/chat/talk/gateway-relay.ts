@@ -4,6 +4,7 @@ import {
   validateTalkSessionCancelOutputResult,
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { t } from "../../../i18n/index.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -168,11 +169,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  stop(): Promise<void> {
-    return this.close("abort");
-  }
-
-  private close(disposition: "abort" | "detach"): Promise<void> {
+  stop({ disposition = "abort" }: RealtimeVoiceCloseOptions = {}): Promise<void> {
     const wasClosed = this.closed;
     this.stopLocal();
     if (!wasClosed) {
@@ -279,7 +276,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     // Status callbacks can synchronously stop Talk; commit detachment first.
-    void this.close("detach");
+    void this.stop({ disposition: "detach" });
     this.ctx.callbacks.onStatus?.("error", formatUiError(error));
   }
 
@@ -322,7 +319,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       );
       // Overflow is locally terminal, so release the server relay immediately even
       // if the browser's microphone permission prompt never settles.
-      void this.close("detach");
+      void this.stop({ disposition: "detach" });
       return;
     }
     this.pendingActivationEvents.push(event);

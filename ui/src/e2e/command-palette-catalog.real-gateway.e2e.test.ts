@@ -499,7 +499,11 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const frames: unknown[] = [];
+    const frames: Array<{
+      direction: "sent" | "received";
+      frame: Record<string, unknown>;
+      transportFailure?: boolean;
+    }> = [];
     const commands: unknown[] = [];
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
@@ -677,6 +681,26 @@ suite.define(() => {
           await status.waitFor({ state: "hidden" });
         },
       );
+    } catch (error) {
+      const catalogFrames = frames.filter(
+        ({ direction, frame }) => direction === "received" || frame.method === "models.list",
+      );
+      console.log(
+        "catalog-publication-failure",
+        JSON.stringify({
+          rejectCatalogReplies,
+          frameCount: catalogFrames.length,
+          frames: catalogFrames.slice(-100).map(({ direction, frame, transportFailure }) => ({
+            direction,
+            id: typeof frame.id === "string" ? frame.id.slice(0, 128) : undefined,
+            method: typeof frame.method === "string" ? frame.method.slice(0, 128) : undefined,
+            event: typeof frame.event === "string" ? frame.event.slice(0, 128) : undefined,
+            ok: typeof frame.ok === "boolean" ? frame.ok : undefined,
+            transportFailure,
+          })),
+        }),
+      );
+      throw error;
     } finally {
       const redact = (text: string) =>
         text

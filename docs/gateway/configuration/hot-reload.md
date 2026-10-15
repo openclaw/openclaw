@@ -107,6 +107,11 @@ returns `UNAVAILABLE` with the committed config details. It does not wait for
 another file event. Repair the file, run `config.get`, then reapply the intended
 config. The Gateway does not overwrite the external edit.
 
+When the Gateway applies a valid external edit picked up by that final reread,
+a waiting write whose saved values were overwritten reports `superseded`
+instead of success. An unrelated edit that preserves the saved values can still
+complete successfully. Run `config.get` before reapplying.
+
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
@@ -429,6 +434,10 @@ Agent requests waiting to start pause while plugin hot reload drains the old
 runtime. They continue with the replacement when it is ready, or with the
 previous runtime after a successful rollback. You do not need to resend these
 requests. Failed restoration or Gateway shutdown still reports a failure.
+Already-admitted turns retain their runtime generation through nested model work.
+Unrelated plugin-owned settings do not invalidate a prepared `chat.send`; session,
+model, tool-policy, and core plugin admission-policy changes still recheck the
+facts used for admission.
 If a replacement fails before activation, rollback restores the previous configured
 model context limits without waiting for model discovery.
 

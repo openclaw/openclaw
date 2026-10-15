@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../../test/helpers/ui-style-fixtures.js";
@@ -6,7 +5,9 @@ import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../../../test-helpers/control-ui-e2e.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const describeDownloadVisibility = canRunPlaywrightChromium(chromiumExecutablePath)
@@ -16,16 +17,16 @@ const describeDownloadVisibility = canRunPlaywrightChromium(chromiumExecutablePa
 let browser: Browser;
 
 async function restDownloadState(
-  options: Parameters<typeof renderCompactAttachmentCard>[0],
+  options: Parameters<typeof CompactAttachmentCard>[0],
 ): Promise<{ opacity: string; pointerEvents: string }> {
-  const host = document.createElement("div");
-  render(renderCompactAttachmentCard(options), host);
+  const view = mountSolid(() => <CompactAttachmentCard {...options} />);
+  flush();
   const page = await browser.newPage();
   try {
     await page.setContent(`<!doctype html>
       <html>
         <head><style>${readStyleSheet("ui/src/styles/chat/message-layout.css")}</style></head>
-        <body><div class="chat-group-messages">${host.innerHTML}</div></body>
+        <body><div class="chat-group-messages">${view.container.innerHTML}</div></body>
       </html>`);
     return await page.evaluate(() => {
       const download = document.querySelector<HTMLElement>(
@@ -35,6 +36,7 @@ async function restDownloadState(
       return { opacity: style.opacity, pointerEvents: style.pointerEvents };
     });
   } finally {
+    view.unmount();
     await page.close();
   }
 }

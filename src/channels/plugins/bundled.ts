@@ -280,10 +280,6 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listBundledChannelPluginIds(): readonly ChannelId[] {
-  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
-}
-
 function resolveBundledChannelMetadata(
   id: ChannelId,
   rootScope: BundledChannelRootScope,

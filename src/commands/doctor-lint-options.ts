@@ -12,3 +12,11 @@ export const DoctorLintCliOptionsSchema = z.strictObject({
 });
 
 export type DoctorLintCliOptions = Readonly<z.infer<typeof DoctorLintCliOptionsSchema>>;
+
+/** Private CLI→worker stdin handoff: the later worker shares the CLI's validation-command budget anchor. */
+export const DoctorLintWorkerInputSchema = z.strictObject({
+  options: DoctorLintCliOptionsSchema,
+  commandStartedAtMs: z.number().int().optional(),
+});
+
+export type DoctorLintWorkerInput = Readonly<z.infer<typeof DoctorLintWorkerInputSchema>>;

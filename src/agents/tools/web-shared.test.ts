@@ -100,16 +100,6 @@ describe("web shared timeout seconds", () => {
     expect(readCache(cache, "key")).toBeNull();
   });
 
-  it("does not write cache values when expiry would exceed the Date range", () => {
-    const cache = new Map<string, CacheEntry<string>>();
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-
-    writeCache(cache, "key", "value", 60_000);
-
-    expect(cache.size).toBe(0);
-    expect(readCache(cache, "key")).toBeNull();
-  });
-
   it("does not evict valid entries when an invalid expiry cannot be cached", () => {
     const cache = new Map<string, CacheEntry<string>>();
     for (let index = 0; index < 100; index += 1) {
@@ -205,24 +195,6 @@ describe("readResponseText", () => {
     },
   );
 
-  it("does not mark multi-chunk exact-limit streamed responses as truncated", async () => {
-    const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn();
-    const response = responseFromReader({
-      chunks: ["hel", "lo"],
-      cancel,
-      releaseLock,
-    });
-
-    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
-      text: "hello",
-      truncated: false,
-      bytesRead: 5,
-    });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps truncated fallback charset decoding isolated between responses", async () => {
     const firstResponse = responseFromReader({
       chunks: ["ab😀cd"],
@@ -251,7 +223,7 @@ describe("readResponseText", () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();
     const response = responseFromReader({
-      chunks: ["hello", ""],
+      chunks: ["hel", "lo", ""],
       cancel,
       releaseLock,
     });
