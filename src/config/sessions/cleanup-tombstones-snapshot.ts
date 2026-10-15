@@ -1,4 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import { quoteSqliteIdentifier } from "../../infra/sqlite-schema-sql.js";
 
 /**
@@ -20,6 +25,14 @@ import { quoteSqliteIdentifier } from "../../infra/sqlite-schema-sql.js";
  * anyone remembering to update this file, and a cascade shape this code cannot
  * express fails loudly instead of quietly restoring less than it removed.
  *
+ * That walk is schema work, so it is resolved once per admitted schema rather
+ * than once per placeholder: the table list comes from the connection's
+ * admitted schema facts, and the derived cascade description is retained
+ * against that facts object. The schema owner replaces the object whenever it
+ * invalidates — DDL, a foreign commit, a rollback, physical replacement — so
+ * the description cannot outlive the schema it describes, and a backlog of
+ * placeholders no longer repeats the whole walk per candidate.
+ *
  * The one thing deliberately NOT captured is the derived transcript search
  * index: `session_transcript_fts_rows` carries no foreign key (its owner,
  * `deleteSessionTranscriptIndexInTransaction`, deletes it explicitly) and the
@@ -39,9 +52,29 @@ type CascadeTable = {
 const ROOT_TABLE = "session_windows";
 const ROOT_SESSION_ID_COLUMN = "session_id";
 
-function readString(row: Record<string, unknown>, column: string): string {
-  const value = row[column];
-  if (typeof value !== "string") {
+/**
+ * Cascade descriptions keyed by the admitted schema facts they were derived
+ * from.
+ *
+ * The schema owner hands out one facts object per schema generation and
+ * replaces it on every invalidation, so keying on the object itself is the
+ * invalidation lifecycle — there is no separate expiry to maintain here and no
+ * way to read a description that outlived its schema. Weak so a retired
+ * connection's facts do not pin their cascade.
+ */
+const cascadeTablesBySchema = new WeakMap<SqliteSchemaFacts, CascadeTable[]>();
+
+/**
+ * One column of an untyped SQLite row, required to be text.
+ *
+ * The string admission itself is the shared `readStringValue` seam; what this
+ * adds is the refusal. Every caller is reading a schema identifier it is about
+ * to interpolate into SQL or replay into a table, so a missing or non-text
+ * value cannot be defaulted away — it has to stop the snapshot.
+ */
+function requireSchemaText(row: Record<string, unknown>, column: string): string {
+  const value = readStringValue(row[column]);
+  if (value === undefined) {
     throw new Error(`SQLite schema walk expected a string ${column}`);
   }
   return value;
@@ -54,7 +87,7 @@ function readForeignKeyGroups(
 ): { parent: string; onDelete: string; columns: { from: string; to: string }[] }[] {
   const rows = /* sqlite-allow-raw: foreign-key introspection has no Kysely form. */ database
     .prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(table)})`)
-    // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `readString` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
+    // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `requireSchemaText` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
     .all() as Record<string, unknown>[];
   const groups = new Map<
     number,
@@ -66,14 +99,14 @@ function readForeignKeyGroups(
       throw new Error(`SQLite returned a non-numeric foreign-key id for ${table}`);
     }
     const group = groups.get(id) ?? {
-      parent: readString(row, "table"),
-      onDelete: readString(row, "on_delete").toUpperCase(),
+      parent: requireSchemaText(row, "table"),
+      onDelete: requireSchemaText(row, "on_delete").toUpperCase(),
       columns: [],
     };
     // A composite key reports its parent column as NULL when it targets the
     // parent's primary key implicitly; such a key cannot be followed by name.
     group.columns.push({
-      from: readString(row, "from"),
+      from: requireSchemaText(row, "from"),
       to: typeof row.to === "string" ? row.to : "",
     });
     groups.set(id, group);
@@ -85,12 +118,10 @@ function readForeignKeyGroups(
  * Tables that a `session_windows` delete cascades into, parents before
  * children so a restore can replay them in insertion order.
  */
-function resolveSessionWindowCascadeTables(database: DatabaseSync): CascadeTable[] {
-  const tableRows = /* sqlite-allow-raw: schema enumeration has no Kysely form. */ database
-    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
-    // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `readString` below is the only thing that admits one.
-    .all() as Record<string, unknown>[];
-  const tables = tableRows.map((row) => readString(row, "name"));
+function walkSessionWindowCascadeTables(
+  database: DatabaseSync,
+  tables: readonly string[],
+): CascadeTable[] {
   const sessionIdColumnByTable = new Map<string, string>([[ROOT_TABLE, ROOT_SESSION_ID_COLUMN]]);
   const ordered: CascadeTable[] = [];
   let frontier = [ROOT_TABLE];
@@ -128,9 +159,32 @@ function resolveSessionWindowCascadeTables(database: DatabaseSync): CascadeTable
 }
 
 /**
+ * Tables that a `session_windows` delete cascades into, resolved once per
+ * admitted schema generation.
+ *
+ * Admitted facts are required rather than optional: the alternative is to fall
+ * back to querying `sqlite_schema` per call, which is the per-candidate schema
+ * walk this exists to remove, and a snapshot taken against schema facts nobody
+ * admitted is exactly the case where restoring less than the delete removed
+ * would go unnoticed.
+ */
+function resolveSessionWindowCascadeTables(database: DatabaseSync): CascadeTable[] {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  if (!schema) {
+    throw new Error("Tombstone snapshot cascade resolution requires admitted schema facts");
+  }
+  let cascade = cascadeTablesBySchema.get(schema);
+  if (!cascade) {
+    cascade = walkSessionWindowCascadeTables(database, [...schema.tables]);
+    cascadeTablesBySchema.set(schema, cascade);
+  }
+  return cascade;
+}
+
+/**
  * A candidate's full `session_nodes` row, every `session_windows` row it owns,
- * and every cascading row those windows own, captured before a reclaim touches
- * any of them.
+ * and every cascading row those windows own, read inside the transaction that
+ * is about to remove them and before it does.
  *
  * `SELECT *` rather than a named column list deliberately: a snapshot that only
  * knew the columns this file cares about would restore an incomplete row if the
@@ -159,7 +213,7 @@ function selectRowsBySessionId(
       .prepare(
         `SELECT * FROM ${quoteSqliteIdentifier(table)} WHERE ${quoteSqliteIdentifier(column)} IN (${placeholders})`,
       )
-      // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `readString` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
+      // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `requireSchemaText` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
       .all(...sessionIds) as Record<string, unknown>[]
   );
 }
@@ -171,16 +225,16 @@ export function captureReclaimedRowSnapshot(
   const node =
     /* sqlite-allow-raw: paired with the dynamic cascade reads below so one snapshot is taken through one statement style. */ database
       .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-      // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `readString` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
+      // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `requireSchemaText` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
       .get(sessionKey) as Record<string, unknown> | undefined;
   if (!node) {
     return undefined;
   }
   const windows = /* sqlite-allow-raw: see above. */ database
     .prepare("SELECT * FROM session_windows WHERE session_key = ?")
-    // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `readString` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
+    // SAFETY: node:sqlite hands back untyped rows; the assertion types every column as `unknown`, so it grants no value type -- `requireSchemaText` is the only thing that admits one, and every other column is replayed verbatim into the table it came from.
     .all(sessionKey) as Record<string, unknown>[];
-  const sessionIds = windows.map((window) => readString(window, ROOT_SESSION_ID_COLUMN));
+  const sessionIds = windows.map((window) => requireSchemaText(window, ROOT_SESSION_ID_COLUMN));
   const cascaded: { table: string; rows: Record<string, unknown>[] }[] = [];
   if (sessionIds.length > 0) {
     for (const table of resolveSessionWindowCascadeTables(database)) {
@@ -218,7 +272,7 @@ function insertRows(
 }
 
 /**
- * Re-inserts a snapshot taken before a reclaim, undoing that reclaim's delete.
+ * Re-inserts a reclaim's own recovery preimage, undoing that reclaim's delete.
  *
  * Rows are replayed outward from the placeholder — node, then windows, then
  * each cascading table in the order the schema walk discovered it — so every

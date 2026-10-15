@@ -104,6 +104,8 @@ async function settlesWhilePending(
 
 type SessionStoreReadMetrics = { rows: number; statements: number };
 
+type SchemaWalkMetrics = { foreignKeyLists: number; schemaEnumerations: number };
+
 type InstrumentedStatement = {
   sourceSQL?: string;
   all: (...parameters: never[]) => unknown[];
@@ -156,6 +158,38 @@ async function measureSessionStoreReads<T>(
   } finally {
     prototype.all = originalAll;
     prototype.iterate = originalIterate;
+  }
+}
+
+/**
+ * Counts the schema-introspection statements real SQLite executes while `run`
+ * runs.
+ *
+ * The cascade description a tombstone snapshot needs is schema work, so it must
+ * be resolved against the admitted schema rather than re-derived per
+ * placeholder. Nothing is replaced here either: `PRAGMA foreign_key_list` and
+ * the catalog enumeration still execute, and this only observes how many of
+ * them the sweep issued.
+ */
+async function measureSchemaWalk<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; metrics: SchemaWalkMetrics }> {
+  const metrics: SchemaWalkMetrics = { foreignKeyLists: 0, schemaEnumerations: 0 };
+  const prototype = StatementSync.prototype as unknown as InstrumentedStatement;
+  const originalAll = prototype.all;
+  prototype.all = function all(this: InstrumentedStatement, ...parameters: never[]) {
+    const sql = this.sourceSQL ?? "";
+    if (sql.includes("foreign_key_list")) {
+      metrics.foreignKeyLists += 1;
+    } else if (/sqlite_schema|sqlite_master/.test(sql)) {
+      metrics.schemaEnumerations += 1;
+    }
+    return originalAll.apply(this, parameters);
+  };
+  try {
+    return { result: await run(), metrics };
+  } finally {
+    prototype.all = originalAll;
   }
 }
 
@@ -849,6 +883,118 @@ describe("sweepTombstonedCronRunRemnants", () => {
         countRows("session_nodes", "session_key", `agent:main:cron:job-${index}:run:run-${index}`),
       ).toBe(0);
     }
+  });
+
+  it("restores the transcript state its own deletion removed, not an earlier one", async () => {
+    // The gap this closes: a group-wide snapshot taken before any candidate is
+    // reclaimed describes a state that the awaited encoding and publication of
+    // the candidates ahead of it gave this one time to leave behind. The
+    // rewrite below changes `transcript_events` in place, so every field
+    // `sameCandidate` compares -- current session id, session key, the
+    // max(node, window) updated_at, the owned generation ids -- is byte
+    // identical afterwards. The deletion transaction therefore revalidates,
+    // passes, and removes the NEW content. If recovery replays a preimage from
+    // before that rewrite, the sweep reinstates the old transcript, reports the
+    // candidate as repaired, and subtracts it from the removal counts -- a
+    // silent data loss that no count or row-presence assertion can see.
+    storePath = path.join(tempDir, "recovery-preimage-freshness.sqlite");
+    const sessionIds: string[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      sessionIds.push(
+        await seedCanonicalPlaceholder({
+          key: `agent:main:cron:job-${index}:run:run-${index}`,
+          sessionId: `cron-session-${index}`,
+          skipMaintenance: true,
+        }),
+      );
+    }
+    const rewritten = sessionIds[0] ?? "";
+    const REPLAYED_CONTENT = "cron run transcript (replayed in place)";
+    let encodes = 0;
+    // Runs before each candidate's archive materialization, which is before
+    // that candidate's deletion transaction opens.
+    materializedHook.beforeRun = async () => {
+      encodes += 1;
+      if (encodes !== 1) {
+        return;
+      }
+      // Candidate 0's own window and node rows are left alone on purpose: an
+      // event replayed under its existing timestamp is exactly the mutation
+      // the placeholder's identity fields cannot report.
+      const database = openDatabase();
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .updateTable("transcript_events")
+          .set({ event_json: JSON.stringify({ type: "session", content: REPLAYED_CONTENT }) })
+          .where("session_id", "=", rewritten),
+      );
+    };
+    materializedHook.run = () => {
+      // Same injection point as the restore case above: let candidate 0's
+      // reclaim commit, then reference it while candidate 1 is encoding, so
+      // post-delete verification has to put candidate 0 back.
+      if (encodes !== 2) {
+        return;
+      }
+      materializedHook.run = undefined;
+      const database = openDatabase();
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db).insertInto("session_nodes").values({
+          session_key: "agent:main:direct:post-delete-reference",
+          current_session_id: rewritten,
+          entry_json: "{}",
+          updated_at: NOW_MS,
+        }),
+      );
+    };
+
+    await expect(sweep({ dryRun: false })).resolves.toMatchObject({
+      candidates: 8,
+      removedNodes: 7,
+      sweptTranscriptStates: 7,
+    });
+    expect(countRows("session_nodes", "session_key", "agent:main:cron:job-0:run:run-0")).toBe(1);
+    expect(countRows("transcript_events", "session_id", rewritten)).toBe(1);
+    const restored = openDatabase();
+    const restoredEvent = executeSqliteQueryTakeFirstSync(
+      restored.db,
+      getSessionKysely(restored.db)
+        .selectFrom("transcript_events")
+        .selectAll()
+        .where("session_id", "=", rewritten),
+    );
+    // The content the deletion actually removed, not the content an earlier
+    // observation of this placeholder happened to hold.
+    expect(String(restoredEvent?.event_json)).toContain(REPLAYED_CONTENT);
+  });
+
+  it("resolves the cascade schema walk once however long the backlog is", async () => {
+    // `PRAGMA foreign_key_list` per remaining table per frontier pass is the
+    // whole catalog walk. Done per placeholder it scales the schema work with
+    // the backlog on the exact large-store path this change exists to repair,
+    // so the description has to come from the connection's admitted schema
+    // facts and be retained against them. Measured at two backlog sizes: the
+    // walk count must not follow the candidate count.
+    const measure = async (placeholders: number, label: string) => {
+      await seedBacklog(placeholders, label);
+      const { result, metrics } = await measureSchemaWalk(() => sweep({ dryRun: false }));
+      expect(result).toMatchObject({
+        candidates: placeholders,
+        removedNodes: placeholders,
+        sweptTranscriptStates: placeholders,
+      });
+      return metrics;
+    };
+
+    const small = await measure(2, "cascade-small");
+    const large = await measure(10, "cascade-large");
+
+    // Per-candidate resolution put five times the placeholders at five times
+    // the introspection; one resolution per admitted schema keeps it flat.
+    expect(large.foreignKeyLists).toBeLessThanOrEqual(small.foreignKeyLists);
+    expect(large.schemaEnumerations).toBeLessThanOrEqual(small.schemaEnumerations);
   });
 
   it("keeps a placeholder whose own key holds a work admission", async () => {

@@ -308,7 +308,21 @@ async function sweepTombstonedCronRunRemnants(params: {
 
   let removedNodes = 0;
   let sweptTranscriptStates = 0;
-  const reclaim = async (candidate: TombstoneCandidate): Promise<boolean> => {
+  /**
+   * What one reclaim removed, or null when it removed nothing.
+   *
+   * `recovery` is the snapshot taken inside the same transaction that did the
+   * removal, so it is the exact preimage of that removal rather than of any
+   * earlier observation. It is `undefined` only in the unreachable case where
+   * the transaction's own fences passed and the placeholder row then did not
+   * read back; the caller treats that as unrepairable instead of restoring
+   * something it cannot prove.
+   */
+  type ReclaimedCandidate = {
+    recovery: ReclaimedRowSnapshot | undefined;
+    sweptTranscriptStates: number;
+  };
+  const reclaim = async (candidate: TombstoneCandidate): Promise<ReclaimedCandidate | null> => {
     const result = await runExclusiveSessionLifecycleMutation("cron-cleanup", {
       scope: params.storePath,
       identities: [candidate.sessionKey, ...candidate.generationIds],
@@ -369,6 +383,7 @@ async function sweepTombstonedCronRunRemnants(params: {
             scope,
             async () => {
               let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
+              let recovery: ReclaimedRowSnapshot | undefined;
               let removed = false;
               runOpenClawAgentWriteTransaction(
                 (transactionDb) => {
@@ -391,6 +406,24 @@ async function sweepTombstonedCronRunRemnants(params: {
                   ) {
                     return;
                   }
+                  // Recovery preimage, captured here and nowhere else: this is
+                  // the first point at which the fences that authorize the
+                  // removal have passed AND nothing has been removed yet, and
+                  // it is inside the transaction that does the removing. Both
+                  // halves matter. Taken earlier -- the group's pre-reclaim
+                  // pass this replaced -- the snapshot describes a state that
+                  // an awaited encode and publication for an earlier candidate
+                  // gave this one time to leave behind: a transcript rewritten
+                  // in place, or an event replayed under its existing
+                  // timestamp, changes nothing `sameCandidate` compares, so
+                  // the delete below validates and removes the newer content
+                  // while a restore would silently reinstate the older one and
+                  // still subtract the candidate from the removal counts.
+                  // Taken inside the transaction it also needs no read
+                  // transaction of its own: the node, window and cascade reads
+                  // share this transaction's single view, so they cannot tear
+                  // against a concurrent writer.
+                  recovery = captureReclaimedRowSnapshot(transactionDb.db, candidate.sessionKey);
                   archivedTranscripts = deleteMaterializedSessionStatePlans(
                     transactionDb,
                     materialized,
@@ -436,6 +469,7 @@ async function sweepTombstonedCronRunRemnants(params: {
               }
               return {
                 archivedTranscripts,
+                recovery,
                 sweptTranscriptStates: candidate.generationIds.length,
               };
             },
@@ -445,7 +479,7 @@ async function sweepTombstonedCronRunRemnants(params: {
       },
     });
     if (!result) {
-      return false;
+      return null;
     }
     // The lifecycle and SQLite writer lanes are released before file I/O;
     // publication reacquires the writer only for its short status commit.
@@ -453,7 +487,7 @@ async function sweepTombstonedCronRunRemnants(params: {
     removedNodes += 1;
     sweptTranscriptStates += result.sweptTranscriptStates;
     emitArchivedTranscriptUpdates(publishedArchives);
-    return true;
+    return { recovery: result.recovery, sweptTranscriptStates: result.sweptTranscriptStates };
   };
 
   // Reference analysis is the only unindexable part of a reclaim, so it is
@@ -496,30 +530,26 @@ async function sweepTombstonedCronRunRemnants(params: {
           subOffset += TOMBSTONE_VERIFICATION_GROUP_SIZE
         ) {
           const group = batch.slice(subOffset, subOffset + TOMBSTONE_VERIFICATION_GROUP_SIZE);
-          // Snapshotted before the delete, not after: once a candidate is
-          // reclaimed there is nothing left to read back -- not the node and
-          // window rows, and not the transcript state those windows cascade.
-          // Capturing every candidate in the group costs indexed reads it will
-          // almost always turn out not to need, but there is no "decide
-          // afterward" option here, and a cheaper snapshot would only be
-          // cheaper by restoring less than the delete removed.
-          const snapshotsByKey = new Map<string, ReclaimedRowSnapshot>();
-          const snapshotDatabase = currentDatabase();
-          for (const candidate of group) {
-            const snapshot = captureReclaimedRowSnapshot(snapshotDatabase.db, candidate.sessionKey);
-            if (snapshot) {
-              snapshotsByKey.set(candidate.sessionKey, snapshot);
-            }
-          }
           // Only candidates this sub-group actually removed need verifying --
           // one `reclaim()` legitimately skips a candidate for reasons that
           // have nothing to do with references (a live work admission, a
           // stale scan no longer matching the current row), and a skipped
           // candidate is trivially still "referenced": it was never deleted.
+          //
+          // Each reclaim hands back its own recovery preimage, taken inside the
+          // transaction that removed the rows. Nothing is snapshotted for a
+          // candidate this group never deletes, and no snapshot can describe a
+          // state older than the removal it would undo.
           const reclaimed: TombstoneCandidate[] = [];
+          const snapshotsByKey = new Map<string, ReclaimedRowSnapshot>();
           for (const candidate of group) {
-            if (await reclaim(candidate)) {
-              reclaimed.push(candidate);
+            const removal = await reclaim(candidate);
+            if (!removal) {
+              continue;
+            }
+            reclaimed.push(candidate);
+            if (removal.recovery) {
+              snapshotsByKey.set(candidate.sessionKey, removal.recovery);
             }
           }
           const reclaimedGenerationIds = reclaimed.flatMap((candidate) => candidate.generationIds);
@@ -544,8 +574,9 @@ async function sweepTombstonedCronRunRemnants(params: {
             }
             const snapshot = snapshotsByKey.get(candidate.sessionKey);
             if (!snapshot) {
-              // Should be unreachable -- every reclaimed candidate was live
-              // (and therefore captured) immediately beforehand. Treated as
+              // Should be unreachable -- the deletion transaction captures its
+              // own preimage after its fences pass and before it removes a row,
+              // so a committed removal always carries one. Treated as
               // unrepairable rather than silently accepted either way.
               unrepairableFailures.push({ candidate, liveGenerationIds });
               continue;

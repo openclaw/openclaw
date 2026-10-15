@@ -23,9 +23,20 @@
  *    preserved; `ops` rows survive untouched (the prior round's P1 fix).
  * 3. `--all-agents` over per-agent stores: two independent physical targets,
  *    each agent sweeps only its own store, no cross-store leakage.
+ * 4. Post-delete recovery, driven by a REAL SECOND OS PROCESS rather than by
+ *    injected faults. A sidecar opens the same SQLite file on its own
+ *    connection and, while the sweep is working through one verification
+ *    group, (a) rewrites a not-yet-reclaimed placeholder's transcript in place
+ *    and (b) references that placeholder immediately after the sweep deletes
+ *    it. The sweep's post-delete verification therefore has to put it back,
+ *    and what it puts back has to be the transcript its own deletion removed —
+ *    not the state the group held when it started. Both halves are the review
+ *    findings this round addressed, observed through the shipped cleanup
+ *    service with no test double anywhere in the loop.
  *
  * Run: pnpm tsx scripts/proof-117074-tombstone-shared-owners.ts
  */
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -358,10 +369,194 @@ async function scenarioAllAgentsPerAgentStores(): Promise<void> {
   );
 }
 
+/**
+ * The external writer, as a standalone process with no access to this module.
+ *
+ * It talks to the store through `node:sqlite` and raw SQL only, so nothing in
+ * the sweep's own process can coordinate with it: no shared module state, no
+ * injected hook, no patched prototype. That is the point — the review asked for
+ * recovery evidence that is not a mocked fault, and the only honest way to
+ * produce a post-delete reference is for a separate writer to actually create
+ * one while the sweep runs.
+ *
+ * Sequence, each step gated on observable store state rather than on a sleep:
+ * 1. Wait until the first placeholder's node row is gone. That proves the
+ *    sweep has finished preparing its verification group and started deleting.
+ * 2. Rewrite the LAST placeholder's transcript event in place. It is still
+ *    present at this point — six more archive encodes stand between it and its
+ *    own deletion — and the rewrite changes nothing the sweep's revalidation
+ *    compares, so the delete still proceeds and removes the rewritten row.
+ * 3. Wait until that last placeholder's node row is gone, then insert a plain
+ *    session row that references its transcript generation.
+ */
+const EXTERNAL_WRITER_SOURCE = String.raw`
+import { DatabaseSync } from "node:sqlite";
+const [databasePath, firstKey, lateKey, lateSessionId, marker, referenceKey] =
+  process.argv.slice(2);
+if (!databasePath) {
+  throw new Error("external writer requires the database path as its first argument");
+}
+const database = new DatabaseSync(databasePath);
+database.exec("PRAGMA busy_timeout = 20000");
+const idle = new Int32Array(new SharedArrayBuffer(4));
+const pause = () => Atomics.wait(idle, 0, 0, 5);
+const absent = (key) =>
+  database.prepare("SELECT COUNT(*) AS present FROM session_nodes WHERE session_key = ?").get(key)
+    .present === 0;
+function waitForAbsence(key, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (absent(key)) {
+      return true;
+    }
+    pause();
+  }
+  return false;
+}
+function write(statement, bindings) {
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    try {
+      return database.prepare(statement).run(...bindings);
+    } catch (error) {
+      if (Date.now() >= deadline || !/SQLITE_BUSY|database is locked/i.test(String(error))) {
+        throw error;
+      }
+      pause();
+    }
+  }
+}
+if (!waitForAbsence(firstKey, 120000)) {
+  console.log("external-writer: timed out waiting for the first reclaim");
+  process.exit(2);
+}
+console.log("external-writer: first placeholder reclaimed; rewriting the last one's transcript");
+const rewritten = write(
+  "UPDATE transcript_events SET event_json = ? WHERE session_id = ?",
+  [JSON.stringify({ type: "session", id: lateSessionId, content: marker }), lateSessionId],
+);
+console.log("external-writer: transcript rows rewritten = " + rewritten.changes);
+if (rewritten.changes !== 1) {
+  process.exit(3);
+}
+if (!waitForAbsence(lateKey, 120000)) {
+  console.log("external-writer: timed out waiting for the late reclaim");
+  process.exit(4);
+}
+write(
+  "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, '{}', ?)",
+  [referenceKey, lateSessionId, Date.now()],
+);
+console.log("external-writer: reference created for " + lateSessionId);
+database.close();
+`;
+
+async function scenarioExternalPostDeleteRecovery(): Promise<void> {
+  console.log("\n[4] a separate process references a reclaimed placeholder after its delete");
+  const stateDir = makeTrackedStateDir();
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  const storePath = path.join(stateDir, "recovery.sqlite");
+  const cfg = twoAgentConfig(storePath);
+  // One full verification group: the sweep snapshots and reclaims these in a
+  // single group, which is the window the external writer works inside.
+  const placeholders = 8;
+  const keyOf = (index: number) => `agent:main:cron:job-${index}:run:run-${index}`;
+  const sessionIdOf = (index: number) => `recovery-cron-session-${index}`;
+  for (let index = 0; index < placeholders; index += 1) {
+    await seedExpiredCronPlaceholder({
+      storePath,
+      ownerAgentId: "main",
+      sessionKey: keyOf(index),
+      sessionId: sessionIdOf(index),
+      ageMs: 48 * HOUR_MS,
+    });
+  }
+  const lateIndex = placeholders - 1;
+  const marker = "cron run transcript (rewritten by another process)";
+  const databasePath = openStore(storePath, "main").path;
+  check("placeholders seeded", countNodes(storePath, "main", keyOf(lateIndex)), 1);
+
+  // Written out as a module file rather than passed to `node -e`: with `-e`
+  // there is no script path in `process.argv`, so the first real argument lands
+  // at index 1 and a `slice(2)` read silently drops it. A file keeps the
+  // ordinary argv contract, and the writer stays a separate program.
+  const writerPath = path.join(stateDir, "external-writer.mjs");
+  fs.writeFileSync(writerPath, EXTERNAL_WRITER_SOURCE);
+  const writer = spawn(
+    process.execPath,
+    [
+      writerPath,
+      databasePath,
+      keyOf(0),
+      keyOf(lateIndex),
+      sessionIdOf(lateIndex),
+      marker,
+      "agent:main:direct:external-post-delete-reference",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let writerOutput = "";
+  writer.stdout.on("data", (chunk: Buffer) => {
+    writerOutput += chunk.toString();
+  });
+  writer.stderr.on("data", (chunk: Buffer) => {
+    writerOutput += chunk.toString();
+  });
+  const writerExit = new Promise<number>((resolve) => {
+    writer.on("exit", (code) => resolve(code ?? -1));
+  });
+
+  const result = await runSessionsCleanup({ cfg, opts: { allAgents: true, enforce: true } });
+  const writerCode = await writerExit;
+  for (const line of writerOutput.trim().split("\n")) {
+    console.log(`  | ${line}`);
+  }
+  check("external writer completed", writerCode, 0);
+
+  // The sweep reports seven removals out of eight candidates: the eighth was
+  // deleted and then put back, so it is subtracted from the applied counts
+  // rather than reported as reclaimed.
+  check("candidates considered", result.appliedSummaries[0]?.tombstoneRemnants?.candidates, 8);
+  check("remnants reported removed", totalSweptRemnants(result.appliedSummaries), placeholders - 1);
+  check(
+    "externally referenced placeholder restored",
+    countNodes(storePath, "main", keyOf(lateIndex)),
+    1,
+  );
+  check(
+    "its transcript generation restored",
+    countTranscriptEvents(storePath, "main", sessionIdOf(lateIndex)),
+    1,
+  );
+  // The recovery assertion that only an in-transaction preimage can satisfy:
+  // the content put back is the content this sweep's own deletion removed.
+  const restored = openStore(storePath, "main");
+  const restoredEvent = executeSqliteQuerySync(
+    restored.db,
+    getSessionKysely(restored.db)
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", sessionIdOf(lateIndex)),
+  ).rows[0];
+  check(
+    "restored transcript carries the externally rewritten content",
+    (restoredEvent?.event_json ?? "").includes(marker),
+    true,
+  );
+  for (let index = 0; index < lateIndex; index += 1) {
+    check(
+      `unreferenced placeholder ${index} stays reclaimed`,
+      countNodes(storePath, "main", keyOf(index)),
+      0,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   await scenarioAllAgentsSharedStore();
   await scenarioSingleAgentSharedStore();
   await scenarioAllAgentsPerAgentStores();
+  await scenarioExternalPostDeleteRecovery();
   // Teardown belongs here, not per scenario: joining the owners is what lets
   // every fixture root be removed without a lease chasing a deleted file.
   await releaseFixtureRoots();
