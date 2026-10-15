@@ -70,7 +70,7 @@ suite.define(() => {
             };
             assetRequests.push(request);
             try {
-              const response = await route.fetch({ url: upstream.href });
+              const response = await route.fetch({ url: upstream.href, maxRetries: 1 });
               request.response = { elapsedMs: elapsedMs(), status: response.status() };
               await route.fulfill({ response });
               request.fulfilledMs = elapsedMs();

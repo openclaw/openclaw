@@ -359,7 +359,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
         prop:menuLabel={t("agentScope.label")}
         prop:disabled={options().length <= 1}
         prop:onSelect={(agentId: string) => props.settingsAgentSelection.set(agentId)}
-        onWa-show={() => void props.agentIdentity.ensure(agents().map((agent) => agent.id))}
+        onOverlay-show={() => void props.agentIdentity.ensure(agents().map((agent) => agent.id))}
       />
     </div>
   );

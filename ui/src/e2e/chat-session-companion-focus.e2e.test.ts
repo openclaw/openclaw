@@ -145,6 +145,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       await mainInput.fill("/bt");
+      await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
       await page.getByRole("option").filter({ hasText: "/btw" }).click();
       const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
       await expect

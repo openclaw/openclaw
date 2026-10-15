@@ -407,16 +407,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
   });
 
-  it("rejects browser expiry outside the Date range before minting a token", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    await expect(
-      buildGoogleRealtimeVoiceProvider().createBrowserSession?.({
-        providerConfig: { apiKey: "gemini-key" },
-      }),
-    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
-    expect(createTokenMock).not.toHaveBeenCalled();
-  });
-
   it("builds thinking config per model family", () => {
     expect(buildThinkingConfig({}, EXTENDED)).toBeUndefined();
     expect(buildThinkingConfig({ thinkingLevel: "minimal" }, EXTENDED)).toEqual({

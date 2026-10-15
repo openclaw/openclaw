@@ -32,9 +32,9 @@ export function wrapKilocodeProviderStream(
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
     const headers = resolveProviderRequestHeaders({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
+      provider: model.provider,
       api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      baseUrl: model.baseUrl,
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,

@@ -34,6 +34,8 @@ open the run's session.
 
 With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
+A newly committed visible result refreshes the destination's idle freshness, so a reply within the idle window retains the scheduled question. Replaying the same result, silent runs, and failed or uncertain deliveries do not refresh it. Recurring visible results can keep the destination idle-fresh; daily reset still uses the session start time.
+
 - Delivery to the creating chat writes the result there.
 - Delivery to a different chat or topic writes the result **only in the destination**, not in the creating chat.
 - With no external route, such as a WebChat-created job, the creating conversation receives the result.

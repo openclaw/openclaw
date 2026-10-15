@@ -500,7 +500,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.runCommand).not.toHaveBeenCalled();
   });
 
-  it("keeps a lost companion response ambiguous", async () => {
+  it("reports an unreachable companion without local replay", async () => {
     const result = await runMac();
     expect(result.requestExecHost).toHaveBeenCalledOnce();
     expect(result.runCommand).not.toHaveBeenCalled();
@@ -526,6 +526,29 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(invokeResult(result.sendInvokeResult)).toEqual({
       ok: false,
       error: { code: "PERMISSION_MISSING", message: "Relaunch OpenClaw", details },
+    });
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("classifies a companion response deadline as a timeout", async () => {
+    const result = await runMac({
+      runViaResponse: {
+        ok: false,
+        error: {
+          code: "TIMEOUT",
+          reason: "timeout",
+          message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+        },
+      },
+    });
+
+    expectExecDeniedEvent(result.sendNodeEvent, "timeout");
+    expect(invokeResult(result.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: {
+        code: "TIMEOUT",
+        message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+      },
     });
     expect(result.runCommand).not.toHaveBeenCalled();
   });

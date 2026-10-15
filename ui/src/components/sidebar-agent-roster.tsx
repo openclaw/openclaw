@@ -320,7 +320,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                         get agentId() {
                           return card().id;
                         },
-                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                        class: "sidebar-agent-roster__action sidebar-agent-roster__new",
                         get label() {
                           return `${t("agentChip.newConversation")}: ${card().name}`;
                         },

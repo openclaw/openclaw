@@ -164,7 +164,8 @@ describe("Solid menu navigation", () => {
     await userEvent.click(surface().querySelector<HTMLButtonElement>("[data-form-control]")!);
     expect(pins).toBe(1);
     expect(selected).toEqual([]);
-    item("Beta").focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(item("Beta"));
     await userEvent.keyboard("{Enter}");
     await phase(surface(), "hidden");
     expect(selected).toEqual(["beta"]);
@@ -501,6 +502,7 @@ describe("Solid menu navigation", () => {
 
   it("skips ineligible controls while preserving editing and native Tab exit", async () => {
     const view = mountMenu({
+      items: [],
       children: (
         <>
           <button data-form-control="">Default</button>
@@ -562,6 +564,7 @@ describe("Solid menu navigation", () => {
           id: "settings",
           content: (
             <>
+              <input aria-label="Filter settings" data-search="" />
               <button data-form-control="">Send always</button>
               <button data-form-control="">Receive always</button>
             </>
@@ -572,15 +575,25 @@ describe("Solid menu navigation", () => {
     });
     await openMenu();
     const before = item("Before settings");
+    const after = item("After settings");
+    const search = view.getByRole("textbox", { name: "Filter settings" });
     const send = view.getByRole("button", { name: "Send always" });
     const receive = view.getByRole("button", { name: "Receive always" });
     before.focus();
     await userEvent.tab();
+    expect(document.activeElement).toBe(search);
+    await userEvent.tab();
     expect(document.activeElement).toBe(send);
     await userEvent.tab();
     expect(document.activeElement).toBe(receive);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(after);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(receive);
     await userEvent.tab({ shift: true });
     expect(document.activeElement).toBe(send);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(search);
     await userEvent.tab({ shift: true });
     expect(document.activeElement).toBe(before);
     expect(surface().matches(":popover-open")).toBe(true);
@@ -606,7 +619,7 @@ describe("Solid menu navigation", () => {
           </Menu>
           <input aria-label="Last control" data-form-control="" />
         </Menu>
-        <button>After menu</button>
+        <button tabindex={0}>After menu</button>
       </>
     ));
     flush();

@@ -36,6 +36,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/sessions-send-tool.incognito.test.ts",
   "src/agents/tools/message-tool.current-prompt-reaction.test.ts",
   "src/agents/tools/message-tool.hosted-transport.test.ts",
+  "src/agents/tools/message-tool-retry-delivery.test.ts",
   "src/agents/tools/sessions-tool.self-archive.test.ts",
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",

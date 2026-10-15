@@ -1,26 +1,73 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { createLitTestRenderer } from "../../../test-helpers/lit-render.ts";
-import { renderAssistantAttachments as renderAttachmentCards } from "./chat-message-attachments.ts";
-import { renderMessageImages } from "./chat-message-images.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
+import { MessageImages } from "./chat-message-images-solid.tsx";
 import {
   projectMessageMedia,
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
+  type AssistantAttachmentItem,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type AttachmentSidebarContent = Extract<SidebarContent, { kind: "attachment" }>;
 
-function renderAssistantAttachments(
-  ...[content, options, ...rest]: Parameters<typeof renderAttachmentCards>
+type AttachmentTestProps = Omit<Parameters<typeof AssistantAttachments>[0], "attachments"> & {
+  content: AssistantAttachmentItem[];
+};
+const mounts = new Map<
+  HTMLElement,
+  {
+    update: (props: AttachmentTestProps) => void;
+    unmount: () => void;
+  }
+>();
+
+function AttachmentContent(props: AttachmentTestProps) {
+  const media = createMemo(() => projectMessageMedia({}, props.content));
+  return (
+    <>
+      <MessageImages images={media().images} options={props.options} />
+      <AssistantAttachments
+        attachments={media().attachments}
+        options={props.options}
+        onOpenSidebar={props.onOpenSidebar}
+        onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+        inlinePlayback={props.inlinePlayback}
+      />
+    </>
+  );
+}
+
+function drawAssistantAttachments(
+  container: HTMLElement,
+  content: AssistantAttachmentItem[],
+  options: AttachmentTestProps["options"],
+  onOpenSidebar?: AttachmentTestProps["onOpenSidebar"],
+  onAssistantAttachmentLoaded?: AttachmentTestProps["onAssistantAttachmentLoaded"],
+  inlinePlayback = true,
 ) {
-  const { images, attachments } = projectMessageMedia({}, content);
-  return html`${renderMessageImages(images, options)}${renderAttachmentCards(attachments, options, ...rest)}`;
+  const props = { content, options, onOpenSidebar, onAssistantAttachmentLoaded, inlinePlayback };
+  const mounted = mounts.get(container);
+  if (mounted) {
+    mounted.update(props);
+    flush();
+  } else {
+    const [current, update] = createSignal<AttachmentTestProps>(props, { ownedWrite: true });
+    const root = mountSolid(() => <AttachmentContent {...current()} />, { container });
+    mounts.set(container, { update, unmount: root.unmount });
+  }
+}
+
+function unmountAttachments(container: HTMLElement) {
+  mounts.get(container)?.unmount();
+  mounts.delete(container);
 }
 
 function managedAttachment(url: string, artifactId?: string): AttachmentItem {
@@ -54,7 +101,6 @@ async function flushAttachmentResolution() {
 }
 
 const subscribers = new Set<() => void>();
-const { render, cleanup } = createLitTestRenderer();
 
 function stubAttachmentIntersection(): () => Promise<void> {
   const callbacks: IntersectionObserverCallback[] = [];
@@ -77,8 +123,10 @@ function stubAttachmentIntersection(): () => Promise<void> {
   };
 }
 
-afterEach(async () => {
-  await cleanup();
+afterEach(() => {
+  for (const container of mounts.keys()) {
+    unmountAttachments(container);
+  }
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
   }
@@ -92,25 +140,23 @@ describe("attachment sidebar source ownership", () => {
   it("preserves an ordinary comment-named file when its source cannot be previewed", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "selection-comment.txt",
-              mimeType: "text/plain",
-              url: "https://files.example/notes.txt",
-            },
-          },
-        ],
-        {},
-        onOpenSidebar,
-        undefined,
-        false,
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "selection-comment.txt",
+            mimeType: "text/plain",
+            url: "https://files.example/notes.txt",
+          },
+        },
+      ],
+      {},
+      onOpenSidebar,
+      undefined,
+      false,
     );
     await vi.waitFor(() =>
       expect(
@@ -132,17 +178,15 @@ describe("attachment sidebar source ownership", () => {
   ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: { kind: "document", label, mimeType, url: source },
-          },
-        ],
-        { onOpenImage },
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: { kind: "document", label, mimeType, url: source },
+        },
+      ],
+      { onOpenImage },
     );
 
     expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
@@ -172,7 +216,7 @@ describe("attachment sidebar source ownership", () => {
       vi.stubGlobal("fetch", fetchMock);
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => {
-        render(null, container);
+        unmountAttachments(container);
       });
       const attachment: AttachmentItem = {
         type: "attachment",
@@ -184,13 +228,10 @@ describe("attachment sidebar source ownership", () => {
         },
       };
       const rerender = () =>
-        render(
-          renderAssistantAttachments([attachment], {
-            authToken: "test-token",
-            onRequestUpdate: rerender,
-          }),
-          container,
-        );
+        drawAssistantAttachments(container, [attachment], {
+          authToken: "test-token",
+          onRequestUpdate: rerender,
+        });
       subscribers.add(rerender);
       rerender();
       await vi.advanceTimersByTimeAsync(0);
@@ -236,22 +277,20 @@ describe("attachment sidebar source ownership", () => {
 
   it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "vector.svg",
-              mimeType: "application/octet-stream",
-              url: "https://files.example/download/opaque",
-            },
-          },
-        ],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "vector.svg",
+            mimeType: "application/octet-stream",
+            url: "https://files.example/download/opaque",
+          },
+        },
+      ],
+      {},
     );
 
     expect(container.querySelector("openclaw-chat-svg-attachment")).not.toBeNull();
@@ -261,22 +300,20 @@ describe("attachment sidebar source ownership", () => {
 
   it("does not let an SVG-shaped label override a document MIME type", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "vector.svg",
-              mimeType: "application/pdf",
-              url: "https://files.example/document.pdf",
-            },
-          },
-        ],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "vector.svg",
+            mimeType: "application/pdf",
+            url: "https://files.example/document.pdf",
+          },
+        },
+      ],
+      {},
     );
 
     expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
@@ -313,14 +350,12 @@ describe("attachment sidebar source ownership", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     const onAssistantAttachmentLoaded = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [svgAttachment(source)],
-        { onOpenImage },
-        undefined,
-        onAssistantAttachmentLoaded,
-      ),
+    drawAssistantAttachments(
       container,
+      [svgAttachment(source)],
+      { onOpenImage },
+      undefined,
+      onAssistantAttachmentLoaded,
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -372,22 +407,20 @@ describe("attachment sidebar source ownership", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "image",
-              label: "diagram",
-              url: source,
-            },
-          },
-        ],
-        {},
-        onOpenSidebar,
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: {
+            kind: "image",
+            label: "diagram",
+            url: source,
+          },
+        },
+      ],
+      {},
+      onOpenSidebar,
     );
 
     await vi.waitFor(() =>
@@ -414,12 +447,10 @@ describe("attachment sidebar source ownership", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [svgAttachment(`${window.location.origin}/reconnected.svg`, "reconnected.svg")],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [svgAttachment(`${window.location.origin}/reconnected.svg`, "reconnected.svg")],
+      {},
     );
 
     await intersectAttachment();
@@ -446,16 +477,14 @@ describe("attachment sidebar source ownership", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
-          svgAttachment(`${window.location.origin}/oversized.svg`, "oversized.svg", {
-            sizeBytes: 256 * 1024 + 1,
-          }),
-        ],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        svgAttachment(`${window.location.origin}/oversized.svg`, "oversized.svg", {
+          sizeBytes: 256 * 1024 + 1,
+        }),
+      ],
+      {},
     );
 
     await vi.waitFor(() =>
@@ -492,12 +521,10 @@ describe("attachment sidebar source ownership", () => {
       ) as unknown as typeof fetch,
     );
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [svgAttachment(`${window.location.origin}/chunked.svg`, "chunked.svg")],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [svgAttachment(`${window.location.origin}/chunked.svg`, "chunked.svg")],
+      {},
     );
 
     await intersectAttachment();
@@ -526,14 +553,12 @@ describe("attachment sidebar source ownership", () => {
     vi.stubGlobal("fetch", fetchMock);
     const container = document.body.appendChild(document.createElement("div"));
     const onAssistantAttachmentLoaded = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [svgAttachment(`${window.location.origin}/stalled.svg`, "stalled.svg")],
-        {},
-        undefined,
-        onAssistantAttachmentLoaded,
-      ),
+    drawAssistantAttachments(
       container,
+      [svgAttachment(`${window.location.origin}/stalled.svg`, "stalled.svg")],
+      {},
+      undefined,
+      onAssistantAttachmentLoaded,
     );
 
     await intersectAttachment();
@@ -561,13 +586,11 @@ describe("attachment sidebar source ownership", () => {
     );
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [svgAttachment(`${window.location.origin}/broken.svg`, "broken.svg")],
-        {},
-        onOpenSidebar,
-      ),
+    drawAssistantAttachments(
       container,
+      [svgAttachment(`${window.location.origin}/broken.svg`, "broken.svg")],
+      {},
+      onOpenSidebar,
     );
 
     const image = await vi.waitFor(() => {
@@ -599,13 +622,10 @@ describe("attachment sidebar source ownership", () => {
       .mockResolvedValueOnce({ url: ticketedUrl });
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () =>
-      render(
-        renderAssistantAttachments([managedAttachment(source, artifactId)], {
-          onRequestUpdate: rerender,
-          resolveArtifactDownload,
-        }),
-        container,
-      );
+      drawAssistantAttachments(container, [managedAttachment(source, artifactId)], {
+        onRequestUpdate: rerender,
+        resolveArtifactDownload,
+      });
     subscribers.add(rerender);
 
     rerender();
@@ -629,14 +649,11 @@ describe("attachment sidebar source ownership", () => {
     const source = "https://example.com/clip.mp4";
     const container = document.body.appendChild(document.createElement("div"));
     let sidebarContent: AttachmentSidebarContent | undefined;
-    render(
-      renderAssistantAttachments([managedAttachment(source)], {}, (content) => {
-        if (content.kind === "attachment") {
-          sidebarContent = content;
-        }
-      }),
-      container,
-    );
+    drawAssistantAttachments(container, [managedAttachment(source)], {}, (content) => {
+      if (content.kind === "attachment") {
+        sidebarContent = content;
+      }
+    });
     container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
 
     expect(sidebarContent?.src).toBe(source);
@@ -646,10 +663,7 @@ describe("attachment sidebar source ownership", () => {
 
   it("does not expose a Files action without a sidebar owner", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments([managedAttachment("https://example.com/asset.bin")], {}),
-      container,
-    );
+    drawAssistantAttachments(container, [managedAttachment("https://example.com/asset.bin")], {});
 
     expect(container.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
     expect(
@@ -665,14 +679,11 @@ describe("attachment sidebar source ownership", () => {
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () =>
-      render(
-        renderAssistantAttachments([managedAttachment(source, `artifact_${attachmentId}`)], {
-          onRequestUpdate: rerender,
-          resourceBasePath: "/rosita",
-          resolveArtifactDownload,
-        }),
-        container,
-      );
+      drawAssistantAttachments(container, [managedAttachment(source, `artifact_${attachmentId}`)], {
+        onRequestUpdate: rerender,
+        resourceBasePath: "/rosita",
+        resolveArtifactDownload,
+      });
     subscribers.add(rerender);
 
     rerender();
@@ -708,17 +719,15 @@ describe("attachment sidebar source ownership", () => {
     let sidebarContent: AttachmentSidebarContent | undefined;
     const transcriptUpdate = () => rerender();
     const rerender = () =>
-      render(
-        renderAssistantAttachments(
-          [managedAttachment(source, artifactId)],
-          { connectionEpoch: 1, onRequestUpdate: transcriptUpdate, resolveArtifactDownload },
-          (content) => {
-            if (content.kind === "attachment") {
-              sidebarContent = content;
-            }
-          },
-        ),
+      drawAssistantAttachments(
         container,
+        [managedAttachment(source, artifactId)],
+        { connectionEpoch: 1, onRequestUpdate: transcriptUpdate, resolveArtifactDownload },
+        (content) => {
+          if (content.kind === "attachment") {
+            sidebarContent = content;
+          }
+        },
       );
     subscribers.add(transcriptUpdate);
 
@@ -760,18 +769,16 @@ describe("attachment sidebar source ownership", () => {
       const playback = requestedPlayback ?? "native";
       const container = document.body.appendChild(document.createElement("div"));
       const onOpenSidebar = vi.fn();
-      render(
-        renderAssistantAttachments(
-          [
-            {
-              type: "attachment",
-              attachment: { kind, label, mimeType, playback, url: source },
-            },
-          ],
-          {},
-          onOpenSidebar,
-        ),
+      drawAssistantAttachments(
         container,
+        [
+          {
+            type: "attachment",
+            attachment: { kind, label, mimeType, playback, url: source },
+          },
+        ],
+        {},
+        onOpenSidebar,
       );
 
       const mediaPlayer = container.querySelector(player);
@@ -785,12 +792,10 @@ describe("attachment sidebar source ownership", () => {
     ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
   ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
+      {},
     );
 
     expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
@@ -815,18 +820,16 @@ describe("attachment sidebar source ownership", () => {
     },
   ])("renders $code failures with separable status and reason text", ({ code, label, reason }) => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        expectDefined(
-          normalizeAttachmentContentBlock({
-            type: "attachment_error",
-            attachment: { code, kind: "document", label },
-          }),
-          "normalized attachment failure",
-        ),
-        {},
-      ),
+    drawAssistantAttachments(
       container,
+      expectDefined(
+        normalizeAttachmentContentBlock({
+          type: "attachment_error",
+          attachment: { code, kind: "document", label },
+        }),
+        "normalized attachment failure",
+      ),
+      {},
     );
 
     expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
@@ -865,23 +868,21 @@ describe("attachment sidebar source ownership", () => {
   it("renders normalized base64 audio with inline playback and Files actions", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "audio",
-              label: "inline.wav",
-              mimeType: "audio/wav",
-              url: "data:audio/wav;base64,UklGRg==",
-            },
-          },
-        ],
-        {},
-        onOpenSidebar,
-      ),
+    drawAssistantAttachments(
       container,
+      [
+        {
+          type: "attachment",
+          attachment: {
+            kind: "audio",
+            label: "inline.wav",
+            mimeType: "audio/wav",
+            url: "data:audio/wav;base64,UklGRg==",
+          },
+        },
+      ],
+      {},
+      onOpenSidebar,
     );
 
     const player = container.querySelector("openclaw-chat-audio-player");
@@ -921,32 +922,30 @@ describe("attachment sidebar source ownership", () => {
     let sidebarContent: AttachmentSidebarContent | undefined;
     const transcriptUpdate = () => rerender();
     const rerender = () =>
-      render(
-        renderAssistantAttachments(
-          [
-            {
-              type: "attachment",
-              attachment: {
-                kind: "audio",
-                label: "clip.mp3",
-                mimeType: "audio/mpeg",
-                url: source,
-              },
-            },
-          ],
-          {
-            authToken: "token-A",
-            sessionKey: "agent:main:sidebar-audio",
-            messageId: "saved-audio-message",
-            onRequestUpdate: transcriptUpdate,
-          },
-          (content) => {
-            if (content.kind === "attachment") {
-              sidebarContent = content;
-            }
-          },
-        ),
+      drawAssistantAttachments(
         container,
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "audio",
+              label: "clip.mp3",
+              mimeType: "audio/mpeg",
+              url: source,
+            },
+          },
+        ],
+        {
+          authToken: "token-A",
+          sessionKey: "agent:main:sidebar-audio",
+          messageId: "saved-audio-message",
+          onRequestUpdate: transcriptUpdate,
+        },
+        (content) => {
+          if (content.kind === "attachment") {
+            sidebarContent = content;
+          }
+        },
       );
     subscribers.add(transcriptUpdate);
 

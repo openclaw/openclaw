@@ -147,6 +147,26 @@ current config. The original login callback does not authorize a later command.
 Let the shared owner report the visibility outcome:
 a saved policy is not proof that the running Gateway applied it.
 
+## Submit JSON requests
+
+Use `postJsonResponse` from `openclaw/plugin-sdk/provider-http` when a JSON POST
+returns a complete JSON response. It uses the guarded POST transport, checks the
+HTTP status, reads bounded JSON, and releases the transport before returning or
+throwing. Polling and generated-asset downloads keep their own request lifetimes.
+
+Pass the usual `postJsonRequest` transport options plus `errorLabel`. Optional
+`responseLabel` changes the JSON parsing error label; it defaults to `errorLabel`.
+`errorOptions` and `readOptions` preserve the options accepted by
+`assertOkOrThrowHttpError` and `readProviderJsonResponse`, including deadlines,
+byte limits, and credential-redaction headers. Set `objectResponse: true` to
+require a JSON object; otherwise use the generic result type and validate the
+vendor response at the plugin boundary. Submission POSTs are not retried unless
+the caller explicitly supplies the existing retry options.
+
+Keep `postJsonRequest` for streaming or binary responses, custom response/error
+parsers, and code that needs to retain the response transport. Those callers
+must release it in `finally`.
+
 ## Walkthrough
 
 <Steps>

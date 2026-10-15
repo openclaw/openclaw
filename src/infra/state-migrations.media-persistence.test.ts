@@ -249,6 +249,35 @@ describe("legacy media persistence doctor migration", () => {
     expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
   });
 
+  it("retains a completed schema crossing's integrity proof on reopen", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-crossing-proof-");
+    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 21 });
+    const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+    try {
+      const result = await migrateLegacyMediaPersistence({ env });
+      expect(result.warnings).toEqual([]);
+      expect(checks.mock.calls.filter(([file]) => file === pathname)).toHaveLength(1);
+      const sql = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+      try {
+        const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
+        expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          sql.mock.calls.filter(
+            ([query], index) =>
+              sql.mock.contexts[index] === reopened.db && /PRAGMA\s+integrity_check/iu.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.mockRestore();
+      }
+    } finally {
+      checks.mockRestore();
+    }
+  });
+
   it("cancels pending integrity before migrating the agent schema", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-interruption-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

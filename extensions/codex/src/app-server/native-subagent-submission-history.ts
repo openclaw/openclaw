@@ -1,5 +1,8 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readThreadParentThreadId } from "./native-subagent-assignment.js";
+import {
+  findCodexNativeSuccessorTurn,
+  readThreadParentThreadId,
+} from "./native-subagent-assignment.js";
 import type { ChildState, NativeSubagentMonitorClient } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
@@ -37,20 +40,17 @@ export async function readCodexNativeSubmissionTurn(
   const turns = (Array.isArray(thread?.turns) ? thread.turns : []).flatMap((turn) =>
     isJsonObject(turn) ? [turn] : [],
   );
-  const predecessorIndex = turns.findIndex(
-    (turn) => readString(turn, "id") === receipt.predecessorNativeTurnId,
+  const turn = findCodexNativeSuccessorTurn(
+    turns,
+    receipt.predecessorNativeTurnId,
+    receipt.submissionId,
   );
-  const turnIndex = turns.findIndex((turn) => readString(turn, "id") === receipt.submissionId);
-  if (
-    predecessorIndex < 0 ||
-    turnIndex <= predecessorIndex ||
-    !["completed", "failed"].includes(readString(turns[predecessorIndex], "status") ?? "")
-  ) {
+  if (!turn) {
     return undefined;
   }
   const previous = dependencies.currentChild();
   if (previous && !previous.terminal && previous.nativeTurnId !== receipt.submissionId) {
     await dependencies.recovery.reconcileRegisteredChild(previous);
   }
-  return dependencies.isCurrent() ? turns[turnIndex] : undefined;
+  return dependencies.isCurrent() ? turn : undefined;
 }
