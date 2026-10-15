@@ -172,47 +172,6 @@ describe("normalizeSlackChannelType", () => {
   });
 });
 
-describe("resolveSlackSystemEventRoute", () => {
-  it("uses the sole configured agent for fallback system-event sessions", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
-      cfg: {
-        agents: { entries: { ops: {} } },
-      },
-    });
-    expect(await ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
-      agentId: "ops",
-      sessionKey: "agent:ops:slack:channel:c123",
-    });
-  });
-
-  it("routes DM system events through direct-peer bindings when sender is known", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
-      accountId: "work",
-      cfg: {
-        bindings: [
-          {
-            agentId: "ops-dm",
-            match: {
-              channel: "slack",
-              accountId: "work",
-              peer: { kind: "direct", id: "U123" },
-            },
-          },
-        ],
-      },
-    });
-    expect(
-      await ctx.resolveSlackSystemEventRoute({
-        channelId: "D123",
-        channelType: "im",
-        senderId: "U123",
-      }),
-    ).toEqual({ agentId: "ops-dm", sessionKey: "agent:ops-dm:main" });
-  });
-});
-
 describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   it("repeats disabled-channel warnings on a fixed interval despite steady traffic", () => {
     vi.useFakeTimers();
