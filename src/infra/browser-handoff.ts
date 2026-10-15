@@ -18,9 +18,9 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { openLocalFile } from "./browser-open.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   createPrivateWindowsDirectory,
   createPrivateWindowsFile,
@@ -71,10 +71,14 @@ function renderBrowserHandoffDocument(targetUrl: string): string {
 /** Create the private handoff directory with platform-appropriate owner-only access. */
 async function createHandoffDirectory(): Promise<string> {
   if (process.platform !== "win32") {
-    // mkdtemp creates the directory with mode 0700.
-    return await fs.mkdtemp(path.join(os.tmpdir(), HANDOFF_DIR_PREFIX));
+    // mkdtemp creates the directory with mode 0700 under the shared secure
+    // OpenClaw temp root (owner-scoped fallback), never a bare os.tmpdir path.
+    return await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), HANDOFF_DIR_PREFIX));
   }
-  const directory = path.join(os.tmpdir(), `${HANDOFF_DIR_PREFIX}${randomUUID()}`);
+  const directory = path.join(
+    resolvePreferredOpenClawTmpDir(),
+    `${HANDOFF_DIR_PREFIX}${randomUUID()}`,
+  );
   createPrivateWindowsDirectory(directory);
   return directory;
 }

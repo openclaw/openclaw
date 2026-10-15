@@ -1,8 +1,8 @@
 // Covers the private browser handoff for credential-bearing dashboard URLs.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const { openLocalFileMock, createPrivateWindowsDirectoryMock, createPrivateWindowsFileMock } =
   vi.hoisted(() => ({
@@ -61,7 +61,7 @@ describe("openUrlPrivately", () => {
     const dir = path.dirname(openedPath);
     const dirStat = await fs.stat(dir);
     expect(dirStat.isDirectory()).toBe(true);
-    expect(path.dirname(dir)).toBe(path.resolve(os.tmpdir()));
+    expect(path.dirname(dir)).toBe(path.resolve(resolvePreferredOpenClawTmpDir()));
     expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
     if (isPosix) {
       // POSIX owner-only permissions. Windows does not expose these mode
