@@ -13,9 +13,16 @@ SQLite library with extension loading, and the full matching OpenClaw package
 Chrome-extension setup entry point run on this Bun runtime. The app bundle
 contains no Node executable.
 
-The payload lives in one `Contents/Resources/runtime` directory. Universal apps
-share the JavaScript package between architectures and include universal Bun and
-SQLite binaries plus each architecture's native dependencies. Rebuilding or
+In standard desktop app builds, non-native runtime files are packaged in
+`Contents/Resources/runtime.aar`, including documentation and symbolic links.
+This uncompressed AppleArchive uses the macOS system extractor's parallel
+workers; the outer app download is compressed separately.
+Native executables and libraries, including Bun, remain loose under
+`Contents/Resources/runtime` so signing and notarization tools can inspect them.
+Universal apps share the JavaScript package between architectures and include
+universal Bun and SQLite binaries plus each architecture's native dependencies.
+Elevation-host and separate cloud-worker packages retain their loose runtime
+layout for their existing admission contract. Rebuilding or
 replacing the app replaces this runtime too, including rebuilds with the same
 public version. The app validates the package's version, commit, build time, and
 build ID before launch. Moving the app or removing its build checkout does not
@@ -41,14 +48,41 @@ It leaves authentication unchanged when a credential source is unreadable or
 cannot be resolved safely. Trusted dotenv files are the profile's `.env` and,
 for the default state directory, `~/.config/openclaw/gateway.env`.
 
-The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
-`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
-directory clone when available, falling back to a file copy, and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
+Before the Gateway, node worker, or browser setup helper runs, the app seeds its
+runtime to `<state>/runtime/<runtimeBuildId>/`, where `<state>` is `~/.openclaw`
+or `~/.openclaw-<profile>`. It clones the loose native files when APFS supports
+it, verifies the archive's SHA-256 and format version against the signed app metadata, and extracts the
+resources into a temporary directory. The complete runtime is published
+atomically after provenance and Bun checks succeed. Archive integrity or
+extraction failures leave the current runtime unchanged; reinstall the app if
+retrying setup does not help.
+
+Private worker, browser inspection/setup, and migration recovery only prepare
+the concrete runtime. They preserve the selected terminal runtime, CLI wrappers,
+shell profiles, and Gateway configuration. Local Gateway adoption owns selecting
+`runtime/current` and installing CLI integration.
+
+Extraction happens once per build and profile. A Sparkle update from an app with
+the loose layout seeds the new build on first launch using the same runtime store.
+Rolling back to an older app can reuse its retained seed, or seed it again from
+that app's loose payload; the archive layout does not change user configuration
+or the terminal CLI path. Database downgrade compatibility still follows the
+[rollback rules](/install/updating/rollback-and-recovery#downgrade).
+
+Unlike the previous all-loose
+layout, extracted resources occupy separate disk blocks rather than sharing
+blocks with the app through an APFS directory clone. An unarchived development
+bundle still uses the existing directory-clone path. The child and app-managed Bun service use the concrete
 build directory so each process keeps its matching package and SQLite library.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
 The app retains the current and previous builds; older copies are removed only
 after Gateway health succeeds and no process runs from them.
+
+Helper-only profiles retain their current and previous prepared builds without
+selecting a terminal runtime. After successful preparation, cleanup preserves
+those references, Gateway-selected builds, and builds with running processes.
+An unreadable process or retention reference defers cleanup. Each retained build
+and profile needs its own expanded resource tree.
 
 For an app-owned full Gateway payload, packaging writes
 `openclaw-install-owner.json` at the OpenClaw package root with `schemaVersion: 1`,

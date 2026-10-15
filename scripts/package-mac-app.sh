@@ -621,6 +621,12 @@ stop_packaged_app_if_running() {
   return 1
 }
 
+# Elevation admission inspects its complete loose runtime without extraction.
+if [[ "$SIGNING_VARIANT" == "standard" && "$CLOUD_WORKER_HOST" == "0" ]]; then
+  echo "📦 Archiving runtime resources (native code stays visible to signing)"
+  /usr/bin/python3 "$ROOT_DIR/scripts/archive-mac-runtime.py" "$APP_ROOT"
+fi
+
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
   echo "🔏 Signing bundle with explicit SIGN_IDENTITY"
 else
@@ -636,13 +642,19 @@ if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
     exit 1
   fi
 fi
+VERIFIED_RUNTIME="$APP_ROOT/Contents/Resources/runtime"
+if [[ -f "$APP_ROOT/Contents/Resources/runtime.aar" ]]; then
+  VERIFIED_RUNTIME="$APP_STAGE_DIR/verified-runtime"
+  /usr/bin/ditto "$APP_ROOT/Contents/Resources/runtime" "$VERIFIED_RUNTIME"
+  /usr/bin/aa extract -i "$APP_ROOT/Contents/Resources/runtime.aar" -d "$VERIFIED_RUNTIME"
+fi
 for arch in "${BUILD_ARCHS[@]}"; do
   if /usr/bin/arch -"$arch" /usr/bin/true 2>/dev/null; then
     env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
-      OPENCLAW_SQLITE_LIBRARY="$APP_ROOT/Contents/Resources/runtime/lib/libsqlite3.dylib" \
-      /usr/bin/arch -"$arch" "$APP_ROOT/Contents/Resources/runtime/bin/bun" \
+      OPENCLAW_SQLITE_LIBRARY="$VERIFIED_RUNTIME/lib/libsqlite3.dylib" \
+      /usr/bin/arch -"$arch" "$VERIFIED_RUNTIME/bin/bun" \
       "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
-      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
+      "$VERIFIED_RUNTIME" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
   else
     echo "WARN: Signed runtime $arch verification skipped; install Rosetta to verify this architecture" >&2
   fi

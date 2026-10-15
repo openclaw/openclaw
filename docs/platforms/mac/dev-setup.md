@@ -52,7 +52,10 @@ permissions. See [macOS signing](/platforms/mac/signing).
 
 Packaging builds the JavaScript runtime and Control UI, then stages the full
 standard package with production dependencies under
-`Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
+`Contents/Resources/runtime/lib/node_modules/openclaw`. Standard desktop builds
+then archive non-native resources in `Contents/Resources/runtime.aar` for
+integrity-checked extraction during first-run seeding; native signing targets
+stay loose. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
 optional `sqlite-vec`. Builds at an exact release tag retain the published plugin
 layout. Other commits also stage official external plugins built with that

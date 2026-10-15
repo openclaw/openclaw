@@ -13,9 +13,11 @@ import { afterEach, describe, expect, it as baseIt } from "vitest";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { registerMacRuntimeArchiveTests } from "./mac-runtime-archive.test-support.js";
 import { registerMacRuntimeMaterializationTests } from "./mac-runtime-materialization.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
+registerMacRuntimeArchiveTests();
 registerMacRuntimeMaterializationTests();
 
 const temps = useAutoCleanupTempDirTracker(afterEach);

@@ -239,7 +239,7 @@ final class ChromeExtensionSetup {
 
     private static func resolveLaunch(action: ChromeExtensionSetupAction) async throws -> MacNodeHostWorkerLaunch {
         if Bundle.main.bundleURL.pathExtension == "app" {
-            return try BundledRuntime.browserSetupLaunch(bundle: .main, action: action)
+            return try await BundledRuntime.browserSetupLaunch(bundle: .main, action: action)
         }
         // The ordinary command resolver follows SSH Gateway settings. This action always owns this Mac.
         let executable: String? = if case let .ready(location, _) = await CLIInstaller.status() {

@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized)
 struct BundledRuntimeTests {
-    private func makeBundle(at root: URL, builtAt: String, buildID: String? = nil, command: String) throws -> URL {
+    func makeBundle(at root: URL, builtAt: String, buildID: String? = nil, command: String) throws -> URL {
         let info: [String: Any] = [
             "CFBundleIdentifier": "ai.openclaw.mac.debug",
             "CFBundleExecutable": "OpenClaw",
@@ -85,7 +85,8 @@ struct BundledRuntimeTests {
         for (index, command) in ["worker.before", "worker.dirty"].enumerated() {
             let source = root.appendingPathComponent("source-\(index)")
             let app = source.appendingPathComponent("OpenClaw.app")
-            _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:0\(index).000Z", command: command)
+            _ = try self.makeBundle(
+                at: app, builtAt: "2026-08-27T00:00:0\(index).000Z", buildID: "worker-\(index)", command: command)
             let relocated = root.appendingPathComponent("relocated-\(index)/OpenClaw.app")
             try FileManager.default.createDirectory(
                 at: relocated.deletingLastPathComponent(),
@@ -94,14 +95,15 @@ struct BundledRuntimeTests {
             try FileManager.default.removeItem(at: source)
             let bundle = try #require(Bundle(url: relocated))
             let launch = try await CommandResolver.nodeHostWorkerLaunch(
-                bundle: bundle, projectRoot: source, searchPaths: [external.deletingLastPathComponent().path])
+                bundle: bundle, projectRoot: source, searchPaths: [external.deletingLastPathComponent().path],
+                homeDirectory: root)
             do {
                 let manifest = try await worker.start(launch: launch)
                 #expect(manifest.commands == [command])
-                #expect(launch.command[0] == relocated.appendingPathComponent("Contents/Resources/runtime/bin/bun")
-                    .path)
-                #expect(manifest.pathEnv == relocated
-                    .appendingPathComponent("Contents/Resources/runtime/lib/libsqlite3.dylib").path)
+                #expect(launch.command[0].hasPrefix(root.path + "/.openclaw/runtime/"))
+                #expect(manifest.pathEnv == URL(fileURLWithPath: launch.command[0])
+                    .deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("lib/libsqlite3.dylib").path)
                 #expect(!launch.command.contains(external.path))
             } catch {
                 await worker.stop()
@@ -130,14 +132,18 @@ struct BundledRuntimeTests {
         }
         let bundle = try #require(Bundle(url: app))
         await #expect(throws: MacNodeHostWorker.WorkerError.self) {
-            try await CommandResolver.nodeHostWorkerLaunch(bundle: bundle, projectRoot: root, searchPaths: [])
+            try await CommandResolver.nodeHostWorkerLaunch(
+                bundle: bundle,
+                projectRoot: root,
+                searchPaths: [],
+                homeDirectory: root)
         }
-        #expect(throws: MacNodeHostWorker.WorkerError.self) {
-            try BundledRuntime.browserSetupLaunch(bundle: bundle)
+        await #expect(throws: MacNodeHostWorker.WorkerError.self) {
+            try await BundledRuntime.browserSetupLaunch(bundle: bundle, homeDirectory: root)
         }
     }
 
-    @Test func `browser setup uses relocated private runtime and the node profile without an external CLI`() throws {
+    @Test func `browser setup uses relocated private runtime and the node profile without an external CLI`() async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = root.appendingPathComponent("OpenClaw.app")
@@ -146,13 +152,13 @@ struct BundledRuntimeTests {
         try FileManager.default.moveItem(at: app, to: relocated)
         let bundle = try #require(Bundle(url: relocated))
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "browser-fixture"])
-        let runtime = try BundledRuntime.resolve(bundle: bundle)
-        let worker = try BundledRuntime.launch(bundle: bundle, profile: profile)
-        let setup = try BundledRuntime.browserSetupLaunch(bundle: bundle, profile: profile)
+        let runtime = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: root)
+        let worker = try await BundledRuntime.launch(bundle: bundle, profile: profile, homeDirectory: root)
+        let setup = try await BundledRuntime.browserSetupLaunch(bundle: bundle, profile: profile, homeDirectory: root)
         #expect(setup.command[0] == worker.command[0])
         #expect(setup.command[1].hasSuffix("/dist/extensions/browser/setup-entry.js"))
         #expect(worker.command[1].hasSuffix("/dist/mac-node-worker.js"))
-        #expect(runtime.root == relocated.appendingPathComponent("Contents/Resources/runtime"))
+        #expect(runtime.root.path.hasPrefix(root.path + "/.openclaw-browser-fixture/runtime/"))
         #expect(runtime.bun == runtime.root.appendingPathComponent("bin/bun"))
         #expect(runtime.packageRoot == runtime.root.appendingPathComponent("lib/node_modules/openclaw"))
         #expect(setup.command[0] == runtime.bun.path)

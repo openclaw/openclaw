@@ -509,8 +509,8 @@ enum ManagedNodeGatewayMigration {
         resolveLegacyCLI: @escaping @MainActor @Sendable () throws -> GatewayLaunchAgentManager.InstalledServiceCLI? = {
             nil
         },
-        restorationInstaller: @escaping @MainActor () throws -> BundledRuntime = {
-            try BundledRuntime.resolve(bundle: .main)
+        restorationInstaller: @escaping @MainActor () async throws -> BundledRuntime = {
+            try await BundledRuntime.prepare(bundle: .main)
         },
         verifyHealth: @escaping () async throws -> Void,
         setServiceHosting: @escaping (Candidate) -> Void,

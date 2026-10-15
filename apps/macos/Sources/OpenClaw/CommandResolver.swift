@@ -214,12 +214,14 @@ enum CommandResolver {
         bundle: Bundle = .main,
         projectRoot: URL? = nil,
         searchPaths: [String]? = nil,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         desktopSharingEnabled: Bool? = nil) async throws -> MacNodeHostWorkerLaunch
     {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+            return try await BundledRuntime.launch(
+                bundle: bundle, homeDirectory: homeDirectory, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
