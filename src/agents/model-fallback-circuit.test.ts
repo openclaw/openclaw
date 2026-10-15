@@ -50,11 +50,15 @@ async function saturateEventLoop(ms = 150): Promise<void> {
   while (performance.now() < end) {
     // Busy-wait on purpose; yielding would let the loop go idle.
   }
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function idleEventLoop(ms = 150): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function acquireBurst(now: number) {
