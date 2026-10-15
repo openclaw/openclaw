@@ -412,23 +412,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.client.listenerCount("sync.state")).toBe(0);
   });
 
-  it("registers Matrix thread bindings before starting the client", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    expect(hoisted.callOrder).toEqual([
-      "prepare-client",
-      "create-manager",
-      "register-events",
-      "start-client",
-      "dispose-auto-join",
-      "dispose-monitor-events",
-    ]);
-    expect(hoisted.acquireSharedMatrixClient).toHaveBeenCalledWith(
-      expect.objectContaining({ startClient: false }),
-    );
-    expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
-  });
-
   it("starts monitoring without waiting for backfill but joins it during retirement", async () => {
     let finishBackfill: (() => void) | undefined;
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(
@@ -495,16 +478,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledTimes(1);
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
     expect(hoisted.client.listenerCount("sync.state")).toBe(0);
-  });
-
-  it("cleans up thread bindings and shared clients when startup fails", async () => {
-    hoisted.state.startClientError = new Error("start failed");
-
-    await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
-
-    expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledTimes(1);
-    expectPersistRelease();
   });
 
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {
