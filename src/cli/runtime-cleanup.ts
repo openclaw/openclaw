@@ -3,6 +3,7 @@ import {
   hasProviderTransportDispatcherPool,
   stopActiveManagedProviderLocalServices,
 } from "../agents/provider-runtime-lifecycle.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
@@ -67,15 +68,15 @@ export async function runCliDisposer(
   const token = Symbol(name);
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
+    .catch((error: unknown) => {
+      // Observe failures even after the reporting deadline, without blocking later teardown.
+      console.error(`CLI cleanup failed: ${name}: ${formatErrorMessage(error)}`);
+    })
     .finally(() => pendingDisposers.delete(token));
   pendingDisposers.set(token, { name, operation, deferred: false });
-  try {
-    await raceWithTimeout(operation, timeoutMs, () => {
-      console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
-    });
-  } catch {
-    // Teardown cannot mask the command outcome or skip later resources.
-  }
+  await raceWithTimeout(operation, timeoutMs, () => {
+    console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
+  });
 }
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
