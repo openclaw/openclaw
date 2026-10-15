@@ -146,6 +146,29 @@ describe("process-owned directory observation", () => {
     expect(watch).toHaveBeenCalledTimes(1);
   });
 
+  it("watches the long form of a Windows 8.3 short path", () => {
+    // libuv aborts when a directory watch opened through a short path reports a child event.
+    const root = tempDirs.make("owned-directory-short-");
+    const shortPath = path.join(root, "RUNNER~1");
+    const longPath = path.join(root, "runneradmin");
+    fs.mkdirSync(shortPath);
+    fs.mkdirSync(longPath);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs.realpathSync, "native").mockImplementation(((target: fs.PathLike) =>
+      target === shortPath ? longPath : String(target)) as typeof fs.realpathSync.native);
+    const watch = vi.spyOn(fs, "watch");
+    const listener = vi.fn();
+    subscriptions.push(observeOwnedDirectory(shortPath, listener));
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch.mock.calls[0]![0]).toBe(longPath);
+    const result = watch.mock.results[0];
+    if (result?.type !== "return") {
+      throw new Error("Missing native directory watcher");
+    }
+    result.value.emit("change", "change", "auth.json");
+    expect(listener).toHaveBeenCalledWith("auth.json");
+  });
+
   it("re-admits an absent directory and invalidates after missed notifications", () => {
     vi.useFakeTimers({
       toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
