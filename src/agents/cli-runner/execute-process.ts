@@ -178,18 +178,18 @@ export async function executeCliProcess(params: {
   // carry output, never the authority or deadline used to protect its execution.
   const reportStreamProgress = createModelCallStreamProgressReporter({
     recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+    target: {
+      runId: runParams.runId,
+      ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
+      ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+    },
   });
-  const streamProgressTarget = {
-    runId: runParams.runId,
-    ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
-    ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
-  };
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
     if (chunkBytes > 0) {
       if (params.events.activeParsedToolCount() === 0) {
-        reportStreamProgress(streamProgressTarget);
+        reportStreamProgress();
       } else {
         // Tool chatter renews the transport's quiet allowance, not the separate
         // blocked-tool progress clock.

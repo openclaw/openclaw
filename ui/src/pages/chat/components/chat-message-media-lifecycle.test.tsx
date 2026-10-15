@@ -100,9 +100,10 @@ function managedImageResourceKey(source: string): string {
     undefined,
     undefined,
     "",
-    `${source.replace(/\/full$/u, "/thumbnail")}?v=3`,
+    `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`,
     "",
     "thumbnail",
+    480,
   ]);
 }
 
@@ -224,11 +225,20 @@ describe("chat media resource lifecycle", () => {
       rerender();
       await vi.advanceTimersByTimeAsync(0);
       expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
-        { sessionKey: "agent:main:main", artifactId, variant },
+        {
+          sessionKey: "agent:main:main",
+          artifactId,
+          variant,
+          ...(variant === "thumbnail" ? { previewWidth: 480 } : {}),
+        },
       ]);
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
         managed
-          ? [variant === "full" ? source : source.replace(/\/full$/u, "/thumbnail") + "?v=3"]
+          ? [
+              variant === "full"
+                ? source
+                : source.replace(/\/full$/u, "/thumbnail") + "?v=4&width=480",
+            ]
           : [],
       );
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
@@ -271,7 +281,7 @@ describe("chat media resource lifecycle", () => {
     expect(onOpenImage).toHaveBeenCalledOnce();
     const opened = onOpenImage.mock.calls[0]?.[0];
     expect(opened.src).toBe(blobUrl);
-    expect((await opened.loadFullResolution()).src).toBe(blobUrl);
+    expect(opened.loadDisplayImage).toBeUndefined();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([source, source]);
     opened.release?.();
     unmountImages(container);
@@ -335,9 +345,9 @@ describe("chat media resource lifecycle", () => {
       rerender();
       await vi.advanceTimersByTimeAsync(0);
       expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
-        { sessionKey: "first-session", artifactId, variant: "thumbnail" },
-        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
-        { sessionKey: "second-session", artifactId, variant: "thumbnail" },
+        { sessionKey: "first-session", artifactId, variant: "thumbnail", previewWidth: 480 },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail", previewWidth: 480 },
+        { sessionKey: "second-session", artifactId, variant: "thumbnail", previewWidth: 480 },
       ]);
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
         http ? [] : [imageSource, imageSource],
@@ -1015,7 +1025,9 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls) {
-      expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=3`);
+      expect(requestUrl).toBe(
+        `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`,
+      );
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

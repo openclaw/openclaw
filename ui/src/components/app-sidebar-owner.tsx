@@ -19,7 +19,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
@@ -48,11 +47,6 @@ import {
   type SidebarRecentSession,
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
-import {
-  COMMUNITY_INVITE_KEY,
-  dismissCommunityInvite as persistCommunityInviteDismissal,
-  isCommunityInviteEligible,
-} from "./community-invite-state.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
@@ -220,14 +214,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         () => this.context?.agentIdentity,
         (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
       )
-      .watchStore(
-        () => this.context?.theme,
-        () => this.syncCommunityInviteState(),
-      )
-      .watchStore(
-        () => this.context?.config,
-        () => this.syncCommunityInviteState(),
-      )
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.config)
       .effect(
         () => this.context?.plugins,
         (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
@@ -249,14 +237,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
     this.requestUpdate();
   };
-  private communityInvitePresentation: "unavailable" | "pending" | "shown" = "unavailable";
-  private readonly communityInviteStorageChanged = (event: StorageEvent) => {
-    if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
-      this.syncCommunityInviteState();
-      this.requestUpdate();
-    }
-  };
-
   // Catalog rows are non-startup content. Load their renderer through the same
   // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
   private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
@@ -284,7 +264,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
-    window.removeEventListener("storage", this.communityInviteStorageChanged);
     super.disconnectedCallback();
   }
 
@@ -293,19 +272,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshotController.synchronize();
     if (this.context?.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
-    }
-    // Admit new geometry only between interactions; once shown it stays put.
-    // Popover focus can leave :focus-within false; inspect the owned DOM instead.
-    // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
-    if (
-      this.communityInvitePresentation === "pending" &&
-      !this.matches(":hover") &&
-      !this.contains(this.ownerDocument.activeElement) &&
-      this.sessionOrganizer.draggingSessionKey === null &&
-      this.sessionOrganizer.draggingSidebarSection === null &&
-      this.sessionOrganizer.draggingSidebarEntry === null
-    ) {
-      this.communityInvitePresentation = "shown";
     }
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -383,44 +349,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
     );
-    window.addEventListener("storage", this.communityInviteStorageChanged);
-    this.syncCommunityInviteState();
     this.catalogRendererImport.schedule();
   }
-
-  private readonly handleSidebarInteractionEnd = (event: Event) => {
-    // Internal focus handoffs can briefly clear :focus-within before the new target focuses.
-    if (
-      this.communityInvitePresentation !== "pending" ||
-      (event instanceof FocusEvent &&
-        event.relatedTarget instanceof Node &&
-        this.contains(event.relatedTarget))
-    ) {
-      return;
-    }
-    this.requestUpdate();
-  };
-
-  private syncCommunityInviteState() {
-    if (
-      !this.context?.theme.branding.communityLinks ||
-      !this.context?.config.current.communityInvite ||
-      !isCommunityInviteEligible()
-    ) {
-      this.communityInvitePresentation = "unavailable";
-    } else if (this.communityInvitePresentation !== "shown") {
-      this.communityInvitePresentation = "pending";
-    }
-  }
-
-  private readonly dismissCommunityInvite = () => {
-    const result = persistCommunityInviteDismissal();
-    this.syncCommunityInviteState();
-    this.requestUpdate();
-    if (!result.ok) {
-      showToast({ message: t("communityInvite.dismissFailed") });
-    }
-  };
 
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
@@ -596,8 +526,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           class="sidebar sidebar--rail"
           data-snapshot-state={this.sidebarSnapshot ? "cached" : "live"}
           data-snapshot-saved={String(this.sidebarSnapshotController.saved)}
-          onPointerLeave={this.handleSidebarInteractionEnd}
-          onFocusOut={this.handleSidebarInteractionEnd}
           onContextMenu={(event) => {
             if (
               !(event.target instanceof Element) ||
@@ -653,12 +581,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <div class="sidebar-shell__invite">
               <Show
                 when={
-                  this.communityInvitePresentation === "shown" && this.context.theme.resolvedMode
+                  this.context.theme.branding.communityLinks &&
+                  this.context.config.current.communityInvite
                 }
               >
-                {(mode) => (
-                  <SidebarCommunityInvite onDismiss={this.dismissCommunityInvite} mode={mode()} />
-                )}
+                <SidebarCommunityInvite />
               </Show>
             </div>
             <Show when={this.devGitBranch}>

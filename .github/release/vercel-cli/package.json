@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "sandbox": "4.6.1",
-    "vercel": "62.2.0"
+    "vercel": "63.0.2"
   },
   "overrides": {
     "@bytecodealliance/preview2-shim@0.17.6": "0.28.0",
