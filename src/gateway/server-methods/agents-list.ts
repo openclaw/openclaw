@@ -12,10 +12,7 @@ import {
 } from "../operator-role-policy.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
-import {
-  readPreparedServerMethodModelCatalog,
-  readPreparedServerMethodModelCatalogs,
-} from "./optional-model-catalog.js";
+import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -31,16 +28,7 @@ export const agentListHandler: GatewayRequestHandler = async ({
 
   const cfg = context.getRuntimeConfig();
   const agentIds = listAgentIds(cfg);
-  const modelCatalogByAgentId = context.readPreparedGatewayModelCatalogBatch
-    ? await readPreparedServerMethodModelCatalogs(context, agentIds)
-    : new Map(
-        await Promise.all(
-          agentIds.map(
-            async (agentId) =>
-              [agentId, await readPreparedServerMethodModelCatalog(context, { agentId })] as const,
-          ),
-        ),
-      );
+  const modelCatalogByAgentId = await readPreparedServerMethodModelCatalogs(context, agentIds);
   const result = await listAgentsForGateway(cfg, {
     modelCatalogByAgentId,
     includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
