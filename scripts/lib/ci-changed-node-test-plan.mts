@@ -699,7 +699,7 @@ function createChangedTargetShards(
   });
 }
 
-/** One shared E2E build keeps hourly coverage inside the existing main matrix cap. */
+/** Balance slow process proofs while reserving both rows inside the existing matrix cap. */
 export function createNodeWorkerE2eTestShards() {
   return createChangedTargetShards(
     resolvePreciseChangedTargets(NODE_WORKER_E2E_TEST_FILES, process.cwd()),
@@ -707,7 +707,7 @@ export function createNodeWorkerE2eTestShards() {
       checkName: "checks-node-worker-e2e",
       shardName: "node-worker-e2e",
     },
-    1,
+    2,
   ).map((shard) => Object.assign(shard, { planConcurrency: 1 }));
 }
 

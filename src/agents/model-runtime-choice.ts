@@ -4,8 +4,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { FailoverError } from "./failover/error.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
@@ -308,6 +310,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
+  /** Session creation supplies its bounded wait; config mutations remain passive. */
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   sessionEntry?: Pick<
     SessionEntry,
     "authProfileOverride" | "authProfileOverrideSource" | "providerOverride" | "modelProvider"
@@ -321,20 +325,61 @@ export async function preparePublishedModelRuntimeChoice(params: {
       validate: () => string | undefined;
     }
 > {
+  const catalog = await loadPreparedModelCatalog();
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
-    await loadPreparedModelCatalog();
+    catalog;
   const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
   const { prepareModelCatalogDecisions } = await loadModelCatalogDecisions();
-  const published = getPublishedPreparedModelCatalogOwnerSnapshot({
+  const catalogParams = {
     config: params.cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
-  });
+  };
+  const published = params.prepareNativeCatalog
+    ? await params.prepareNativeCatalog(() =>
+        catalog.loadPublishedPreparedModelCatalogOwnerSnapshot(catalogParams),
+      )
+    : getPublishedPreparedModelCatalogOwnerSnapshot(catalogParams);
   const unavailable = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
-  const owner = materializePreparedModelCatalogOwner(published);
+  let nativeCatalog: ModelCatalogSnapshot | undefined;
+  if (params.prepareNativeCatalog) {
+    const configuredEntry = findModelInCatalog(
+      published.modelCatalog.entries,
+      params.provider,
+      params.model,
+    );
+    const selectedRuntimeId =
+      params.runtimeId ??
+      params.preferredRuntimeId ??
+      resolveAgentHarnessPolicy({
+        config: published.config,
+        agentId: params.agentId,
+        provider: params.provider,
+        modelId: params.model,
+        modelApi: configuredEntry?.api,
+        modelBaseUrl: configuredEntry?.baseUrl,
+      }).runtime;
+    const nativeRuntime = published.pluginRegistry?.agentHarnesses.some(
+      (registration) =>
+        registration.harness.id === selectedRuntimeId &&
+        typeof registration.harness.loadModelCatalog === "function",
+    );
+    // The native owner caches current observations and reacquires retired ones.
+    // Creation cannot depend on a prior model-picker request to populate its catalog.
+    if (nativeRuntime) {
+      nativeCatalog = await params.prepareNativeCatalog(async () =>
+        published.loadNativeModelCatalog?.({
+          provider: params.provider,
+          modelId: params.model,
+          runtime: selectedRuntimeId,
+        }),
+      );
+    }
+  }
+  const owner = materializePreparedModelCatalogOwner(published, nativeCatalog);
   const authStore = getPreparedModelRuntimeAuthStore(owner);
   if (!authStore) {
     return { kind: "unavailable", message: unavailable };

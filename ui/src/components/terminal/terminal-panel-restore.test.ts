@@ -189,6 +189,82 @@ describe("terminal persisted restore", () => {
     await i18n.setLocale("en");
   });
 
+  it.each(["pointerdown", "keydown"])(
+    "preserves newer focus and selection after %s during restore",
+    async (eventType) => {
+      const policies: Array<(() => boolean) | undefined> = [];
+      createTerminal.mockImplementation(async (_options, shouldFocusOnOpen?: () => boolean) => {
+        policies.push(shouldFocusOnOpen);
+        return createTerminalController();
+      });
+      const gateway = createGateway();
+      const { panel, sessions } = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      const firstId = sessions.activeId;
+      expect(firstId).not.toBeNull();
+      expect(policies[0]?.()).toBe(true);
+      const external = document.body.appendChild(document.createElement("input"));
+      external.focus();
+      external.dispatchEvent(
+        eventType === "keydown"
+          ? new KeyboardEvent(eventType, { key: "ArrowDown", bubbles: true })
+          : new Event(eventType, { bubbles: true }),
+      );
+      expect(policies[0]?.()).toBe(false);
+      first.resolve(attachResult(first.sessionId));
+      const second = await waitForAttach(gateway, 1);
+      expect(policies[1]?.()).toBe(false);
+      expect(sessions.activeId).toBe(firstId);
+      second.resolve(attachResult(second.sessionId));
+      await waitForFast(() => expect(sessions.booting).toBe(false));
+      expect(document.activeElement).toBe(external);
+      const next = sessions.tabs.find((tab) => tab.gatewaySessionId === "session-b");
+      if (!next) {
+        throw new Error("second terminal not restored");
+      }
+      const focus = vi.spyOn(next.controller.terminal, "focus");
+      sessions.switchTo(next.id);
+      await panel.updateComplete;
+      await waitForFast(() => expect(focus).toHaveBeenCalledOnce());
+      expect(sessions.activeId).toBe(next.id);
+    },
+  );
+
+  it.each([false, true])(
+    "removes restore input observers when finished (unmounted=%s)",
+    async (unmounted) => {
+      const added = vi.spyOn(document, "addEventListener");
+      const removed = vi.spyOn(document, "removeEventListener");
+      const gateway = createGateway();
+      const { panel, sessions } = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      const handler = added.mock.calls.find(
+        ([type, listener, capture]) =>
+          type === "pointerdown" &&
+          capture === true &&
+          added.mock.calls.some(
+            ([other, callback, options]) =>
+              other === "keydown" && callback === listener && options === true,
+          ),
+      )?.[1];
+      if (!handler) {
+        throw new Error("restore input observer missing");
+      }
+      if (unmounted) {
+        panel.remove();
+        await waitForFast(() => expect(sessions.tabs).toHaveLength(0));
+        first.resolve(attachResult(first.sessionId));
+      } else {
+        first.resolve(attachResult(first.sessionId));
+        const second = await waitForAttach(gateway, 1);
+        second.resolve(attachResult(second.sessionId));
+        await waitForFast(() => expect(sessions.booting).toBe(false));
+      }
+      expect(removed).toHaveBeenCalledWith("pointerdown", handler, true);
+      expect(removed).toHaveBeenCalledWith("keydown", handler, true);
+    },
+  );
+
   it.each([
     { closeIndex: 0, closed: "session-a", remaining: "session-b" },
     { closeIndex: 1, closed: "session-b", remaining: "session-a" },

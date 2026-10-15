@@ -1339,8 +1339,12 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   }
 
   .new-session-page__trigger,
-  .new-session-page__select--agent .agent-select--compact .agent-select__trigger,
+  .new-session-page__triggers
+    .new-session-page__select--agent
+    .agent-select--compact
+    .agent-select__trigger,
   :root[data-theme-mode="light"]
+    .new-session-page__triggers
     .new-session-page__select--agent
     .agent-select--compact
     .agent-select__trigger {
@@ -1363,19 +1367,22 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
     flex: 0 0 44px;
   }
 
-  .new-session-page__select--agent openclaw-agent-select {
+  .new-session-page__triggers .new-session-page__select--agent openclaw-agent-select {
     width: 100%;
     max-width: 100%;
   }
 
-  .new-session-page__select--agent .agent-select--compact .agent-select__trigger {
+  .new-session-page__triggers
+    .new-session-page__select--agent
+    .agent-select--compact
+    .agent-select__trigger {
     width: 100%;
     gap: 4px;
     justify-content: center;
   }
 
-  /* The trigger's accessible name still includes the full selected agent. */
-  .new-session-page__select--agent .agent-select__label {
+  /* Only the compact setup row hides the name; the palette reuses this picker. */
+  .new-session-page__triggers .new-session-page__select--agent .agent-select__label {
     display: none;
   }
 
