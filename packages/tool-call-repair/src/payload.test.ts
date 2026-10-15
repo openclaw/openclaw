@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
+import {
+  projectPlainTextToolCallBlocks,
+  scanPlainTextJsonToolCall,
+  stripPlainTextToolCallBlocks,
+} from "./payload.js";
 
 function trackStringOperations(value: string) {
   let indexedReads = 0;
@@ -169,5 +173,52 @@ describe("stripPlainTextToolCallBlocks", () => {
 
     expect(stripPlainTextToolCallBlocks(tracked.text)).toBe(raw);
     expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
+  });
+});
+
+describe("projectPlainTextToolCallBlocks", () => {
+  it.each([
+    ["[read]\n\n", "[read]\n\n"],
+    ["[tool:read] {}\n", ""],
+    ["[tool:read] {}\n[", "[tool:read] {}\n["],
+    ["[tool:read]<parameter=x>value</parameter>\n", ""],
+    ["[read]\n{}[/read] [write]\n", " [write]\n"],
+  ])("retains calls whose suffix can change the projection: %s", (pending, visible) => {
+    const prefix = "Before\n";
+    expect(projectPlainTextToolCallBlocks(prefix + pending)).toEqual({
+      text: prefix + visible,
+      retainStart: prefix.length,
+      retainedOutputStart: prefix.length,
+    });
+  });
+
+  it("reports source and output boundaries after a settled removed line", () => {
+    const settled = "Before\n[read]\n{}[/read]\n";
+    expect(projectPlainTextToolCallBlocks(`${settled}Tail`)).toEqual({
+      text: "Before\nTail",
+      retainStart: settled.length,
+      retainedOutputStart: "Before\n".length,
+    });
+    expect(
+      projectPlainTextToolCallBlocks(`${settled}Tail`, { settleBefore: "Before\n".length }),
+    ).toEqual({
+      text: "Before\nTail",
+      retainStart: "Before\n".length,
+      retainedOutputStart: "Before\n".length,
+    });
+  });
+
+  it("retains a terminal CR until newline consumption settles", () => {
+    const source = "[read]\n{}[/read]\r";
+    expect(projectPlainTextToolCallBlocks(source)).toEqual({
+      text: "",
+      retainStart: 0,
+      retainedOutputStart: 0,
+    });
+    expect(projectPlainTextToolCallBlocks(`${source}\n`)).toEqual({
+      text: "",
+      retainStart: source.length + 1,
+      retainedOutputStart: 0,
+    });
   });
 });

@@ -9,6 +9,11 @@ const reference = (text: string) =>
   toolCallRepair.stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
 
 const samples = [
+  "[id]: /url\n\n[tool:read] {}\nIntro.\n\n![example `x\n[tool:read] {}\nx`][id]\n",
+  "[a\\]b]: /url\n\n[tool:read] {}\nIntro.\n\n![example `x\n[tool:read] {}\nx`][a\\]b]\n",
+  "![example `x\n[tool:read] {}\nx`][id]\n```text\nnext\n```\n[id]: /url",
+  " ```text\n[tool:read] {}\n ```\n[tool:read] {}\nDone.",
+  " ```text\nbody\r ```\r\n[tool:read] {}\nDone.",
   "See sources.\n[1] A cited claim.\n[2] Another cited claim.\n[12] A third one.\n",
   'Plain prose that mentions [read] {"path": "a.ts"} mid-line.\n',
   'Visible.\n[tool:read] {"path":"a.ts"}\nDone.\n',
@@ -27,6 +32,17 @@ const samples = [
   '```json\n{"value":1}\n',
   '~~~text\n[tool:read] {"path":"a.ts"}\n~~~\nAfter.',
   '```text\n[tool:read] {"path":"a.ts"}\n```\n[tool:exec] {"command":"ls"}\nDone.',
+  "[tool:read] {}\n\n[/read]\nDone.",
+  "[tool:read] {}\n\n[not-a-close]\nDone.",
+  '[read]\n\n{ "path": "a.ts" }\n[/read]\nDone.',
+  "[tool:read]<parameter=x>value</parameter>\n<parameter=y>next</parameter>\nDone.",
+  "[tool:read]<parameter=x>value</parameter>\n<parameter=invalid value\nDone.",
+  "```ts\nconst first = {};\n```\n[tool:read] {}\nDone.\n~~~ts\nconst last = {};\n~~~",
+  "```text\r\n[tool:read] {}\r\n```\r\n[tool:read] {}\r\nDone.",
+  "Before `example\n[tool:read] {}\nend`.\n[tool:read] {}\nDone.",
+  "> ```text\n> [tool:read] {}\n> ```\n\n[tool:read] {}\nDone.",
+  "Intro\nHeading\n===\n    [tool:read] {}\n\nDone.",
+  "Intro\n\n[reference]:\n    /example\n\n[tool:read] {}\nDone.",
 ];
 
 describe("plainToolCallTextFilter streamed projection", () => {
