@@ -200,6 +200,12 @@ export function createAdvisorController(deps: AdvisorDeps) {
     }): void {
       const state = stateFor(params.sessionKey);
       if (state.run?.id !== params.runId) {
+        // A new user turn supersedes advice based on the preceding turn's snapshot.
+        if (state.inFlight) {
+          state.inFlight.abort();
+          state.inFlight = undefined;
+          resetInterval(state);
+        }
         state.run = {
           id: params.runId,
           agentId: params.agentId,
@@ -249,9 +255,16 @@ export function createAdvisorController(deps: AdvisorDeps) {
       agentId: string;
       runId?: string;
       durationMs?: number;
+      aborted?: boolean;
     }): void {
       const state = stateFor(params.sessionKey);
       if (state.run && params.runId && state.run.id !== params.runId) {
+        return;
+      }
+      if (params.aborted) {
+        state.inFlight?.abort();
+        state.cancelScheduled?.();
+        sessions.delete(params.sessionKey);
         return;
       }
       accountTime(state, params.durationMs ?? (state.run ? Date.now() - state.run.startedAt : 0));

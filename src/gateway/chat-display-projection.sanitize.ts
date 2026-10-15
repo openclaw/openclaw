@@ -433,6 +433,7 @@ export function sanitizeChatHistoryMessage(
   if (
     openClawMeta &&
     ("upstreamUserText" in openClawMeta ||
+      "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
       "media" in openClawMeta)
   ) {
@@ -440,6 +441,8 @@ export function sanitizeChatHistoryMessage(
     // It is not display data and can otherwise evict the visible row from history.
     const projectedMeta = { ...openClawMeta };
     delete projectedMeta.upstreamUserText;
+    // Captured model input is private replay state, not part of the display transcript.
+    delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
     if ("media" in projectedMeta) {

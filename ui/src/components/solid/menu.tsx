@@ -16,7 +16,7 @@ import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
-import { useMenuMachine, type MenuBinding } from "./menu-machine.ts";
+import { MENU_FORM_CONTROL_SELECTOR, useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
@@ -191,7 +191,10 @@ export function Menu(props: BranchProps): JSX.Element {
       const initial = [
         ...overlay.surface.querySelectorAll<HTMLElement>("[data-initial-focus], [autofocus]"),
       ].find((node) => node.closest('[role="menu"]') === overlay.surface);
-      (intent === "last" ? items.at(-1) : (initial ?? items[0]))?.focus({ preventScroll: true });
+      (intent === "last"
+        ? (items.at(-1) ?? formControls().at(-1))
+        : (initial ?? items[0] ?? formControls()[0])
+      )?.focus({ preventScroll: true });
     },
     onEscape(event) {
       if (props.onEscape?.(event)) {
@@ -210,6 +213,18 @@ export function Menu(props: BranchProps): JSX.Element {
       return false;
     },
   });
+  const formControls = (): HTMLElement[] =>
+    [...overlay.surface.querySelectorAll<HTMLElement>(MENU_FORM_CONTROL_SELECTOR)].filter(
+      (control) =>
+        control.closest('[role="menu"]') === overlay.surface &&
+        ![...overlay.children].some(
+          (child) => child.open && containsComposed(child.surface, control),
+        ) &&
+        (control.tabIndex >= 0 || control.closest('[role^="menuitem"]')) &&
+        !control.matches(':disabled, [aria-disabled="true"]') &&
+        !control.closest("[inert]") &&
+        control.checkVisibility({ checkVisibilityCSS: true }),
+    );
   const menuRoot = identity.root ?? overlay;
   const placement = () =>
     props.placement ??
@@ -251,6 +266,71 @@ export function Menu(props: BranchProps): JSX.Element {
       anchorBinding?.update(trigger, value);
     }
   });
+  const keydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) {
+      return;
+    }
+    const target = event.target;
+    if (
+      !(target instanceof HTMLElement) ||
+      target.closest('[role="menu"]') !== overlay.surface ||
+      [...overlay.children].some((child) => child.open && containsComposed(child.surface, target))
+    ) {
+      return;
+    }
+    const search = overlay.surface.querySelector<HTMLInputElement>("input[data-search]");
+    const first = ownItems(overlay.surface).find(
+      (item) =>
+        !search || Boolean(search.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
+    );
+    if (
+      (target === search && event.key === "ArrowDown") ||
+      (target === first && search && event.key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      (target === search ? first : search)?.focus({ preventScroll: true });
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const controls = formControls();
+    const row = target.closest<HTMLElement>('[role^="menuitem"]');
+    const firstControl = row ? controls.find((control) => row.contains(control)) : undefined;
+    if (
+      firstControl &&
+      ((!event.shiftKey && target === row) || (event.shiftKey && target === firstControl))
+    ) {
+      event.preventDefault();
+      (event.shiftKey ? row : firstControl)?.focus();
+      return;
+    }
+    const candidates = controls.includes(target)
+      ? [...controls, ...ownItems(overlay.surface)].toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        )
+      : controls;
+    const next = (event.shiftKey ? candidates.toReversed() : candidates).find(
+      (candidate) =>
+        target.compareDocumentPosition(candidate) &
+        (event.shiftKey ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING),
+    );
+    if (next) {
+      event.preventDefault();
+      next.focus();
+    } else {
+      const destination = untrack(() => props.tabFocusTarget?.(event.shiftKey));
+      if (destination) {
+        event.preventDefault();
+        if (menuRoot.request(false, "none")) {
+          destination.focus({ preventScroll: true });
+        }
+      } else {
+        menuRoot.request(false, "return");
+      }
+    }
+  };
   onSettled(() => {
     mounted = true;
     if (!identity.parent) {
@@ -258,86 +338,6 @@ export function Menu(props: BranchProps): JSX.Element {
     }
     anchorBinding = createOverlayAnchor(overlay.surface);
     anchorBinding.update(trigger, placement());
-    const keydown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (
-        !(target instanceof HTMLElement) ||
-        target.closest('[role="menu"]') !== overlay.surface ||
-        [...overlay.children].some((child) => child.open && containsComposed(child.surface, target))
-      ) {
-        return;
-      }
-      const search = overlay.surface.querySelector<HTMLInputElement>("input[data-search]");
-      const first = ownItems(overlay.surface).find(
-        (item) =>
-          !search ||
-          Boolean(search.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
-      );
-      if (
-        !event.defaultPrevented &&
-        !event.isComposing &&
-        ((target === search && event.key === "ArrowDown") ||
-          (target === first && search && event.key === "ArrowUp"))
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        (target === search ? first : search)?.focus({ preventScroll: true });
-        return;
-      }
-      if (event.key !== "Tab" || event.defaultPrevented || event.isComposing) {
-        return;
-      }
-      const controls = [
-        ...overlay.surface.querySelectorAll<HTMLElement>("[data-form-control]"),
-      ].filter(
-        (control) =>
-          control.closest('[role="menu"]') === overlay.surface &&
-          (control.tabIndex >= 0 || control.closest('[role^="menuitem"]')) &&
-          !control.matches(':disabled, [aria-disabled="true"]') &&
-          !control.closest("[inert]") &&
-          control.checkVisibility({ checkVisibilityCSS: true }),
-      );
-      const row = target.closest<HTMLElement>('[role^="menuitem"]');
-      const firstControl = row ? controls.find((control) => row.contains(control)) : undefined;
-      if (
-        firstControl &&
-        ((!event.shiftKey && target === row) || (event.shiftKey && target === firstControl))
-      ) {
-        event.preventDefault();
-        (event.shiftKey ? row : firstControl)?.focus();
-        return;
-      }
-      const index = controls.indexOf(target);
-      let next = index >= 0 ? controls[index + (event.shiftKey ? -1 : 1)] : undefined;
-      if (target.matches("input[data-search]") && !event.shiftKey) {
-        next = ownItems(overlay.surface).find((item) =>
-          Boolean(target.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
-        );
-      } else if (index === 0 && event.shiftKey) {
-        next = ownItems(overlay.surface).findLast((item) =>
-          Boolean(target.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_PRECEDING),
-        );
-      } else if (index < 0 && !event.shiftKey && target.matches('[role^="menuitem"]')) {
-        next = controls.find((control) =>
-          Boolean(target.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING),
-        );
-      }
-      if (next) {
-        event.preventDefault();
-        next.focus();
-      } else {
-        const destination = untrack(() => props.tabFocusTarget?.(event.shiftKey));
-        if (destination) {
-          event.preventDefault();
-          if (menuRoot.request(false, "none")) {
-            destination.focus({ preventScroll: true });
-          }
-        } else {
-          menuRoot.request(false, "return");
-        }
-      }
-    };
-    overlay.surface.addEventListener("keydown", keydown, true);
     const disconnectControl = connectControl(
       () =>
         props.ref?.({
@@ -351,7 +351,6 @@ export function Menu(props: BranchProps): JSX.Element {
       mounted = false;
       disconnectControl();
       anchorBinding?.dispose();
-      overlay.surface.removeEventListener("keydown", keydown, true);
     };
   });
   const renderEntries = (entries: () => readonly MenuEntry[]): JSX.Element => (
@@ -432,6 +431,7 @@ export function Menu(props: BranchProps): JSX.Element {
                     <span class={["oc-menu-item__label", item().labelClass]}>
                       {item().content ?? item().label}
                     </span>
+
                     <Show when={item().details}>
                       <span class="oc-menu-item__details">{item().details}</span>
                     </Show>
@@ -454,6 +454,7 @@ export function Menu(props: BranchProps): JSX.Element {
                             <span class={["oc-menu-item__label", item().labelClass]}>
                               {item().label}
                             </span>
+
                             <Show when={item().details}>
                               <span class="oc-menu-item__details">{item().details}</span>
                             </Show>
@@ -544,6 +545,12 @@ export function Menu(props: BranchProps): JSX.Element {
       </button>
       <div
         {...binding.content()}
+        onKeyDown={(event: KeyboardEvent) => {
+          keydown(event);
+          if (!event.defaultPrevented) {
+            binding.content().onKeyDown(event);
+          }
+        }}
         ref={(node) => {
           surface = node;
         }}
