@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
+import { NodeRegistry } from "../gateway/node-registry.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -394,7 +395,7 @@ async function openServiceDuplex(
 }
 
 describe("service-owned node duplex", () => {
-  it.each(["listener", "send"] as const)(
+  it.each(["listener", "send", "concurrent send"] as const)(
     "preserves an invocation rejection after readiness for %s setup",
     async (operation) => {
       const fixture = await openServiceDuplex();
@@ -405,15 +406,29 @@ describe("service-owned node duplex", () => {
         details: { code: "PAIRING_CHANGED" },
       };
       try {
+        if (operation === "concurrent send") {
+          const retired = new NodeRegistry();
+          fixture.sendInvokeInput.mockImplementation((id, frame) => {
+            retired.sendInvokeInput(id, frame);
+          });
+        }
         fixture.ctx.respond(false, undefined, pairingChanged);
-        await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+        if (operation !== "concurrent send") {
+          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+        }
 
         const setup =
           operation === "listener"
             ? Promise.resolve().then(() => fixture.channel.onMessage(vi.fn()))
             : fixture.channel.send(Uint8Array.of(1));
         await expect(setup).rejects.toMatchObject(pairingChanged);
-        expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+        expect(() => fixture.channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
+        if (operation === "concurrent send") {
+          expect(fixture.sendInvokeInput).toHaveBeenCalledOnce();
+          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+        } else {
+          expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+        }
       } finally {
         fixture.finish.resolve();
       }

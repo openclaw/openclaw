@@ -65,6 +65,7 @@ import { publishConnectModelCatalog } from "./connect-model-catalog.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
 import type {
+  GatewayConnectAttachTiming,
   GatewayConnectPhaseContext,
   GatewayWsMessageHandlerParams,
 } from "./message-handler-types.js";
@@ -334,6 +335,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const phaseTimes: Partial<
           Record<"auth_validated" | "session_attached" | "hello_payload_prepared", number>
         > = {};
+        const attachTimes: Partial<Record<GatewayConnectAttachTiming, number>> = {};
         logWs("in", "req", { connId, id: frame.id, method: "connect" });
         const recordHandshakeResponse = (ok: boolean, bytes?: number, sendMs?: number) => {
           diagnostics?.response(ok ? "ok" : "error", bytes);
@@ -344,6 +346,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             ok,
             bytes,
             sendMs,
+            ...attachTimes,
             authMs: phaseTimes.auth_validated,
             attachMs:
               phaseTimes.session_attached === undefined
@@ -442,6 +445,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             helloDelivered = true;
             flushQueuedHandshakeFrames();
           },
+          recordAttachTiming: (phase, phaseStartedAt) => {
+            attachTimes[phase] = performance.now() - phaseStartedAt;
+          },
           onPairingWait: () => {
             waitingForPairing = true;
             params.clearHandshakeTimer();
@@ -458,10 +464,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             if (!authenticated) {
               return;
             }
+            const deviceStartedAt = performance.now();
             const deviceAuthorized = await authorizeGatewayConnectDevice(
               phaseContext,
               authenticated,
             );
+            phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
             if (!deviceAuthorized) {
               return;
             }

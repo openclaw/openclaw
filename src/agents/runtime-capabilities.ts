@@ -18,6 +18,10 @@ import {
   resolveChannelPromptCapabilities,
   resolveChannelReactionGuidance,
 } from "./channel-tools.js";
+import {
+  resolveSpawnRequesterConversationTarget,
+  type SpawnRequesterConversationSource,
+} from "./spawn-requester-origin.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
 const THREAD_BOUND_ACP_SPAWN_CAPABILITY = "threadbound-acp-spawn";
@@ -46,6 +50,7 @@ export function collectRuntimeChannelCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
 }): string[] | undefined {
   if (!params.channel) {
     return undefined;
@@ -55,7 +60,13 @@ export function collectRuntimeChannelCapabilities(params: {
   const internalChannelCapabilities =
     params.channel === INTERNAL_MESSAGE_CHANNEL ? ["markdownDetails"] : [];
   const threadSpawnCapabilities: string[] = [];
-  if (params.cfg && supportsThreadBindingSpawn(params.channel)) {
+  const { requester, ...channelContext } = params;
+  const conversation = resolveSpawnRequesterConversationTarget(requester ?? {});
+  if (
+    params.cfg &&
+    (conversation.to || conversation.threadId != null) &&
+    supportsThreadBindingSpawn(params.channel)
+  ) {
     for (const [kind, capability] of [
       ["subagent", THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY],
       ["acp", THREAD_BOUND_ACP_SPAWN_CAPABILITY],
@@ -67,13 +78,14 @@ export function collectRuntimeChannelCapabilities(params: {
         kind,
       });
       if (policy.enabled && policy.spawnEnabled) {
-        // Thread-bound spawn is only advertised when both policy gates are enabled.
         threadSpawnCapabilities.push(capability);
       }
     }
   }
-  const channelPromptCapabilities = params.cfg ? resolveChannelPromptCapabilities(params) : [];
-  return mergeRuntimeCapabilities(resolveChannelCapabilities(params), [
+  const channelPromptCapabilities = params.cfg
+    ? resolveChannelPromptCapabilities(channelContext)
+    : [];
+  return mergeRuntimeCapabilities(resolveChannelCapabilities(channelContext), [
     ...channelPromptCapabilities,
     ...internalChannelCapabilities,
     ...threadSpawnCapabilities,
@@ -86,7 +98,10 @@ export function resolveRuntimeChannelPromptContext(
 ) {
   const runtimeChannel = normalizeMessageChannel(params.channel);
   const context = { cfg: params.cfg, channel: runtimeChannel, accountId: params.accountId };
-  const runtimeCapabilities = collectRuntimeChannelCapabilities(context);
+  const runtimeCapabilities = collectRuntimeChannelCapabilities({
+    ...context,
+    requester: params.requester,
+  });
   return {
     runtimeChannel,
     ...(runtimeChannel && getChannelPlugin(runtimeChannel)?.agentPrompt?.customInlineButtonHint

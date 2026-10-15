@@ -117,21 +117,30 @@ suite.define(() => {
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
+    const rpc = async (method: string, params: Record<string, unknown> = {}) =>
+      record(
+        JSON.parse(
+          await cli([
+            "gateway",
+            "call",
+            method,
+            "--port",
+            String(owner.port),
+            "--params",
+            JSON.stringify(params),
+            "--json",
+          ]),
+        ),
+      );
     const publish = async (nextModels: typeof models) => {
-      const snapshot = record(JSON.parse(await cli(["gateway", "call", "config.get", "--json"])));
-      return cli([
-        "gateway",
-        "call",
-        "config.patch",
-        "--params",
-        JSON.stringify({
-          baseHash: snapshot.hash,
-          raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
-          replacePaths: ["models.providers.fixture.models"],
-          response: "summary",
-        }),
-        "--json",
-      ]);
+      const current = await rpc("config.get");
+      expect(typeof current.hash).toBe("string");
+      await rpc("config.patch", {
+        raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
+        baseHash: current.hash,
+        replacePaths: ["models.providers.fixture.models"],
+        response: "summary",
+      });
     };
     const handoff = record(JSON.parse(await cli(["dashboard", "--json"])));
     if (typeof handoff.browserUrl !== "string") {

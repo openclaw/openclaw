@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  requireNodeSqlite,
+  resolveExistingSqliteFileUri,
+} from "./node-sqlite.js";
 import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -15,6 +19,7 @@ import {
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 
 let pendingCloses = 0;
 type ReplyOwnership = { kind: string; before: number; after: number };
@@ -71,6 +76,10 @@ export type FixtureOperations = {
   read: { input: undefined; output: string[] };
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
+  commitWithoutReceipt: {
+    input: { value: string; mode: "native" | "schema-maintenance" };
+    output: never;
+  };
   commitUnserializable: { input: { value: string }; output: symbol };
   failClose: { input: undefined; output: undefined };
   delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
@@ -207,6 +216,31 @@ function createFixtureBackend(
           db,
           query.selectFrom("entries").select("value").orderBy("id"),
         ).rows.map((row) => row.value);
+      }
+      if (command.type === "commitWithoutReceipt") {
+        const { DatabaseSync } = requireNodeSqlite();
+        // Exit inside the native call: the durable COMMIT precedes its receipt observer.
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the database.
+        const exec = DatabaseSync.prototype.exec;
+        DatabaseSync.prototype.exec = function (sql) {
+          Reflect.apply(exec, this, [sql]);
+          if (sql === "COMMIT") {
+            process.exit(17);
+          }
+        };
+        const write = () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            executeSqliteQuerySync(
+              db,
+              query.insertInto("entries").values({ value: command.input.value }),
+            );
+          });
+        if (command.input.mode === "schema-maintenance") {
+          withStateDatabaseSchemaMaintenance({ databasePath }, write);
+        } else {
+          write();
+        }
+        throw new Error("Fixture COMMIT did not exit");
       }
       if (command.type === "database.domain.execute") {
         const inner = command.input.command;

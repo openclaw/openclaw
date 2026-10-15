@@ -5,13 +5,8 @@ import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
-import type { ClawRemovalJournalWorkerInput } from "./removal-journal-contract.js";
 
 export type ClawProvenanceWriteOperations = {
-  "clawProvenance.removalJournal": {
-    input: ClawRemovalJournalWorkerInput;
-    output: { nonce: string };
-  };
   "clawProvenance.packageStatus": {
     input: {
       ref: PersistedClawPackageRef;

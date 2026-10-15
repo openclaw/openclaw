@@ -257,7 +257,7 @@ describe("Doctor Windows database path repair", () => {
       await runStateIntegrityHealth(ctx);
       expect(state.readRows()).toEqual(before);
       expect(ctx.updateWarnings).toEqual([
-        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix after the update finishes.",
+        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
       ]);
     },
   );
