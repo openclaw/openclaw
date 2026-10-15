@@ -362,6 +362,7 @@ function createReadTransport(
       }
       const request: OpenClawStateReadRequest = {
         context: {
+          databaseEngineInput: context.databaseEngineInput,
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
           stateIntegrity: context.stateIntegrity,

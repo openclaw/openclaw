@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureNewSessionComposerUiProof,
+  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
   waitForGatewayRecoveryScope,
@@ -11,7 +13,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([1, 2])("stacks phone setup selectors with %s agents", async (agentCount) => {
+  it.each([1, 2])("keeps phone setup selectors on one row with %s agents", async (agentCount) => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -75,6 +77,14 @@ suite.define(() => {
           // Measure only after the shell mode, controls, and container layout settle.
           await waitForLayoutSettled(page, ".new-session-page__triggers button");
           await captureNewSessionComposerUiProof(suite, page, `mobile-setup-${width}.png`);
+          if (captureUiProofEnabled && width === 390 && agentCount === 2) {
+            await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
+            await expect
+              .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+              .toBe("dark");
+            await captureNewSessionComposerUiProof(suite, page, "mobile-setup-dark.png");
+            await evaluateControlUiContext(page, (context) => context.theme.setMode("light"));
+          }
           const layout = await selectors.evaluateAll((buttons) =>
             buttons.map((button) => {
               const box = button.getBoundingClientRect();
@@ -85,14 +95,18 @@ suite.define(() => {
                 left: box.left,
                 right: box.right,
                 height: box.height,
+                width: box.width,
               };
             }),
           );
-          expect(new Set(layout.map((box) => box.row)).size).toBe(width <= 560 ? layout.length : 1);
+          expect(new Set(layout.map((box) => box.row)).size).toBe(1);
           for (const [index, box] of layout.entries()) {
             expect(box.left).toBeGreaterThanOrEqual(0);
             expect(box.right).toBeLessThanOrEqual(width);
             expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
+            if (mobile) {
+              expect(box.width).toBeGreaterThanOrEqual(44);
+            }
             const next = layout[index + 1];
             if (next && box.row === next.row) {
               expect(box.right).toBeLessThanOrEqual(next.left);
@@ -100,6 +114,17 @@ suite.define(() => {
           }
         }
         await page.setViewportSize({ width: 320, height: 700 });
+        for (const selector of await selectors.all()) {
+          await selector.click();
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("true");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("false");
+          await selector.focus();
+          await page.keyboard.press("Enter");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("true");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("false");
+        }
         await checkout.click();
         const baseRef = page.locator("#new-session-worktree-base-ref");
         await baseRef.fill("feature/mobile-layout-with-a-long-branch-name");

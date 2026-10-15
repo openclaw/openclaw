@@ -20,6 +20,7 @@ import {
   getRenderedModalDialog,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { selectMenuValue, settleSessionMenu } from "../../test-helpers/session-menu.ts";
 import {
   createContext,
   createGateway,
@@ -231,14 +232,11 @@ describe("sessions page agent-scope retirement", () => {
       page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
       await page.updateComplete;
       const menu =
-        page.querySelector<HTMLElementTagNameMap["openclaw-session-menu"]>("openclaw-session-menu");
-      await menu?.updateComplete;
-      menu!.querySelector("wa-dropdown")!.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "move-session" } },
-          bubbles: true,
-        }),
-      );
+        page.querySelector<HTMLElementTagNameMap["openclaw-session-menu"]>(
+          "openclaw-session-menu",
+        )!;
+      await settleSessionMenu(menu);
+      await selectMenuValue(menu, "move-session");
       await vi.waitFor(() =>
         expect(clientRequest).toHaveBeenCalledWith("sessions.move", {
           key: "global",

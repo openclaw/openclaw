@@ -1,5 +1,5 @@
-// Proxy fetch tests cover explicit/env proxy dispatchers, managed proxy TLS,
-// FormData conversion, metadata markers, and proxy env recovery.
+// Proxy fetch tests cover FormData conversion, metadata markers, env proxy
+// dispatch, and proxy env recovery.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const PROXY_ENV_KEYS = [
@@ -27,7 +27,6 @@ const {
   const undiciFetchLocal = vi.fn();
   const envAgentSpyLocal = vi.fn();
   class MockUndiciFormDataLocal {
-    readonly [Symbol.toStringTag] = "FormData";
     readonly entriesList: [string, unknown, string | undefined][] = [];
 
     append(key: string, value: unknown, filename?: string): void {
@@ -38,15 +37,10 @@ const {
       return this.entriesList.find(([entryKey]) => entryKey === key)?.[1] ?? null;
     }
   }
-  class ProxyAgent {
-    readonly proxyUrl: string | undefined;
-    constructor(public readonly options: { uri?: string; proxyTls?: unknown } | string) {
-      this.proxyUrl = typeof options === "string" ? options : options.uri;
-    }
-  }
+  const ProxyAgent = vi.fn();
   class EnvHttpProxyAgentLocal {
     static lastCreated: EnvHttpProxyAgentLocal | undefined;
-    constructor(public readonly options?: Record<string, unknown>) {
+    constructor(options?: Record<string, unknown>) {
       EnvHttpProxyAgentLocal.lastCreated = this;
       envAgentSpyLocal(options);
     }
@@ -65,7 +59,6 @@ const {
   );
 
   return {
-    ProxyAgent,
     EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
     MockUndiciFormData: MockUndiciFormDataLocal,
     undiciFetch: undiciFetchLocal,

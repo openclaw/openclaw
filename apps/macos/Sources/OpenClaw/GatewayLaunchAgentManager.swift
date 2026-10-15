@@ -928,19 +928,5 @@ extension GatewayLaunchAgentManager {
         self.testingState.withLock { $0.commandCalls.map(\.command) }
     }
 
-    static func _testRunningGatewayPID(from json: String) -> Int32? {
-        guard let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let service = object["service"] as? [String: Any]
-        else {
-            return nil
-        }
-        return self.runningGatewayPID(from: service)
-    }
-
-    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
-        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
-        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
-    }
     #endif
 }

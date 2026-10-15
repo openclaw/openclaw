@@ -218,7 +218,7 @@ suite.define(() => {
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Rename…", exact: true });
       await foreignRename.waitFor();
-      expect(await foreignRename.getAttribute("disabled")).not.toBeNull();
+      expect(await foreignRename.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       expect(await foreignRow.textContent()).toContain("Shared reference");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);

@@ -98,7 +98,7 @@ suite.define(() => {
       const localReasoning = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       for (const showReasoning of [false, true]) {
         await menuTrigger.click();
-        await menu.getByRole("menuitem", { name: "View", exact: true }).hover();
+        await menu.getByRole("menuitem", { name: "View", exact: true }).click();
         await localReasoning.click();
         await expect
           .poll(() => localReasoning.getAttribute("aria-checked"))

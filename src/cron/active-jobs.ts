@@ -483,11 +483,6 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   );
 }
 
-/** Returns whether any cron run is active in this process. */
-export function hasActiveCronJobs() {
-  return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
-}
-
 /** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
 export function hasActiveCronJobsExceptMarkers(
   markersToIgnore: readonly CronActiveJobMarker[],
