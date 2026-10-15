@@ -816,12 +816,14 @@ describe("CI changed Node test plan", () => {
           for (const target of group.includePatterns ?? []) {
             expect(group.configs).toEqual([buildVitestRunPlans([target])[0]?.config]);
           }
-          for (const key of [
-            "runner",
-            "planConcurrency",
-            "pretestBuildMode",
-            "timeoutMinutes",
-          ] as const) {
+          expect(group.runner).toBe(owner.runner);
+          expect(job.runner).toBe(
+            runnerBackend !== "github" &&
+              owner.configs.includes("test/vitest/vitest.agents-embedded-agent.config.ts")
+              ? "blacksmith-16vcpu-ubuntu-2404"
+              : ownerJob.runner,
+          );
+          for (const key of ["planConcurrency", "pretestBuildMode", "timeoutMinutes"] as const) {
             expect(job[key], key).toEqual(ownerJob[key]);
           }
           expect(job.predictedSeconds).toBeGreaterThan(0);
