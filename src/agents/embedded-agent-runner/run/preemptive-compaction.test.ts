@@ -167,6 +167,21 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
+  it("still compacts when content after the provider boundary exceeds the budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+        makeToolResultMessage("x".repeat(40_000)),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeGreaterThan(190_000);
+    expect(result.route).not.toBe("fits");
+  });
+
   it("does not scan past a zero unavailable context marker", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [

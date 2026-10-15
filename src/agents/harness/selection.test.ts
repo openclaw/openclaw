@@ -1616,6 +1616,49 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
   });
 
+  it("passes partial conversation policy to harnesses that enforce it exactly", async () => {
+    const received: Array<{
+      conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
+      pluginHarnessToolPolicyRestricted: boolean | undefined;
+      toolsAllow: string[] | undefined;
+    }> = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push({
+        conversationToolPolicy: attempt.conversationToolPolicy,
+        pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted,
+        toolsAllow: attempt.toolsAllow,
+      });
+      return createAttemptResult("codex");
+    });
+    registerHarness({
+      conversationToolPolicySupport: "exact",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    });
+
+    for (const toolsAllow of [undefined, ["Read", "Bash"]]) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy: { deny: ["exec"] },
+        toolsAllow,
+      });
+    }
+
+    expect(received).toEqual([
+      {
+        conversationToolPolicy: { deny: ["exec"] },
+        pluginHarnessToolPolicyRestricted: true,
+        toolsAllow: undefined,
+      },
+      {
+        conversationToolPolicy: { deny: ["exec"] },
+        pluginHarnessToolPolicyRestricted: true,
+        toolsAllow: ["Read", "Bash"],
+      },
+    ]);
+  });
+
   it("isolates native tools unless every exact deny is explicitly safe", async () => {
     const received: Array<{
       restricted: boolean;

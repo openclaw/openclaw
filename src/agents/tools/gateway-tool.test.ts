@@ -164,6 +164,31 @@ describe("gateway update action", () => {
     },
   );
 
+  it.each([undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:123456789",
+        turnSourceChannel: "telegram",
+      },
+      () =>
+        createGatewayTool({ senderIsOwner, requesterSenderId: "123456789" }).execute("update", {
+          action: "update.run",
+          requesterSenderId: "spoofed",
+          channel: "discord",
+        }),
+    );
+    expect(result.details).toEqual({
+      ok: false,
+      code: "owner_required",
+      reason: "owner_required",
+      message:
+        "No authenticated owner chat principal or operator-scheduled admission authorizes this update. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
+    });
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it.each([0])(
     "uses trusted chat routing without an update deadline (thread %s)",
     async (threadId) => {
