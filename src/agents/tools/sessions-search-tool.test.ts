@@ -13,6 +13,7 @@ import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibil
 import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { createSessionChannelReadFixture } from "./sessions-channel-read-result.test-support.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
@@ -123,6 +124,9 @@ describe("sessions_search tool", () => {
       row(sibling, "channel:c111"),
       row(other, "channel:c222"),
     ];
+    const owner = createSessionChannelReadFixture(
+      rows.map((entry) => ({ ...entry, chatType: "channel" as const })),
+    );
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsSearchTool({
       config: { tools: { sessions: { visibility: "channel" } } },
@@ -147,7 +151,7 @@ describe("sessions_search tool", () => {
         } as T;
       },
     });
-    const result = await tool.execute("channel-search", { query: "context" });
+    const result = await owner.run(() => tool.execute("channel-search", { query: "context" }));
     expect(result.details).toMatchObject({
       results: [
         expect.objectContaining({ sessionKey: requester }),
@@ -231,6 +235,7 @@ describe("sessions_search tool", () => {
     const admittedFirst = makeRow(firstSibling, "channel:c111");
     const reassignedFirst = makeRow(firstSibling, "channel:c222");
     const secondRow = makeRow(secondSibling, "channel:c111");
+    const owner = createSessionChannelReadFixture([requesterRow, admittedFirst, secondRow]);
     let currentFirst = admittedFirst;
     const searched: string[] = [];
     const tool = createSessionsSearchTool({
@@ -257,6 +262,7 @@ describe("sessions_search tool", () => {
         searched.push(...keys);
         if (keys.includes(secondSibling)) {
           currentFirst = reassignedFirst;
+          owner.setRow(reassignedFirst);
         }
         return {
           results: keys.map((key) =>
@@ -272,9 +278,11 @@ describe("sessions_search tool", () => {
       },
     });
 
-    const result = await tool.execute("channel-search-final-revalidation", {
-      query: "context",
-    });
+    const result = await owner.run(() =>
+      tool.execute("channel-search-final-revalidation", {
+        query: "context",
+      }),
+    );
 
     expect(searched).toEqual([requester, firstSibling, secondSibling]);
     expect(JSON.stringify(result.details)).not.toContain("BUFFERED REASSIGNED CHANNEL SECRET");
@@ -286,7 +294,119 @@ describe("sessions_search tool", () => {
     });
   });
 
+  it("drops earlier hits revoked while another final description is pending", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:2.201";
+    const firstSibling = "agent:main:slack:channel:c111:thread:2.202";
+    const secondSibling = "agent:main:slack:channel:c111:thread:2.203";
+    const makeRow = (key: string, to = "channel:c111") => ({
+      key,
+      agentId: "main",
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" as const },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const requesterRow = makeRow(requester);
+    const firstRow = makeRow(firstSibling);
+    const secondRow = makeRow(secondSibling);
+    const owner = createSessionChannelReadFixture([requesterRow, firstRow, secondRow]);
+    let currentFirst = firstRow;
+    const searched: string[] = [];
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        if (request.method === "sessions.list") {
+          return { sessions: [requesterRow, firstRow, secondRow], hasMore: false } as T;
+        }
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          if (key === secondSibling && searched.length === 3) {
+            // The first final check already succeeded; a later awaited check revokes it.
+            await Promise.resolve();
+            currentFirst = makeRow(firstSibling, "channel:c222");
+            owner.setRow(currentFirst);
+          }
+          return {
+            session:
+              key === firstSibling
+                ? currentFirst
+                : key === secondSibling
+                  ? secondRow
+                  : requesterRow,
+          } as T;
+        }
+        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+        searched.push(...keys);
+        return {
+          results: keys.map((key) =>
+            hit({
+              sessionKey: key,
+              snippet: key === firstSibling ? "FINAL CHECK REVOKED SECRET" : "channel context",
+            }),
+          ),
+        } as T;
+      },
+    });
+
+    const result = await owner.run(() =>
+      tool.execute("channel-search-final-description-revocation", {
+        query: "context",
+      }),
+    );
+
+    expect(searched).toEqual([requester, firstSibling, secondSibling]);
+    expect(JSON.stringify(result.details)).not.toContain("FINAL CHECK REVOKED SECRET");
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each([false, true])(
+    "requires a live disclosure owner only for cross-session channel hits (%s)",
+    async (includeSibling) => {
+      const requester = "agent:main:slack:channel:c111:thread:2.301";
+      const sibling = "agent:main:slack:channel:c111:thread:2.302";
+      const rows = [requester, ...(includeSibling ? [sibling] : [])].map((key) => ({
+        key,
+        agentId: "main",
+        chatType: "channel",
+        space: "t111",
+        origin: { provider: "slack", chatType: "channel" },
+        deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
+      }));
+      const tool = createSessionsSearchTool({
+        config: { tools: { sessions: { visibility: "channel" } } },
+        agentSessionKey: requester,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          if (request.method === "sessions.list") {
+            return { sessions: rows, hasMore: false } as T;
+          }
+          if (request.method === "sessions.describe") {
+            return {
+              session: rows.find((row) => row.key === (request.params as { key: string }).key),
+            } as T;
+          }
+          return {
+            results: (request.params as { sessionKeys: string[] }).sessionKeys.map((key) =>
+              hit({ sessionKey: key }),
+            ),
+          } as T;
+        },
+      });
+      const result = tool.execute("channel-search-missing-owner", { query: "context" });
+      if (includeSibling) {
+        await expect(result).rejects.toThrow(
+          "Cross-session channel retrieval requires the local Gateway read owner",
+        );
+      } else {
+        expect((await result).details).toMatchObject({
+          results: [expect.objectContaining({ sessionKey: requester })],
+        });
+      }
+    },
+  );
+
   it("rejects route reassignment after description but before transcript I/O", async () => {
     const requester = "agent:main:slack:channel:c111:thread:3.001";
     const sibling = "agent:main:slack:channel:c111:thread:3.002";

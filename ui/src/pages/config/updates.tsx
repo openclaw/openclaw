@@ -8,7 +8,6 @@ import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
 } from "../../../../src/shared/update-outcome.ts";
-import "../../components/update-run-view.ts";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
@@ -28,6 +27,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
+import { UpdateRunView } from "../../components/update-run-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -122,7 +122,7 @@ function RecordedAttempt(props: UpdatesViewProps) {
           }
         >
           <div class="settings-row settings-row--stacked">
-            <openclaw-update-run-view prop:run={run()} prop:connected={props.connected} />
+            <UpdateRunView run={run()} connected={props.connected} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>

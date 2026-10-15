@@ -388,6 +388,8 @@ export async function handleChatHistoryRequest({
         requestedSessionKey: sessionKey,
         canonicalSessionKey: canonicalKey,
         sessionId,
+        agentId: sessionAgentId,
+        defaultAgentId: compatibilityOwnerAgentId,
       });
       if (sessionInfo && Object.hasOwn(historyPage, "activeLeafEntryId")) {
         sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;

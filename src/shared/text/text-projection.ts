@@ -1,12 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeRegions } from "./code-regions.js";
+import { findCodeRegions, isInsideSettledBlockCode } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
 // Token absence must prove identity; activated syntax stays with the canonical transform.
 export type TextFilter = { transform: (text: string) => string } & (
-  | { activationTokens: readonly string[] }
+  | { activationTokens: readonly string[]; ignoreBlockCode?: boolean }
   | { create: () => TextProjector }
 );
 
@@ -40,14 +40,24 @@ export function createConditionalTextProjector(
 export function createActivatedProjector(
   filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
 ): TextProjector {
-  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
+  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "gi");
   const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
   let tail = "";
   let active = false;
   return createConditionalTextProjector(filter.transform, (input) => {
     if (!active) {
       const appended = tail + (input.delta ?? input.text);
-      active = activation.test(appended);
+      let regions: ReturnType<typeof findCodeRegions> | undefined;
+      for (const match of appended.matchAll(activation)) {
+        const start = input.text.length - appended.length + match.index;
+        if (
+          !filter.ignoreBlockCode ||
+          !isInsideSettledBlockCode(start, input.text, (regions ??= findCodeRegions(input.text)))
+        ) {
+          active = true;
+          break;
+        }
+      }
       tail = !active && overlap ? appended.slice(-overlap) : "";
     }
     return active;

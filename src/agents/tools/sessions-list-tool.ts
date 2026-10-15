@@ -53,6 +53,7 @@ import {
 } from "./sessions-helpers.js";
 import {
   createSessionsListVisibleReference,
+  finalizeSessionsListChannelRead,
   prepareSessionsListChannelAccess,
 } from "./sessions-list-channel-access.js";
 
@@ -700,26 +701,21 @@ export function createSessionsListTool(opts?: {
         }
         return jsonResult(resultFor(count));
       };
-      const channelVisible = await pMap(
+      return finalizeSessionsListChannelRead({
         sessions,
-        ({ entry }) => channelAccess.revalidateCurrent(entry),
-        { concurrency: 4, stopOnError: true },
-      );
-      if (
-        !requireSessionReadOwner &&
-        !hydrateTranscriptFieldsAfterFiltering &&
-        messageLimit === 0
-      ) {
-        return finalize(channelVisible);
-      }
-      const { withCurrentSessionListRows } =
-        await import("../../gateway/session-list-read-result.js");
-      return await withCurrentSessionListRows(
-        sessions.map(({ entry }) => entry),
-        (ownerVisible) =>
-          finalize(ownerVisible.map((visible, index) => visible && channelVisible[index] === true)),
+        channelAccess,
+        visibility,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        a2aPolicy,
+        allowArchivedMetadata:
+          (archived === true || archived === "all") &&
+          !hydrateTranscriptFieldsAfterFiltering &&
+          messageLimit === 0,
         requireSessionReadOwner,
-      );
+        hasEnrichment: hydrateTranscriptFieldsAfterFiltering || messageLimit > 0,
+        finalize,
+      });
     }),
   };
 }

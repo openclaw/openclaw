@@ -151,7 +151,10 @@ restrict agent pairs with `tools.agentToAgent.allow`. Set
 primary main-session exception; `self` restricts even main to its current session.
 
 The `channel` setting authorizes retrieval; it does not merge thread sessions or
-automatically inject sibling-thread history. It also filters transcript-backed
+automatically inject sibling-thread history. Sibling send, status/model changes,
+and session controls remain denied. Cross-session list and search require a
+Gateway-hosted agent; standalone RPC-only readers fail closed for those results.
+It also filters transcript-backed
 memory search, but it does not isolate shared memory files, filesystem access,
 or a channel plugin's direct message/history tools. Restrict those capabilities
 separately when one agent serves multiple customers. Historical sessions without

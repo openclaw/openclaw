@@ -7,6 +7,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import { currentSessionChannelReadAccess } from "./sessions-channel-read-result.js";
 import {
   createSessionVisibilityRowChecker,
   resolveDisplaySessionKey,
@@ -145,4 +146,64 @@ export async function prepareSessionsListChannelAccess(params: {
       }
     },
   };
+}
+
+/** Apply channel and existing row-owner checks in the same synchronous publication. */
+export async function finalizeSessionsListChannelRead<T>(params: {
+  sessions: readonly SessionCandidate[];
+  channelAccess: Awaited<ReturnType<typeof prepareSessionsListChannelAccess>>;
+  visibility: "self" | "tree" | "channel" | "agent" | "all";
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  a2aPolicy: AgentToAgentPolicy;
+  allowArchivedMetadata: boolean;
+  requireSessionReadOwner: boolean;
+  hasEnrichment: boolean;
+  finalize: (visible: readonly boolean[]) => T;
+}): Promise<T> {
+  const channelVisible = await pMap(
+    params.sessions,
+    ({ entry }) => params.channelAccess.revalidateCurrent(entry),
+    { concurrency: 4, stopOnError: true },
+  );
+  const channelRead = {
+    requesterAgentId: params.requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    a2aPolicy: params.a2aPolicy,
+    allowArchivedMetadata: params.allowArchivedMetadata,
+    targets: params.sessions.map(({ entry, agentId: sessionAgentId }) => ({
+      key: entry.key,
+      agentId: sessionAgentId,
+      expectedSessionId: entry.sessionId,
+    })),
+  };
+  if (!params.requireSessionReadOwner && !params.hasEnrichment) {
+    const currentVisible =
+      params.visibility === "channel"
+        ? currentSessionChannelReadAccess(channelRead)
+        : channelVisible;
+    return params.finalize(
+      currentVisible.map((visible, index) => visible && channelVisible[index] === true),
+    );
+  }
+  const { withCurrentSessionListRows } = await import("../../gateway/session-list-read-result.js");
+  return withCurrentSessionListRows(
+    params.sessions.map(({ entry }) => entry),
+    (ownerVisible, read) => {
+      const currentVisible =
+        params.visibility === "channel"
+          ? currentSessionChannelReadAccess(channelRead, read)
+          : channelVisible;
+      return params.finalize(
+        ownerVisible.map(
+          (visible, index) =>
+            visible && channelVisible[index] === true && currentVisible[index] === true,
+        ),
+      );
+    },
+    params.requireSessionReadOwner,
+    params.visibility === "channel"
+      ? [{ key: params.requesterSessionKey, agentId: params.requesterAgentId }]
+      : [],
+  );
 }

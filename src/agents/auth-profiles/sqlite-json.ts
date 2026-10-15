@@ -18,6 +18,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
+  type AuthProfileReadDatabaseOpener,
 } from "./sqlite-read-pool.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
@@ -141,8 +142,9 @@ function inspectAuthProfileJsonText(raw: string | undefined): PersistedAuthProfi
 export function inspectAgentAuthProfileJsonCellReadOnly(
   databasePath: string,
   target: "store" | "state",
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
 ): PersistedAuthProfileStoreInspection {
-  const acquired = acquireAuthProfileReadDatabase(databasePath);
+  const acquired = acquireAuthProfileReadDatabase(databasePath, openReadOnlyDatabase);
   if (acquired.status === "missing") {
     return { status: "missing", reason: "database" };
   }
@@ -160,11 +162,17 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
 /** Reuse the worker-owned reader; each statement observes the latest committed rows. */
 export function readAuthProfileRowsReadOnly(
   databasePath: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
   retainReader = true,
 ): AuthProfileRowRead {
-  const acquired = acquireAuthProfileReadDatabase(databasePath, schema, expectedIdentity);
+  const acquired = acquireAuthProfileReadDatabase(
+    databasePath,
+    openReadOnlyDatabase,
+    schema,
+    expectedIdentity,
+  );
   if (acquired.status !== "readable") {
     const inspection: PersistedAuthProfileStoreInspection =
       acquired.status === "missing"

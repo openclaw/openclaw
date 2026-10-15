@@ -7,6 +7,7 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { SessionRunVisualActivity } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
@@ -126,6 +127,7 @@ export function createSessionCapability(
     deletionState: (row) => deletions.deletionState(row.key, row.agentId, row.sessionId),
   });
   const swarmActivity = new SwarmActivityTracker();
+  const runVisualActivity = new SessionRunVisualActivity();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
@@ -467,6 +469,7 @@ export function createSessionCapability(
       retireOperationConnection(previousClient);
       groups.invalidate();
       swarmActivity.clear();
+      runVisualActivity.clear();
       mutations.retireConnection();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
@@ -535,6 +538,12 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === "agent" || event.event === "chat") {
+      if (runVisualActivity.observe(event)) {
+        notifySubscribers();
+      }
+      return;
+    }
     if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       githubPublication.observePullRequests(event.payload);
       return;
@@ -577,6 +586,9 @@ export function createSessionCapability(
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
+    if (reconciled.applied && hasActiveRun === false && eventInfo) {
+      runVisualActivity.retire(eventInfo.key);
+    }
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
     if (
       claimChanged ||
@@ -666,6 +678,7 @@ export function createSessionCapability(
     observeRow,
     inheritRow: roster.observations.inheritRow,
     projectRows: roster.observations.projectRows,
+    isRunVisuallyActive: runVisualActivity.isActive,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -715,6 +728,7 @@ export function createSessionCapability(
       permissions.clear();
       deletions.clear();
       swarmActivity.clear();
+      runVisualActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       sessionEventSubscription.dispose();

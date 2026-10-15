@@ -129,6 +129,7 @@ describe("file path tooltip", () => {
       } else {
         await userEvent.keyboard("{Escape}");
       }
+      await expect.poll(card).toBeNull();
       if (dismissal === "reopen") {
         const reopened = waitForReopen(tooltip);
         await page.elementLocator(anchor()).hover();
