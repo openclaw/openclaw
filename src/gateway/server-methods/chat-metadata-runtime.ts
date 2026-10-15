@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
+import {
+  getPreparedRuntimeAuthProfileStoreSnapshot,
+  type AuthProfileStore,
+} from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
@@ -41,7 +44,10 @@ import {
   type ChatMetadataRuntimeDeps,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
-import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
+import {
+  createChatMetadataModelList,
+  retainPublishedModelsList,
+} from "./chat-metadata-model-list.js";
 import {
   hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
@@ -79,6 +85,7 @@ type PreparedMetadataGeneration = {
 type ChatMetadataRefreshOptions = { notifyIfUnchanged?: boolean };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
+const EMPTY_AUTH_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
@@ -369,14 +376,85 @@ export function createGatewayChatMetadataRuntime(params: {
     return readProjection.read();
   };
 
+  // The last list each request shape received. While the model owner rebuilds, reads get this
+  // data minus changed providers instead of waiting for the replacement to publish.
+  const publishedModelLists = new Map<
+    string,
+    { result: ModelsListResult; facts: PreparedGenerationFacts; authStore: AuthProfileStore }
+  >();
+  const retainedModelsList = (key: string, agentId: string) => {
+    const published = publishedModelLists.get(key);
+    const agent = published?.facts.agents.find((candidate) => candidate.agentId === agentId);
+    if (!published || !agent) {
+      return undefined;
+    }
+    const { agentDir, inheritedAuthDir, metadataSnapshot } = agent.owner;
+    return retainPublishedModelsList(
+      published.result,
+      {
+        config: published.facts.config,
+        agentId,
+        authStore: published.authStore,
+        providerPlugins: metadataSnapshot.owners.providers,
+      },
+      {
+        config: deps.getConfig(),
+        agentId,
+        authStore: deps.getPreparedAuthStore(agentDir, inheritedAuthDir) ?? EMPTY_AUTH_STORE,
+      },
+    );
+  };
   const readModelsList = async (
     request: PreparedModelsListRequest,
   ): Promise<ModelsListResult | undefined> => {
     assertAgentDatabaseAdmitted(request.agentId);
-    return readCurrent(async (generation) => {
-      const prepared = await generation.modelLists.read(request);
-      return prepared ?? { isCurrent: () => true, read: () => undefined };
-    });
+    const agentId = normalizeAgentId(request.agentId);
+    const key = JSON.stringify([
+      agentId,
+      request.params,
+      request.includeManualSelection,
+      request.requesterProfileId,
+      request.readScope?.sessionKey,
+      request.readScope?.sessionEntry,
+    ]);
+    const rebuilding =
+      pending !== undefined ||
+      getPendingPreparedModelRuntimeReplacement() !== undefined ||
+      !current ||
+      !authStoresCurrent(current.facts, deps) ||
+      current.facts.agents.some((agent) => !agent.owner.isCurrent());
+    const retained = rebuilding ? retainedModelsList(key, agentId) : undefined;
+    if (retained) {
+      return retained;
+    }
+    let generation: PreparedMetadataGeneration | undefined;
+    let result: ModelsListResult | undefined;
+    try {
+      result = await readCurrent(async (read) => {
+        generation = read;
+        const prepared = await read.modelLists.read(request);
+        return prepared ?? { isCurrent: () => true, read: () => undefined };
+      });
+    } catch (error) {
+      // A publication that retires the read's owner mid-flight is not a user-visible failure.
+      const fallback = retainedModelsList(key, agentId);
+      if (fallback) {
+        return fallback;
+      }
+      throw error;
+    }
+    const agent = generation?.facts.agents.find((candidate) => candidate.agentId === agentId);
+    if (result && generation && agent) {
+      publishedModelLists.set(key, {
+        result,
+        facts: generation.facts,
+        authStore:
+          deps.getPreparedAuthStore(agent.owner.agentDir, agent.owner.inheritedAuthDir) ??
+          EMPTY_AUTH_STORE,
+      });
+      pruneMapToMaxSize(publishedModelLists, CHAT_METADATA_CACHE_MAX_ENTRIES);
+    }
+    return result;
   };
 
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {

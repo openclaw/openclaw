@@ -1,6 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
 import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
@@ -24,6 +28,86 @@ type SharedModelsListRequest = Omit<
   >;
 };
 type PreparedModels = Awaited<ReturnType<typeof prepareModelsListResult>>;
+
+type ProviderIdentitySource = {
+  config: OpenClawConfig;
+  agentId: string;
+  authStore: AuthProfileStore;
+  providerPlugins: ReadonlyMap<string, readonly string[]>;
+};
+
+/** Everything a provider's rows depend on that a user action can remove: config, auth, plugins. */
+function providerIdentity(source: ProviderIdentitySource, provider: string): unknown {
+  const { config, authStore } = source;
+  const pluginIds = source.providerPlugins.get(provider) ?? [];
+  const forProvider = <T>(entries: Record<string, T> | undefined) =>
+    Object.entries(entries ?? {}).filter(([id]) => normalizeProviderId(id) === provider);
+  const visibility = (models: Record<string, unknown> | undefined) =>
+    Object.entries(models ?? {}).filter(
+      ([ref]) =>
+        ref.includes("/") && normalizeProviderId(ref.slice(0, ref.indexOf("/"))) === provider,
+    );
+  const { providers: _providers, ...models } = config.models ?? {};
+  return {
+    models,
+    provider: forProvider(config.models?.providers),
+    authProfiles: Object.entries(config.auth?.profiles ?? {}).filter(
+      ([, profile]) => normalizeProviderId(profile.provider) === provider,
+    ),
+    authOrder: forProvider(config.auth?.order),
+    credentials: Object.entries(authStore.profiles).filter(
+      ([, profile]) => normalizeProviderId(profile.provider) === provider,
+    ),
+    credentialOrder: forProvider(authStore.order),
+    visibility: [
+      visibility(config.agents?.defaults?.models),
+      visibility(config.agents?.entries?.[source.agentId]?.models),
+    ],
+    plugins: {
+      enabled: config.plugins?.enabled,
+      allow: config.plugins?.allow?.filter((id) => pluginIds.includes(id)),
+      deny: config.plugins?.deny?.filter((id) => pluginIds.includes(id)),
+      entries: pluginIds.map((id) => config.plugins?.entries?.[id]),
+    },
+  };
+}
+
+/**
+ * Serves a published list while its owner rebuilds. A provider whose config, credentials,
+ * visibility or plugin changed since publication is removed now and returns with the new
+ * catalog; unchanged providers keep their rows.
+ */
+export function retainPublishedModelsList(
+  published: ModelsListResult,
+  previous: ProviderIdentitySource,
+  current: Omit<ProviderIdentitySource, "providerPlugins">,
+): ModelsListResult {
+  const kept = new Map<string, boolean>();
+  const keep = (provider: string) => {
+    const id = normalizeProviderId(provider);
+    let result = kept.get(id);
+    if (result === undefined) {
+      result = isDeepStrictEqual(
+        providerIdentity(previous, id),
+        providerIdentity({ ...current, providerPlugins: previous.providerPlugins }, id),
+      );
+      kept.set(id, result);
+    }
+    return result;
+  };
+  const { models, decisionModels, providerOutcomes, pendingProviders, ...rest } = published;
+  return {
+    ...rest,
+    models: models.filter((model) => keep(model.provider)),
+    ...(decisionModels && {
+      decisionModels: decisionModels.filter((model) => keep(model.provider)),
+    }),
+    ...(providerOutcomes && {
+      providerOutcomes: providerOutcomes.filter((outcome) => keep(outcome.provider)),
+    }),
+    ...(pendingProviders && { pendingProviders: pendingProviders.filter(keep) }),
+  };
+}
 
 /** Model-list variants are derived facts of the existing chat metadata generation. */
 export function createChatMetadataModelList(params: {
