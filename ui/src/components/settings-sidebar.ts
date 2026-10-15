@@ -448,7 +448,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </div>
       ${navigation}
       <footer class="settings-sidebar__footer">
-        ${renderSettingsConnectionStatus(props)}
+        <div class="settings-sidebar__connection">${renderSettingsConnectionStatus(props)}</div>
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

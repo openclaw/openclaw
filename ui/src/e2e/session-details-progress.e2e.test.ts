@@ -240,7 +240,13 @@ suite.define(() => {
         await geometry(true);
         expect(await details.locator(".chat-details__toolbar").count()).toBe(0);
         const environment = details.locator(".chat-details__environment");
-        expect(await environment.textContent()).toContain("/workspace/openclaw/session-details");
+        expect(await environment.textContent()).toContain("openclaw");
+        expect(await environment.textContent()).not.toContain(
+          "/workspace/openclaw/session-details",
+        );
+        expect(await environment.locator(".chat-details__row").first().getAttribute("title")).toBe(
+          "openclaw",
+        );
         const context = details.locator(".chat-details__context");
         expect(await context.locator("summary").textContent()).toContain("50%");
         await context.locator("summary").click();
@@ -388,6 +394,7 @@ suite.define(() => {
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
+        await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
         await selectChatLayoutAction(page, "Details");

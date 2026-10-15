@@ -284,6 +284,10 @@ export function createSessionActorWorker(
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
+            transcriptWatermark: {
+              sessionId: previousEntry.sessionId,
+              ...before.hot.transcript.watermark,
+            },
           },
         }),
       readPredicate: (predicate: Parameters<typeof readSessionEntryPatchPredicate>[2]) =>

@@ -23,6 +23,7 @@ import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
+import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 function seedSchema(database: DatabaseSync) {
   database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
@@ -169,7 +170,7 @@ describe("agent JSON predicate migration", () => {
     }
   });
 
-  it.each(["commit", "rollback", "without-outbox"] as const)(
+  it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete migration (%s)",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -179,8 +180,16 @@ describe("agent JSON predicate migration", () => {
         if (outcome === "without-outbox") {
           database.exec("DROP TABLE context_engine_turn_outbox");
         }
+        if (outcome === "missing-additive-indexes") {
+          database.exec(`
+            DROP INDEX idx_agent_transcript_context_pending;
+            DROP INDEX idx_agent_session_nodes_label;
+            DROP INDEX idx_agent_session_nodes_entry_not_valid;
+          `);
+        }
         database.exec(`INSERT INTO transcript_events (session_id, seq, event_json, created_at)
           VALUES ('history', 1, '{"type":"message","message":{"role":"user"}}', 1)`);
+        database.exec("ANALYZE");
         const original = captureOpenClawMigrationWitness(database, {
           role: "agent",
           agentId: "main",
@@ -204,7 +213,18 @@ describe("agent JSON predicate migration", () => {
           if (outcome === "rollback") {
             expect(migrate).toThrow(/authoriz/u);
           } else {
-            migrate();
+            await assertSqliteMigrationScopePreserved(
+              database,
+              [
+                "schema_meta",
+                "session_nodes",
+                // Old schema-25 stores also need the current readers' startup columns.
+                "session_windows",
+                "transcript_events",
+                "context_engine_turn_outbox",
+              ],
+              migrate,
+            );
           }
         });
         database.setAuthorizer(null);
@@ -234,6 +254,16 @@ describe("agent JSON predicate migration", () => {
               .prepare("SELECT name FROM sqlite_schema WHERE name = 'context_engine_turn_outbox'")
               .get(),
           ).toBeUndefined();
+        }
+        if (outcome === "missing-additive-indexes") {
+          expect(
+            database
+              .prepare(`SELECT name FROM sqlite_schema WHERE name IN (
+              'idx_agent_transcript_context_pending', 'idx_agent_session_nodes_label',
+              'idx_agent_session_nodes_entry_not_valid'
+            )`)
+              .all(),
+          ).toEqual([]);
         }
       });
     },

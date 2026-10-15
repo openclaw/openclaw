@@ -87,7 +87,7 @@ export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperatio
 }
 
 /** Connection-bound domains share the executor's transaction and publication grants. */
-export function createSessionWorkerOperationContext(
+function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
   bound: {
