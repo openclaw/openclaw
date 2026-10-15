@@ -214,7 +214,9 @@ function TaskSuggestionCard(props: {
           </summary>
           <div class="task-suggestion__instruction-body">
             <code
-              ref={path}
+              ref={(element) => {
+                path = element;
+              }}
               onScroll={(event) => {
                 const element = event.currentTarget;
                 element.toggleAttribute(

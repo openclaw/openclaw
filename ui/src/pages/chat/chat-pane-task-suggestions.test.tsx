@@ -320,13 +320,13 @@ describe("chat pane task suggestion lifecycle", () => {
     draw();
     expect(input().value).toBe("/projects/app");
     input().value = "relative/path";
-    input().dispatchEvent(new Event("input"));
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     draw();
     expect(container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.disabled).toBe(
       true,
     );
     input().value = "/projects/app";
-    input().dispatchEvent(new Event("input"));
+    input().dispatchEvent(new Event("input", { bubbles: true }));
     draw();
     container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.click();
     await vi.waitFor(() =>

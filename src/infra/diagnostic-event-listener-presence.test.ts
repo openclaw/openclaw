@@ -17,20 +17,12 @@ describe("diagnostic event listener interest", () => {
     resetDiagnosticEventsForTest();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
     resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
   });
 
   it("notifies only newly interested producers across filters, unsubscribe, and reset", () => {
-    const key = Symbol.for("openclaw.diagnosticEventListenerPresence.v1");
-    vi.stubGlobal(key, {
-      marker: key,
-      internalCount: 1,
-      trustedCount: 0,
-      broadInterestCount: 0,
-      eventInterestDeltas: new Map([["message.queued", 1]]),
-    });
+    onInternalDiagnosticEvent(() => {}, { include: ["message.queued"] });
     const type = "gateway.event_loop.sample";
     const observations: boolean[] = [];
     const stopObserving = onInternalDiagnosticEventInterest(type, () => {
