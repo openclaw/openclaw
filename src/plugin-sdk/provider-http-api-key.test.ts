@@ -5,7 +5,10 @@ const { resolveApiKeyForProvider } = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn<() => Promise<{ apiKey?: string }>>(),
 }));
 
-vi.mock("./provider-auth-runtime.js", () => ({ resolveApiKeyForProvider }));
+vi.mock("./provider-auth-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-auth-runtime.js")>()),
+  resolveApiKeyForProvider,
+}));
 
 describe("provider API-key HTTP request policy", () => {
   beforeEach(() => {
