@@ -213,6 +213,12 @@ async function buildCatalogFallbackBaseline(
     for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
       const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
       if (!existsSync(memoryPath)) {
+        // A newly registered source-only locale has no memory until its own refresh
+        // worker creates it; sibling workers must not block that bootstrap. The
+        // aggregate sync and check still require every locale's memory.
+        if (options.allowCatalogDrift) {
+          continue;
+        }
         throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
       }
       const memory = loadControlUiTranslationMemory(memoryPath);
