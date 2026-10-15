@@ -35,7 +35,9 @@ class QuestionButton extends Button {
     }
     try {
       await interaction.acknowledge();
-    } catch {}
+    } catch {
+      // The Gateway can accept the answer even when Discord cannot acknowledge it.
+    }
     let content: string;
     try {
       const result = await this.ctx.resolveQuestion({

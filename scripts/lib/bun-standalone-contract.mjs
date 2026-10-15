@@ -107,22 +107,32 @@ function runtimeEntries(root, relative = "") {
   return entries;
 }
 
-export function pruneStandaloneRuntime(root) {
-  let removedFiles = 0;
-  let removedBytes = 0;
-  for (const { name, symlink } of runtimeEntries(root)) {
-    if (!symlink && /(?:\.map|\.d\.(?:ts|mts|cts))$/.test(name)) {
-      const filename = path.join(root, name);
-      removedBytes += fs.statSync(filename).size;
-      fs.unlinkSync(filename);
-      removedFiles += 1;
+function assertStandaloneRuntimeLinks(root, entries) {
+  const canonicalRoot = fs.realpathSync(root);
+  for (const { name, symlink } of entries) {
+    if (!symlink) {
+      continue;
+    }
+    const filename = path.join(root, name);
+    // Publication moves the staging tree, so even contained absolute links would break.
+    if (path.isAbsolute(fs.readlinkSync(filename))) {
+      throw new Error(
+        `Invalid standalone runtime symlink ${name}: absolute target is not relocatable`,
+      );
+    }
+    let target;
+    try {
+      target = fs.realpathSync(filename);
+    } catch (error) {
+      throw new Error(`Invalid standalone runtime symlink ${name}: dangling or unreadable target`, {
+        cause: error,
+      });
+    }
+    const relative = path.relative(canonicalRoot, target);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error(`Invalid standalone runtime symlink ${name}: target is outside runtime/`);
     }
   }
-  return {
-    patterns: ["**/*.map", "**/*.d.ts", "**/*.d.mts", "**/*.d.cts"],
-    removedFiles,
-    removedBytes,
-  };
 }
 
 /** Tree SHA256 frames sorted POSIX path, kind, and content hash/link target with NULs and LF. */
@@ -134,6 +144,7 @@ export async function describeStandaloneRuntime(root) {
   const entries = runtimeEntries(root).toSorted((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
   );
+  assertStandaloneRuntimeLinks(root, entries);
   for (const { name, symlink } of entries) {
     const filename = path.join(root, name);
     if (symlink) {
@@ -155,8 +166,11 @@ export async function createStandaloneManifest({
   openclaw,
   embedded,
   pruning,
+  sqlite,
 }) {
+  const runtime = await describeStandaloneRuntime(path.join(outputRoot, "runtime"));
   const executable = path.join(outputRoot, "openclaw");
+  const { categories, sidecarPlugins, ...pruningSummary } = pruning;
   return {
     schemaVersion: 1,
     mode,
@@ -168,9 +182,14 @@ export async function createStandaloneManifest({
       sizeBytes: fs.statSync(executable).size,
       sha256: await sha256File(executable),
     },
-    runtime: await describeStandaloneRuntime(path.join(outputRoot, "runtime")),
+    runtime: {
+      ...runtime,
+      categories,
+      sidecarPlugins,
+      sqlite,
+    },
     embedded,
-    pruning,
+    pruning: pruningSummary,
     ...(process.platform === "darwin"
       ? {
           macos: { hardenedRuntime: true, entitlements: standaloneMacosEntitlements(mode) },

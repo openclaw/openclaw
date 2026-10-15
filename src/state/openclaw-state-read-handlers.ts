@@ -13,6 +13,7 @@ import {
   readClawOrphanWorkspaceInDatabase,
   readClawPackageRefsInDatabase,
 } from "../claws/provenance-read.kernel.js";
+import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
@@ -136,6 +137,9 @@ export function readOpenClawStateDatabaseCommand(
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
 ): OpenClawStateReadResult {
+  if (command.type === "claws.inventory") {
+    return readClawStateCommandInDatabase(db, command);
+  }
   if (command.type === "claws.packageOwnership") {
     const install =
       command.agentId === undefined

@@ -31,7 +31,6 @@ import {
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { createExtensionTestTimingKey } from "../../scripts/lib/extension-test-plan.mts";
-import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
@@ -549,35 +548,17 @@ describe("runtime placement observations", () => {
     },
   );
 
-  it.each(
-    (["push", "pull-request"] as const).flatMap((compactMode) =>
-      [false, true].map((gatewayRecipient) => ({ compactMode, gatewayRecipient })),
-    ),
-  )(
-    "admits complete $compactMode runtime placement without changing inventories or precise capacity (Gateway recipient: $gatewayRecipient)",
-    ({ compactMode, gatewayRecipient }) => {
+  it.each(["push", "pull-request"] as const)(
+    "admits complete %s runtime placement without changing inventories or precise capacity",
+    (compactMode) => {
       selectRuntimeConsumers();
       const originalShards = fullSuiteVitestShards.slice();
       const runtimeConfig = "test/vitest/vitest.runtime-config.config.ts";
       const infrastructure = "test/vitest/vitest.infra.config.ts";
-      const gatewayFixtureConfig = "fixture-agentic-gateway-server-isolated.config.ts";
-      const isExclusiveConfig = localCheckRuntime.isExclusiveCiTestConfig;
-      // Model a Gateway recipient without borrowing a changing project inventory.
-      const gatewayConfigSpy = gatewayRecipient
-        ? vi
-            .spyOn(localCheckRuntime, "isExclusiveCiTestConfig")
-            .mockImplementation((config) =>
-              isExclusiveConfig(
-                config === gatewayFixtureConfig
-                  ? "test/vitest/vitest.gateway-methods-isolated.config.ts"
-                  : config,
-              ),
-            )
-        : undefined;
       const configs = new Set([
         runtimeConfig,
         infrastructure,
-        ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
+        "test/vitest/vitest.gateway-database-workers.config.ts",
       ]);
       const compactSpy = mockRuntimePlacementCosts();
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
@@ -596,12 +577,6 @@ describe("runtime placement observations", () => {
               projects: shard.projects.filter((config) => configs.has(config)),
             }))
             .filter((shard) => shard.projects.length > 0),
-          ...(gatewayRecipient
-            ? ["agentic-gateway-server-isolated", "agentic-agents-core-subagents"].map((name) => {
-                const config = `fixture-${name}.config.ts`;
-                return { name, config, projects: [config] };
-              })
-            : []),
         );
         const before = createNodeTestShardBundles(options);
         const runtimeGroups = before
@@ -619,18 +594,14 @@ describe("runtime placement observations", () => {
                 "src/infra/update-managed-service-handoff-lifecycle.test.ts",
               ]),
             }),
-            ...(gatewayRecipient
-              ? []
-              : [
-                  expect.objectContaining({
-                    configs: expect.arrayContaining([
-                      "test/vitest/vitest.gateway-database-workers.config.ts",
-                    ]),
-                    includePatterns: expect.arrayContaining([
-                      "test/plugins/codex-model-catalog.gateway.test.ts",
-                    ]),
-                  }),
-                ]),
+            expect.objectContaining({
+              configs: expect.arrayContaining([
+                "test/vitest/vitest.gateway-database-workers.config.ts",
+              ]),
+              includePatterns: expect.arrayContaining([
+                "test/plugins/codex-model-catalog.gateway.test.ts",
+              ]),
+            }),
           ]),
         );
         const selected = ["src/config/state-startup-corpus.test.ts"];
@@ -694,25 +665,6 @@ describe("runtime placement observations", () => {
           (job, index) => JSON.stringify(job.groups) !== JSON.stringify(before[index]!.groups),
         );
         expect(changed).toHaveLength(2);
-        if (gatewayRecipient) {
-          const recipient = changed.find((job) =>
-            before.some(
-              (original) =>
-                original.checkName === job.checkName &&
-                original.groups.some((group) => group.configs.includes(gatewayFixtureConfig)) &&
-                original.pretestBuildMode === undefined &&
-                original.planConcurrency === 1,
-            ),
-          )!;
-          expect(recipient, "serial Gateway recipient").toBeDefined();
-          const original = before.find((job) => job.checkName === recipient.checkName)!;
-          expect(recipient.env).toEqual(original.env);
-          for (const group of original.groups) {
-            expect(recipient.groups.find((entry) => entry.shard_name === group.shard_name)).toEqual(
-              group,
-            );
-          }
-        }
         for (const job of changed) {
           expect(job.predictedSeconds).toBeLessThanOrEqual(360);
           expect(job.planConcurrency).toBe(1);
@@ -730,10 +682,7 @@ describe("runtime placement observations", () => {
         );
         expect(crossing.length).toBeGreaterThan(0);
         for (const group of crossing) {
-          const measuredGateway = gatewayRecipient && group.configs.includes(gatewayFixtureConfig);
-          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBe(
-            measuredGateway ? "8" : "2",
-          );
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBe("2");
         }
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
@@ -765,9 +714,82 @@ describe("runtime placement observations", () => {
       } finally {
         spy.mockRestore();
         compactSpy.mockRestore();
-        gatewayConfigSpy?.mockRestore();
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
+    },
+  );
+
+  it.each([false, true])(
+    "admits a serial Gateway recipient only with spare capacity (packed: %s)",
+    (packed) => {
+      const group = (name: string, runtime = false): NodeTestShardGroup => ({
+        shard_name: name,
+        configs: [name === "gateway" ? "fixture-gateway.config.ts" : "fixture-runtime.config.ts"],
+        includePatterns: [`src/${name}.test.ts`],
+        requiresDist: false,
+        runner: "large",
+        env: { OPENCLAW_VITEST_MAX_WORKERS: name === "gateway" ? "8" : "2" },
+        ...(runtime ? { pretestBuildMode: "runtime" } : {}),
+      });
+      const moved = group("moved", true);
+      const retained = group("retained", true);
+      const gateway = group("gateway");
+      const ordinary = group("ordinary");
+      const jobs: CompactNodeTestShard[] = [
+        {
+          checkName: "donor",
+          shardName: "donor",
+          runner: "large",
+          groups: [moved, retained],
+          requiresDist: false,
+          pretestBuildMode: "runtime",
+          planConcurrency: 1,
+        },
+        {
+          checkName: "gateway",
+          shardName: "gateway",
+          runner: "large",
+          groups: packed ? [gateway, ordinary] : [gateway],
+          requiresDist: false,
+          planConcurrency: 1,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        },
+      ];
+      const weights: Record<string, number> = {
+        moved: 180,
+        retained: 250,
+        gateway: 30,
+        ordinary: 190,
+      };
+      const cost = (groups: NodeTestShardGroup[]) =>
+        60 + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0);
+      rebalanceRuntimeTestJobs(jobs, {
+        cost,
+        admits: (groups) => groups.length > 0 && cost(groups) <= 360,
+        runnerRank: () => 0,
+        prepareRecipient: (job) => (job.planConcurrency === 1 ? job.groups : undefined),
+      });
+      expect(jobs.map((job) => job.groups.map((entry) => entry.shard_name))).toEqual(
+        packed
+          ? [
+              ["moved", "retained"],
+              ["gateway", "ordinary"],
+            ]
+          : [["retained"], ["gateway", "moved"]],
+      );
+      if (!packed) {
+        expect(jobs.map((job) => job.predictedSeconds)).toEqual([310, 270]);
+        expect(jobs[1]).toMatchObject({ pretestBuildMode: "runtime", planConcurrency: 1 });
+      }
+      expect(jobs[1]!.env).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: "2" });
+      expect(jobs[1]!.groups[0]).toEqual(gateway);
+      expect(jobs[1]!.groups[0]!.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("8");
+      expect(
+        jobs
+          .flatMap((job) => job.groups)
+          .filter((entry) => entry.shard_name !== "gateway")
+          .every((entry) => entry.env?.OPENCLAW_VITEST_MAX_WORKERS === "2"),
+      ).toBe(true);
     },
   );
 

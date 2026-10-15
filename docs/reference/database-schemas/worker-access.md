@@ -162,6 +162,12 @@ preparation runs under Gateway or exclusive offline ownership, so it does not
 repeat its preflight reads inside the creation transaction. Integrity checks,
 agent ownership checks, and destructive cleanup authority remain in place.
 
+Catalog admission alone does not mean the agent schema exists. Session target
+discovery joins any pending first preparation owned by the agent's native
+execution owner before inspecting that catalog. This covers new databases and
+interrupted empty files without making Gateway readiness depend on every lazy
+agent store. Canceling a discovery request stops its wait, not schema preparation.
+
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
 then reuse them across handles and workers while admission retains a live
@@ -198,10 +204,16 @@ cascade, while windows transferred to a surviving session retain their scopes.
 Shared retirement flags remove those scopes and exited workers' reference cells
 from later admission snapshots; stale transfers cannot restore them. Recreated
 scope keys receive a fresh receipt identity, so old cached reads remain invalid.
-Worker exit invalidates row receipts only for databases that worker still had
-open; retiring an unrelated idle worker preserves session and auth caches.
-Native close settles receipts before releasing its reference, so a later worker
-failure does not invalidate those committed facts again.
+Worker exit releases handle references without advancing data revisions, so
+session and auth caches held by live siblings survive idle-worker retirement.
+Native writes retain a pending count in the existing worker reference metadata
+until their scoped and database-wide receipts are published. On worker exit, the
+receipt owner invalidates only databases with pending writes, before releasing
+handles and settling callers. This covers durable COMMIT followed by a crash
+before receipt publication, including writes without a separate domain grant.
+The operation owner still handles unknown-outcome recovery.
+Quarantine and schema changes still invalidate their admission facts and scoped
+receipts. Final-handle closure still retires facts for physical-file readmission.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
 Receipt metadata follows retained session scopes rather than all deleted sessions;
@@ -3046,12 +3058,13 @@ Session creation retains this original-absence witness when a sibling finishes
 admission while caller authority is being prepared, including shared stores.
 It still refuses replacement files and changed aliases or shared-state owners.
 
-Cold session readers join the same physical writer queue before dispatch, so they
-cannot observe the database file before its first schema admission completes.
-They use the existing target-discovery lane while holding that queue, so a history
-search waiting for writer-backed index status cannot block their worker dispatch.
-Already admitted readers retain their independent read path. The queue reservation
-ends before consumer callbacks run, and the existing request deadline, cancellation,
+Cold session readers share the database's schema-admission turn before dispatch,
+so they cannot observe the file before its first schema admission completes.
+They use the existing target-discovery lane during that turn, so a history search
+waiting for writer-backed index status cannot block their worker dispatch. Pure
+reads never reserve the agent writer; already admitted readers retain their
+independent read path. The schema-admission turn ends before consumer callbacks
+run, and the existing request deadline, cancellation,
 and database revocation cover admission waiting. Read-only access never creates a
 missing store; idle agents still have no durable database until their first write.
 Session event capture retains the physical source reported by the worker after

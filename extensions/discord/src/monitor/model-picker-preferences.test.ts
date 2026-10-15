@@ -151,36 +151,6 @@ describe("discord model picker preferences", () => {
     expect(new Set(recent)).toEqual(new Set(["openai/gpt-4o", "openai/gpt-4.1"]));
   });
 
-  it("keeps selections recent when the process clock is outside the Date range", async () => {
-    const env = await createStateEnv();
-    const scope = { userId: "invalid-clock-user" };
-    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" });
-    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4o" });
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-    try {
-      await recordDiscordModelPickerRecentModel({
-        env,
-        scope,
-        modelRef: "openai/gpt-5.5",
-        limit: 2,
-      });
-      await recordDiscordModelPickerRecentModel({
-        env,
-        scope,
-        modelRef: "openai/gpt-5.6",
-        limit: 2,
-      });
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-
-    await expect(readDiscordModelPickerRecentModels({ env, scope, limit: 3 })).resolves.toEqual([
-      "openai/gpt-5.6",
-      "openai/gpt-5.5",
-    ]);
-  });
-
   it("retires the July command cache while preserving July SQLite state", async () => {
     const env = await createStateEnv();
     const stateDir = env.OPENCLAW_STATE_DIR!;

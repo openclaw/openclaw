@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.contract.js";
+import { withLeasePinnedDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -198,12 +200,17 @@ export function captureRuntimeConfigAsyncReader(
   return Object.assign(read, { assertCurrent });
 }
 
-function createCurrentConfigReader(params: { configPath?: string; env?: NodeJS.ProcessEnv }) {
+function createCurrentConfigReader(params: {
+  configPath?: string;
+  env?: NodeJS.ProcessEnv;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
+}) {
   return createConfigIO({
     configPath: params.configPath,
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
     observe: false,
     pluginValidation: "core-only",
+    deferredPluginMigrations: params.deferredPluginMigrations,
     shellEnvFallback: "defer",
     suppressFutureVersionWarning: true,
     logger: { warn: () => {}, error: () => {} },
@@ -285,8 +292,30 @@ export function readCurrentConfigForResolution(
 export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 }): OpenClawConfig {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
+}
+
+/** Keep the Claw Add policy reader bound to its admitted plugin-state lease. */
+export async function withCurrentConfigPolicyReader<T>(
+  params: {
+    configPath: string;
+    env: NodeJS.ProcessEnv;
+    lease: { databasePath: string; assertOwned: () => void };
+  },
+  run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withLeasePinnedDeferredPluginMigrations(
+    params,
+    async (deferredPluginMigrations, assertCurrent) =>
+      run(() => {
+        assertCurrent();
+        const config = readCurrentConfigForPolicyCheck({ ...params, deferredPluginMigrations });
+        assertCurrent();
+        return config;
+      }),
+  );
 }
 
 /** Read canonical disk policy asynchronously without inspecting migration state. */

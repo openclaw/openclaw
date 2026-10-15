@@ -1,0 +1,803 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { validateClawsCatalogDetailResult } from "@openclaw/gateway-protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+const mocks = vi.hoisted(() => ({
+  list: vi.fn(),
+  search: vi.fn(),
+  detail: vi.fn(),
+  version: vi.fn(),
+  artifact: vi.fn(),
+  security: vi.fn(),
+  download: vi.fn(),
+  trust: vi.fn(),
+  extract: vi.fn(),
+  read: vi.fn(),
+  skillCard: vi.fn(),
+}));
+
+// mock-isolation: Catalog responses are fixed fixtures; no live registry request may escape.
+vi.mock("../infra/clawhub-packages.js", () => ({
+  listClawHubPackages: mocks.list,
+  searchClawHubPackages: mocks.search,
+  fetchClawHubPackageDetail: mocks.detail,
+  fetchClawHubPackageVersion: mocks.version,
+  fetchClawHubPackageArtifact: mocks.artifact,
+  fetchClawHubPackageSecurity: mocks.security,
+}));
+// mock-isolation: Archive bytes come from the fixture so source identity remains deterministic.
+vi.mock("../infra/clawhub-artifacts.js", () => ({
+  downloadClawHubPackageArchive: mocks.download,
+}));
+vi.mock("../infra/clawhub-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-skills.js")>()),
+  fetchClawHubSkillCard: mocks.skillCard,
+}));
+// mock-isolation: Trust verdicts are explicit fixtures, never ambient policy state.
+vi.mock("../infra/clawhub-install-trust.js", () => ({
+  checkClawHubPackageTrust: mocks.trust,
+}));
+// mock-isolation: Extraction is controlled by each test without touching package installers.
+vi.mock("../infra/install-flow.js", () => ({
+  withExtractedArchiveRoot: mocks.extract,
+}));
+// mock-isolation: Manifest reads use fixture results independent of archive internals.
+vi.mock("./reader.js", () => ({
+  readClawManifestFile: mocks.read,
+}));
+
+import {
+  ClawHubSourceError,
+  listClawHubClaws,
+  readClawHubClawDetail,
+  readClawHubClawPreview,
+  searchClawHubClaws,
+  withResolvedClawHubSource,
+} from "./clawhub-source.js";
+import type { ClawManifest } from "./types.js";
+
+const packageName = "@openclaw/research-briefing";
+const version = "1.0.0";
+const archiveBytes = Buffer.alloc(321);
+const digest = createHash("sha256").update(archiveBytes).digest("hex");
+const tempDirs = createTrackedTempDirs();
+const matchingSecurity = {
+  package: { name: packageName, family: "claw" },
+  release: {
+    version,
+    artifactKind: "npm-pack",
+    artifactSha256: digest,
+    npmIntegrity: "sha512-proof",
+  },
+  overview: "No concerning capabilities found.",
+  verdict: "benign",
+  securityAuditUrl: "https://clawhub.ai/openclaw/claws/research-briefing/security-audit",
+  trust: {
+    scanStatus: "clean",
+    moderationState: "approved",
+    blockedFromDownload: false,
+    reasons: [],
+    pending: false,
+    stale: false,
+  },
+};
+
+function officialPackage(name = packageName) {
+  return {
+    name,
+    displayName: "Research Briefing",
+    family: "claw",
+    channel: "official",
+    isOfficial: true,
+    ownerHandle: "openclaw",
+    summary: "Researches a topic and produces a briefing.",
+    createdAt: 1,
+    updatedAt: 2,
+    latestVersion: version,
+    stats: { downloads: 12 },
+  };
+}
+
+const summary = {
+  schemaVersion: 1,
+  agent: { id: "research-briefing", name: "Research Briefing" },
+  workspace: { bootstrapFiles: ["SOUL.md"], fileCount: 1 },
+  packages: { skillCount: 2, pluginCount: 0 },
+  mcpServerCount: 1,
+  cronJobCount: 0,
+};
+
+async function prepareResolverFixture(packages: ClawManifest["packages"] = []) {
+  const temp = await tempDirs.make("openclaw-clawhub-claw-");
+  const extractedRoot = path.join(temp, "extracted");
+  const archivePath = path.join(temp, "claw.tgz");
+  const stateDir = path.join(temp, "state");
+  await fs.mkdir(extractedRoot);
+  await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
+  await fs.writeFile(archivePath, archiveBytes);
+  mocks.download.mockResolvedValue({
+    archivePath,
+    artifact: "clawpack",
+    sha256Hex: digest,
+    npmIntegrity: "sha512-proof",
+    cleanup: vi.fn(),
+  });
+  mocks.extract.mockImplementation(async ({ onExtracted }) => await onExtracted(extractedRoot));
+  mocks.read.mockImplementation(async (root: string) => ({
+    ok: true,
+    manifest: { packages },
+    source: {
+      kind: "package",
+      name: packageName,
+      version,
+      packageRoot: root,
+      manifestPath: path.join(root, "CLAW.md"),
+      integrityKind: "development-snapshot",
+      integrity: "sha256:development",
+      byteLength: 1,
+    },
+    diagnostics: [],
+  }));
+  return { stateDir, extractedRoot };
+}
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  const temp = await tempDirs.make("openclaw-clawhub-catalog-");
+  const extractedRoot = path.join(temp, "extracted");
+  const archivePath = path.join(temp, "catalog.clawpack");
+  await fs.mkdir(extractedRoot);
+  await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
+  await fs.writeFile(path.join(extractedRoot, "SOUL.md"), "# Research brief\n");
+  await fs.writeFile(path.join(extractedRoot, "brief.md"), "# Brief template\n");
+  await fs.writeFile(archivePath, archiveBytes);
+  const contentsManifest = {
+    schemaVersion: 1,
+    agent: { id: "research-briefing", name: "Research Briefing" },
+    metadata: {},
+    workspace: {
+      bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
+      files: [{ source: "brief.md", path: "brief.md" }],
+    },
+    packages: [
+      { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
+      { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
+    ],
+    mcpServers: { sources: { command: "source-tool" } },
+    cronJobs: [
+      {
+        id: "daily-briefing",
+        name: "Daily briefing",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated",
+        message: "Prepare the briefing",
+      },
+    ],
+  } satisfies ClawManifest;
+  mocks.read.mockImplementation(async (root: string) => ({
+    ok: true,
+    manifest: contentsManifest,
+    source: {
+      kind: "package",
+      name: packageName,
+      version,
+      packageRoot: root,
+      manifestPath: path.join(root, "CLAW.md"),
+      integrityKind: "development-snapshot",
+      integrity: "sha256:development",
+      byteLength: archiveBytes.byteLength,
+    },
+    diagnostics: [],
+    snapshot: {
+      workspaceSources: [
+        {
+          sourcePath: "SOUL.md",
+          realPath: path.join(root, "SOUL.md"),
+          byteLength: Buffer.byteLength("# Research brief\n"),
+          digest: `sha256:${createHash("sha256").update("# Research brief\n").digest("hex")}`,
+        },
+        {
+          sourcePath: "brief.md",
+          realPath: path.join(root, "brief.md"),
+          byteLength: Buffer.byteLength("# Brief template\n"),
+          digest: `sha256:${createHash("sha256").update("# Brief template\n").digest("hex")}`,
+        },
+      ],
+    },
+  }));
+  mocks.skillCard.mockResolvedValue("# Citation check\n");
+  mocks.download.mockResolvedValue({
+    archivePath,
+    artifact: "clawpack",
+    sha256Hex: digest,
+    npmIntegrity: "sha512-proof",
+    cleanup: vi.fn(),
+  });
+  mocks.extract.mockImplementation(async ({ onExtracted }) => await onExtracted(extractedRoot));
+  mocks.detail.mockResolvedValue({
+    package: { ...officialPackage(), ownerHandle: undefined, clawManifestSummary: summary },
+    owner: { handle: "openclaw" },
+  });
+  mocks.version.mockResolvedValue({
+    package: { name: packageName, displayName: "Research Briefing", family: "claw" },
+    version: { version, createdAt: 2, changelog: "", clawManifestSummary: summary },
+  });
+  mocks.artifact.mockResolvedValue({
+    package: { name: packageName, family: "claw" },
+    version,
+    artifact: {
+      kind: "npm-pack",
+      sha256: digest,
+      npmIntegrity: "sha512-proof",
+    },
+  });
+  mocks.trust.mockResolvedValue({
+    ok: true,
+    trustInstallRecordFields: {
+      clawhubTrustDisposition: "clean",
+      clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+    },
+  });
+});
+
+afterEach(async () => {
+  await tempDirs.cleanup();
+  vi.unstubAllEnvs();
+});
+
+describe("official ClawHub Claw catalog", () => {
+  it("loads all 30 official starters across paginated list responses", async () => {
+    const first = Array.from({ length: 25 }, (_, index) =>
+      officialPackage(`@openclaw/starter-${index}`),
+    );
+    const second = Array.from({ length: 5 }, (_, index) =>
+      officialPackage(`@openclaw/starter-${index + 25}`),
+    );
+    mocks.list
+      .mockResolvedValueOnce({
+        items: [...first, officialPackage("@other/impostor")],
+        nextCursor: "page 2",
+      })
+      .mockResolvedValueOnce({ items: second, nextCursor: null });
+
+    const result = await listClawHubClaws();
+
+    expect(result).toHaveLength(30);
+    expect(result[0]).toMatchObject({ packageName: "@openclaw/starter-0", official: true });
+    expect(result.at(-1)?.packageName).toBe("@openclaw/starter-29");
+    expect(mocks.list).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ family: "claw", isOfficial: true, limit: 100 }),
+    );
+    expect(mocks.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "page 2" }));
+  });
+
+  it("uses list for a blank query and filters typed search to the official publisher", async () => {
+    mocks.list.mockResolvedValue({ items: [officialPackage()], nextCursor: null });
+    await expect(searchClawHubClaws({ query: "  " })).resolves.toHaveLength(1);
+    expect(mocks.search).not.toHaveBeenCalled();
+
+    mocks.search.mockResolvedValue([
+      { score: 1, package: officialPackage() },
+      { score: 1, package: officialPackage("@other/impostor") },
+      { score: 1, package: { ...officialPackage(), ownerHandle: "someone-else" } },
+      { score: 1, package: { ...officialPackage(), name: 42 } },
+    ]);
+    const result = await searchClawHubClaws({ query: "research" });
+    expect(result.map((item) => item.packageName)).toEqual([packageName]);
+    expect(mocks.search).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "research", family: "claw", isOfficial: true, limit: 100 }),
+    );
+  });
+
+  it("honors the starter catalog limit for a blank query", async () => {
+    mocks.list.mockResolvedValue({
+      items: [officialPackage("@openclaw/first"), officialPackage("@openclaw/second")],
+      nextCursor: "page 2",
+    });
+
+    const entries = await searchClawHubClaws({ query: " ", limit: 1 });
+
+    expect(entries.map((entry) => entry.packageName)).toEqual(["@openclaw/first"]);
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(mocks.list).toHaveBeenCalledWith(
+      expect.objectContaining({ family: "claw", isOfficial: true, limit: 1 }),
+    );
+  });
+
+  it("finds an official match when community matches fill the search cap", async () => {
+    mocks.search.mockImplementation(async ({ isOfficial, limit }) =>
+      isOfficial
+        ? [{ score: 1, package: officialPackage() }]
+        : Array.from({ length: limit }, (_, index) => ({
+            score: 1,
+            package: { ...officialPackage(`@community/result-${index}`), isOfficial: false },
+          })),
+    );
+
+    await expect(searchClawHubClaws({ query: "research", limit: 1 })).resolves.toMatchObject([
+      { packageName },
+    ]);
+    expect(mocks.search).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "research", family: "claw", isOfficial: true, limit: 1 }),
+    );
+  });
+
+  it("projects exact-release contents from the verified archive", async () => {
+    mocks.skillCard.mockResolvedValueOnce(
+      "---\nname: citation-check\ndescription: Metadata description\n---\n# Citation check\n",
+    );
+    const detail = await readClawHubClawDetail({ packageName });
+    expect(validateClawsCatalogDetailResult({ detail })).toBe(true);
+    expect(detail).toMatchObject({
+      packageName,
+      version,
+      agentName: "Research Briefing",
+      workspaceFiles: 2,
+      skills: 1,
+      plugins: 1,
+      mcpServers: 1,
+      scheduledJobs: 1,
+      contents: {
+        instructions: [
+          { name: "SOUL.md", source: "SOUL.md", excerpt: "Research brief" },
+          { name: "brief.md", source: "brief.md", excerpt: "Brief template" },
+        ],
+        skills: [{ name: "@openclaw/citation-check", version: "1.1.0", excerpt: "Citation check" }],
+        integrations: [
+          { name: "@openclaw/source-plugin", kind: "plugin", version: "2.0.0" },
+          { name: "sources", kind: "mcpServer" },
+        ],
+        automations: [{ name: "Daily briefing", schedule: "0 9 * * *", timezone: "UTC" }],
+      },
+    });
+    expect(mocks.version).toHaveBeenCalledWith(
+      expect.objectContaining({ name: packageName, version }),
+    );
+    expect(mocks.download).toHaveBeenCalledWith(
+      expect.objectContaining({ name: packageName, version, artifact: "clawpack" }),
+    );
+    expect(mocks.skillCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "citation-check",
+        ownerHandle: "openclaw",
+        version: "1.1.0",
+      }),
+    );
+  });
+
+  it("keeps the detail available when a skill card cannot be fetched", async () => {
+    mocks.skillCard.mockRejectedValueOnce(new Error("Skill card unavailable"));
+
+    await expect(readClawHubClawDetail({ packageName })).resolves.toMatchObject({
+      contents: { skills: [{ name: "@openclaw/citation-check", version: "1.1.0" }] },
+    });
+  });
+
+  it("previews verified workspace files and declared skills", async () => {
+    await expect(
+      readClawHubClawPreview({ packageName, version, kind: "instruction", name: "brief.md" }),
+    ).resolves.toEqual({ kind: "instruction", name: "brief.md", content: "# Brief template\n" });
+    await expect(
+      readClawHubClawPreview({
+        packageName,
+        version,
+        kind: "skill",
+        name: "@openclaw/citation-check",
+      }),
+    ).resolves.toEqual({
+      kind: "skill",
+      name: "@openclaw/citation-check",
+      content: "# Citation check\n",
+    });
+    expect(mocks.skillCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "citation-check",
+        ownerHandle: "openclaw",
+        version: "1.1.0",
+      }),
+    );
+    mocks.skillCard.mockRejectedValueOnce(new Error("Skill not found"));
+    await expect(
+      readClawHubClawPreview({
+        packageName,
+        version,
+        kind: "skill",
+        name: "@openclaw/citation-check",
+      }),
+    ).rejects.toMatchObject({
+      code: "clawhub_preview_unavailable",
+      message: "This skill's content is unavailable from the configured ClawHub.",
+    });
+    await expect(
+      readClawHubClawPreview({ packageName, version, kind: "instruction", name: "missing.md" }),
+    ).rejects.toMatchObject({ code: "clawhub_preview_unavailable" });
+  });
+
+  it("lists and previews the SOUL file generated from the Claw document", async () => {
+    mocks.read.mockImplementationOnce(async () => ({
+      ok: true,
+      manifest: {
+        workspace: { bootstrapFiles: {}, files: [] },
+        packages: [],
+        mcpServers: {},
+        cronJobs: [],
+      },
+      clawMarkdownBody: Buffer.from("# Travel planner\n"),
+      snapshot: { workspaceSources: [] },
+      source: { kind: "package", name: packageName, version },
+    }));
+    await expect(readClawHubClawDetail({ packageName })).resolves.toMatchObject({
+      workspaceFiles: 1,
+      contents: {
+        instructions: [{ name: "SOUL.md", source: "CLAW.md#body", excerpt: "Travel planner" }],
+      },
+    });
+    mocks.read.mockImplementationOnce(async () => ({
+      ok: true,
+      manifest: {
+        workspace: { bootstrapFiles: {}, files: [] },
+        packages: [],
+        mcpServers: {},
+        cronJobs: [],
+      },
+      clawMarkdownBody: Buffer.from("# Travel planner\n"),
+      snapshot: { workspaceSources: [] },
+      source: { kind: "package", name: packageName, version },
+    }));
+    await expect(
+      readClawHubClawPreview({ packageName, version, kind: "instruction", name: "SOUL.md" }),
+    ).resolves.toEqual({ kind: "instruction", name: "SOUL.md", content: "# Travel planner\n" });
+  });
+
+  it("does not substitute the latest package summary for a missing exact-release summary", async () => {
+    mocks.version.mockResolvedValue({
+      package: { name: packageName, displayName: "Research Briefing", family: "claw" },
+      version: { version, createdAt: 2, changelog: "", clawManifestSummary: null },
+    });
+
+    await expect(readClawHubClawDetail({ packageName })).rejects.toMatchObject({
+      code: "clawhub_manifest_summary_missing",
+    });
+  });
+
+  it("accepts an exact release with build metadata without borrowing the latest scan status", async () => {
+    const selectedVersion = "0.9.0+build.1";
+    mocks.artifact.mockResolvedValue({
+      package: { name: packageName, family: "claw" },
+      version: selectedVersion,
+      artifact: { kind: "npm-pack", sha256: digest, npmIntegrity: "sha512-proof" },
+    });
+    mocks.detail.mockResolvedValue({
+      package: { ...officialPackage(), ownerHandle: undefined, scanStatus: "clean" },
+      owner: { handle: "openclaw" },
+    });
+    mocks.version.mockResolvedValue({
+      package: { name: packageName, family: "claw" },
+      version: {
+        version: selectedVersion,
+        createdAt: 1,
+        changelog: "",
+        clawManifestSummary: summary,
+      },
+    });
+    mocks.read.mockImplementation(async (root: string) => ({
+      ok: true,
+      manifest: {
+        schemaVersion: 1,
+        agent: { id: "research-briefing", name: "Research Briefing" },
+        workspace: { bootstrapFiles: {}, files: [] },
+        packages: [],
+        mcpServers: {},
+        cronJobs: [],
+      } satisfies ClawManifest,
+      source: {
+        kind: "package",
+        name: packageName,
+        version: selectedVersion,
+        packageRoot: root,
+        manifestPath: path.join(root, "CLAW.md"),
+        integrityKind: "development-snapshot",
+        integrity: "sha256:development",
+        byteLength: archiveBytes.byteLength,
+      },
+      diagnostics: [],
+    }));
+
+    const detail = await readClawHubClawDetail({ packageName, version: selectedVersion });
+    expect(detail.version).toBe(selectedVersion);
+    expect(detail).not.toHaveProperty("scanStatus");
+  });
+
+  it("refuses a non-official coordinate or forged publisher before resolving detail", async () => {
+    await expect(readClawHubClawDetail({ packageName: "@other/impostor" })).rejects.toThrow(
+      /official OpenClaw/,
+    );
+    expect(mocks.detail).not.toHaveBeenCalled();
+
+    mocks.detail.mockResolvedValue({
+      package: { ...officialPackage(), ownerHandle: "someone-else" },
+      owner: { handle: "someone-else" },
+    });
+    await expect(readClawHubClawDetail({ packageName })).rejects.toThrow(/identity/);
+  });
+
+  it("rejects repeating pagination cursors rather than silently hiding starters", async () => {
+    mocks.list.mockResolvedValue({ items: [officialPackage()], nextCursor: "loop" });
+    await expect(listClawHubClaws()).rejects.toThrow(/cursor/);
+  });
+});
+
+describe("verified ClawHub Claw source", () => {
+  it.each(["skill", "plugin"] as const)(
+    "rejects a different per-call registry before resolving %s dependencies",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
+      const { stateDir } = await prepareResolverFixture([
+        { kind, source: "clawhub", ref: "@acme/dependency", version: "1.0.0" },
+      ]);
+      const run = vi.fn(async () => "unreachable");
+
+      const attempt = withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        baseUrl: "https://other.example",
+        stateDir,
+        run,
+      });
+
+      await expect(attempt).rejects.toBeInstanceOf(ClawHubSourceError);
+      await expect(attempt).rejects.toMatchObject({ code: "clawhub_registry_mismatch" });
+      expect(run).not.toHaveBeenCalled();
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([
+    { name: "process-configured URL", source: {} },
+    { name: "matching per-call URL", source: { baseUrl: "https://configured.example/clawhub/" } },
+  ])("accepts dependencies from the $name", async ({ source }) => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example/clawhub");
+    await prepareResolverFixture([
+      { kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.0.0" },
+      { kind: "plugin", source: "clawhub", ref: "@acme/github", version: "1.0.0" },
+    ]);
+    const run = vi.fn(async () => "resolved");
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        ...source,
+        run,
+      }),
+    ).resolves.toMatchObject({ value: "resolved" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a different per-call registry for a Claw without dependencies", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
+    await prepareResolverFixture();
+    const run = vi.fn(async () => "resolved");
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        baseUrl: "https://other.example",
+        run,
+      }),
+    ).resolves.toMatchObject({ value: "resolved" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const preview = await withResolvedClawHubSource({
+      coordinate: { packageName, version },
+      mode: "preview",
+      stateDir,
+      run: async (source, _trust, persistSource) => {
+        await expect(persistSource()).rejects.toThrow(/preview/);
+        return source.source;
+      },
+    });
+    expect(preview.value.integrity).toBe(`sha256:${digest}`);
+    expect(preview.value.byteLength).toBe(321);
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const apply = await withResolvedClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+      stateDir,
+      run: async (_source, _trust, persistSource) => (await persistSource()).source,
+    });
+    expect(apply.value.integrity).toBe(preview.value.integrity);
+    expect(apply.value.byteLength).toBe(preview.value.byteLength);
+    expect(apply.value.packageRoot).toBe(path.join(stateDir, "claws", "sources", digest));
+    await expect(
+      fs.readFile(path.join(apply.value.packageRoot, "package.json"), "utf8"),
+    ).resolves.toBe("{}\n");
+    await expect(fs.readFile(`${apply.value.packageRoot}.tgz`)).resolves.toEqual(archiveBytes);
+  });
+
+  it("reuses an identical source when two applies promote the same digest concurrently", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const install = () =>
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        stateDir,
+        run: async (_source, _trust, persistSource) => (await persistSource()).source.packageRoot,
+      });
+
+    const [first, second] = await Promise.all([install(), install()]);
+    expect(first.value).toBe(path.join(stateDir, "claws", "sources", digest));
+    expect(second.value).toBe(first.value);
+  });
+
+  it("refuses to reuse a corrupted source at an existing digest path", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const install = () =>
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        stateDir,
+        run: async (_source, _trust, persistSource) => (await persistSource()).source.packageRoot,
+      });
+    const first = await install();
+    await fs.writeFile(path.join(first.value, "package.json"), "corrupted\n");
+
+    await expect(install()).rejects.toMatchObject({ code: "clawhub_cached_source_mismatch" });
+    await expect(fs.readFile(path.join(first.value, "package.json"), "utf8")).resolves.toBe(
+      "corrupted\n",
+    );
+  });
+
+  it("binds artifact identity, resolver digest, and downloaded bytes before extraction", async () => {
+    await prepareResolverFixture();
+    mocks.artifact.mockResolvedValueOnce({
+      package: { name: "@openclaw/other-claw", family: "claw" },
+      version,
+      artifact: {
+        kind: "npm-pack",
+        sha256: digest,
+        npmIntegrity: "sha512-proof",
+      },
+    });
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "preview",
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_identity_mismatch" });
+    expect(mocks.download).not.toHaveBeenCalled();
+
+    mocks.download.mockResolvedValueOnce({
+      archivePath: "/tmp/wrong.tgz",
+      artifact: "clawpack",
+      sha256Hex: "b".repeat(64),
+      npmIntegrity: "sha512-proof",
+      cleanup: vi.fn(),
+    });
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "preview",
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_artifact_integrity_mismatch" });
+    expect(mocks.extract).not.toHaveBeenCalled();
+  });
+
+  it("accepts a security verdict for the selected Claw artifact before download", async () => {
+    await prepareResolverFixture();
+    const { checkClawHubPackageTrust } = await vi.importActual<
+      typeof import("../infra/clawhub-install-trust.js")
+    >("../infra/clawhub-install-trust.js");
+    mocks.security.mockResolvedValue(matchingSecurity);
+    mocks.trust.mockImplementation(checkClawHubPackageTrust);
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "preview",
+        run: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ riskAcknowledgementRequired: false });
+    expect(mocks.download).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a mismatched security artifact before download even with risk acknowledged", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const { checkClawHubPackageTrust } = await vi.importActual<
+      typeof import("../infra/clawhub-install-trust.js")
+    >("../infra/clawhub-install-trust.js");
+    mocks.security.mockResolvedValue({
+      ...matchingSecurity,
+      release: { ...matchingSecurity.release, artifactSha256: "b".repeat(64) },
+    });
+    mocks.trust.mockImplementation(checkClawHubPackageTrust);
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        acknowledgeClawHubRisk: true,
+        stateDir,
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_security_unavailable" });
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.extract).not.toHaveBeenCalled();
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires a fresh risk acknowledgement on apply and never persists denied content", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const { checkClawHubPackageTrust } = await vi.importActual<
+      typeof import("../infra/clawhub-install-trust.js")
+    >("../infra/clawhub-install-trust.js");
+    mocks.security.mockResolvedValue({
+      ...matchingSecurity,
+      overview: "No security analysis has been recorded yet.",
+      verdict: "review",
+    });
+    mocks.trust.mockImplementation(checkClawHubPackageTrust);
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "preview",
+        stateDir,
+        run: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ riskAcknowledgementRequired: true });
+    mocks.download.mockClear();
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        stateDir,
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_risk_acknowledgement_required" });
+    expect(mocks.download).not.toHaveBeenCalled();
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        stateDir,
+        acknowledgeClawHubRisk: true,
+        run: async (_source, _trust, persistSource) => (await persistSource()).source.name,
+      }),
+    ).resolves.toMatchObject({ value: packageName, riskAcknowledgementRequired: true });
+  });
+
+  it("rejects a valid archive when its embedded package identity differs", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    mocks.read.mockResolvedValue({
+      ok: true,
+      manifest: {},
+      source: { kind: "package", name: "@openclaw/other-claw", version },
+      diagnostics: [],
+    });
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        stateDir,
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "clawhub_identity_mismatch" });
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});

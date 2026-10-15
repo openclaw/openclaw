@@ -4,6 +4,17 @@ This file records third-party notices for code or substantial implementation
 portions incorporated into OpenClaw source, beyond normal package-manager
 dependency metadata.
 
+## SQLite
+
+macOS standalone builds include SQLite, compiled by `scripts/build-mac-sqlite.sh`
+from the source archive pinned in `scripts/lib/sqlite-macos.json`.
+
+- Upstream: https://sqlite.org/
+- License: Public domain (https://sqlite.org/copyright.html)
+
+SQLite's source code is in the public domain. No copyright license is required
+to use, copy, modify, or distribute it.
+
 ## Pi / pi-mono
 
 Portions of OpenClaw were adapted from Pi / pi-mono, and OpenClaw also depends

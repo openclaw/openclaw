@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerDatabase,
@@ -19,6 +20,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import type {
@@ -541,6 +543,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         input: Input,
         inputBytes: number,
       ): Promise<SessionTranscriptWorkerValues[Input["kind"]]> => {
+        // An admitted empty catalog can still belong to the agent's first schema birth.
+        for (const physicalPath of admissionPaths) {
+          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath);
+          if (preparation) {
+            await racePromiseWithAbortSignal(preparation, signal, (aborted) => aborted.reason);
+          }
+        }
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>

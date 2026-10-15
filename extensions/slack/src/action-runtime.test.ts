@@ -444,7 +444,7 @@ describe("handleSlackAction", () => {
       "F123",
       expect.objectContaining({
         channelId: "C_ALLOWED",
-        token: "tok",
+        cfg,
         maxBytes: 20 * 1024 * 1024,
       }),
     );

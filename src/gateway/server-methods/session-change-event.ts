@@ -486,3 +486,21 @@ export function emitSessionsChanged(
   next.timer.unref?.();
   startPendingSessionChange(next, { payload, scope });
 }
+
+/** Naming changes runtime presentation without changing access or stored session facts. */
+export function emitSessionTitleChanged(
+  context: SessionChangeContext,
+  target: { sessionKey: string; sessionId?: string; agentId: string },
+): void {
+  try {
+    emitSessionsChanged(
+      context,
+      { ...target, reason: "chat.title" },
+      { accessChanged: false, rowScope: "runtime" },
+    );
+  } catch (error) {
+    log.warn("Session title state publication failed", {
+      error: formatErrorMessageWithCode(error),
+    });
+  }
+}

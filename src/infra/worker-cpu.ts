@@ -253,6 +253,12 @@ function trackWorker(worker: WorkerCpuHandle): void {
     // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "error" && source.script === "code-mode-node.worker.js") {
+        // Capture native failure before the pool's generic failure/close cleanup runs.
+        const error = args[0];
+        source.retirementReason ??=
+          isRecord(error) && error.code === "ERR_CODE_MODE_GC_THRASH" ? "gc-thrash" : "crash";
+      }
       if (event === "message") {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));

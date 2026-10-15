@@ -13,7 +13,6 @@ import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
-import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
@@ -302,54 +301,35 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: Omit<SlackActionClientOpts, "cfg"> & {
-    cfg: OpenClawConfig;
-    mediaUrl?: string;
-    forceDocument?: boolean;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    threadTs?: string;
-    replyBroadcast?: boolean;
-    uploadFileName?: string;
-    uploadTitle?: string;
-    blocks?: (Block | KnownBlock)[];
-    authoredTextPlacement?: SlackAuthoredTextPlacement;
-    nativeDataFallbackBaseText?: string;
-    textIsSlackMrkdwn?: boolean;
-    textIsSlackPlainText?: boolean;
-  },
+  opts: Omit<SlackActionClientOpts, "cfg"> &
+    Pick<
+      Parameters<typeof sendMessageSlack>[2],
+      | "cfg"
+      | "mediaUrl"
+      | "forceDocument"
+      | "mediaAccess"
+      | "mediaLocalRoots"
+      | "mediaReadFile"
+      | "threadTs"
+      | "replyBroadcast"
+      | "uploadFileName"
+      | "uploadTitle"
+      | "blocks"
+      | "authoredTextPlacement"
+      | "nativeDataFallbackBaseText"
+      | "textIsSlackMrkdwn"
+      | "textIsSlackPlainText"
+    >,
 ) {
   const onDeliveryResult = Object.getOwnPropertyDescriptor(
     opts,
     SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
   )?.value;
   return await sendMessageSlack(to, content, {
-    accountId: opts.accountId,
-    cfg: opts.cfg,
-    token: opts.token,
-    mediaUrl: opts.mediaUrl,
-    ...(opts.forceDocument ? { forceDocument: true } : {}),
-    mediaAccess: opts.mediaAccess,
-    mediaLocalRoots: opts.mediaLocalRoots,
-    mediaReadFile: opts.mediaReadFile,
-    client: opts.client,
-    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
-    threadTs: opts.threadTs,
-    replyBroadcast: opts.replyBroadcast,
-    ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-    ...(opts.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-    ...(opts.authoredTextPlacement ? { authoredTextPlacement: opts.authoredTextPlacement } : {}),
-    ...(Object.hasOwn(opts, "nativeDataFallbackBaseText")
-      ? { nativeDataFallbackBaseText: opts.nativeDataFallbackBaseText }
-      : {}),
-    ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
-    ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
-    ...(typeof onDeliveryResult === "function" ? { onDeliveryResult } : {}),
-    blocks: opts.blocks,
+    ...opts,
+    uploadFileName: opts.uploadFileName || undefined,
+    uploadTitle: opts.uploadTitle || undefined,
+    onDeliveryResult: typeof onDeliveryResult === "function" ? onDeliveryResult : undefined,
   });
 }
 

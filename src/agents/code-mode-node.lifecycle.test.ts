@@ -165,6 +165,7 @@ describe("Node Code Mode worker custody", () => {
       expect(survivor.isClosed).toBe(false);
       released.resolve();
       await closing;
+      expect(owned.close).toHaveBeenCalledWith(undefined, "shutdown");
       const count = fixture.pools.length;
       await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
       expect(fixture.pools).toHaveLength(count);
@@ -195,6 +196,10 @@ describe("Node Code Mode worker custody", () => {
           : run()),
       ).toMatchObject({ status: "completed" });
       expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
+      expect((previous ?? fixture.pools.at(-1))?.close).toHaveBeenCalledWith(
+        undefined,
+        reason === "runtime changed" ? "rotation" : "dispose",
+      );
     },
   );
 
@@ -257,6 +262,8 @@ describe("Node Code Mode worker custody", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reused.isClosed).toBe(true);
       expect(retiredContexts).toEqual([undefined, undefined]);
+      expect(previous.close).toHaveBeenCalledWith(undefined, "idle-expiry");
+      expect(reused.close).toHaveBeenCalledWith(undefined, "idle-expiry");
     } finally {
       caller.disable();
       vi.useRealTimers();
@@ -302,12 +309,21 @@ describe("Node Code Mode worker custody", () => {
   );
 
   it("bounds the warm set and retires every idle pool on memory pressure", async () => {
+    const start = fixture.pools.length;
     const results = await Promise.all(Array.from({ length: 6 }, run));
     expect(results.every((result) => result.status === "completed")).toBe(true);
     const idle = fixture.pools.filter((pool) => !pool.isClosed);
     expect(idle).toHaveLength(4);
+    const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
+    expect(evicted).toHaveLength(2);
+    for (const pool of evicted) {
+      expect(pool.close).toHaveBeenCalledWith(undefined, "eviction");
+    }
     channel("openclaw.memory.critical").publish({});
     expect(idle.every((pool) => pool.isClosed)).toBe(true);
+    for (const pool of idle) {
+      expect(pool.close).toHaveBeenCalledWith(undefined, "memory_pressure");
+    }
     expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
     const count = fixture.pools.length;
     expect(await run()).toMatchObject({ status: "completed" });
@@ -389,6 +405,7 @@ describe("Node Code Mode worker custody", () => {
     ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
     await result.continuation.dispose();
     expect(pool.close).toHaveBeenCalledTimes(2);
+    expect(pool.close).toHaveBeenCalledWith(undefined, "dispose");
     expect(pool.isClosed).toBe(true);
   });
 
