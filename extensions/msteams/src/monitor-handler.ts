@@ -3,9 +3,11 @@ import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import { isMSTeamsLifecycleRemoval } from "./lifecycle-activity.js";
 import { buildMSTeamsAdaptiveCardActivity } from "./message-activity.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
+import { handleMSTeamsLifecycleRemoval } from "./monitor-handler/lifecycle-handler.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./msteams-ingress.js";
@@ -130,6 +132,12 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
     turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
   ): Promise<MSTeamsIngressDispatchResult | void> => {
     const activity = context.activity;
+    if (isMSTeamsLifecycleRemoval(activity)) {
+      // No reply lane adopts removals. Ingress completes a successful return;
+      // throwing before it leaves failed cleanup retryable.
+      await handleMSTeamsLifecycleRemoval(context, deps);
+      return;
+    }
     // Poll votes are intercepted by monitor.ts, which returns the HTTP invoke response.
     if (activity?.type === "invoke" && activity.name === "adaptiveCard/action") {
       if (await maybeHandleMSTeamsApprovalCardSubmit({ context, deps })) {

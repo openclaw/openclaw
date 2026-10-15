@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
+import { isMSTeamsLifecycleRemoval } from "./lifecycle-activity.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -50,6 +51,7 @@ const MSTeamsIngressPayloadError = createChannelIngressError<
 function isDispatchableActivity(activity: MSTeamsIngressActivity): boolean {
   return (
     activity.type === "message" ||
+    isMSTeamsLifecycleRemoval(activity) ||
     (activity.type === "invoke" && activity.name === "adaptiveCard/action")
   );
 }
@@ -116,7 +118,7 @@ function parseClaimedActivity(
   if (!facts) {
     throw new MSTeamsIngressPayloadError(
       "unsupported-activity",
-      "Microsoft Teams ingress row is not an agent-turn activity.",
+      "Microsoft Teams ingress row is not a dispatchable activity.",
     );
   }
   if (facts.eventId !== claimedId) {

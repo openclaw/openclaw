@@ -18,6 +18,18 @@ How replies are routed and threaded, and how attachments and files move in and o
     - `agent:<agentId>:msteams:channel:<conversationId>`
     - `agent:<agentId>:msteams:group:<conversationId>`
 
+Removing the bot/app clears its cached proactive conversation reference. For an
+isolated personal DM session, OpenClaw also archives the old transcript and
+deletes the active session entry, so a message after reinstall starts fresh.
+Per-session preferences are cleared with that entry. Removal events are queued
+durably; cleanup retries if the session is busy.
+
+Shared main/per-peer sessions, sessions shared by multiple Teams bot accounts,
+and locked sessions are retained, with the reason logged. Use
+`session.dmScope: "per-account-channel-peer"` for separate personal sessions per
+bot account. Removing another member or clearing chat history in the Teams
+client does not reset an OpenClaw session.
+
 ## Channel metadata
 
 The message tool's `channel-list` action requires `teamId`. The `channel-info`
