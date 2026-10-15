@@ -164,6 +164,16 @@ function createConcurrentSqliteHarness(prefix: string) {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function metadataPressure() {
+  return {
+    artifacts: Array.from({ length: 12 }, (_, index) => ({
+      id: `artifact-${index}`,
+      createdAt: index + 1,
+      url: `https://example.com/${index}/${"x".repeat(1900)}`,
+    })),
+  };
+}
+
 describe("WorkboardStore", () => {
   it("emits monotonic committed changes, ignores no-ops, and isolates listener failures", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
@@ -1018,13 +1028,7 @@ describe("WorkboardStore", () => {
     const card = await store.create({
       title: "Keep proof under metadata pressure",
       status: "running",
-      metadata: {
-        artifacts: Array.from({ length: 12 }, (_, index) => ({
-          id: `artifact-${index}`,
-          createdAt: index + 1,
-          url: `https://example.com/${index}/${"x".repeat(1900)}`,
-        })),
-      },
+      metadata: metadataPressure(),
     });
     const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
     const artifactCountBefore = claimed.card.metadata?.artifacts?.length ?? 0;
@@ -1353,34 +1357,16 @@ describe("WorkboardStore", () => {
   it("accepts POSIX and Windows absolute directory workspaces", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
 
-    await expect(
-      store.create({
-        title: "POSIX workspace",
-        workspace: { kind: "dir", path: "/Users/me/repo" },
-      }),
-    ).resolves.toMatchObject({
-      metadata: { automation: { workspace: { kind: "dir", path: "/Users/me/repo" } } },
-    });
-    await expect(
-      store.create({
-        title: "Windows drive workspace",
-        workspace: { kind: "dir", path: String.raw`C:\Users\me\repo` },
-      }),
-    ).resolves.toMatchObject({
-      metadata: {
-        automation: { workspace: { kind: "dir", path: String.raw`C:\Users\me\repo` } },
-      },
-    });
-    await expect(
-      store.create({
-        title: "Windows UNC workspace",
-        workspace: { kind: "dir", path: String.raw`\\server\share\repo` },
-      }),
-    ).resolves.toMatchObject({
-      metadata: {
-        automation: { workspace: { kind: "dir", path: String.raw`\\server\share\repo` } },
-      },
-    });
+    for (const workspacePath of [
+      "/Users/me/repo",
+      String.raw`C:\Users\me\repo`,
+      String.raw`\\server\share\repo`,
+    ]) {
+      const workspace = { kind: "dir", path: workspacePath };
+      await expect(store.create({ title: workspacePath, workspace })).resolves.toMatchObject({
+        metadata: { automation: { workspace } },
+      });
+    }
     await expect(
       store.create({ title: "Relative workspace", workspace: { kind: "dir", path: "repo" } }),
     ).rejects.toThrow(/absolute/);
@@ -1737,77 +1723,68 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("emits completion for a max-length run ID when metadata must be trimmed", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const runId = "r".repeat(MAX_RUN_ID_LENGTH);
-    const card = await store.create({
-      title: "Retain completed event under metadata pressure",
-      status: "running",
-      execution: codexExecution("exec-max-run", 1_000, { runId }),
-      metadata: {
-        artifacts: Array.from({ length: 12 }, (_, index) => ({
-          id: `artifact-${index}`,
-          createdAt: index + 1,
-          url: `https://example.com/${index}/${"x".repeat(1900)}`,
-        })),
-      },
-    });
-    const subscription = await store.subscribeNotifications({ runId });
-    await store.complete(card.id, {
-      proof: { status: "passed", command: "test-command", note: "p".repeat(2000) },
-    });
+  it.each([
+    { runIdLength: 164, trimMetadata: false },
+    { runIdLength: MAX_RUN_ID_LENGTH, trimMetadata: true },
+  ])(
+    "completes a $runIdLength-character run with trimMetadata=$trimMetadata",
+    async ({ runIdLength, trimMetadata }) => {
+      const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+      const runId = "r".repeat(runIdLength);
+      const card = await store.create({
+        title: "Complete long run ID",
+        status: "running",
+        execution: codexExecution("exec-long-run", 1_000, { runId }),
+        ...(trimMetadata ? { metadata: metadataPressure() } : {}),
+      });
+      const logged = trimMetadata
+        ? undefined
+        : await store.addWorkerLog(card.id, { message: "Verification ready.", runId });
+      const subscription = await store.subscribeNotifications({ runId });
+      await store.complete(card.id, {
+        ...(trimMetadata ? {} : { summary: "Verified." }),
+        proof: {
+          status: "passed",
+          command: "test-command",
+          ...(trimMetadata ? { note: "p".repeat(2000) } : {}),
+        },
+      });
 
-    const completed = await store.get(card.id);
-    expect(completed).toMatchObject({
-      status: "done",
-      execution: { runId },
-      metadata: { proof: [expect.objectContaining({ status: "passed", command: "test-command" })] },
-    });
-    expect(completed?.metadata?.artifacts?.length ?? 0).toBeLessThan(
-      card.metadata?.artifacts?.length ?? 0,
-    );
-    expect(Buffer.byteLength(JSON.stringify(completed?.metadata), "utf8")).toBeLessThanOrEqual(
-      MAX_CARD_METADATA_BYTES,
-    );
-    expect(await store.notificationEvents({ subscriptionId: subscription.id })).toMatchObject({
-      events: [expect.objectContaining({ kind: "completed", runId })],
-    });
-  });
-
-  it("completes a card with its full 164-character execution run ID", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const runId = "r".repeat(164);
-    const card = await store.create({
-      title: "Complete long run ID",
-      status: "running",
-      execution: codexExecution("exec-long-run", 1_000, { runId }),
-    });
-
-    const logged = await store.addWorkerLog(card.id, { message: "Verification ready.", runId });
-    const subscription = await store.subscribeNotifications({ runId });
-    await store.complete(card.id, {
-      summary: "Verified.",
-      proof: { status: "passed", command: "test-command" },
-    });
-
-    expect(await store.get(card.id)).toMatchObject({
-      status: "done",
-      execution: { status: "done", runId },
-      events: [
-        ...(logged.events ?? []),
-        expect.objectContaining({ kind: "moved", toStatus: "done" }),
-      ],
-      metadata: {
-        attempts: [expect.objectContaining({ status: "succeeded", runId })],
-        workerLogs: [expect.objectContaining({ message: "Verification ready.", runId })],
-        proof: [expect.objectContaining({ status: "passed", command: "test-command" })],
-        notifications: [expect.objectContaining({ kind: "completed", runId })],
-      },
-    });
-    expect(await store.notificationEvents({ subscriptionId: subscription.id })).toMatchObject({
-      events: [expect.objectContaining({ kind: "completed", runId })],
-    });
-  });
+      const completed = await store.get(card.id);
+      expect(completed).toMatchObject({
+        status: "done",
+        execution: { status: "done", runId },
+        metadata: {
+          proof: [expect.objectContaining({ status: "passed", command: "test-command" })],
+        },
+      });
+      if (!trimMetadata) {
+        expect(logged).toBeDefined();
+        expect(completed).toMatchObject({
+          events: [
+            ...(logged?.events ?? []),
+            expect.objectContaining({ kind: "moved", toStatus: "done" }),
+          ],
+          metadata: {
+            attempts: [expect.objectContaining({ status: "succeeded", runId })],
+            workerLogs: [expect.objectContaining({ message: "Verification ready.", runId })],
+            notifications: [expect.objectContaining({ kind: "completed", runId })],
+          },
+        });
+      }
+      if (trimMetadata) {
+        expect(completed?.metadata?.artifacts?.length ?? 0).toBeLessThan(
+          card.metadata?.artifacts?.length ?? 0,
+        );
+        expect(Buffer.byteLength(JSON.stringify(completed?.metadata), "utf8")).toBeLessThanOrEqual(
+          MAX_CARD_METADATA_BYTES,
+        );
+      }
+      expect(await store.notificationEvents({ subscriptionId: subscription.id })).toMatchObject({
+        events: [expect.objectContaining({ kind: "completed", runId })],
+      });
+    },
+  );
 
   it("leaves the card unchanged when completion notification validation fails", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
