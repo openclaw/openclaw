@@ -1,8 +1,14 @@
 import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
+import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import {
+  reconcileAcceptedModel,
+  resolveManagerRuntimeCapabilities,
+  resolveSnapshotModelEvidence,
+  writeManagerConfigControl,
+  type ManagerModelSelection,
+} from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   AcpSessionRuntimeOptions,
@@ -21,6 +27,7 @@ import {
   reconcileAcceptedRuntimeOptions,
   resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
+  resolveThinkingProvenance,
 } from "./runtime-options.js";
 
 export type RuntimeOptionCommandServices = {
@@ -80,7 +87,8 @@ export async function runSetManagerSessionRuntimeOption(
     ...("key" in update ? { includeStatusConfigOptionKeys: true } : {}),
   });
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-  let result: AcpRuntimeConfigOptionResult | void = undefined;
+  let result: AcpRuntimeConfigOptionResult | undefined;
+  let model: ManagerModelSelection | undefined;
   if ("runtimeMode" in update) {
     if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
       throw createUnsupportedControlError({
@@ -98,38 +106,53 @@ export async function runSetManagerSessionRuntimeOption(
       fallbackMessage: "Could not update ACP runtime mode.",
     });
   } else {
-    if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
-      throw createUnsupportedControlError({
-        backend: handle.backend || meta.backend,
-        control: "session/set_config_option",
-      });
-    }
-    const advertisedKeys = new Set(
-      (capabilities.configOptionKeys ?? [])
-        .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-        .filter(Boolean),
-    );
     const wireKey = resolveRuntimeConfigOptionKey(update.key, capabilities.configOptionKeys);
-    if (advertisedKeys.size > 0 && !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))) {
-      throw new AcpRuntimeError(
-        "ACP_BACKEND_UNSUPPORTED_CONTROL",
-        `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
+    const isModel =
+      normalizeLowercaseStringOrEmpty(wireKey) ===
+      normalizeLowercaseStringOrEmpty(
+        resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys),
       );
-    }
-    params.assertActive?.();
-    result = await withAcpRuntimeErrorBoundary({
+    ({ result, model } = await withAcpRuntimeErrorBoundary({
       run: async () =>
-        await runtime.setConfigOption!({ handle, key: wireKey, value: update.value }),
+        await writeManagerConfigControl({
+          runtime,
+          handle,
+          capabilities,
+          backend: handle.backend || meta.backend,
+          key: wireKey,
+          value: update.value,
+          isModel,
+          assertBeforeWrite: () => {
+            assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
+            params.assertActive?.();
+          },
+          assertAfterWrite: () => assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey),
+        }),
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not update ACP runtime config option.",
-    });
+    }));
   }
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
+  const requestedOptions = mergeRuntimeOptions({
+    current: resolveRuntimeOptionsFromMeta(meta),
+    patch,
+  });
+  const selection =
+    model ??
+    resolveSnapshotModelEvidence(
+      result,
+      resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys),
+      requestedOptions.model,
+    );
   const nextOptions = reconcileAcceptedRuntimeOptions(
-    mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch }),
+    reconcileAcceptedModel(requestedOptions, selection),
     result,
   );
-  await persistManagerRuntimeOptions({ ...params, options: nextOptions });
+  await persistManagerRuntimeOptions({
+    ...params,
+    options: nextOptions,
+    ...("thinking" in patch && patch.thinking !== undefined ? { thinkingExplicit: true } : {}),
+  });
   return nextOptions;
 }
 
@@ -145,6 +168,7 @@ export async function runUpdateManagerSessionRuntimeOptions(
     ...params,
     assertCommitAllowed: params.assertActive,
     options: nextOptions,
+    ...(params.patch.thinking !== undefined ? { thinkingExplicit: true } : {}),
   });
   return nextOptions;
 }
@@ -186,6 +210,8 @@ async function persistManagerRuntimeOptions(
   > & {
     assertCommitAllowed?: () => void;
     options: AcpSessionRuntimeOptions;
+    /** Provenance for newly selected thinking; omitted keeps the current provenance. */
+    thinkingExplicit?: true;
   },
 ): Promise<void> {
   const options = params.options;
@@ -208,6 +234,7 @@ async function persistManagerRuntimeOptions(
         ...(current.identity ? { identity: current.identity } : {}),
         mode: current.mode,
         runtimeOptions: hasOptions ? options : undefined,
+        ...resolveThinkingProvenance(options, params.thinkingExplicit ?? current.thinkingExplicit),
         cwd: options.cwd,
         state: current.state,
         lastActivityAt: Date.now(),

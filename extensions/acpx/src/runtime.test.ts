@@ -13,8 +13,9 @@ import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { renderAgentCommand, type AcpxAgentCommand } from "./command-line.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import {
+  CODEX_ACP_COMMAND,
   CODEX_ACP_WRAPPER_COMMAND,
-  makeEmptySessionStore,
+  makeAgentRuntime,
   makeLeasedRuntime,
   makeLeaseStore,
   makeRuntime,
@@ -25,7 +26,6 @@ import {
 } from "./runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.11.0";
 const sessionKey = "agent:codex:acp:binding:test";
 const testHandle = { sessionKey, backend: "acpx", runtimeSessionName: sessionKey };
 const ensureInput = { sessionKey, agent: "codex", mode: "persistent" as const };
@@ -104,18 +104,6 @@ function recordCommand(command: AcpxAgentCommand) {
     agentCommand: renderAgentCommand(command),
     ...(typeof command === "string" ? {} : { agentArgv: command }),
   };
-}
-
-function makeAgentRuntime(agent: string, command: AcpxAgentCommand) {
-  const { runtime, delegate } = makeRuntime(makeEmptySessionStore(), {
-    agentRegistry: { resolve: () => command, list: () => [agent] },
-  });
-  const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-    sessionKey: `agent:${agent}:acp:test`,
-    backend: "acpx",
-    runtimeSessionName: agent,
-  });
-  return { runtime, ensure };
 }
 
 function seedLease(
@@ -319,21 +307,36 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     },
   );
 
-  it("drops an inherited model when the agent lacks model support", async () => {
+  it.each([{ modelExplicit: false }, { modelExplicit: true }])(
+    "fails a supplied model when the agent lacks model support (explicit: $modelExplicit)",
+    async ({ modelExplicit }) => {
+      const { runtime, ensure } = makeAgentRuntime("opencode", "opencode acp");
+      const rejection = new RequestedModelUnsupportedError(
+        "No model support",
+        "missing-capability",
+      );
+      ensure.mockRejectedValueOnce(rejection);
+      await expect(
+        runtime.ensureSession({
+          ...ensureInput,
+          agent: "opencode",
+          model: "openrouter/owl-alpha",
+          modelExplicit,
+        }),
+      ).rejects.toBe(rejection);
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(ensure.mock.calls[0]?.[0]).toMatchObject({
+        model: "openrouter/owl-alpha",
+        sessionOptions: { model: "openrouter/owl-alpha" },
+      });
+    },
+  );
+
+  it("keeps the harness default when no model was supplied", async () => {
     const { runtime, ensure } = makeAgentRuntime("opencode", "opencode acp");
-    ensure.mockRejectedValueOnce(
-      new RequestedModelUnsupportedError("No model support", "missing-capability"),
-    );
-    await expect(
-      runtime.ensureSession({ ...ensureInput, agent: "opencode", model: "openrouter/owl-alpha" }),
-    ).resolves.toMatchObject({ appliedModel: { kind: "dropped" } });
-    expect(ensure).toHaveBeenCalledTimes(2);
-    expect(ensure.mock.calls[0]?.[0]).toMatchObject({
-      model: "openrouter/owl-alpha",
-      sessionOptions: { model: "openrouter/owl-alpha" },
-    });
-    expect(ensure.mock.calls[1]?.[0]).toMatchObject({ model: undefined });
-    expect(ensure.mock.calls[1]?.[0]).not.toHaveProperty("sessionOptions");
+    const handle = await runtime.ensureSession({ ...ensureInput, agent: "opencode" });
+    expect(ensure).toHaveBeenCalledExactlyOnceWith({ ...ensureInput, agent: "opencode" });
+    expect(handle.appliedModel).toBeUndefined();
   });
 
   it("persists explicit thinking off over a Codex model suffix", async () => {
@@ -372,95 +375,25 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(handle.appliedThinking).toEqual({ kind: "dropped" });
   });
 
-  it("drops an inherited unsupported model while retaining thinking", async () => {
-    const { runtime, ensure } = makeAgentRuntime("codex", CODEX_ACP_COMMAND);
-    const handle = await runtime.ensureSession({
-      ...ensureInput,
-      model: "google/gemini-3.1-flash-lite",
-      thinking: "low",
-    });
-    expect(ensure.mock.calls[0]?.[0]).toEqual({ ...ensureInput, thinking: "low" });
-    expect(handle.appliedModel).toEqual({ kind: "dropped" });
-  });
-
-  it("rejects explicit unsupported models before delegation", async () => {
-    const { runtime, ensure } = makeAgentRuntime("codex", CODEX_ACP_COMMAND);
-    await expect(
-      runtime.ensureSession({
-        ...ensureInput,
-        model: "google/gemini-3.1-flash-lite",
-        modelExplicit: true,
-      }),
-    ).rejects.toMatchObject({ code: "ACP_INVALID_RUNTIME_OPTION" });
-    expect(ensure).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "bare model", key: "model", value: "gpt-5.4", calls: [["model", "gpt-5.4"]] },
-    {
-      name: "empty qualified model",
-      key: "model",
-      value: "openai//high",
-      error: "ACP_INVALID_RUNTIME_OPTION",
+  it.each([{ modelExplicit: false }, { modelExplicit: true }])(
+    "rejects an unsupported Codex model before delegation (explicit: $modelExplicit)",
+    async ({ modelExplicit }) => {
+      const { runtime, ensure } = makeAgentRuntime("codex", CODEX_ACP_COMMAND);
+      await expect(
+        runtime.ensureSession({
+          ...ensureInput,
+          model: "google/gemini-3.1-flash-lite",
+          modelExplicit,
+          thinking: "low",
+        }),
+      ).rejects.toMatchObject({
+        name: "AcpRuntimeError",
+        code: "ACP_INVALID_RUNTIME_OPTION",
+        message: expect.stringContaining('Codex ACP model "google/gemini-3.1-flash-lite"'),
+      });
+      expect(ensure).not.toHaveBeenCalled();
     },
-    {
-      name: "reasoning suffix",
-      key: "model",
-      value: "openai/gpt-5.4/high",
-      calls: [
-        ["model", "gpt-5.4"],
-        ["reasoning_effort", "high"],
-      ],
-    },
-    {
-      name: "unsupported model",
-      key: "model",
-      value: "google/gemini-3.1-flash-lite",
-      error: "ACP_INVALID_RUNTIME_OPTION",
-    },
-    {
-      name: "reasoning alias",
-      key: "reasoning_effort",
-      value: "x-high",
-      calls: [["reasoning_effort", "xhigh"]],
-    },
-    {
-      name: "clearing thinking",
-      key: "thought_level",
-      value: "off",
-      error: "ACP_BACKEND_UNSUPPORTED_CONTROL",
-    },
-    { name: "Claude timeout", agent: "claude", key: "Timeout_Seconds", value: "60", calls: [] },
-    {
-      name: "Claude model",
-      agent: "claude",
-      key: "model",
-      value: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/claude",
-      calls: [["model", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/claude"]],
-    },
-  ])("normalizes config control: $name", async ({ agent = "codex", key, value, calls, error }) => {
-    const handle = testHandle;
-    const { runtime, delegate } = makeRuntime(
-      sessionStore({
-        acpxRecordId: sessionKey,
-        agentCommand: agent === "codex" ? CODEX_ACP_COMMAND : "claude-agent-acp.exe",
-      }),
-    );
-    const accepted = { configOptions: [{ id: "effort", currentValue: "high" }] };
-    const update = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(accepted);
-    const result = runtime.setConfigOption({ handle, key, value });
-    if (error) {
-      await expect(result).rejects.toMatchObject({ code: error });
-      expect(update).not.toHaveBeenCalled();
-    } else {
-      await expect(result).resolves.toBe(calls?.length ? accepted : undefined);
-      expect(update.mock.calls).toEqual(
-        calls?.map(([controlKey, controlValue]) => [
-          { handle, key: controlKey, value: controlValue },
-        ]),
-      );
-    }
-  });
+  );
 
   it("does not reuse commands leased by another gateway instance", async () => {
     const foreign = commandForLease("foreign", "gateway-foreign");

@@ -509,3 +509,52 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
     },
   );
 });
+
+const THINKING_PROVENANCE_RUNTIME_OPTIONS = { model: "openai/gpt-5.6-luna", thinking: "high" };
+
+it.each([true, false, undefined])(
+  "round-trips thinking provenance %s through the existing runtime options column",
+  async (thinkingExplicit) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: `acp-thinking-provenance-${String(thinkingExplicit)}` },
+      async (state) => {
+        const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+        await state.writeConfig(cfg);
+        const scope = {
+          cfg,
+          env: state.env,
+          agentId: "main",
+          sessionKey: "agent:main:acp:thinking-provenance",
+          skipMaintenance: true,
+        };
+        const meta: SessionAcpMeta = {
+          ...META,
+          runtimeSessionName: "thinking-provenance",
+          runtimeOptions: THINKING_PROVENANCE_RUNTIME_OPTIONS,
+          ...(thinkingExplicit === undefined ? {} : { thinkingExplicit }),
+        };
+
+        await upsertAcpSessionMeta({ ...scope, mutate: () => meta });
+
+        const stored = openOpenClawStateDatabase({ env: state.env })
+          .db.prepare(
+            `SELECT
+              json_extract(runtime_options_json, '$.model') AS model,
+              json_extract(runtime_options_json, '$.thinking') AS thinking,
+              json_extract(runtime_options_json, '$.thinkingExplicit') AS thinkingExplicit
+            FROM acp_sessions WHERE session_key = ?`,
+          )
+          .get(buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId));
+        expect(stored).toEqual({
+          ...THINKING_PROVENANCE_RUNTIME_OPTIONS,
+          thinkingExplicit: thinkingExplicit === undefined ? null : Number(thinkingExplicit),
+        });
+
+        const reread = readAcpSessionEntry(scope)?.acp;
+        expect(reread).toEqual(meta);
+        expect(reread?.runtimeOptions).toEqual(THINKING_PROVENANCE_RUNTIME_OPTIONS);
+        expect(reread?.thinkingExplicit).toBe(thinkingExplicit);
+      },
+    );
+  },
+);

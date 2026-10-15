@@ -83,6 +83,11 @@ export type SessionAcpMeta = {
   identity?: SessionAcpIdentity;
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;
+  /**
+   * Provenance of the requested `runtimeOptions.thinking`: true for an explicit selection, false
+   * for an inherited default. Absent means legacy/unknown. Not evidence that thinking was applied.
+   */
+  thinkingExplicit?: boolean;
   cwd?: string;
   state: "idle" | "running" | "error";
   lastActivityAt: number;

@@ -20,6 +20,7 @@ export type TestSessionStore = {
   save(record: Record<string, unknown>): Promise<void>;
 };
 export const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"';
+export const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.11.0";
 
 export function makeRuntime(
   baseStore: TestSessionStore,
@@ -42,8 +43,9 @@ export function makeRuntime(
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
     getCapabilities: UpstreamRuntime["getCapabilities"];
-    getStatus: NonNullable<AcpRuntime["getStatus"]>;
+    getStatus: UpstreamRuntime["getStatus"];
     setMode: NonNullable<AcpRuntime["setMode"]>;
+    setModel: UpstreamRuntime["setModel"];
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
   };
 } {
@@ -83,8 +85,9 @@ export function makeRuntime(
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
           getCapabilities: UpstreamRuntime["getCapabilities"];
-          getStatus: NonNullable<AcpRuntime["getStatus"]>;
+          getStatus: UpstreamRuntime["getStatus"];
           setMode: NonNullable<AcpRuntime["setMode"]>;
+          setModel: UpstreamRuntime["setModel"];
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
         };
       }
@@ -155,6 +158,39 @@ export function makeEmptySessionStore(): TestSessionStore {
     save: vi.fn(async () => {}),
   };
 }
+
+export function makeAgentRuntime(agent: string, command: AcpxAgentCommand) {
+  const { runtime, delegate } = makeRuntime(makeEmptySessionStore(), {
+    agentRegistry: { resolve: () => command, list: () => [agent] },
+  });
+  const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+    sessionKey: `agent:${agent}:acp:test`,
+    backend: "acpx",
+    runtimeSessionName: agent,
+  });
+  return { runtime, ensure };
+}
+
+/** Live-control runtime whose stored record selects the harness command. */
+export function makeControlRuntime(agent: string, command: AcpxAgentCommand) {
+  const sessionKey = `agent:${agent}:acp:test`;
+  const handle = { sessionKey, backend: "acpx", runtimeSessionName: sessionKey };
+  const { runtime, delegate } = makeRuntime({
+    load: vi.fn(async () => ({ acpxRecordId: sessionKey, agentCommand: command })),
+    save: vi.fn(async () => {}),
+  });
+  return { runtime, delegate, handle };
+}
+
+export const codexEffortCapabilities: Awaited<ReturnType<UpstreamRuntime["getCapabilities"]>> = {
+  controls: [
+    "session/set_mode",
+    "session/set_model",
+    "session/set_config_option",
+    "session/status",
+  ],
+  configOptionKeys: ["model", "reasoning_effort"],
+};
 
 export function makeTurn(
   input: { requestId: string },

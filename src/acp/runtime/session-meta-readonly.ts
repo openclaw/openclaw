@@ -93,16 +93,24 @@ export function rowToAcpSessionMeta(
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   // SAFETY: Runtime options share the same typed persisted metadata contract.
-  const runtimeOptions = safeParseJsonRecord(row.runtime_options_json ?? "") as
-    | AcpSessionRuntimeOptions
+  const storedOptions = safeParseJsonRecord(row.runtime_options_json ?? "") as
+    | (AcpSessionRuntimeOptions & { thinkingExplicit?: unknown })
     | undefined;
+  // Provenance shares the runtime options column but is root metadata, never a runtime option.
+  const {
+    thinkingExplicit,
+    ...runtimeOptions
+  }: AcpSessionRuntimeOptions & { thinkingExplicit?: unknown } = storedOptions ?? {};
   return {
     backend: row.backend,
     agent: row.agent,
     runtimeSessionName: row.runtime_session_name,
     ...(identity ? { identity } : {}),
     mode: row.mode === "oneshot" ? "oneshot" : "persistent",
-    ...(runtimeOptions ? { runtimeOptions } : {}),
+    ...(storedOptions ? { runtimeOptions } : {}),
+    ...(runtimeOptions.thinking && typeof thinkingExplicit === "boolean"
+      ? { thinkingExplicit }
+      : {}),
     ...(row.cwd != null ? { cwd: row.cwd } : {}),
     state: row.state === "running" || row.state === "error" ? row.state : "idle",
     lastActivityAt: row.last_activity_at,

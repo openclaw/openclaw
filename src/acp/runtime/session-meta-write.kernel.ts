@@ -29,6 +29,7 @@ export function bindAcpSessionMeta(params: {
   meta: SessionAcpMeta;
   updatedAt: number;
 }): AcpSessionRow {
+  const { runtimeOptions, thinkingExplicit } = params.meta;
   return {
     session_key: params.sessionKey,
     // Kept in the existing column for schema neutrality. New rows prefer the
@@ -39,8 +40,14 @@ export function bindAcpSessionMeta(params: {
     runtime_session_name: params.meta.runtimeSessionName,
     ...bindAcpSessionIdentity(params.meta.identity),
     mode: params.meta.mode,
-    runtime_options_json: params.meta.runtimeOptions
-      ? JSON.stringify(params.meta.runtimeOptions)
+    // Thinking provenance rides in the existing JSON column; option normalizers drop unknown keys.
+    runtime_options_json: runtimeOptions
+      ? JSON.stringify({
+          ...runtimeOptions,
+          ...(runtimeOptions.thinking && typeof thinkingExplicit === "boolean"
+            ? { thinkingExplicit }
+            : {}),
+        })
       : null,
     cwd: params.meta.cwd ?? null,
     state: params.meta.state,

@@ -15,6 +15,15 @@ export function withAcpxSessionOptions(input: EnsureInput): DelegateEnsureInput 
   return { ...rest, ...(sessionOptions ? { sessionOptions } : {}) };
 }
 
+/** ACPX's typed, unambiguous pre-wire rejection of a model id the session did not advertise. */
+export function isUnadvertisedModelRejection(error: unknown): boolean {
+  return (
+    isRequestedModelUnsupportedError(error) &&
+    error.reason === "unadvertised-model" &&
+    error.ambiguous !== true
+  );
+}
+
 // Try the exact harness id first. ACPX owns live catalog validation and vendor aliases;
 // only its typed rejection allows retrying an OpenClaw provider/model reference.
 export async function withOpenClawModelRef<T>(
@@ -26,13 +35,7 @@ export async function withOpenClawModelRef<T>(
   } catch (error) {
     const model = requested.trim();
     const slash = model.indexOf("/");
-    if (
-      !isRequestedModelUnsupportedError(error) ||
-      error.reason !== "unadvertised-model" ||
-      error.ambiguous === true ||
-      slash <= 0 ||
-      slash === model.length - 1
-    ) {
+    if (!isUnadvertisedModelRejection(error) || slash <= 0 || slash === model.length - 1) {
       throw error;
     }
     return await apply(model.slice(slash + 1));
@@ -43,22 +46,12 @@ export async function ensureSessionWithModelRef(
   ensureSession: BaseAcpxRuntime["ensureSession"],
   input: EnsureInput,
 ): Promise<Awaited<ReturnType<AcpRuntime["ensureSession"]>>> {
-  const ensure = (model: string | undefined) =>
-    ensureSession(withAcpxSessionOptions({ ...input, model }));
   const requested = input.model?.trim();
-  try {
-    return requested
-      ? await withOpenClawModelRef(requested, ensure)
-      : await ensureSession(withAcpxSessionOptions(input));
-  } catch (error) {
-    if (
-      !requested ||
-      input.modelExplicit ||
-      !isRequestedModelUnsupportedError(error) ||
-      error.reason !== "missing-capability"
-    ) {
-      throw error;
-    }
-    return { ...(await ensure(undefined)), appliedModel: { kind: "dropped" } };
+  if (!requested) {
+    return await ensureSession(withAcpxSessionOptions(input));
   }
+  // A supplied model may be a configured ACP selection; never retry it as no-model.
+  return await withOpenClawModelRef(requested, (model) =>
+    ensureSession(withAcpxSessionOptions({ ...input, model })),
+  );
 }

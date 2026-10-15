@@ -262,6 +262,9 @@ export function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionA
     },
     mode: base.mode,
     ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+    ...(base.runtimeOptions?.thinking && base.thinkingExplicit !== undefined
+      ? { thinkingExplicit: base.thinkingExplicit }
+      : {}),
     ...(base.cwd ? { cwd: base.cwd } : {}),
     state: "idle",
     lastActivityAt: now,

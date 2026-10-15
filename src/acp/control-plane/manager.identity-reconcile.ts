@@ -17,6 +17,7 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { assertCurrentAcpActor, hasLegacyAcpIdentityProjection } from "./manager.utils.js";
+import { resolveThinkingProvenance } from "./runtime-options.js";
 
 export async function reconcileManagerRuntimeSessionIdentifiers(
   params: Parameters<ReconcileManagerRuntimeSessionIdentifiers>[0] & {
@@ -119,6 +120,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
     ...(nextIdentity ? { identity: nextIdentity } : {}),
     mode: base.mode,
     ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+    ...resolveThinkingProvenance(base.runtimeOptions, base.thinkingExplicit),
     ...(base.cwd ? { cwd: base.cwd } : {}),
     state: base.state,
     lastActivityAt: now,

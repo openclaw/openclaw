@@ -56,6 +56,7 @@ import {
 } from "./manager.utils.js";
 import {
   normalizeText,
+  resolveThinkingProvenance,
   validateRuntimeConfigOptionInput,
   validateRuntimeModeInput,
   validateRuntimeOptionPatch,
@@ -564,6 +565,7 @@ export class AcpSessionManager {
           ...(base.identity ? { identity: base.identity } : {}),
           mode: base.mode,
           ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+          ...resolveThinkingProvenance(base.runtimeOptions, base.thinkingExplicit),
           ...(base.cwd ? { cwd: base.cwd } : {}),
           state: params.state,
           lastActivityAt: Date.now(),

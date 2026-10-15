@@ -261,6 +261,16 @@ export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionR
   });
 }
 
+/** Thinking provenance exists only beside retained thinking; an absent flag stays legacy/unknown. */
+export function resolveThinkingProvenance(
+  runtimeOptions: AcpSessionRuntimeOptions | undefined,
+  thinkingExplicit: boolean | undefined,
+): Pick<SessionAcpMeta, "thinkingExplicit"> {
+  return normalizeText(runtimeOptions?.thinking) && typeof thinkingExplicit === "boolean"
+    ? { thinkingExplicit }
+    : {};
+}
+
 export function runtimeOptionsEqual(
   a: AcpSessionRuntimeOptions | undefined,
   b: AcpSessionRuntimeOptions | undefined,
@@ -268,7 +278,10 @@ export function runtimeOptionsEqual(
   return JSON.stringify(normalizeRuntimeOptions(a)) === JSON.stringify(normalizeRuntimeOptions(b));
 }
 
-export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
+export function buildRuntimeControlSignature(
+  options: AcpSessionRuntimeOptions,
+  thinkingExplicit?: boolean,
+): string {
   const extras = Object.entries(options.backendExtras ?? {}).toSorted(([a], [b]) =>
     a.localeCompare(b),
   );
@@ -276,6 +289,8 @@ export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions):
     runtimeMode: options.runtimeMode ?? null,
     model: options.model ?? null,
     thinking: options.thinking ?? null,
+    // A same-value optional -> explicit transition must replay under the strict policy.
+    thinkingExplicit: resolveThinkingProvenance(options, thinkingExplicit).thinkingExplicit ?? null,
     permissionProfile: options.permissionProfile ?? null,
     timeoutSeconds: options.timeoutSeconds ?? null,
     backendExtras: extras,

@@ -399,6 +399,38 @@ describe("AcpxRuntime reset generation custody", () => {
     },
   );
 
+  it("refuses a native model write completing after reset retires the generation", async () => {
+    const sessionKey = "agent:catalog:acp:model-evidence-reset";
+    const { runtime, delegate } = makeRuntime({
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    });
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const setModel = vi.spyOn(delegate, "setModel").mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const getStatus = vi.spyOn(delegate, "getStatus").mockResolvedValue({});
+    const pending = runtime.setModel({
+      handle: { sessionKey, backend: "acpx", runtimeSessionName: sessionKey },
+      model: "provider/model",
+    });
+    const rejected = expect(pending).rejects.toThrow("superseded by reset");
+    try {
+      await started.promise;
+      await runtime.prepareFreshSession({ sessionKey });
+      release.resolve();
+      await rejected;
+      expect(setModel).toHaveBeenCalledOnce();
+      expect(getStatus).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      await runtime.shutdown();
+    }
+  });
+
   it("keeps a fresh generation owned when an older discard close finishes late", async () => {
     const { runtime, wrappedStore, delegate, baseStore, oldRecord } = makePersistedRuntime();
     const started = createDeferred<void>();

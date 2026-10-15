@@ -1,11 +1,14 @@
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
+  AcpRuntimeConfigOptionResult,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { logVerbose } from "../../globals.js";
 import {
   AcpRuntimeError,
   formatAcpErrorChain,
@@ -20,6 +23,7 @@ import {
   buildRuntimeConfigOptionPairs,
   buildRuntimeControlSignature,
   isThinkingConfigKey,
+  mergeRuntimeOptions,
   normalizeText,
   reconcileAcceptedRuntimeOptions,
   resolveRuntimeConfigOptionKey,
@@ -112,6 +116,11 @@ function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
   );
 }
 
+/**
+ * Resolves backend-advertised controls plus locally inferred runtime control support.
+ * Reported model/config controls are authoritative; setter presence only fills them in
+ * for backends without capability discovery.
+ */
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -129,8 +138,11 @@ export async function resolveManagerRuntimeCapabilities(params: {
   if (params.runtime.setMode) {
     controls.add("session/set_mode");
   }
-  if (params.runtime.setConfigOption) {
+  if (!reported && params.runtime.setConfigOption) {
     controls.add("session/set_config_option");
+  }
+  if (!reported && params.runtime.setModel) {
+    controls.add("session/set_model");
   }
   if (params.runtime.getStatus) {
     controls.add("session/status");
@@ -141,8 +153,8 @@ export async function resolveManagerRuntimeCapabilities(params: {
       .filter(Boolean) as string[],
   );
   if (
-    normalizedKeys.size === 0 &&
     params.includeStatusConfigOptionKeys &&
+    controls.has("session/set_config_option") &&
     params.runtime.getStatus
   ) {
     try {
@@ -165,6 +177,154 @@ export async function resolveManagerRuntimeCapabilities(params: {
   };
 }
 
+type RuntimeModelResult = Exclude<Awaited<ReturnType<NonNullable<AcpRuntime["setModel"]>>>, void>;
+
+/** Model after a write; `requested` means the backend reported no accepted model evidence. */
+export type ManagerModelSelection =
+  | { evidence: "accepted"; model: string | undefined }
+  | { evidence: "requested"; model: string };
+
+/** Backends may report the native id of the requested provider ref; keep the requested binding. */
+function resolveAcknowledgedModel(requested: string, reported: string): string {
+  return parseModelCatalogRef(requested)?.modelId === reported ? requested : reported;
+}
+
+function findModelOption(
+  configOptions: AcpRuntimeConfigOptionResult["configOptions"] | undefined,
+  key: string | undefined,
+) {
+  return (
+    configOptions?.find((entry) => entry.id === key) ??
+    configOptions?.find((entry) => entry.category === "model")
+  );
+}
+
+function resolveModelSelection(
+  result: RuntimeModelResult | void,
+  key: string,
+  requested: string,
+): ManagerModelSelection {
+  const configOptions = result?.configOptions;
+  const option = findModelOption(configOptions, key);
+  if (option) {
+    return {
+      evidence: "accepted",
+      model:
+        typeof option.currentValue === "string"
+          ? resolveAcknowledgedModel(requested, option.currentValue)
+          : undefined,
+    };
+  }
+  if (typeof result?.currentModelId === "string") {
+    return {
+      evidence: "accepted",
+      model: resolveAcknowledgedModel(requested, result.currentModelId),
+    };
+  }
+  // A complete snapshot without a model option is authoritative.
+  return configOptions
+    ? { evidence: "accepted", model: undefined }
+    : { evidence: "requested", model: requested };
+}
+
+/**
+ * Reads model evidence from a snapshot returned by another control. A native id is qualified only
+ * against the known binding; a snapshot without a model option leaves the binding unchanged.
+ */
+export function resolveSnapshotModelEvidence(
+  result: AcpRuntimeConfigOptionResult | undefined,
+  key: string | undefined,
+  binding: string | undefined,
+): ManagerModelSelection | undefined {
+  const option = findModelOption(result?.configOptions, key);
+  if (!option) {
+    return undefined;
+  }
+  const reported = typeof option.currentValue === "string" ? option.currentValue : undefined;
+  return {
+    evidence: "accepted",
+    model: reported && binding ? resolveAcknowledgedModel(binding, reported) : reported,
+  };
+}
+
+/**
+ * Persists accepted model evidence from a model write or another control's snapshot. Requested
+ * selections stay desired/unverified; evidence without a model never clears the desired model.
+ */
+export function reconcileAcceptedModel(
+  options: AcpSessionRuntimeOptions,
+  selection: ManagerModelSelection | undefined,
+): AcpSessionRuntimeOptions {
+  if (selection?.evidence !== "accepted" || !selection.model) {
+    return options;
+  }
+  return mergeRuntimeOptions({ current: options, patch: { model: selection.model } });
+}
+
+/**
+ * Writes one config control for live-session replay and explicit commands. The protocol is
+ * selected before writing: only model may use session/set_model, and a rejected write is never
+ * retried through another protocol.
+ */
+export async function writeManagerConfigControl(params: {
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  capabilities: AcpRuntimeCapabilities;
+  backend: string;
+  key: string;
+  value: string;
+  isModel: boolean;
+  assertBeforeWrite: () => void;
+  assertAfterWrite: () => void;
+}): Promise<{
+  result: AcpRuntimeConfigOptionResult | undefined;
+  model?: ManagerModelSelection;
+}> {
+  const { runtime, handle, capabilities, key, value } = params;
+  const advertisedKeys = new Set(
+    (capabilities.configOptionKeys ?? [])
+      .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+      .filter(Boolean),
+  );
+  const setConfigOption = capabilities.controls.includes("session/set_config_option")
+    ? runtime.setConfigOption?.bind(runtime)
+    : undefined;
+  const setModel =
+    params.isModel && capabilities.controls.includes("session/set_model")
+      ? runtime.setModel?.bind(runtime)
+      : undefined;
+  let write: () => Promise<RuntimeModelResult | void>;
+  if (
+    setConfigOption &&
+    (advertisedKeys.size === 0 || advertisedKeys.has(normalizeLowercaseStringOrEmpty(key)))
+  ) {
+    write = () => setConfigOption({ handle, key, value });
+  } else if (setModel) {
+    write = () => setModel({ handle, model: value });
+  } else if (setConfigOption) {
+    throw new AcpRuntimeError(
+      "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      `ACP backend "${params.backend}" does not accept config key "${key}".`,
+    );
+  } else {
+    throw createUnsupportedControlError({
+      backend: params.backend,
+      control: params.isModel
+        ? "session/set_config_option or session/set_model"
+        : "session/set_config_option",
+    });
+  }
+  params.assertBeforeWrite();
+  const accepted = await write();
+  params.assertAfterWrite();
+  // Models-only evidence is not a config snapshot and must not clear selected thinking.
+  const configOptions = accepted?.configOptions;
+  return {
+    result: configOptions ? { configOptions } : undefined,
+    ...(params.isModel ? { model: resolveModelSelection(accepted, key, value) } : {}),
+  };
+}
+
 /** Applies persisted runtime options to a live handle once per unique option signature. */
 export async function applyManagerRuntimeControls(params: {
   sessionKey: string;
@@ -174,12 +334,13 @@ export async function applyManagerRuntimeControls(params: {
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
   isCurrentActor?: () => boolean;
   onOptionsChanged: (options: AcpSessionRuntimeOptions) => Promise<void>;
-  onModelApplied?: (model: string | undefined) => void;
+  onModelSelected?: (selection: ManagerModelSelection) => void;
 }): Promise<void> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
   assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   let options = resolveRuntimeOptionsFromMeta(params.meta);
-  const signature = buildRuntimeControlSignature(options);
+  const thinkingExplicit = params.meta.thinkingExplicit;
+  const signature = buildRuntimeControlSignature(options, thinkingExplicit);
   const cached = params.getCachedRuntimeState(params.sessionKey);
   if (cached?.appliedControlSignature === signature) {
     return;
@@ -198,11 +359,23 @@ export async function applyManagerRuntimeControls(params: {
   const thinkingConfigKey = options.thinking
     ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)
     : undefined;
-  const advertisedKeys = new Set(
-    (capabilities.configOptionKeys ?? [])
-      .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-      .filter(Boolean),
-  );
+  const modelConfigKey = resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys);
+  const assertActor = () => assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+  // Policy rebinds on a changed model or requested -> accepted, not on repeated accepted evidence.
+  let boundModel = options.model;
+  let reportedModel: ManagerModelSelection | undefined;
+  const reportModel = (selection: ManagerModelSelection) => {
+    if (
+      selection.evidence === "accepted" &&
+      reportedModel?.evidence === "accepted" &&
+      reportedModel.model === selection.model
+    ) {
+      return;
+    }
+    reportedModel = selection;
+    boundModel = selection.model;
+    params.onModelSelected?.(selection);
+  };
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
@@ -221,52 +394,35 @@ export async function applyManagerRuntimeControls(params: {
       }
 
       if (configOptions.length > 0) {
-        if (
-          !capabilities.controls.includes("session/set_config_option") ||
-          !params.runtime.setConfigOption
-        ) {
-          throw createUnsupportedControlError({
-            backend,
-            control: "session/set_config_option",
-          });
-        }
         for (const [key, requestedValue] of configOptions) {
-          assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+          assertActor();
           // Model changes can clamp or remove unsupported thinking before its turn in the replay.
           const value = key === thinkingConfigKey ? options.thinking : requestedValue;
           if (value === undefined) {
             continue;
           }
-          if (
-            advertisedKeys.size > 0 &&
-            !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
-          ) {
-            throw new AcpRuntimeError(
-              "ACP_BACKEND_UNSUPPORTED_CONTROL",
-              `ACP backend "${backend}" does not accept config key "${key}".`,
-            );
-          }
+          const isModel = key === modelConfigKey;
           try {
-            const result = await params.runtime.setConfigOption({
+            const { result, model } = await writeManagerConfigControl({
+              runtime: params.runtime,
               handle: params.handle,
+              capabilities,
+              backend,
               key,
               value,
+              isModel,
+              assertBeforeWrite: assertActor,
+              assertAfterWrite: assertActor,
             });
-            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
-            if (key === resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys)) {
-              const applied = result?.configOptions.find((option) => option.id === key);
-              params.onModelApplied?.(
-                result
-                  ? typeof applied?.currentValue === "string"
-                    ? applied.currentValue
-                    : undefined
-                  : value,
-              );
+            const selection =
+              model ?? resolveSnapshotModelEvidence(result, modelConfigKey, boundModel);
+            if (selection) {
+              reportModel(selection);
             }
             const accepted = reconcileAcceptedRuntimeOptions(
-              options,
+              reconcileAcceptedModel(options, selection),
               result,
-              normalizeLowercaseStringOrEmpty(key) === "model" ? options.thinking : undefined,
+              isModel ? options.thinking : undefined,
             );
             if (!runtimeOptionsEqual(options, accepted)) {
               // Persist each accepted change even if a later control fails.
@@ -276,10 +432,20 @@ export async function applyManagerRuntimeControls(params: {
             }
           } catch (error) {
             assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+            if (isUnsupportedOptionalTimeoutConfigRejection(key, error)) {
+              continue;
+            }
+            // Explicit thinking must fail before prompting; model and owner failures always propagate.
             if (
-              isUnsupportedOptionalTimeoutConfigRejection(key, error) ||
+              key === thinkingConfigKey &&
+              !isModel &&
+              thinkingExplicit !== true &&
+              !isAcpOwnerRepairRequired(error) &&
               isRejectedThinkingConfigOption(key, error)
             ) {
+              logVerbose(
+                `acp-manager: ${thinkingExplicit === false ? "inherited" : "legacy"} thinking "${value}" was not applied for ${params.sessionKey} (config key "${key}"): ${formatAcpErrorChain(error)}`,
+              );
               continue;
             }
             throw error;
@@ -293,6 +459,6 @@ export async function applyManagerRuntimeControls(params: {
 
   assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   if (cached) {
-    cached.appliedControlSignature = buildRuntimeControlSignature(options);
+    cached.appliedControlSignature = buildRuntimeControlSignature(options, thinkingExplicit);
   }
 }

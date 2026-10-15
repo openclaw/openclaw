@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
+import { createAcpRuntimeOptionCommandCases } from "./commands-acp.runtime-options.test-support.js";
 import {
   createAcpCommandSessionBindingService,
   createAcpTestSessionBinding as createSessionBinding,
@@ -1484,7 +1485,7 @@ describe("/acp command", () => {
       key: "model",
       value: "gpt-5.4",
     });
-    expect(setModel?.reply?.text).toContain("Updated ACP config option");
+    expect(setModel?.reply?.text).toContain("Requested ACP config option");
 
     hoisted.setConfigOptionMock.mockClear();
     const setCwd = await runThreadAcpCommand("/acp set cwd /tmp/worktree", baseCfg);
@@ -1492,49 +1493,28 @@ describe("/acp command", () => {
     expect(setCwd?.reply?.text).toContain("Updated ACP cwd");
   });
 
-  it.each([
-    {
-      action: "cwd",
-      command: "/acp cwd /tmp/worktree",
-      effectiveOptions: { cwd: "/tmp/worktree" },
-      managerMock: hoisted.updateSessionRuntimeOptionsMock,
-      managerInput: { patch: { cwd: "/tmp/worktree" } },
-      expectedText: `✅ Updated ACP cwd for ${defaultAcpSessionKey}: /tmp/worktree. Effective options: cwd=/tmp/worktree`,
-    },
-    {
-      action: "permissions",
-      command: "/acp permissions approve-all",
-      effectiveOptions: { permissionProfile: "approve-all" },
-      managerMock: hoisted.setConfigOptionMock,
-      managerInput: { key: "approval_policy", value: "approve-all" },
-      expectedText: `✅ Updated ACP permissions profile for ${defaultAcpSessionKey}: approve-all. Effective options: permissionProfile=approve-all`,
-    },
-    {
-      action: "timeout",
-      command: "/acp timeout 120",
-      effectiveOptions: { timeoutSeconds: 120 },
-      managerMock: hoisted.setConfigOptionMock,
-      managerInput: { key: "timeout", value: "120" },
-      expectedText: `✅ Updated ACP timeout for ${defaultAcpSessionKey}: 120s. Effective options: timeoutSeconds=120`,
-    },
-  ])("updates ACP $action through the dedicated runtime-option action", async (testCase) => {
-    mockBoundThreadSession();
-    testCase.managerMock.mockResolvedValueOnce(testCase.effectiveOptions);
+  it.each(createAcpRuntimeOptionCommandCases(defaultAcpSessionKey))(
+    "updates ACP $action through the dedicated runtime-option action",
+    async (testCase) => {
+      mockBoundThreadSession();
+      const managerMock = hoisted[testCase.managerMock];
+      managerMock.mockResolvedValueOnce(testCase.effectiveOptions);
 
-    const result = await runThreadAcpCommand(testCase.command, baseCfg);
+      const result = await runThreadAcpCommand(testCase.command, baseCfg);
 
-    expect(result?.reply?.text).toBe(testCase.expectedText);
-    expectMockCallFields(testCase.managerMock, {
-      cfg: baseCfg,
-      sessionKey: defaultAcpSessionKey,
-      ...testCase.managerInput,
-    });
-    expect(
-      hoisted.setModeMock.mock.calls.length +
-        hoisted.setConfigOptionMock.mock.calls.length +
-        hoisted.updateSessionRuntimeOptionsMock.mock.calls.length,
-    ).toBe(1);
-  });
+      expect(result?.reply?.text).toBe(testCase.expectedText);
+      expectMockCallFields(managerMock, {
+        cfg: baseCfg,
+        sessionKey: defaultAcpSessionKey,
+        ...testCase.managerInput,
+      });
+      expect(
+        hoisted.setModeMock.mock.calls.length +
+          hoisted.setConfigOptionMock.mock.calls.length +
+          hoisted.updateSessionRuntimeOptionsMock.mock.calls.length,
+      ).toBe(1);
+    },
+  );
 
   it.each([
     {
