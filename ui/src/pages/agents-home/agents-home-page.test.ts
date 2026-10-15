@@ -195,16 +195,20 @@ afterEach(() => {
 });
 
 describe("AgentsHomePage", () => {
-  it("opens agent creation so the custodian can explain unavailable access", async () => {
+  it("disables unavailable agent creation with its capability and recovery reason", async () => {
     const { page, navigate } = createPage();
     await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    const create = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
-      (link) => link.textContent?.trim() === "New agent",
-    )!;
+    const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "New agent",
+    );
 
-    expect(create.getAttribute("href")).toBe("/custodian?intent=new-agent");
-    create.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { search: "?intent=new-agent" });
+    expect(create).toBeDefined();
+    expect(create?.disabled).toBe(true);
+    expect(create?.title).toContain("openclaw.chat");
+    expect(create?.title).toContain("operator.admin");
+    expect(create?.title).toContain("reconnect");
+    create?.click();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("waits until an initially inactive page is shown before loading its roster", async () => {

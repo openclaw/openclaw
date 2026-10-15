@@ -27,6 +27,7 @@ export function createAgentViewTestProps(
 ): AgentsViewProps {
   return {
     access: {
+      canCreateAgent: true,
       canPatchConfig: true,
       canUpdateConfig: true,
       canUpdateIdentity: true,

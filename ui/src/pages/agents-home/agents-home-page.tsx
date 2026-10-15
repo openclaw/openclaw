@@ -1,5 +1,6 @@
 import { createMemo } from "solid-js";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
@@ -20,6 +21,7 @@ export function AgentsHomePage(props: { active?: boolean }) {
         roster: roster.read(),
         defaultId: agents.read().agentsList?.defaultId,
         connected: currentGateway.phase === "connected",
+        canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
       };
     },
     () => props.active ?? true,
@@ -49,6 +51,7 @@ export function AgentsHomePage(props: { active?: boolean }) {
     <openclaw-agents-home-page>
       <AgentsHomeView
         cards={cards()}
+        canCreate={snapshot().canCreate}
         context={context}
         connected={snapshot().connected}
         loading={snapshot().roster.loading}
