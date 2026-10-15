@@ -221,7 +221,7 @@ async function resolveIMessageConversationTarget(params: {
     const configuredGroup = resolveChannelGroupPolicy({
       cfg: params.cfg,
       channel: "imessage",
-      accountId: params.accountId,
+      accountId: account.accountId,
       groupId: String(chat.id),
     }).groupConfig;
     const chatType = configuredGroup
@@ -232,6 +232,7 @@ async function resolveIMessageConversationTarget(params: {
     }
     if (chatType === "group") {
       return {
+        accountId: account.accountId,
         peer: { kind: "group" as const, id: String(chat.id) },
         from: `imessage:group:${chat.id}`,
         to: params.target,
@@ -255,6 +256,7 @@ async function resolveIMessageConversationTarget(params: {
     ) ?? "auto";
   const from = `${service}:${handle}`;
   return {
+    accountId: account.accountId,
     peer: { kind: "direct" as const, id: handle },
     from,
     to: deliveryTarget ?? from,
@@ -269,16 +271,18 @@ async function resolveIMessageOutboundSessionRoute(
   if (!target) {
     return null;
   }
+  const { accountId, ...route } = target;
   const baseSessionKey = buildOutboundBaseSessionKey({
     ...params,
+    accountId,
     channel: "imessage",
-    peer: target.peer,
+    peer: route.peer,
   });
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    ...target,
-    chatType: target.peer.kind,
+    ...route,
+    chatType: route.peer.kind,
   };
 }
 

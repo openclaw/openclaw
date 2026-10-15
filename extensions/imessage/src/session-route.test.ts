@@ -81,6 +81,16 @@ describe("iMessage outbound session routing", () => {
     ["native group", "chat_id:43", {}, "43"],
     ["native group GUID", "chat_guid:iMessage;+;chat123", {}, "43"],
     ["configured group", "chat_id:42", { channels: { imessage: { groups: { "42": {} } } } }, "42"],
+    [
+      "named default account group",
+      "chat_id:42",
+      {
+        channels: {
+          imessage: { defaultAccount: "work", accounts: { work: { groups: { "42": {} } } } },
+        },
+      },
+      "42",
+    ],
   ] as const)("keeps a %s on the group session", async (_name, target, cfg, id) => {
     expect(
       await imessagePlugin.messaging!.targetResolver!.resolveTarget!({
@@ -100,6 +110,19 @@ describe("iMessage outbound session routing", () => {
       peer: { kind: "group", id },
       to: target,
     });
+  });
+
+  it("uses the resolved default account for account-scoped direct sessions", async () => {
+    expect(
+      await imessagePlugin.messaging!.resolveOutboundSessionRoute!({
+        cfg: {
+          channels: { imessage: { defaultAccount: "work", accounts: { work: {} } } },
+          session: { dmScope: "per-account-channel-peer" },
+        },
+        agentId: "main",
+        target: "chat_id:42",
+      }),
+    ).toMatchObject({ sessionKey: "agent:main:imessage:work:direct:+15551234567" });
   });
 
   it("does not invent a session for an unresolved chat ID", async () => {
