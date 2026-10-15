@@ -203,6 +203,9 @@ struct ChatViewModelProgressCardActionTests {
         #expect(vm.progressCardRefreshPending)
         await transport.refreshes(atLeast: 1)
 
+        // Request arrival does not mean the accepted receipt has reached the view model.
+        await waitForObservedState { vm.progressCardRefreshIntent?.accepted == true }
+
         // The updated card is what ends the wait.
         transport.setCard(progressCard(revision: 8))
         await vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(

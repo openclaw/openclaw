@@ -206,7 +206,7 @@ echo built >> "$FIXTURE_BUILDS"
     const saves = job.steps.filter((step: { uses?: string }) =>
       step.uses?.startsWith("actions/cache/save@"),
     );
-    expect(saves).toHaveLength(3);
+    expect(saves).toHaveLength(4);
     for (const event of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
       for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
         for (const allowed of ["true", "false"]) {
@@ -222,13 +222,15 @@ echo built >> "$FIXTURE_BUILDS"
               "ios-cache-inputs": { outputs: { xcode: "xcode" } },
               "ios-packages-cache": { outputs: { "cache-hit": "false" } },
               "watch-rtc-cache": { outputs: { "cache-hit": "false" } },
+              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" },
             },
           };
           for (const step of saves) {
+            // Native test products are written only by the scheduled run that recorded their inputs.
+            const writers =
+              step.name === "Save iOS test build products" ? ["schedule"] : ["push", "schedule"];
             expect(evaluateWorkflowExpression("${{ " + step.if + " }}", context), step.name).toBe(
-              ["push", "schedule"].includes(event) &&
-                ref === "refs/heads/main" &&
-                allowed === "true",
+              writers.includes(event) && ref === "refs/heads/main" && allowed === "true",
             );
             expect(step.uses).toBe("actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
           }

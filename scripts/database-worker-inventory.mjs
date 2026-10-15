@@ -3508,6 +3508,8 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
     classifyKnownEntry,
+    // Historical snapshots supply counts; only current-source diagnostics are consumed below.
+    !ref,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(

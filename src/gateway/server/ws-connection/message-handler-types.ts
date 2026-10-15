@@ -99,6 +99,19 @@ export type GatewayWsMessageHandlerParams = {
   logWsControl: SubsystemLogger;
 };
 
+export type GatewayConnectAttachTiming =
+  | "deviceAuthorizationMs"
+  | "deviceLookupMs"
+  | "deviceMetadataMs"
+  | "deviceTokensMs"
+  | "nodePreparationMs"
+  | "identityMs"
+  | "profileEnsureMs"
+  | "profileAuthorityMs"
+  | "scopeGrantMs"
+  | "operatorDeviceMs"
+  | "sessionRegistrationMs";
+
 export type GatewayConnectPhaseContext = {
   handler: GatewayWsMessageHandlerParams;
   frame: RequestFrame;
@@ -127,6 +140,8 @@ export type GatewayConnectPhaseContext = {
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
   onPairingWait: () => void;
+  /** Nested wall times for the connect response log; direct bootstrap callers may omit it. */
+  recordAttachTiming?: (phase: GatewayConnectAttachTiming, startedAt: number) => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {

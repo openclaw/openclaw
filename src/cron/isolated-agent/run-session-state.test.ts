@@ -430,49 +430,83 @@ describe("createPersistCronSessionEntry", () => {
     expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
   });
 
-  it("retains resume fields for a message transcript without caller SQL", async () => {
-    const dir = sessionDirs.make();
-    const storePath = path.join(dir, "sessions.json");
-    const scope = {
-      agentId: "main",
-      sessionId: "run-session-id",
-      sessionKey: "agent:main:cron:completed",
-      storePath,
-    };
-    await appendTranscriptMessage(scope, { message: { role: "user", content: "cron prompt" } });
+  it("retains embedded attempt timestamps before a transcript exists", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:cron:embedded-attempt";
     const cronSession = makeCronSession(
-      makeSessionEntry({
-        label: "Cron: completed",
-        sessionStartedAt: 1000,
-        cliSessionIds: { "claude-cli": "retained-cli-session" },
-      }),
+      makeSessionEntry({ sessionStartedAt: 1000, lastInteractionAt: 1000 }),
       storePath,
     );
-
+    const persistedStore: Record<string, SessionEntry> = {};
     const persist = createPersistCronSessionEntry({
       cronSession,
-      agentSessionKey: "agent:main:cron:completed",
+      agentSessionKey: sessionKey,
       workspaceDir: "/tmp/workspace",
-      persistSessionEntry: vi.fn(async () => {}),
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
-    const reads = observeHostDataSql();
-    try {
-      await persist();
-      expect(reads.queries).toEqual([]);
-    } finally {
-      reads.restore();
-    }
+    await persist();
+    cronSession.sessionEntry.lastInteractionAt = 2000;
+    await persist();
 
-    expect(cronSession.store["agent:main:cron:completed"]).toEqual({
-      sessionId: "run-session-id",
-      label: "Cron: completed",
+    expect(persistedStore[sessionKey]).toMatchObject({
       sessionStartedAt: 1000,
-      cliSessionIds: { "claude-cli": "retained-cli-session" },
-      updatedAt: 1000,
-      systemSent: true,
+      lastInteractionAt: 2000,
     });
   });
+
+  it.each([false, true])(
+    "persists native resume fields only with a transcript (present: %s) without caller SQL",
+    async (transcriptPresent) => {
+      const dir = sessionDirs.make();
+      const storePath = path.join(dir, "sessions.json");
+      const scope = {
+        agentId: "main",
+        sessionId: "run-session-id",
+        sessionKey: "agent:main:cron:completed",
+        storePath,
+      };
+      if (transcriptPresent) {
+        await appendTranscriptMessage(scope, { message: { role: "user", content: "cron prompt" } });
+      }
+      const cronSession = makeCronSession(
+        makeSessionEntry({
+          label: "Cron: completed",
+          sessionStartedAt: 1000,
+          cliSessionIds: { "claude-cli": "retained-cli-session" },
+        }),
+        storePath,
+      );
+
+      const persist = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: "agent:main:cron:completed",
+        workspaceDir: "/tmp/workspace",
+        persistSessionEntry: vi.fn(async () => {}),
+      });
+
+      const reads = observeHostDataSql();
+      try {
+        await persist();
+        expect(reads.queries).toEqual([]);
+      } finally {
+        reads.restore();
+      }
+
+      expect(cronSession.store["agent:main:cron:completed"]).toEqual({
+        sessionId: "run-session-id",
+        label: "Cron: completed",
+        ...(transcriptPresent
+          ? {
+              sessionStartedAt: 1000,
+              cliSessionIds: { "claude-cli": "retained-cli-session" },
+            }
+          : {}),
+        updatedAt: 1000,
+        systemSent: true,
+      });
+    },
+  );
 
   it("does not let an older concurrent run reclaim a persisted lifecycle revision", async () => {
     const sessionKey = "agent:main:session";

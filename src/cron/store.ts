@@ -29,6 +29,7 @@ import type {
 } from "./store/save-worker.types.js";
 import {
   isCronRuntimeOnlySave,
+  loadCronStoreForChanges,
   prepareCronStoreChanges,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
@@ -281,7 +282,15 @@ function saveCronJobsStoreChangesNative(
   return commitCronStoreNative(
     storeKey,
     ({ db }, admittedHooks) =>
-      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
+      saveCronStoreChangesInDatabase(
+        db,
+        storeKey,
+        storeKey,
+        prepared,
+        loadCronStoreForChanges(db, storeKey),
+        options,
+        admittedHooks,
+      ),
     transactionHooks,
     "cron.config-mutation",
   ).value;

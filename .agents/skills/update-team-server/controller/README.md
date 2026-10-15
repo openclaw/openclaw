@@ -86,13 +86,22 @@ sidecar startup and the model agent's own pending admission still wait. Missing
 transport responses and pending startup/admission
 facts wait inside the original budget. Malformed evidence, corruption, changed
 identity, protocol failures, and authentication failures remain failures.
+If native readiness becomes unavailable again after convergence, a well-formed
+HTTP 503 readiness snapshot waits within that same deadline. It never authorizes
+marker dispatch. `elapsed_seconds` in `VERIFICATION_FAILED` measures the named
+step, not the elapsed startup or marker budget.
 
 If marker dispatch has a typed transport timeout, the owner checks readiness
 again and replays the byte-identical request with its original idempotency key.
 The Gateway owns reservation and replay; a minimal `in_flight` acknowledgement
 still names that same run. Acceptance requires the subsequent `agent.wait`
 terminal receipt to bind the exact session, visible marker, and configured
-provider/model. Neither a healthy probe nor a timeout becomes successful
+requested provider/model. The effective model must be that primary or one of its
+configured fallbacks captured with the protected policy; fallback changes are
+policy changes. The release's native model-reference parser separates auth-profile
+suffixes for receipt comparisons; the full configured references remain protected.
+A successful configured fallback remains valid when the primary
+is rate-limited. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
 
 During graceful suspension drain, status reads use a five-second transport and

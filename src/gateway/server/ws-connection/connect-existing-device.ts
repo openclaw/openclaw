@@ -169,12 +169,14 @@ export async function authorizeExistingGatewayDevice(params: {
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
   if (device) {
+    const metadataStartedAt = performance.now();
     await updatePairedDeviceMetadata(device.id, {
       ...clientAccessMetadata,
       ...(metadataPinning.refreshPairedPlatform
         ? { platform: metadataPinning.refreshPairedPlatform }
         : {}),
     });
+    context.recordAttachTiming?.("deviceMetadataMs", metadataStartedAt);
   }
   return { ok: true, handoffBootstrapProfile };
 }

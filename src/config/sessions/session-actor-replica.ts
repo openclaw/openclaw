@@ -45,22 +45,35 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
 
+// Transcript producers replace changed rows and envelopes; shared subtrees stay
+// immutable. Weak keys do not keep evicted payloads alive.
+const transcriptSizes = new WeakMap<object, number>();
+
 // Residency is a heap estimate, not a wire-size limit. Trusted postimages are
 // acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(value: unknown): number {
+function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): number {
   if (typeof value === "string") {
     return 16 + value.length * 2;
   }
   if (!value || typeof value !== "object") {
     return 8;
   }
-  if (Array.isArray(value)) {
-    return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
+  const known = sizes?.get(value);
+  if (known !== undefined) {
+    return known;
   }
   let bytes = 32;
-  for (const key in value) {
-    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
+  if (Array.isArray(value)) {
+    bytes = value.reduce<number>(
+      (total, child) => total + 16 + estimateReplicaBytes(child, sizes),
+      bytes,
+    );
+  } else {
+    for (const key in value) {
+      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), sizes);
+    }
   }
+  sizes?.set(value, bytes);
   return bytes;
 }
 
@@ -322,7 +335,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
     pool.snapshots += 1;
   }
   const previousBytes = cell.transcriptBytes;
-  const bytes = estimateReplicaBytes(transcript);
+  const bytes = estimateReplicaBytes(transcript, transcriptSizes);
   cell.transcript = transcript;
   cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;

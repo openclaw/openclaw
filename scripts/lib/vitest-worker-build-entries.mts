@@ -113,6 +113,8 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
+  "scripts/update-gateway-build.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
   "extensions/acpx/src/runtime.admission-retention.test-support.ts",
   "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/sqlite-reliability-writer.ts",
