@@ -21,7 +21,11 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
-          sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
+          // Keep link titling local so request counts measure navigation resolution.
+          sessions: [
+            createControlUiSessionRow(sourceKey, "Source conversation", 1),
+            createControlUiSessionRow(destinationKey, "Linked conversation", 2),
+          ],
           sessionTranscripts: {
             [sourceKey]: {
               // URL chips need Gateway identity resolution; raw keys can already load literally.
@@ -61,9 +65,12 @@ suite.define(() => {
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
-        await gateway.deferNext("sessions.resolve", resolutionMatch);
+        const previousResolves = await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
-        await gateway.waitForRequest("sessions.resolve", { match: resolutionMatch });
+        await gateway.waitForRequest("sessions.resolve", {
+          after: previousResolves,
+          match: resolutionMatch,
+        });
         expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
           [],
         );
