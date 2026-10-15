@@ -9,11 +9,11 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import {
   SubscriptionsController,
   type ControllerHost,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";

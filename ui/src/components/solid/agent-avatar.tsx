@@ -5,7 +5,7 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "../agent-select.ts";
-import { avatarArtwork } from "../identity-avatar-view.ts";
+import { Icon } from "./icon.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 
 export type AgentAvatarProps = {
@@ -31,26 +31,26 @@ export function AgentAvatarContent(props: AgentAvatarProps) {
 
   return (
     <Show
-      when={!props.option.icon || Boolean(avatar().image)}
+      when={avatar().image ? undefined : props.option.icon}
       fallback={
-        <span
-          ref={avatarArtwork(() => props.option.icon)}
-          class="agent-select__avatar agent-select__avatar--icon"
-          aria-hidden="true"
+        <AgentIdentityAvatar
+          agent={{
+            id: props.option.agent?.id ?? props.option.value,
+            avatar: avatar().image,
+            textAvatar: props.option.agent
+              ? resolveAgentTextAvatar(props.option.agent, props.identity)
+              : null,
+          }}
+          class="agent-select__avatar"
+          onImageError={avatar().onError}
         />
       }
     >
-      <AgentIdentityAvatar
-        agent={{
-          id: props.option.agent?.id ?? props.option.value,
-          avatar: avatar().image,
-          textAvatar: props.option.agent
-            ? resolveAgentTextAvatar(props.option.agent, props.identity)
-            : null,
-        }}
-        class="agent-select__avatar"
-        onImageError={avatar().onError}
-      />
+      {(icon) => (
+        <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
+          <Icon name={icon()} />
+        </span>
+      )}
     </Show>
   );
 }

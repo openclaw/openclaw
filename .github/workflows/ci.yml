@@ -4986,28 +4986,29 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' }}
         run: |
           set -euo pipefail
+          # Start clean once; SwiftPM invalidates trait-dependent modules for the following suite.
+          openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
+          echo "OPENCLAWKIT_SCRATCH=$openclawkit_scratch" >> "$GITHUB_ENV"
           # Guard: chat-only consumers build OpenClawKit with the Talk trait
           # disabled and must NOT link ElevenLabsKit. Assert that future sources
           # under OpenClawKit cannot silently reintroduce an unconditional
           # ElevenLabsKit dependency while the manifest still looks correct.
-          deps="$(swift package --package-path apps/shared/OpenClawKit show-dependencies --disable-default-traits)"
+          deps="$(swift package --package-path apps/shared/OpenClawKit --scratch-path "$openclawkit_scratch" show-dependencies --disable-default-traits)"
           echo "$deps"
           if grep -qi 'elevenlabs' <<<"$deps"; then
             echo "::error::ElevenLabsKit resolved with the Talk trait disabled; keep it gated behind the Talk trait."
             exit 1
           fi
-          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits --disable-index-store -Xswiftc -gline-tables-only
+          swift build --package-path apps/shared/OpenClawKit --scratch-path "$openclawkit_scratch" --target OpenClawKit --disable-default-traits --disable-index-store -Xswiftc -gline-tables-only
 
       # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true' }}
         run: |
           set -euo pipefail
-          openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
-          trap 'rm -rf "$openclawkit_scratch"' EXIT
           openclawkit_test_args=(
             --package-path apps/shared/OpenClawKit
-            --scratch-path "$openclawkit_scratch"
+            --scratch-path "${OPENCLAWKIT_SCRATCH:?OpenClawKit scratch was not prepared}"
             --disable-index-store -Xswiftc -gline-tables-only
           )
           if [[ "$OPENCLAWKIT_TEST_EXECUTION" == "parallel" ]]; then
@@ -5016,6 +5017,10 @@ jobs:
             openclawkit_test_args+=(--no-parallel)
           fi
           swift test "${openclawkit_test_args[@]}"
+
+      - name: Clean OpenClawKit build scratch
+        if: always() && env.OPENCLAWKIT_SCRATCH != ''
+        run: rm -rf "$OPENCLAWKIT_SCRATCH"
 
       - name: Swabble tests
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' && env.HISTORICAL_TARGET != 'true' }}

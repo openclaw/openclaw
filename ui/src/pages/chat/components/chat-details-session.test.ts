@@ -54,6 +54,18 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   expect(element.querySelector("[data-details-group]")).toBeNull();
   expect(element.querySelector(".chat-details-session > summary")).toBeNull();
+  const openChanges = vi.fn();
+  element.props = { ...element.props!, onOpenSessionDiff: openChanges };
+  await element.updateComplete;
+  const changes = element.querySelector('[data-details-group="pull-requests"]')!;
+  expect(changes.querySelector("summary")?.textContent).toContain("Changes");
+  const allChanges = changes.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
+  expect(allChanges.textContent).toContain("All changes");
+  allChanges.click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  element.props = { ...element.props!, onOpenSessionDiff: undefined };
+  await element.updateComplete;
+  expect(element.querySelector("[data-details-group]")).toBeNull();
   element.props = { ...element.props!, pullRequests };
   await element.updateComplete;
   expect(

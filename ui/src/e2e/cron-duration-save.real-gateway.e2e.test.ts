@@ -210,9 +210,59 @@ catalogSuite.define(() => {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
-            .toBe(1);
+          try {
+            await expect
+              .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
+              .toBe(1);
+          } catch (error) {
+            try {
+              const sequence = frames.flatMap<{
+                kind: string;
+                ok?: boolean;
+                fixtureModels?: string[];
+              }>((entry) => {
+                const frame = requireRecord(requireRecord(entry).frame);
+                if (frame.event === "config.changed" || frame.event === "chat.metadata.changed") {
+                  return [{ kind: frame.event }];
+                }
+                if (frame.method === "models.list") {
+                  return [{ kind: "models.request" }];
+                }
+                if (frame.type !== "res") {
+                  return [];
+                }
+                const models = frame.ok === true ? requireRecord(frame.payload).models : [];
+                return [
+                  {
+                    kind: "models.reply",
+                    ok: frame.ok === true,
+                    fixtureModels: ["anchor", "retiring", "published"].filter(
+                      (id) =>
+                        Array.isArray(models) &&
+                        models.some((model) => {
+                          const row = requireRecord(model);
+                          return row.provider === "fixture" && row.id === id;
+                        }),
+                    ),
+                  },
+                ];
+              });
+              console.error(
+                "[automation-catalog-publication]",
+                JSON.stringify({
+                  sequence: sequence.slice(-20),
+                  publicationCount: commands.length,
+                  pickerCount: await picker.count(),
+                  retiringOptionCount: await picker
+                    .locator('[role="option"][data-value="fixture/retiring"]')
+                    .count(),
+                }),
+              );
+            } catch {
+              console.error("[automation-catalog-publication] diagnostic unavailable");
+            }
+            throw error;
+          }
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
           ).toBe(0);

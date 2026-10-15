@@ -408,7 +408,8 @@ run_gateway_node() {
 	fi
 	if ((drain_deadline > 0)); then
 		remaining=$((drain_deadline - SECONDS))
-		((remaining > 0)) || return 1
+		# Expiry before dispatch is the same budget exhaustion as bounded's timeout.
+		((remaining > 0)) || return 124
 		if ((remaining < rpc_budget)); then
 			rpc_budget="$remaining"
 		fi

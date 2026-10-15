@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -10,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
@@ -132,7 +132,10 @@ describe("chat pane session menu boundary", () => {
     let workspace = createPaneHeaderWorkspaceFixture(state);
     const draw = () => {
       workspace = createPaneHeaderWorkspaceFixture(state);
-      render(pane.renderPaneHeader(workspace, session, false, undefined, false, null), container);
+      renderPaneLegacyContent(
+        pane.renderPaneHeader(workspace, session, false, undefined, false, null),
+        container,
+      );
     };
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
@@ -214,7 +217,7 @@ describe("chat pane session menu boundary", () => {
       const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
       const container = document.body.appendChild(document.createElement("div"));
       const draw = () =>
-        render(
+        renderPaneLegacyContent(
           pane.renderPaneHeader(
             createPaneHeaderWorkspaceFixture(state),
             undefined,
@@ -287,7 +290,7 @@ describe("chat pane session menu boundary", () => {
     await Promise.all([ledger, verifier].map(refreshPane));
     const container = document.body.appendChild(document.createElement("div"));
     const title = (pane: TestChatPane) => {
-      render(
+      renderPaneLegacyContent(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(pane.state),
           selectedChatSessionRow(pane.state),
@@ -361,7 +364,7 @@ describe("chat pane session menu boundary", () => {
       },
     };
     const container = document.createElement("div");
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         undefined,
@@ -396,7 +399,7 @@ describe("chat pane session menu boundary", () => {
       derivedTitle: "Partial reconnect metadata",
     } satisfies GatewaySessionRow;
     const draw = (session: GatewaySessionRow | undefined, catalog = false) => {
-      render(
+      renderPaneLegacyContent(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(state),
           session,
@@ -446,7 +449,7 @@ describe("chat pane session menu boundary", () => {
       updatedAt: 0,
     } satisfies GatewaySessionRow;
     const container = document.body.appendChild(document.createElement("div"));
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -487,7 +490,7 @@ describe("chat pane session menu boundary", () => {
       state.settings = loadSettings();
       const row: GatewaySessionRow = { key, sessionId: "fixture", kind: "direct", updatedAt: 0 };
       const container = document.body.appendChild(document.createElement("div"));
-      render(
+      renderPaneLegacyContent(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(state),
           row,

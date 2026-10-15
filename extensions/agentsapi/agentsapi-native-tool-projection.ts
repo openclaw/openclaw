@@ -10,7 +10,6 @@ import {
 import {
   formatToolProgressOutput,
   projectAgentToolActivity,
-  sanitizeToolResult,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
@@ -196,7 +195,7 @@ export class AgentsApiNativeToolProjection {
       return;
     }
     const id = this.identity(state.turnId, state.item.id);
-    const delta = sanitizeToolResult(event.delta);
+    const delta = event.delta;
     this.output.append(id, delta);
     if (
       state.commandOutputChars < TOOL_PROGRESS_OUTPUT_MAX_CHARS &&
@@ -378,10 +377,8 @@ export class AgentsApiNativeToolProjection {
     const commandFacts = commandBearing
       ? {
           title: typeof args.command === "string" ? args.command : "Command output",
-          ...(!savedItemUnavailable && typeof item.exit_code === "number"
-            ? { exitCode: item.exit_code }
-            : {}),
-          ...(!savedItemUnavailable && typeof item.duration_ms === "number"
+          ...(!savedItemUnavailable && item.exit_code != null ? { exitCode: item.exit_code } : {}),
+          ...(!savedItemUnavailable && item.duration_ms != null
             ? { durationMs: item.duration_ms }
             : {}),
           ...(typeof args.cwd === "string" ? { cwd: args.cwd } : {}),
@@ -462,9 +459,8 @@ export class AgentsApiNativeToolProjection {
       return;
     }
     const remaining = TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.outputProgressChars;
-    const sanitized = sanitizeToolResult(output);
-    const truncated = sanitized.length > remaining;
-    const text = truncateUtf16Safe(sanitized, remaining);
+    const truncated = output.length > remaining;
+    const text = truncateUtf16Safe(output, remaining);
     state.outputProgressChars += text.length;
     state.outputProgressMessages += 1;
     await this.emitToolProgress(

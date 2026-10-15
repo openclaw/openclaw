@@ -33,6 +33,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -2549,6 +2550,84 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "visible final" }));
     expect((await readStoredMainSession(storePath)).restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("admits one stranded delivery retry after its parent source is terminal", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    const first = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "stranded-parent",
+        ChatType: "group",
+      },
+      runOverrides: {
+        agentId: "main",
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        terminalReplyExpectation: "required",
+        config: { messages: { visibleReplies: "message_tool" } },
+      },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    first.followupRun.sourceTurnId = first.sourceTurnId;
+    first.followupRun.messageId = "stranded-parent";
+    attachSourceTurnRecorder({
+      followupRun: first.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: first.sourceTurnId,
+      storePath,
+      text: "Send the result.",
+    });
+    const finalText = Array(6)
+      .fill("The requested deployment is complete and the service is healthy.")
+      .join(" ");
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: finalText }],
+        meta: { finalAssistantVisibleText: finalText },
+      })
+      .mockImplementation(async () => {
+        const admitted = await readStoredMainSession(storePath);
+        expect(admitted.restartRecoveryDeliverySourceRunId).toBe(first.sourceTurnId);
+        expect(admitted.restartRecoveryTerminalRunIds).toContain(first.sourceTurnId);
+        return {
+          payloads: [],
+          meta: { finalAssistantVisibleText: "NO_REPLY" },
+        };
+      });
+
+    await first.run();
+    const retry = vi.mocked(enqueueFollowupRun).mock.calls.at(-1)?.[1];
+    expect(retry?.strandedReplyRetry).toBe(true);
+    expect(retry?.userTurnTranscriptRecorder).toBeUndefined();
+    expect((await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds).toContain(
+      first.sourceTurnId,
+    );
+    const drain = requireScheduledFollowupRunner();
+    await drain(expectDefined(retry, "stranded retry"));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+
+    await drain(expectDefined(retry, "duplicate stranded retry"));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    await drain({
+      ...expectDefined(retry, "redelivered parent source"),
+      strandedReplyRetry: undefined,
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const messages = (await loadTranscriptEvents({ storePath, sessionId: "session" })).filter(
+      (event) => readTranscriptEventMessage(event)?.role === "user",
+    );
+    expect(messages).toHaveLength(1);
+    expect((await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds).toContain(
+      first.sourceTurnId,
+    );
   });
 
   it("drops a redelivered terminal channel source before hooks or model work", async () => {

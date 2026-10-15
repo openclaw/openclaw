@@ -108,7 +108,9 @@ During graceful suspension drain, status reads use a five-second transport and
 subprocess bound (shortened by the original drain deadline). A typed timeout,
 connection loss, or service-restart close retries after one, two, then at most
 four seconds, with each wait capped by the remaining drain budget. These reads
-do not renew the deadline or the suspension lease. Missing or malformed failure
+do not renew the deadline or the suspension lease. If request preparation consumes
+the remaining budget before CLI dispatch, the same deadline policy applies; no
+RPC is started. Missing or malformed failure
 evidence, authentication or protocol failures, and definitive Gateway refusals
 remain fatal. Deadline expiry still requires the existing fresh lease,
 process-generation, and write-custody proof before authorized interruption;

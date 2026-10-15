@@ -50,7 +50,7 @@ function routingProbesAtLeastAsStrict(candidate: unknown, baseline: unknown): bo
       return false;
     }
     const candidateEntry = candidateById.get(baselineEntry.id);
-    if (!isRecord(candidateEntry)) {
+    if (candidateEntry === undefined) {
       return false;
     }
     const candidateRoute = canonicalRoutingRoute(candidateEntry.route);

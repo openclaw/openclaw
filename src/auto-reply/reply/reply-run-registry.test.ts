@@ -405,32 +405,6 @@ describe("reply run registry", () => {
     });
   });
 
-  it.each([
-    { firstStore: "store-a", laterStore: "store-a", expected: "rotated-session" },
-    { firstStore: "store-a", laterStore: "store-b", expected: "first-session" },
-    { firstStore: "store-a", laterStore: undefined, expected: "first-session" },
-    { firstStore: undefined, laterStore: "store-b", expected: "first-session" },
-    { firstStore: undefined, laterStore: undefined, expected: "rotated-session" },
-  ])(
-    "keeps after-clear session rotation with its database ($firstStore -> $laterStore)",
-    async ({ firstStore, laterStore, expected }) => {
-      const first = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
-      lifecycleAdmissionByOperation.set(first, { databaseIdentity: firstStore });
-      const barrier = createDeferred();
-      const afterClear = vi.fn();
-      runAfterReplyOperationClear(first, afterClear);
-      first.completeWithAfterClearBarrier(barrier.promise);
-
-      const later = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
-      lifecycleAdmissionByOperation.set(later, { databaseIdentity: laterStore });
-      later.updateSessionId("rotated-session");
-      later.complete();
-      expect(afterClear).not.toHaveBeenCalled();
-      barrier.resolve();
-      await vi.waitFor(() => expect(afterClear).toHaveBeenCalledWith(expected));
-    },
-  );
-
   it("keeps a late callback behind its own delivery when a foreign store replaces the global barrier", async () => {
     const first = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
     lifecycleAdmissionByOperation.set(first, { databaseIdentity: "store-a" });

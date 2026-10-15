@@ -48,6 +48,7 @@ Behavior:
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. Once the originating run ends, its pending completion cannot start another turn or deliver a reply; retained output remains available through `process poll` or `process log`. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
+- Gateway-hosted background processes still end with the Gateway. After a restart, eligible owning sessions receive one lost-process completion turn: the outcome is unknown, and the agent must check side effects or saved state before re-running anything. No command or output is replayed. Reset or archived sessions, incognito sessions, subagents, ended cron runs, and disabled completion notifications do not receive a restart wake. Keeping the physical process alive requires a separate process host.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -92,7 +93,8 @@ openclaw config set tools.exec.notifyOnExit false
 An agent's `agents.entries.<id>.tools.exec.notifyOnExit` overrides the global
 setting. Set that override to `false` too, or remove it to inherit the global
 value. Newly started commands use the updated setting; commands already running
-retain the setting they started with. Use `process poll` or `process log` to
+retain the setting they started with. Restart wakes also check the current setting,
+so disabling notifications suppresses any pending lost-process wake. Use `process poll` or `process log` to
 collect their results on demand. This disables the completion event and its
 automatic model call without disabling `background: true` or the `process` tool.
 

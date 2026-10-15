@@ -124,7 +124,9 @@ describe("imessage targets", () => {
 
   it("infers direct and group chat types from normalized targets", () => {
     expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
+    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
+    expect(inferIMessageTargetChatType("chat_guid:iMessage;-;+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_guid:iMessage;+;chat42")).toBe("group");
   });
 
   it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
@@ -139,7 +141,7 @@ describe("imessage targets", () => {
       kind: "chat_identifier",
       chatIdentifier: hex,
     });
-    expect(inferIMessageTargetChatType(hex)).toBe("group");
+    expect(inferIMessageTargetChatType(hex)).toBeUndefined();
   });
 });
 

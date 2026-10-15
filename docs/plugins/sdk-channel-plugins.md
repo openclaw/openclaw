@@ -437,8 +437,16 @@ when initialization must finish before the child runs.
       remains pending; sources evicted from the summary cap report `queue-cap-old`.
 
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
-      batching. Its `begin()` cleanup receives an optional settlement with
-      `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
+      batching. Its optional `shouldSuppressReply(payload)` applies before an
+      origin-routed send, which bypasses the immediate reply dispatcher. All source
+      policies in a collected batch must agree to suppress it; an explicit request
+      can therefore retain feedback alongside passive messages. `onReplyDelivered`
+      runs only after confirmed origin delivery, so deduplication must not record
+      a failed or transport-pending send as delivered.
+      Its `begin()` cleanup receives an optional settlement with `visibleReplySent`,
+      `failed`, and `completed` after delivery and presentation cleanup finish.
+      `completed` identifies successful execution, including deliberate silence;
+      cancellation does not count as recovery from an earlier failure.
       `transportPending: true` means delivery remains owned by transport without a
       later callback to this source; clear activity UI without claiming success or failure
       unless `visibleReplySent` or `failed` already proves the outcome.

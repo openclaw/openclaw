@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendManager,
+  SandboxContext,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
@@ -27,7 +28,6 @@ import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.
 import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
 import { createWindowsCommandBridge } from "./windows-command.js";
 import { buildLauncherEnv } from "./windows-env.js";
-import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
 
 type MxcExecFinalizeToken = {
   payloadDir: string;
@@ -139,7 +139,7 @@ export function createMxcSandboxBackendHandle(params: {
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: MxcWorkspaceAccess;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
