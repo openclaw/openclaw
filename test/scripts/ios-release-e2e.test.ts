@@ -648,6 +648,12 @@ describe("native command adapter", () => {
     "native-build-only",
     "setup-code-timeout",
     "setup-code-rpc-timeout",
+    "setup-code-handshake-retry",
+    "setup-code-handshake-timeout-retry",
+    "setup-code-handshake-exhausted",
+    "setup-code-closed-after-dispatch",
+    "setup-code-closed-unknown-dispatch",
+    "setup-code-closed-cancelled",
     "test-unjoined",
     "test-exit",
     "reader-failure",
@@ -713,6 +719,7 @@ describe("native command adapter", () => {
         ([options]) => options.configPath !== "/private/preflight/config.json",
       );
     let simulatorReady = false;
+    let setupCodeCalls = 0;
     let sourceChanged = false;
     let exitMock: (() => void) | undefined;
     let requestLog = "";
@@ -756,6 +763,32 @@ describe("native command adapter", () => {
           ],
         };
       }
+      if (options.method === "device.pair.setupCode") {
+        setupCodeCalls++;
+        if (
+          scenario === "setup-code-handshake-exhausted" ||
+          scenario === "setup-code-closed-unknown-dispatch" ||
+          scenario === "setup-code-closed-cancelled" ||
+          (scenario.startsWith("setup-code-handshake-") && setupCodeCalls === 1)
+        ) {
+          if (scenario === "setup-code-closed-cancelled") {
+            abort.abort();
+          }
+          throw new GatewayTransportError({
+            kind: scenario === "setup-code-handshake-timeout-retry" ? "timeout" : "closed",
+            message: "private setup handshake failure",
+            connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+            code: 1008,
+            reason:
+              scenario === "setup-code-closed-unknown-dispatch"
+                ? "private setup credential"
+                : "invalid-handshake",
+            ...(scenario === "setup-code-closed-unknown-dispatch"
+              ? {}
+              : { requestDispatched: false }),
+          });
+        }
+      }
       options.onHelloOk?.();
       options.assertDispatchCurrent?.();
       if (options.method === "device.pair.setupStatus") {
@@ -787,6 +820,16 @@ describe("native command adapter", () => {
       expect(options.method).toBe("device.pair.setupCode");
       expect(simulatorReady).toBe(scenario !== "gateway-only");
       lifecycle.push("setup-code");
+      if (scenario === "setup-code-closed-after-dispatch") {
+        throw new GatewayTransportError({
+          kind: "closed",
+          message: "private setup response lost",
+          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+          code: 1006,
+          reason: "private response credential",
+          requestDispatched: true,
+        });
+      }
       if (scenario === "setup-code-timeout") {
         throw new Error("private fixture command failed", {
           cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
@@ -1332,6 +1375,44 @@ describe("native command adapter", () => {
         return;
       }
       const report = await runTrials("stock", native.dependencies);
+      if (scenario.includes("handshake-") || scenario.startsWith("setup-code-closed-")) {
+        const recovered = scenario.endsWith("-retry");
+        const exhausted = scenario === "setup-code-handshake-exhausted";
+        const cancelled = scenario === "setup-code-closed-cancelled";
+        const dispatched = scenario === "setup-code-closed-after-dispatch";
+        expect(setupCodeCalls).toBe(recovered ? 2 : exhausted ? 3 : 1);
+        expect(report.trials[0]?.status).toBe(recovered ? "passed" : "failed");
+        expect(report.trials[0]?.errors).toEqual(
+          recovered ? [] : [cancelled ? "cancelled" : "preparation-failed"],
+        );
+        expect(report.trials[0]?.tests).toHaveLength(recovered ? 2 : 0);
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        expect(proof.fixtures).toEqual([
+          expect.objectContaining({
+            cleanupConfirmed: true,
+            setupRpc: expect.objectContaining({
+              attempts: recovered ? 2 : exhausted ? 3 : 1,
+              authenticated: recovered || dispatched,
+              dispatchEntered: recovered || dispatched,
+              responseReceived: recovered,
+            }),
+          }),
+        ]);
+        if (!recovered) {
+          expect(report.trials[0]?.diagnostics[0]?.context).toEqual(
+            expect.arrayContaining([
+              "rpc-transport-kind:closed",
+              `rpc-close-code:${dispatched ? 1006 : 1008}`,
+              `rpc-close-reason:${exhausted || cancelled ? "invalid-handshake" : "withheld"}`,
+            ]),
+          );
+        }
+        expect(JSON.stringify({ proof, report, progressSnapshots })).not.toMatch(
+          /private|synthetic|OPENCLAW_E2E_|metadata/,
+        );
+        return;
+      }
       expect(JSON.stringify(proof)).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
       expect(progressSnapshots.length).toBeGreaterThan(0);
       expect(progressSnapshots.join("\n")).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
@@ -1454,6 +1535,8 @@ describe("native command adapter", () => {
                 context:
                   scenario === "setup-status-timeout"
                     ? [
+                        "rpc-attempts:1",
+                        "rpc-transport-kind:timeout",
                         "rpc-authenticated:true",
                         "rpc-dispatch-entered:true",
                         "rpc-request-dispatched:true",
@@ -1472,7 +1555,12 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             cleanupConfirmed: true,
-            setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupStatusRpc: {
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              attempts: 1,
+            },
           }),
         ]);
         return;
@@ -1587,7 +1675,12 @@ describe("native command adapter", () => {
                 ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
                 context:
                   scenario === "setup-code-rpc-timeout"
-                    ? ["rpc-authenticated:true", "rpc-dispatch-entered:true"]
+                    ? [
+                        "rpc-attempts:1",
+                        "rpc-transport-kind:timeout",
+                        "rpc-authenticated:true",
+                        "rpc-dispatch-entered:true",
+                      ]
                     : [],
               },
             ],
@@ -1597,7 +1690,12 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             trial: 1,
-            setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupRpc: {
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              attempts: 1,
+            },
           }),
         ]);
         expect(
@@ -1698,8 +1796,18 @@ describe("native command adapter", () => {
         expect.objectContaining({
           trial: 1,
           cleanupConfirmed: true,
-          setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
-          setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
+          setupStatusRpc: {
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            attempts: 1,
+          },
+          setupRpc: {
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            attempts: 1,
+          },
           providerMessages: [
             { stage: "first", received: true },
             { stage: "second", received: true },

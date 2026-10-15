@@ -599,36 +599,62 @@ export async function createNativeDependencies(options: {
                   authenticated: false,
                   dispatchEntered: false,
                   responseReceived: false,
+                  attempts: 0,
                 };
                 fixtureEvidence[operation === "setup-status" ? "setupStatusRpc" : "setupRpc"] =
                   rpcEvidence;
                 try {
                   requireLiveFixture();
-                  const result = await phase(operation, () =>
-                    callGateway<T>({
-                      config: {},
-                      configPath: readyInstance.configPath,
-                      url: readyInstance.url,
-                      token: readyInstance.gatewayToken,
-                      ignoreEnvUrlOverride: true,
-                      deviceIdentity: null,
-                      sharedStateMode: "read-only",
-                      method:
-                        operation === "setup-status"
-                          ? "device.pair.setupStatus"
-                          : "device.pair.setupCode",
-                      params,
-                      timeoutMs: 30_000,
-                      signal: fixtureSignal,
-                      onHelloOk: () => {
-                        rpcEvidence.authenticated = true;
-                      },
-                      assertDispatchCurrent: () => {
+                  const result = await phase(operation, async () => {
+                    for (;;) {
+                      rpcEvidence.attempts++;
+                      rpcEvidence.authenticated = false;
+                      rpcEvidence.dispatchEntered = false;
+                      try {
+                        return await callGateway<T>({
+                          config: {},
+                          configPath: readyInstance.configPath,
+                          url: readyInstance.url,
+                          token: readyInstance.gatewayToken,
+                          ignoreEnvUrlOverride: true,
+                          deviceIdentity: null,
+                          sharedStateMode: "read-only",
+                          method:
+                            operation === "setup-status"
+                              ? "device.pair.setupStatus"
+                              : "device.pair.setupCode",
+                          params,
+                          timeoutMs: 30_000,
+                          signal: fixtureSignal,
+                          onHelloOk: () => {
+                            rpcEvidence.authenticated = true;
+                          },
+                          assertDispatchCurrent: () => {
+                            requireLiveFixture();
+                            rpcEvidence.dispatchEntered = true;
+                          },
+                        });
+                      } catch (error) {
+                        // Cold Simulator boot can stall the handshake. Only reconnect when
+                        // the transport confirms setupCode was never sent; never replay it.
+                        if (
+                          operation !== "setup-code" ||
+                          rpcEvidence.attempts >= 3 ||
+                          fixtureSignal.aborted ||
+                          hasUnjoinedWork(error) ||
+                          !isGatewayTransportError(error) ||
+                          error.requestDispatched !== false ||
+                          rpcEvidence.dispatchEntered
+                        ) {
+                          throw error;
+                        }
                         requireLiveFixture();
-                        rpcEvidence.dispatchEntered = true;
-                      },
-                    }),
-                  );
+                        console.error(
+                          `iOS qualification: ${operation} attempt ${rpcEvidence.attempts} ${error.kind} before dispatch; retrying`,
+                        );
+                      }
+                    }
+                  });
                   rpcEvidence.responseReceived = true;
                   requireLiveFixture();
                   return result;
@@ -639,15 +665,28 @@ export async function createNativeDependencies(options: {
                   if (!options.signal.aborted) {
                     requireLiveFixture();
                   }
-                  if (isGatewayTransportError(error) && error.kind === "timeout") {
-                    const failure = new OperationError(operation, "timeout");
+                  if (isGatewayTransportError(error)) {
+                    const failure = new OperationError(
+                      operation,
+                      error.kind === "timeout" ? "timeout" : "failed",
+                    );
                     failure.diagnostic.context.push(
+                      `rpc-attempts:${rpcEvidence.attempts}`,
+                      `rpc-transport-kind:${error.kind}`,
                       `rpc-authenticated:${rpcEvidence.authenticated}`,
                       `rpc-dispatch-entered:${rpcEvidence.dispatchEntered}`,
                     );
                     if (typeof error.requestDispatched === "boolean") {
                       failure.diagnostic.context.push(
                         `rpc-request-dispatched:${error.requestDispatched}`,
+                      );
+                    }
+                    if (error.kind === "closed") {
+                      failure.diagnostic.context.push(
+                        `rpc-close-code:${error.code ?? "unknown"}`,
+                        // Close reasons can contain credentials; export only the fixed
+                        // preauth timeout marker used by the Gateway's connection owner.
+                        `rpc-close-reason:${error.reason === "invalid-handshake" ? error.reason : "withheld"}`,
                       );
                     }
                     throw failure;
