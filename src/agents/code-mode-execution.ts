@@ -715,6 +715,8 @@ export async function runWait(params: {
     });
   } catch (error) {
     const aborted = signal.aborted;
+    const code = aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const failurePhase = code === "invalid_input" ? "input" : "host";
     logCodeModeFailure(error, {
       sessionId: state.ctx.sessionId,
       sessionKey: state.ctx.sessionKey,
@@ -722,7 +724,7 @@ export async function runWait(params: {
       toolCallId: params.toolCallId,
       codeModeRunId: state.runId,
       workerId: state.bridgeDispatch.workerId,
-      failurePhase: "bridge",
+      failurePhase,
       bridgeDispatchStarted: state.bridgeDispatch.started,
     });
     await state.owner.close();
@@ -730,8 +732,8 @@ export async function runWait(params: {
     return state.output.takeResult(
       {
         status: "failed" as const,
-        code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
-        failurePhase: "bridge" as const,
+        code,
+        failurePhase,
         bridgeDispatchStarted: state.bridgeDispatch.started,
         replaySafe: state.replaySafe,
         telemetry: telemetry(state.runtime),

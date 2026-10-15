@@ -7,9 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as diagnostics from "../logging/code-mode-diagnostic.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { execSchema } from "./bash-tools.schemas.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
+  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -173,31 +175,43 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
 });
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
-  it("records a new settlement failure after a successful tool without replay", async () => {
-    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
-    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
-    const target = pluginToolWithExecute("phase_fixture", "Settlement fixture", async () =>
-      jsonResult({ ok: true }),
-    );
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
-    const details = resultDetails(
-      await expectDefined(tools[0], "exec").execute("settlement-failure", {
-        awaitResults: true,
-        code: "await phase_fixture({}); await yield_control();",
-      }),
-    );
-    expect(details).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      failurePhase: "input",
-      replaySafe: false,
-    });
-    expect(target.execute).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledExactlyOnceWith(
-      expect.any(ToolInputError),
-      expect.objectContaining({ failurePhase: "input", bridgeDispatchStarted: true }),
-    );
-  });
+  it.each([false, true])(
+    "records a new settlement failure without replay (parked: %s)",
+    async (parked) => {
+      const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+      const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+      const target = fakeTool("exec", "Settlement fixture");
+      target.parameters = execSchema;
+      target.execute = vi.fn(async () => jsonResult({ ok: true }));
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+      let details = resultDetails(
+        await expectDefined(tools[0], "exec").execute("settlement-failure", {
+          awaitResults: !parked,
+          code: `${parked ? "await yield_control();" : ""}
+          await exec({ command: "fixture", awaitResults: true }); await yield_control();`,
+        }),
+      );
+      if (parked) {
+        expect(details).toMatchObject({ status: "waiting" });
+        details = resultDetails(
+          await expectDefined(tools[1], "wait").execute("settlement-failure-wait", {
+            runId: details.runId,
+          }),
+        );
+      }
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "invalid_input",
+        failurePhase: "input",
+        replaySafe: false,
+      });
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        expect.any(ToolInputError),
+        expect.objectContaining({ failurePhase: "input", bridgeDispatchStarted: true }),
+      );
+    },
+  );
 
   it("returns a bad patch anchor as invalid_input without replaying or changing the file", async () => {
     const cwd = await fs.realpath(tempDirs.make("code-mode-patch-failure-"));
