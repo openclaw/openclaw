@@ -31,6 +31,7 @@ import {
   parseUnionSeg,
   quoteSeg,
   resolvePositionalSeg,
+  splitOcPathSlots,
   splitRespectingBrackets,
   unquoteSeg,
 } from "./oc-path.js";
@@ -81,7 +82,9 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
     const key = JSON.stringify(
       flatPaths
         ? slotSubs.map(({ value }) => unquoteSeg(value))
-        : [path.section, path.item, path.field],
+        : ast.kind === "jsonl"
+          ? [path.section, splitOcPathSlots(path.item, path.field)]
+          : [path.section, path.item, path.field],
     );
     if (!seen.has(key)) {
       seen.add(key);

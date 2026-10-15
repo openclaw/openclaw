@@ -214,20 +214,32 @@ describe("recursive wildcard targets", () => {
     }
   });
 
-  it("keeps repeated recursive wildcards within the small-tree CPU budget", () => {
+  it("bounds AST expansion for repeated recursive wildcards", () => {
+    const depth = 10;
     let value: unknown = 1;
-    for (let depth = 9; depth >= 0; depth--) {
-      value = { ["k" + depth]: value };
+    for (let level = depth - 1; level >= 0; level--) {
+      value = { ["k" + level]: value };
     }
     const ast = parseJsonc(JSON.stringify(value)).ast;
-    const pattern = parseOcPath("oc://f.json/" + Array(10).fill("**").join("."));
-    const start = process.threadCpuUsage();
-    const out = findOcPaths(ast, pattern);
-    const { user, system } = process.threadCpuUsage(start);
+    const pattern = parseOcPath("oc://f.json/" + Array(depth).fill("**").join("."));
+    const maxEntryReads = 100 * (depth + 1) * depth;
+    let entryReads = 0;
+    for (let node = ast.root; node?.kind === "object";) {
+      const entries = node.entries;
+      Object.defineProperty(node, "entries", {
+        get() {
+          if (++entryReads > maxEntryReads) {
+            throw new Error("Recursive wildcard exceeded the AST expansion budget");
+          }
+          return entries;
+        },
+      });
+      node = entries[0]?.value ?? null;
+    }
 
-    expect(out).toHaveLength(11);
+    const out = findOcPaths(ast, pattern);
+    expect(out).toHaveLength(depth + 1);
     expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
-    expect((user + system) / 1000).toBeLessThan(100 * (process.env.CI ? 4 : 1));
   });
 });
 
@@ -235,6 +247,55 @@ describe("findOcPaths — JSONL", () => {
   const ast = parseJsonl(
     '{"event":"start","userId":"u1"}\n{"event":"action","userId":"u1"}\n{"event":"end","userId":"u1"}\n',
   ).ast;
+
+  it("returns each value target once while retaining physical line addresses", () => {
+    const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n').ast;
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/*/**/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://session/L1",
+      "oc://session/L1/a",
+      "oc://session/L1/a.b",
+      'oc://session/L1/"a.b"',
+      "oc://session/L3",
+      "oc://session/L3/a",
+      "oc://session/L3/a.b",
+      'oc://session/L3/"a.b"',
+    ]);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual([
+      "1",
+      "2",
+      "1",
+      "2",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("deduplicates quoted aliases within a line", () => {
+    const lineAst = parseJsonl('{"a":{"b":1}}\n').ast;
+    for (const { union, paths } of [
+      { union: '{a,"a"}', paths: ["oc://session/L1/a", "oc://session/L1/a/b"] },
+      { union: '{"a",a}', paths: ['oc://session/L1/"a"', 'oc://session/L1/"a"/b'] },
+    ]) {
+      const out = findOcPaths(lineAst, parseOcPath("oc://session/L1/" + union + "/**"));
+      expect(out.map(({ path }) => formatOcPath(path))).toEqual(paths);
+      expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+      for (const { path, match } of out) {
+        expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+      }
+    }
+  });
+
+  it("keeps valid line addresses after recursive zero-width routes", () => {
+    const lineAst = parseJsonl('{"nest":{"event":"x"}}\n').ast;
+    const out = findOcPaths(lineAst, parseOcPath("oc://session/**/**/event"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual(["oc://session/L1/nest/event"]);
+    expect(leafValues(out)).toEqual(["x"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
 
   it("enumerates value lines with concrete line addresses", () => {
     const out = findOcPaths(ast, parseOcPath("oc://session/*/event"));
