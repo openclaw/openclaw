@@ -101,6 +101,41 @@ describe("authenticated Gateway RPC diagnostics", () => {
   it.each([
     {
       clientKind: "openclaw-control-ui",
+      params: { sessionKey: "private-session", agentId: "private-agent", compact: true },
+      shape: { scope: "session", compact: true, page: "first" },
+    },
+    {
+      clientKind: "openclaw-macos",
+      params: { agentId: "private-agent", offset: 50 },
+      shape: { scope: "agent", compact: false, page: "append" },
+    },
+    {
+      clientKind: "gateway-client",
+      params: { compact: "private-invalid", offset: "private-invalid", query: "private-query" },
+      shape: { scope: "global", compact: false, page: "first" },
+    },
+  ])("attributes cron list receipt without private values ($clientKind)", async (query) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "cron.list");
+    const client = createOperatorWsClient({
+      clientInfo: { id: query.clientKind, mode: "backend" },
+    });
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "cron.list", params: query.params },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.filter((event) => event.phase === "received")).toEqual([
+      expect.objectContaining({
+        method: "cron.list",
+        cronList: { clientKind: query.clientKind, source: "wire", ...query.shape },
+      }),
+    ]);
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
+  it.each([
+    {
+      clientKind: "openclaw-control-ui",
       params: { view: "configured", agentId: "private-agent", preparedOnly: true },
       shape: { view: "configured", scope: "agent", preparedOnly: true, refresh: false },
     },

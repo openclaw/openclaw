@@ -61,11 +61,34 @@ describe("diagnostics-prometheus service", () => {
         ...sessions,
         sessionsList: { ...sessions.sessionsList, source: "internal" },
       });
+      const cron = {
+        type: "gateway.rpc",
+        method: "cron.list",
+        phase: "received",
+        cronList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          scope: "session",
+          compact: true,
+          page: "first",
+        },
+      } as const;
+      metrics.record(cron);
+      metrics.record(cron);
+      metrics.record(cron, untrusted);
+      metrics.record({ ...cron, cronList: { ...cron.cronList, source: "internal" } });
       metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
       const rendered = metrics.render();
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="models.list"} 3\n');
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 1\n');
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="cron.list"} 3\n');
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1\n',
+      );
       expect(rendered).toContain(
         'openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2\n',
       );
