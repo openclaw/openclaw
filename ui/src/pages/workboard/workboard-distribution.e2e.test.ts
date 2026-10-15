@@ -84,7 +84,9 @@ suite.define(() => {
       const url = new URL("workboard/ops", suite.server.baseUrl);
       url.hostname = "ui.example";
       url.hash = new URLSearchParams({ gatewayUrl }).toString();
-      await page.goto(url.href);
+      const response = await page.goto(url.href);
+      expect(response?.status()).toBe(200);
+      expect(errors).toEqual([]);
       await page.getByRole("button", { name: "Switch to gateway.example", exact: true }).click();
       await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);

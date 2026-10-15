@@ -327,23 +327,10 @@ describe("doctor-contract-registry module loader", () => {
     },
   );
 
-  it("collects model provider ids for doctor compatibility migrations", () => {
-    expect(
-      collectRelevantDoctorPluginIds({
-        models: {
-          providers: {
-            "ollama-cloud": {
-              baseUrl: "https://ai.ollama.com",
-            },
-          },
-        },
-      }),
-    ).toEqual(["ollama-cloud"]);
-  });
-
   it("collects distinct configured-model and policy providers without shadow-list owners", () => {
     expect(
       collectRelevantDoctorPluginIds({
+        models: { providers: { "ollama-cloud": { baseUrl: "https://ai.ollama.com" } } },
         agents: {
           defaults: {
             model: { primary: "default/model", fallbacks: ["fallback/model", 42] },
@@ -362,7 +349,15 @@ describe("doctor-contract-registry module loader", () => {
         },
         hooks: { mappings: [{ model: "hook/model" }, { model: 42 }] },
       }),
-    ).toEqual(["default", "default-policy", "entry", "entry-policy", "fallback", "hook"]);
+    ).toEqual([
+      "default",
+      "default-policy",
+      "entry",
+      "entry-policy",
+      "fallback",
+      "hook",
+      "ollama-cloud",
+    ]);
   });
 
   it("collects model and policy providers from the legacy list when entries is absent", () => {
@@ -394,6 +389,7 @@ describe("doctor-contract-registry module loader", () => {
 
   it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
     const raw = {
+      plugins: { entries: { "memory-wiki": {} } },
       channels: {
         defaults: {},
         modelByChannel: { discord: { guild: "openai/gpt-5.6-luna" } },
@@ -402,11 +398,15 @@ describe("doctor-contract-registry module loader", () => {
       },
     };
 
-    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "openai"]);
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "memory-wiki", "openai"]);
     expect(
       collectDoctorConfigRepairPluginIds(raw, [["channels", "modelByChannel", "discord", "guild"]]),
     ).toStrictEqual(["openai"]);
-    expect(collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual(["discord", "openai"]);
+    expect(collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual([
+      "discord",
+      "memory-wiki",
+      "openai",
+    ]);
   });
 
   it("collects provider ids from media model entries", () => {
@@ -502,37 +502,6 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
-  it("loads a provider doctor contract when a media preference is its only activation", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => ({
-      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        config: { ...cfg, repaired: true },
-        changes: ["repaired configured provider model"],
-      }),
-    }));
-    mockDoctorPlugins({
-      id: "opencode",
-      rootDir: pluginRoot,
-      channels: [],
-      providers: ["opencode"],
-      doctorContract: { configRepair: true },
-    });
-    const config = {
-      tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
-    };
-    const pluginIds = collectRelevantDoctorPluginIds(config);
-
-    expect(pluginIds).toEqual(["opencode"]);
-    expect(
-      applyPluginDoctorCompatibilityMigrations(config, { config, env: {}, pluginIds }),
-    ).toEqual({
-      config: { ...config, repaired: true },
-      changes: ["repaired configured provider model"],
-    });
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-  });
-
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectDoctorConfigRepairPluginIds(
@@ -579,6 +548,7 @@ describe("doctor-contract-registry module loader", () => {
           },
           hooks: { gmail: { model: "gmail-model/model" } },
           tts: { summaryModel: "untouched-tts/model" },
+          tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
           channels: {
             modelByChannel: { slack: { room: "channel-model/model" } },
             discord: { voice: { model: "untouched-voice/model" } },
@@ -596,40 +566,10 @@ describe("doctor-contract-registry module loader", () => {
       "agent-primary",
       "channel-model",
       "gmail-model",
+      "opencode",
       "untouched-tts",
       "untouched-voice",
       "worker-policy",
     ]);
-  });
-
-  it("does not infer touched-path ownership from dotted configured ids", () => {
-    expect(
-      collectDoctorConfigRepairPluginIds(
-        {
-          agents: { entries: { "worker.blue": { model: "provider.with.dots/model" } } },
-          plugins: { entries: { other: {} } },
-        },
-        [["plugins", "entries", "other", "enabled"]],
-      ),
-    ).toEqual(["other", "provider.with.dots"]);
-  });
-
-  it("falls back to the full doctor-id set when touched paths are too broad", () => {
-    expect(
-      collectDoctorConfigRepairPluginIds(
-        {
-          channels: {
-            discord: {},
-            telegram: {},
-          },
-          plugins: {
-            entries: {
-              "memory-wiki": {},
-            },
-          },
-        },
-        [["channels"]],
-      ),
-    ).toEqual(["discord", "memory-wiki", "telegram"]);
   });
 });

@@ -8,21 +8,112 @@ import {
   validateToolsGitHubStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  GitHubIdentityError,
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
   resolveConfiguredGitHubToolIdentity,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
+import { gitHubPublicApi } from "../github-public-api.js";
+import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 export const toolsGitHubHandlers: GatewayRequestHandlers = {
+  "tools.github.read": async (options) => {
+    const { params, respond, context, client } = options;
+    const target = gitHubPublicApi.parseGitHubTarget(params);
+    if (
+      !target ||
+      params.agentId !== undefined ||
+      params.sessionKey !== undefined ||
+      (params.refresh !== undefined && typeof params.refresh !== "boolean")
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid tools.github.read params"),
+      );
+      return;
+    }
+    const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
+    const assertCaller = caller && captureGatewayToolCallerAssertion();
+    const assertToolAllowed = caller?.assertToolAllowed;
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const registry = scope?.pluginRegistry;
+    const record = registry?.plugins.find((plugin) => plugin.id === "github");
+    const pluginCurrent =
+      registry &&
+      record &&
+      capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
+    if (
+      !caller ||
+      !assertCaller ||
+      !assertToolAllowed ||
+      client?.internal?.pluginRuntimeOwnerId !== "github" ||
+      !pluginCurrent
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "GitHub reading requires an active github_read tool invocation.",
+        ),
+      );
+      return;
+    }
+    const signals = [
+      options.signal,
+      getAsyncWorkSignal(),
+      ...(caller.approvalSignals ?? []),
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
+    const signal = AbortSignal.any(signals);
+    const assertActive = () => {
+      assertCaller();
+      assertToolAllowed("github_read");
+      options.sessionMutationCommitGuard?.();
+      signal.throwIfAborted();
+      if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
+        throw new Error("GitHub read authority is no longer active.");
+      }
+    };
+    try {
+      const { identity, assertSelected } = await prepareGitHubReaderIdentity(
+        context,
+        caller.agentId,
+        assertActive,
+      );
+      const document = await gitHubPublicApi.loadGitHubDetail(
+        target,
+        identity,
+        undefined,
+        params.refresh === true,
+        { assertActive: assertSelected, signal },
+      );
+      assertSelected();
+      respond(true, document, undefined);
+    } catch (error) {
+      const { message, ...details } =
+        error instanceof GitHubIdentityError
+          ? { message: error.message, retryable: error.reason !== "unavailable" }
+          : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    }
+  },
   "tools.github.status": defineValidatedGatewayHandler(
     "tools.github.status",
     validateToolsGitHubStatusParams,

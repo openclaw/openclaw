@@ -24,7 +24,11 @@ type StepProps = {
 function Message(props: StepProps) {
   return (
     <Show when={props.step.message}>
-      <div class="wizard-step__message">{formatUiExternalText(props.step.message!)}</div>
+      <div class="wizard-step__message">
+        <For each={formatUiExternalText(props.step.message!).split("\n\n")} keyed={false}>
+          {(paragraph, index) => <p class={index === 0 ? undefined : "muted"}>{paragraph()}</p>}
+        </For>
+      </div>
     </Show>
   );
 }
@@ -55,6 +59,7 @@ function SignIn(props: { step: WizardStep }) {
           <Show when={props.step.externalUrl}>
             <a
               class="btn primary wizard-step__external-link"
+              autofocus
               data-link-reader-external
               href={props.step.externalUrl}
               target="_blank"
@@ -75,8 +80,9 @@ function SignIn(props: { step: WizardStep }) {
             )}
           </Show>
         </div>
-        <div class="muted" role="status" aria-live="polite">
-          {t("modelSetup.wizard.waiting")}
+        <div class="wizard-step__waiting muted" role="status" aria-live="polite" aria-busy="true">
+          <span class="wizard-step__spinner" aria-hidden="true" />
+          {props.step.progressMessage ?? t("modelSetup.waitingForApproval")}
         </div>
         <Show when={code()?.expiresInMinutes}>
           <div class="muted">
@@ -96,6 +102,7 @@ function Answer(props: StepProps & { label: string; onClick?: () => void }) {
     <button
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
+      autofocus
       disabled={props.busy}
       onClick={() => props.onClick?.()}
     >
@@ -193,16 +200,21 @@ function SingleChoice(props: StepProps & { options: WizardStepOption[] }) {
   return (
     <Show when={props.options.length <= 2} fallback={<Picker params={params()} />}>
       <div
-        class="wizard-step__actions"
+        class={[
+          "wizard-step__actions",
+          { "wizard-step__actions--split": Boolean(props.leadingAction) },
+        ]}
         role="group"
         aria-label={label()}
         aria-describedby={props.validationErrorId}
       >
+        {props.leadingAction}
         <For each={props.options} keyed={false}>
           {(option, index) => (
             <button
               type="button"
               class={index === 0 ? "btn primary" : "btn"}
+              autofocus={index === 0}
               disabled={props.busy}
               onClick={() => props.onAnswer(option().value)}
             >
@@ -266,7 +278,7 @@ function OptionsStep(props: StepProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            <Show when={props.leadingAction}>
+            <Show when={options().length > 2 && props.leadingAction}>
               <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
                 {props.leadingAction}
               </openclaw-modal-actions>
