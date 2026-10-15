@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
@@ -106,11 +107,17 @@ export class SessionOwnerFilterController implements ReactiveController {
     return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
   }
 
-  observeOwnerFacet(agentId: string, visibility: { filters: boolean } | undefined): void {
+  observeOwnerFacet(agentId: string, owners: SessionsListResult["owners"]): void {
     this.restore();
     // Pending replacement rows must not reverse the query their owner inventory selected.
-    if (visibility !== undefined) {
-      this.ownerFacet = { agentId, multiple: visibility.filters };
+    if (owners !== undefined) {
+      // Participants in filtered rows govern attribution UI, not query membership.
+      // The complete owner facet stays authoritative when those rows disappear.
+      const selfUserId = this.selfUserId;
+      this.ownerFacet = {
+        agentId,
+        multiple: owners.some((owner) => owner.type !== "human" || owner.id !== selfUserId),
+      };
     }
   }
 

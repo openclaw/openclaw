@@ -205,6 +205,7 @@ data class GatewayErrorDetails(
   val clawhubWarning: String? = null,
   val missingScope: String? = null,
   val requiredScopes: List<String> = emptyList(),
+  val retryAfterMs: Int? = null,
 )
 
 data class GatewayMissingScopeErrorDetails(
@@ -917,7 +918,28 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long,
     withEnqueue: (() -> Unit) -> Unit = { it() },
-  ): RpcResult = conn.request(method, parseRequestParams(paramsJson), timeoutMs, guardRequestEnqueue(conn, withEnqueue))
+  ): RpcResult {
+    val params = parseRequestParams(paramsJson)
+    val enqueue = guardRequestEnqueue(conn, withEnqueue)
+    if (method != "talk.catalog") return conn.request(method, params, timeoutMs, enqueue)
+    var remainingMs = minOf(timeoutMs, 10_000)
+    val deadline = SystemClock.elapsedRealtime() + remainingMs
+    while (true) {
+      val result = conn.request(method, params, remainingMs, enqueue)
+      val error = result.error
+      if (
+        result.ok || error?.code != "UNAVAILABLE" || error.details?.retryable != true ||
+        error.details.reason != "talk-catalog-warming"
+      ) {
+        return result
+      }
+      val retryDelayMs = (error.details.retryAfterMs ?: 250).coerceAtLeast(250).toLong()
+      if (SystemClock.elapsedRealtime() + retryDelayMs >= deadline) return result
+      delay(retryDelayMs)
+      remainingMs = deadline - SystemClock.elapsedRealtime()
+      if (remainingMs <= 0) return result
+    }
+  }
 
   private fun parseRequestParams(paramsJson: String?): JsonElement? = paramsJson?.takeUnless(String::isBlank)?.let(json::parseToJsonElement)
 
@@ -1945,6 +1967,7 @@ class GatewaySession(
                 reason = it["reason"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
+                retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),

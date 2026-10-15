@@ -268,6 +268,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     Supported values: `auto`, `default`, `flex`, `priority`, `ultrafast`.
     Availability depends on the selected provider route, account, and model.
+    `serviceTier` and `service_tier` set an inherited default, not a lock.
+    A session or per-message speed selection takes precedence: Standard sends
+    `default`, Fast sends `priority`, and Ultrafast sends `ultrafast` when supported.
+    Without a speed override, configured tiers such as `flex` and `auto` remain
+    unchanged. `/fast default` clears the session override.
+
+    Speed controls remain editable while a response runs. Changes apply to later
+    requests; they do not interrupt or rewrite a request already in flight.
 
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
