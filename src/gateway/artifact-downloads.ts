@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import {
   assertArtifactDownloadGrantCurrent,
   getArtifactDownloadGrant,
+  retainArtifactDownloadStream,
 } from "./artifact-download-grants.js";
 import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -49,6 +51,8 @@ export async function handleArtifactDownloadHttpRequest(
     respondNotFound(res);
     return true;
   }
+  let assertGrantCurrent = () =>
+    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   const assertCurrent = () => {
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);
@@ -59,7 +63,7 @@ export async function handleArtifactDownloadHttpRequest(
     ) {
       throw new Error("Artifact download belongs to another ingress grant");
     }
-    assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
+    assertGrantCurrent();
   };
   let prepared: ArtifactDownloadResponse | undefined;
   const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
@@ -122,6 +126,34 @@ export async function handleArtifactDownloadHttpRequest(
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("cache-control", "private, no-store");
   writeByteHeaders(res, response);
-  res.end(body);
+  if (prepared.stream) {
+    const stream = prepared.stream;
+    let retained: ReturnType<typeof retainArtifactDownloadStream> | undefined;
+    try {
+      retained = retainArtifactDownloadStream(opts.clients, client, ticket, grant);
+      assertGrantCurrent = retained.assertCurrent;
+      await pipeline(
+        async function* (options) {
+          // pipeline supplies its cancellation signal to function sources.
+          const signal = options!.signal!;
+          for await (const chunk of stream(signal)) {
+            signal.throwIfAborted();
+            assertCurrent();
+            yield chunk;
+          }
+        },
+        res,
+        { signal: client.connectionSignal },
+      );
+    } catch {
+      // Headers may already be delivered. A truncated transfer must fail, not
+      // acquire a successful end marker or a second HTTP response.
+      res.destroy();
+    } finally {
+      retained?.release();
+    }
+  } else {
+    res.end(body);
+  }
   return true;
 }

@@ -206,6 +206,8 @@ Native dependency policy:
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
+      The shared preload registers the jsdom adapter without importing its DOM
+      bindings; those initialize when a jsdom environment starts.
     - Provider plugin shards reuse workers with the shared cleanup runner.
       Track global replacements with `vi.stubGlobal` so cleanup can restore them
       before the next file.

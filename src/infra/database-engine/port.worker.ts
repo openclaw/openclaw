@@ -472,7 +472,10 @@ export async function inspectDatabasePort(
 }
 
 /** One capability contract for dry-run evidence and the actual copy session. */
-export async function readPostgresPortCapabilities(db: Client, descriptor: PortDescriptor) {
+export async function readPostgresPortCapabilities(
+  db: Client,
+  descriptor: Pick<PortDescriptor, "minimumPostgresVersion">,
+) {
   const server = (
     await db.query<{ version: number; encoding: string; client_encoding: string }>(
       "SELECT current_setting('server_version_num')::int AS version, current_setting('server_encoding') AS encoding, current_setting('client_encoding') AS client_encoding",

@@ -275,6 +275,17 @@ export const SessionsFilesGetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+/** Original bytes use a connection-bound HTTP grant, independent of preview limits. */
+export const SessionsFilesDownloadParamsSchema = closedObject(
+  SessionsFilesGetParamsSchema.properties,
+);
+export const SessionsFilesDownloadResultSchema = closedObject({
+  filename: NonEmptyString,
+  mimeType: NonEmptyString,
+  url: NonEmptyString,
+  expiresAt: NonEmptyString,
+});
+
 export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
 export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
 export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
@@ -799,6 +810,8 @@ export type SessionFileBrowserResult = Static<typeof SessionFileBrowserResultSch
 export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchema>;
 export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
 export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>;
+export type SessionsFilesDownloadParams = Static<typeof SessionsFilesDownloadParamsSchema>;
+export type SessionsFilesDownloadResult = Static<typeof SessionsFilesDownloadResultSchema>;
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
 export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;

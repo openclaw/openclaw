@@ -174,7 +174,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     },
     close(): Promise<number> {
       member.stopping = true;
-      if (owned.members.size === 0) {
+      if (owned.members.size === 0 || (owned.members.size === 1 && owned.members.has(member))) {
         return stopCarrier();
       }
       if (owned.members.has(member)) {

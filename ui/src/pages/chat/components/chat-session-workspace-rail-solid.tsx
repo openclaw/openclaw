@@ -10,6 +10,7 @@ import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type {
   SessionWorkspaceFilter,
   SessionWorkspaceProps,
@@ -45,6 +46,7 @@ function RailRow(props: {
   directory?: boolean;
   path?: string;
   hideActions?: boolean;
+  download?: JSX.Element;
 }) {
   return (
     <div
@@ -106,6 +108,7 @@ function RailRow(props: {
               <Icon name="eye" />
             </button>
           </openclaw-tooltip>
+          {props.download}
           <Show when={props.path !== undefined}>
             <span
               ref={(element) =>
@@ -245,6 +248,22 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
             badge={file().missing ? t("chat.workspaceFiles.missing") : undefined}
             onOpen={() => props.workspace.onOpenFile(file().path, "session")}
             path={file().path}
+            download={
+              <Show when={props.workspace.onDownloadFile}>
+                {(download) => (
+                  <FileDownloadButton
+                    scopeKey={[
+                      props.workspace.sessionKey,
+                      file().path,
+                      props.workspace.connectionEpoch,
+                    ].join("\0")}
+                    download={(signal) => download()(file().path, "session", signal)}
+                    disabled={file().missing}
+                    class="chat-workspace-rail__row-action"
+                  />
+                )}
+              </Show>
+            }
           />
         )}
       </For>
@@ -418,6 +437,23 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
                           onOpen={onOpen}
                           path={entry().path}
                           hideActions={directory()}
+                          download={
+                            <Show when={!directory() && props.workspace.onDownloadFile}>
+                              {(download) => (
+                                <FileDownloadButton
+                                  scopeKey={[
+                                    props.workspace.sessionKey,
+                                    entry().path,
+                                    props.workspace.connectionEpoch,
+                                  ].join("\0")}
+                                  download={(signal) =>
+                                    download()(entry().path, "workspace", signal)
+                                  }
+                                  class="chat-workspace-rail__row-action"
+                                />
+                              )}
+                            </Show>
+                          }
                         />
                       );
                     }}

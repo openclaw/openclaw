@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
+import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
@@ -89,6 +90,7 @@ type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
   | "setup-descriptor-cli-backend-runtime-undeclared"
+  | "setup-cli-backend-missing-model-provider"
   | "setup-entry-load-failed"
   | "setup-registration-failed";
 
@@ -535,6 +537,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
+    const recordDiagnostics: PluginSetupRegistryDiagnostic[] = [];
     const api = buildPluginApi({
       id: record.id,
       name: record.name ?? record.id,
@@ -560,6 +563,14 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
           if (cliBackends.has(key) || recordCliBackends.has(key)) {
             return;
           }
+          warnOnMissingCliBackendModelProvider(backend, (message) => {
+            recordDiagnostics.push({
+              pluginId: record.id,
+              code: "setup-cli-backend-missing-model-provider",
+              runtimeId: backend.id,
+              message,
+            });
+          });
           recordCliBackends.set(key, { pluginId: record.id, backend });
         },
         registerConfigMigration(migrate) {
@@ -607,6 +618,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       });
       continue;
     }
+    diagnostics.push(...recordDiagnostics);
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
     for (const [key, entry] of recordProviders) {

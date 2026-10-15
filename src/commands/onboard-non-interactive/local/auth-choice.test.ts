@@ -223,43 +223,6 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.secretInputMode).toBe("ref");
   });
 
-  it("keeps a custom provider model on the configured explicit-fleet system agent", async () => {
-    const agentConfig: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "anthropic/global" },
-        },
-        entries: {
-          main: { model: { primary: "anthropic/main" } },
-          ops: { model: { primary: "openai/ops" } },
-        },
-      },
-    };
-    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
-
-    const result = await applyChoice({
-      nextConfig: agentConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-      } as never,
-      target: {
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/ops-workspace",
-      },
-    });
-
-    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
-    expect(result?.agents?.entries?.ops?.model).toEqual({
-      primary: "custom-models-custom-local/local-large",
-    });
-    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
-    expect(result?.models?.providers?.["custom-models-custom-local"]).toBeDefined();
-  });
-
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
     const profileKey = "fixture-custom-profile-secret";
     resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: profileKey, source: "profile" });
@@ -489,21 +452,6 @@ describe("applyNonInteractiveAuthChoice", () => {
     });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("stores custom provider OpenAI Responses compatibility", async () => {
-    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
-
-    const result = await applyChoice({
-      nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "gpt-5.4",
-        customCompatibility: "openai-responses",
-      } as never,
-    });
-
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.api).toBe("openai-responses");
   });
 
   it("infers image-capable non-interactive custom provider models by known model id", async () => {

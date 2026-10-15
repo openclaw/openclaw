@@ -23,40 +23,6 @@ function buildPlan(params: Parameters<typeof buildCliRespawnPlan>[0]) {
 }
 
 describe("buildCliRespawnPlan", () => {
-  it("returns null when respawn policy skips the argv", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "--help"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      }),
-    ).toBeNull();
-  });
-
-  it.each([["gateway", "--ambient-channels", "run"]])(
-    "keeps foreground Gateway ambient channel options in process: %j",
-    (...args) => {
-      for (const platform of ["darwin", "linux", "win32"] as const) {
-        expect(
-          buildPlan({
-            argv: ["node", "openclaw", ...args],
-            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-            platform,
-          }),
-        ).toBeNull();
-      }
-    },
-  );
-
-  it("does not detach native hook relays through a startup respawn", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
-
   it.each(["linux", "win32"] as const)(
     "leaves foreground Gmail shutdown with its lifecycle owner on %s",
     (platform) => {

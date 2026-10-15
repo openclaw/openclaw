@@ -291,6 +291,26 @@ it("renders the saved chip identity before agent discovery without reviving anot
   expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
 });
 
+it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
+  const { host, container } = createHost();
+  host.restoreSidebarSnapshot(emptySnapshot);
+  const update = mountObservedHost(host, container, renderSidebarAgentCard);
+  const name = () => container.querySelector(".sidebar-agent-card__name-text");
+  const original = name();
+  expect(original?.textContent).toBe("Harbor");
+
+  update();
+  expect(name()).toBe(original);
+
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    brand: { ...emptySnapshot.brand, name: "Harbor renamed" },
+  });
+  update();
+  expect(name()).toBe(original);
+  expect(name()?.textContent).toBe("Harbor renamed");
+});
+
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {
   const { host, container } = createHost();
   host.sidebarAgentsMode = "chip";
