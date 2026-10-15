@@ -1865,8 +1865,10 @@ reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
 Worker transport already detaches these internal postimages. Settlement and
-replica installation share them without another deep freeze or copy; internal
-borrowers treat snapshots and receipts as read-only and copy before editing.
+replica installation share them without another copy. Installation freezes the
+entry facts exposed to shared readers; the complete transcript graph is not
+deep-frozen. Internal borrowers treat snapshots and receipts as read-only and
+copy before editing.
 Replica residency uses an approximate heap budget based on string lengths and
 object/slot overhead, without serializing postimages or transcript bodies just
 to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
@@ -1916,8 +1918,7 @@ a cold miss loads the requested entries in one existing worker batch. Retained
 entry facts are frozen and shared, including selected prompt snapshots and sharing
 records. Mutable turn and workspace owners make shallow working copies when they
 adopt these facts; the public SDK detaches its mutable result at its own boundary.
-Complete
-entry commit receipts refresh the entry projection without claiming transcript,
+Complete entry commit receipts refresh the entry projection without claiming transcript,
 membership, or pending-input coverage. Missing ancillary facts still use the
 existing reader. Scoped receipt counters keep unrelated session writes from
 evicting resident entries, while a before/after write-token check preserves one

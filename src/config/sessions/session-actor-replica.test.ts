@@ -833,9 +833,9 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       ],
       "row-facts-reader",
     );
-    retainedEntry.label = "Reader edit after retention";
-    projection.hasBoard = true;
     const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry).toBe(retainedEntry);
+    expect(retained.projection).toBe(projection);
     expect(retained.entry?.label).toBeUndefined();
     expect(retained.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget)?.entry).toBe(retained.entry);

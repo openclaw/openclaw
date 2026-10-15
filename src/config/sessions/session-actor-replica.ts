@@ -278,7 +278,7 @@ function discard(cell: ReplicaCell): void {
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  cell.entry = entry;
+  cell.entry = freezeJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
@@ -295,6 +295,13 @@ function retainSnapshot(
   }
   const previousTranscript = cell.transcript;
   discard(cell);
+  // Freeze borrowed entry facts once per installed revision, not on every read.
+  freezeJsonSnapshot(state.target);
+  freezeJsonSnapshot(state.entry);
+  freezeJsonSnapshot(state.members);
+  freezeJsonSnapshot(state.participants);
+  Object.freeze(state.dependencySessionIds);
+  Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
   cell.bytes = estimateReplicaBytes(state);
@@ -415,11 +422,11 @@ export function readSessionActorEntryFacts(
   }
   const { cell, state, incarnation } = current;
   const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
-  return freezeJsonSnapshot({
-    target,
+  return Object.freeze({
+    target: state.target,
     entry:
       state.entry && snapshotFields !== "full"
-        ? attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields)
+        ? Object.freeze(attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields))
         : state.entry,
     members: state.members,
     participants: state.participants,
@@ -429,12 +436,14 @@ export function readSessionActorEntryFacts(
     snapshots:
       snapshotFields === "full"
         ? snapshots
-        : snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+        : Object.freeze(
+            snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+          ),
     projection: cell.snapshot
-      ? {
+      ? Object.freeze({
           hasBoard: cell.snapshot.hasBoard,
           activitySummaryWatermark: cell.snapshot.transcript.watermark,
-        }
+        })
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
@@ -575,16 +584,7 @@ export function retainSessionActorEntryFacts(
       }
     }
     cell.generation = incarnation;
-    // The private copy isolates mutable reader results; no borrowed reference escapes this owner.
-    retainEntry(
-      cell,
-      structuredClone({
-        ...facts,
-        target,
-        dependencySessionIds,
-        writeToken,
-      }),
-    );
+    retainEntry(cell, { ...facts, target, dependencySessionIds, writeToken });
   }
 }
 
