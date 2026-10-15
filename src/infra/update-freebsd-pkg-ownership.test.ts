@@ -155,6 +155,30 @@ describe("system package ownership", () => {
     });
   });
 
+  it("names an absent package manager executable instead of a database to restore", async () => {
+    const onWarning = vi.fn();
+    const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+      result("", {
+        code: null,
+        termination: "error",
+        error: Object.assign(new Error("spawn pacman ENOENT"), { code: "ENOENT" }),
+      }),
+    );
+    await withMockedPlatform("linux", async () => {
+      const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+      await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
+      await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
+    });
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("executable was not found"),
+    );
+    expect(onWarning.mock.calls[0]?.[0]).toContain(
+      "Continuing without verified system-package ownership",
+    );
+    expect(onWarning.mock.calls[0]?.[0]).not.toMatch(/Restore access to the active/u);
+  });
+
   it("does not continue an ancestor walk or reset the snapshot after a late ENOENT", async () => {
     const query = vi
       .spyOn(exec, "runCommandBuffered")

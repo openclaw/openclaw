@@ -61,14 +61,21 @@ export class SystemPackageOwnershipError extends UpdatePreMutationError {
       : "budgetMs" in diagnostic
         ? `${owner.label} inspection exhausted its shared ${diagnostic.budgetMs} ms budget during ${diagnostic.operation}. `
         : `${owner.label} inspection failed during ${diagnostic.operation}${code ? ` (${code})` : ""}. `;
+    // A launch ENOENT is not a database-access failure: the executable is absent, so
+    // name that condition instead of the storage recovery other failures need. The
+    // inspection still warns and continues, and confirmed ownership still refuses.
+    const unavailable =
+      source === "paths"
+        ? `${owner.label} paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying.`
+        : code === "ENOENT"
+          ? `The ${owner.label} executable was not found, so its package ownership could not be verified. Verify package ownership manually before replacing files.`
+          : `${owner.label} ownership could not be verified. Restore access to the active ${owner.manager} database and configuration, then retry.`;
     super(
       `${owner.manager}-${kind}`,
       prefix +
         (kind === "owned-install"
           ? `This installation contains files installed by ${owner.label}. ${owner.guidance}; openclaw update will not replace package-owned files.`
-          : source === "paths"
-            ? `${owner.label} paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying.`
-            : `${owner.label} ownership could not be verified. Restore access to the active ${owner.manager} database and configuration, then retry.`),
+          : unavailable),
     );
     this.owned = kind === "owned-install";
   }
