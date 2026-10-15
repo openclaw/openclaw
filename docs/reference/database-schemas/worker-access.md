@@ -671,6 +671,10 @@ Scheduled cron runs reuse the job loaded by their queue transaction when claimin
 and activating work. One conflict-safe receipt insert claims both the request ID
 and the active job slot through their unique indexes; only rejected requests read
 an existing receipt to report duplicates and repair consumed scheduled slots.
+Startup and clock-jump catch-up mutate the scheduler command's already-loaded
+jobs instead of rereading them for IDs and again for runtime mutation. Each new
+command loads current rows; catch-up preserves intervening in-process edits and
+persisted future retries. Execution authority is loaded at queue admission.
 The scheduler claims and activates due runs
 in one worker command using its loaded job postimages. Fresh claims persist the
 running state directly; capacity-limited runs retain their queued state and FIFO
