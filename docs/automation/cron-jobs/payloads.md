@@ -71,6 +71,15 @@ apps, native filesystem tools, and MCP access. Its captured runtime identity mus
 match, and current app permissions and approval policy still apply. Explicit finite tool
 lists retain their captured app limits.
 
+When authoring from a native Codex conversation, ordinary agent-turn jobs inherit
+tools. The `automations` tool rejects finite per-job lists for these turns because
+they disable the native shell, filesystem, and app surface. Updating instructions
+or a schedule should leave `toolsAllow` omitted. From the owning conversation,
+`toolsAllow: null` explicitly restores inherited selection under current owner and
+app authorization. Script payloads and condition triggers still use explicit lists;
+operators can configure deliberate restrictions through the CLI or Gateway API.
+Existing saved restrictions are not cleared by a content-only edit.
+
 Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
 That copy could miss tools the creator had, such as the native shell. Those jobs now run with
 their owner conversation's tools, like a `*` job; the stored copy is left as it is. Jobs whose

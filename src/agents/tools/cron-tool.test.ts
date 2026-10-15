@@ -16,6 +16,7 @@ import {
   revokeCronCreatorAuthorityRunScope,
 } from "../../gateway/cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
+import { captureFinalCodexCronCreatorToolAllowlist } from "../../plugin-sdk/codex-mcp-projection.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
@@ -25,6 +26,7 @@ import {
 } from "../cron-creator-authority-context.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createCronTool } from "./cron-tool.js";
+import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 describe("cron tool", () => {
@@ -115,6 +117,86 @@ describe("cron tool", () => {
       payload: { kind: "agentTurn" as const, message: "hello" },
     };
   }
+
+  async function createNativeCronTool() {
+    const creatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+    const creatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
+    await captureFinalCodexCronCreatorToolAllowlist(
+      creatorToolAllowlist,
+      creatorToolAllowlistCaptureRef,
+      [],
+      { nativeToolSurfaceEnabled: true },
+    );
+    return createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist,
+      creatorToolAllowlistCaptureRef,
+    });
+  }
+
+  it.each(
+    [
+      { label: "native names", toolsAllow: ["exec_command", "write_stdin", "gateway_exec"] },
+      { label: "canonical names", toolsAllow: ["read", "exec", "message"] },
+      { label: "empty selection", toolsAllow: [] },
+    ].flatMap((selection) =>
+      ["add", "update"].map((action) => ({
+        label: selection.label,
+        toolsAllow: selection.toolsAllow,
+        action,
+      })),
+    ),
+  )("does not save native agent-turn caps: $action with $label", async ({ action, toolsAllow }) => {
+    const tool = await createNativeCronTool();
+    callGatewayMock.mockResolvedValue({
+      id: "existing",
+      payload: { kind: "agentTurn", message: "Use the old review service", toolsAllow: ["*"] },
+    });
+    await expect(
+      tool.execute("native-write", {
+        action,
+        jobId: "existing",
+        job: {
+          ...(action === "add" ? buildReminderAgentTurnJob() : {}),
+          payload: { kind: "agentTurn", message: "Use the new review service", toolsAllow },
+        },
+      }),
+    ).rejects.toThrow("No changes were saved");
+    expect(callGatewayMock.mock.calls.map(([call]) => call.method)).toEqual(
+      action === "update" ? ["cron.get"] : [],
+    );
+
+    // Retrying just the requested content edit must not replace the working tool policy.
+    callGatewayMock.mockClear();
+    await tool.execute("content-update", {
+      action: "update",
+      jobId: "existing",
+      job: { payload: { kind: "agentTurn", message: "Use the new review service" } },
+    });
+    const writes = callGatewayMock.mock.calls.filter(([call]) => call.method === "cron.update");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.[0]).toHaveProperty("params.patch.payload", {
+      kind: "agentTurn",
+      message: "Use the new review service",
+    });
+  });
+
+  it.each([
+    { payload: { kind: "script", script: 'return "ok"', toolsAllow: ["read"] } },
+    {
+      payload: { kind: "agentTurn", message: "Report changes", toolsAllow: ["read"] },
+      trigger: { script: "return { fire: false }" },
+    },
+  ])("retains explicit native-conversation script selections: %j", async (job) => {
+    const tool = await createNativeCronTool();
+    await tool.execute("script-add", {
+      action: "add",
+      job: { ...buildReminderAgentTurnJob(), ...job },
+    });
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      payload: { toolsAllow: ["read"] },
+    });
+  });
 
   async function executeAddAndReadDelivery(params: {
     callId: string;

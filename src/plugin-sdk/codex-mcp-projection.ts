@@ -81,6 +81,7 @@ export async function captureFinalCodexCronCreatorToolAllowlist(
 ) {
   const { captureFinalEffectiveCronCreatorToolAllowlist: capture } =
     await import("../agents/tools/cron-tool.js");
+  captureRef.nativeToolsRequireInheritedSelection = options.nativeToolSurfaceEnabled === true;
   return capture(target, captureRef, tools, (tool) => getPluginToolMeta(tool), {
     canonicalToolNames: options.nativeToolSurfaceEnabled
       ? CODEX_NATIVE_CRON_CREATOR_AUTHORITY

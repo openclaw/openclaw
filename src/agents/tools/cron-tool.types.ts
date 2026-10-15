@@ -24,6 +24,8 @@ type CronToolsAllowCaptureProvenance = {
 
 export type CronToolsAllowCaptureRef = {
   value?: CronToolsAllowCaptureProvenance;
+  /** The harness exposes native tools as one surface, not a finite per-job selection. */
+  nativeToolsRequireInheritedSelection?: boolean;
 };
 
 export type CronCreatorToolAuthorityMaterialization = {

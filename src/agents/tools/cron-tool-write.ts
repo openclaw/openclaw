@@ -19,6 +19,33 @@ import type {
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
+/** Refuse a selection the native harness cannot execute instead of saving a broken job. */
+export function assertCronNativeToolSelection(
+  job: Record<string, unknown>,
+  captureRef?: CronToolsAllowCaptureRef,
+  currentJob?: CronJob,
+): void {
+  const payload = isRecord(job.payload) ? job.payload : undefined;
+  if (
+    !captureRef?.nativeToolsRequireInheritedSelection ||
+    !Array.isArray(payload?.toolsAllow) ||
+    payload.toolsAllow.includes("*")
+  ) {
+    return;
+  }
+  const kind = payload.kind ?? currentJob?.payload.kind;
+  const trigger = Object.hasOwn(job, "trigger") ? job.trigger : currentJob?.trigger;
+  if (
+    kind !== "agentTurn" ||
+    (isRecord(trigger) && typeof trigger.script === "string" && trigger.script.trim())
+  ) {
+    return;
+  }
+  throw new Error(
+    "Native scheduled agent turns require inherited tool selection; a finite toolsAllow list disables native shell, files, and apps. No changes were saved. For task-content edits, omit toolsAllow to preserve the existing policy. To restore inherited tools, set toolsAllow:null from the owning conversation. Deliberate per-job restrictions must be configured through the CLI or Gateway API.",
+  );
+}
+
 export async function resolveCronUpdateCreatorOptions(params: {
   adminManagement: boolean;
   options?: CronToolOptions;
@@ -27,6 +54,20 @@ export async function resolveCronUpdateCreatorOptions(params: {
   readCurrentJob: () => Promise<CronJob>;
 }): Promise<CronToolOptions | undefined> {
   const { options, patch } = params;
+  let currentJob: Promise<CronJob> | undefined;
+  const readCurrentJob = () => (currentJob ??= params.readCurrentJob());
+  if (
+    options?.creatorToolAllowlistCaptureRef?.nativeToolsRequireInheritedSelection &&
+    isRecord(patch.payload) &&
+    Array.isArray(patch.payload.toolsAllow) &&
+    !patch.payload.toolsAllow.includes("*")
+  ) {
+    assertCronNativeToolSelection(
+      patch,
+      options.creatorToolAllowlistCaptureRef,
+      await readCurrentJob(),
+    );
+  }
   if (!params.adminManagement) {
     return options;
   }
@@ -37,7 +78,7 @@ export async function resolveCronUpdateCreatorOptions(params: {
   ) {
     return undefined;
   }
-  const current = await params.readCurrentJob();
+  const current = await readCurrentJob();
   if (
     current.owner?.sessionKey === params.callerSessionKey &&
     normalizeAccountId(current.owner?.accountId) === normalizeAccountId(options.agentAccountId)
