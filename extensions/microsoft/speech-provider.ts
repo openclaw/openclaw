@@ -10,11 +10,11 @@ import type {
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import { removeUndefinedProperties } from "openclaw/plugin-sdk/speech-provider";
 import {
   asBoolean,
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
@@ -177,7 +177,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       return {
         ...base,
         enabled: true,
-        ...removeUndefinedProperties({
+        ...filterStringRecord({
           voice: trimToUndefined(talkProviderConfig.voiceId),
           lang: trimToUndefined(talkProviderConfig.languageCode),
           outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
@@ -185,15 +185,17 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
           rate: trimToUndefined(talkProviderConfig.rate),
           volume: trimToUndefined(talkProviderConfig.volume),
           proxy: trimToUndefined(talkProviderConfig.proxy),
-          timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs),
         }),
+        ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
+          ? {}
+          : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
     resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
+      filterStringRecord({
         voice: trimToUndefined(params.voiceId),
         outputFormat: trimToUndefined(params.outputFormat),
-      }),
+      }) ?? {},
     listVoices: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);

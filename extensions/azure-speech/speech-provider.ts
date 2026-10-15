@@ -6,12 +6,12 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
-  removeUndefinedProperties,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -179,7 +179,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       });
       return {
         ...base,
-        ...removeUndefinedProperties({
+        ...filterStringRecord({
           apiKey,
           region,
           endpoint,
@@ -191,11 +191,11 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       };
     },
     resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
+      filterStringRecord({
         voice: trimToUndefined(params.voiceId),
         lang: trimToUndefined(params.languageCode),
         outputFormat: trimToUndefined(params.outputFormat),
-      }),
+      }) ?? {},
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)

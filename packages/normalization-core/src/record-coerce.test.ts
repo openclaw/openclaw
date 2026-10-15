@@ -5,17 +5,9 @@ import {
   asOptionalRecord,
   filterStringRecord,
   isStringRecord,
-  removeUndefinedProperties,
 } from "./record-coerce.js";
 
 describe("record-coerce", () => {
-  it("removes only undefined fields from an owned record without copying values", () => {
-    const nested = { retained: true };
-    const record = { absent: undefined, nil: null, blank: "", zero: 0, disabled: false, nested };
-    expect(removeUndefinedProperties(record)).toBe(record);
-    expect(record).toStrictEqual({ nil: null, blank: "", zero: 0, disabled: false, nested });
-    expect(record.nested).toBe(nested);
-  });
   it("keeps record coercion behavior for optional and nullable variants", () => {
     expect(asOptionalRecord({ ok: true })).toEqual({ ok: true });
     expect(asOptionalRecord(null)).toBeUndefined();

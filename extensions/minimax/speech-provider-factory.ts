@@ -8,7 +8,6 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
-  removeUndefinedProperties,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -39,9 +38,9 @@ type MinimaxTtsProviderOverrides = Partial<
 >;
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
-  const portalBaseUrl = trimToUndefined(
-    cfg?.models?.providers?.[MINIMAX_PORTAL_PROVIDER_ID]?.baseUrl,
-  );
+  const providers = asOptionalRecord(asOptionalRecord(cfg?.models)?.providers);
+  const portalProvider = asOptionalRecord(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
+  const portalBaseUrl = trimToUndefined(portalProvider?.baseUrl);
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
@@ -119,13 +118,22 @@ function readMinimaxProviderConfig(config: SpeechProviderConfig, cfg?: OpenClawC
 function readMinimaxOverrides(
   overrides: SpeechProviderOverrides | undefined,
 ): MinimaxTtsProviderOverrides {
-  return removeUndefinedProperties({
-    model: trimToUndefined(overrides?.model),
-    voiceId: trimToUndefined(overrides?.voiceId),
-    speed: normalizeMinimaxSpeed(overrides?.speed),
-    vol: normalizeMinimaxVolume(overrides?.vol),
-    pitch: normalizeMinimaxPitch(overrides?.pitch),
-  });
+  if (!overrides) {
+    return {};
+  }
+  const normalized: MinimaxTtsProviderOverrides = {
+    model: trimToUndefined(overrides.model),
+    voiceId: trimToUndefined(overrides.voiceId),
+    speed: normalizeMinimaxSpeed(overrides.speed),
+    vol: normalizeMinimaxVolume(overrides.vol),
+    pitch: normalizeMinimaxPitch(overrides.pitch),
+  };
+  for (const key of ["model", "voiceId", "speed", "vol", "pitch"] as const) {
+    if (normalized[key] === undefined) {
+      delete normalized[key];
+    }
+  }
+  return normalized;
 }
 
 const parseDirectiveToken = createSpeechDirectiveParser({

@@ -9,7 +9,6 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   createSpeechDirectiveParser,
-  removeUndefinedProperties,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -84,10 +83,20 @@ function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
   };
 }
 
+function definedSettings<T extends Record<string, unknown>>(settings: T): Partial<T> {
+  const defined = { ...settings };
+  for (const key in defined) {
+    if (defined[key] === undefined) {
+      delete defined[key];
+    }
+  }
+  return defined;
+}
+
 function normalizeVoiceSettings(
   raw: Record<string, unknown> | undefined,
 ): Partial<Parameters<typeof elevenLabsTTS>[0]["voiceSettings"]> {
-  return removeUndefinedProperties({
+  return definedSettings({
     stability: asFiniteNumberInRange(raw?.stability, { min: 0, max: 1 }),
     similarityBoost: asFiniteNumberInRange(raw?.similarityBoost, { min: 0, max: 1 }),
     style: asFiniteNumberInRange(raw?.style, { min: 0, max: 1 }),
@@ -335,7 +344,7 @@ export function buildElevenLabsSpeechProvider({
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...removeUndefinedProperties({
+        ...definedSettings({
           voiceId: trimToUndefined(talkProviderConfig.voiceId),
           modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
           seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
@@ -362,7 +371,7 @@ export function buildElevenLabsSpeechProvider({
         useSpeakerBoost: params.speakerBoost,
       });
       return {
-        ...removeUndefinedProperties({
+        ...definedSettings({
           voiceId: trimToUndefined(params.voiceId),
           modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)),
           outputFormat: trimToUndefined(params.outputFormat),

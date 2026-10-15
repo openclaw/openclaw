@@ -21,4 +21,3 @@ export { MAX_AUDIO_BYTES } from "@openclaw/media-core/constants";
 
 export { retryAsync } from "../infra/retry.js";
 export { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-export { removeUndefinedProperties } from "@openclaw/normalization-core/record-coerce";

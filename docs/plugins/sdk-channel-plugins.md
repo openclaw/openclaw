@@ -333,12 +333,6 @@ when initialization must finish before the child runs.
     `account`/`channel` registry specs, and a `collect` callback. The callback receives
     `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
     `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
-    Its `collectSecret(target, key, path, options)` helper binds string-secret
-    collection and materialization to that snapshot; `options` retains plugin-owned
-    activation and credential ownership. `collectConditionalChannelFieldAssignments`
-    also accepts `expected: "string-or-object"` and an account `owner` callback for
-    structured credentials. Direct-record `createSimpleChannelSecretContract`
-    collectors can supply `channelAccountId` when their root identity is not `default`.
 
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,

@@ -6,12 +6,12 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
-  removeUndefinedProperties,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumberInRange,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -120,23 +120,28 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
             });
       return {
         ...base,
-        ...removeUndefinedProperties({
+        ...filterStringRecord({
           apiKey: resolvedApiKey,
           baseUrl: trimToUndefined(talkProviderConfig.baseUrl)
             ? normalizeInworldBaseUrl(trimToUndefined(talkProviderConfig.baseUrl))
             : undefined,
           voiceId: trimToUndefined(talkProviderConfig.voiceId),
           modelId: trimToUndefined(talkProviderConfig.modelId),
-          temperature: normalizeInworldTemperature(talkProviderConfig.temperature),
         }),
+        ...(normalizeInworldTemperature(talkProviderConfig.temperature) == null
+          ? {}
+          : { temperature: normalizeInworldTemperature(talkProviderConfig.temperature) }),
       };
     },
-    resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
+    resolveTalkOverrides: ({ params }) => ({
+      ...filterStringRecord({
         voiceId: trimToUndefined(params.voiceId),
         modelId: trimToUndefined(params.modelId),
-        temperature: normalizeInworldTemperature(params.temperature),
       }),
+      ...(normalizeInworldTemperature(params.temperature) == null
+        ? {}
+        : { temperature: normalizeInworldTemperature(params.temperature) }),
+    }),
     listVoices: async (req) => {
       const config = req.providerConfig ? readInworldProviderConfig(req.providerConfig) : undefined;
       const apiKey = resolveInworldApiKey(req.apiKey, config?.apiKey);

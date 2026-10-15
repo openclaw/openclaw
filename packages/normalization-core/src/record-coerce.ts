@@ -57,13 +57,3 @@ export function filterStringRecord(value: unknown): Record<string, string> | und
   );
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
-
-/** Remove undefined fields from a caller-owned record in place. */
-export function removeUndefinedProperties<T extends object>(value: T): Partial<T> {
-  for (const key in value) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
-}

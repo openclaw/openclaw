@@ -16,6 +16,7 @@ import {
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeVideoGenerationDuration,
+  selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
   type VideoGenerationRequest,
@@ -169,6 +170,19 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
   return { frameImages, inputReferences };
 }
 
+function resolveDurationSeconds(
+  durationSeconds: number | undefined,
+  supportedDurations: readonly number[] = SUPPORTED_DURATION_SECONDS,
+): number | undefined {
+  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
+  if (rounded === undefined) {
+    return undefined;
+  }
+  const effectiveDurations =
+    supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS;
+  return selectSupportedVideoDuration(rounded, effectiveDurations);
+}
+
 function resolveSeed(seed: unknown): number | undefined {
   if (typeof seed !== "number") {
     return undefined;
@@ -190,11 +204,7 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
     prompt: req.prompt,
   };
 
-  const duration = normalizeVideoGenerationDuration({
-    durationSeconds: req.durationSeconds,
-    supportedDurationSeconds:
-      supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS,
-  });
+  const duration = resolveDurationSeconds(req.durationSeconds, supportedDurations);
   if (duration != null) {
     body.duration = duration;
   }

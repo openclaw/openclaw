@@ -1,14 +1,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import {
-  asOptionalRecord,
-  removeUndefinedProperties,
-} from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as trimToUndefined,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
@@ -67,6 +63,11 @@ export type OpenAiCompatibleSpeechProviderOptions<
   missingApiKeyError?: string;
 };
 
+type ModelProviderConfig = {
+  apiKey?: unknown;
+  baseUrl?: unknown;
+};
+
 function resolveConfiguredSpeechVoice(
   config: SpeechProviderConfig | undefined,
 ): string | undefined {
@@ -80,6 +81,16 @@ function resolveConfiguredSpeechVoice(
 
 function trimTrailingBaseUrl(value: unknown, fallback: string): string {
   return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
+}
+
+function readModelProviderConfig(
+  cfg: unknown,
+  providerConfigKey: string,
+): ModelProviderConfig | undefined {
+  const root = asOptionalRecord(cfg);
+  const models = asOptionalRecord(root?.models);
+  const providers = asOptionalRecord(models?.providers);
+  return asOptionalRecord(providers?.[providerConfigKey]);
 }
 
 function buildExtraJsonBodyFields<ExtraConfig extends Record<string, unknown>>(
@@ -175,13 +186,13 @@ export function createOpenAiCompatibleSpeechProvider<
   }
 
   function resolveApiKey(params: {
-    cfg?: OpenClawConfig;
+    cfg?: unknown;
     providerConfig: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>;
   }): string | undefined {
     return (
       params.providerConfig.apiKey ??
       normalizeResolvedSecretInputString({
-        value: params.cfg?.models?.providers?.[providerConfigKey]?.apiKey,
+        value: readModelProviderConfig(params.cfg, providerConfigKey)?.apiKey,
         path: `${appendConfigPathSegment("models.providers", providerConfigKey)}.apiKey`,
       }) ??
       trimToUndefined(process.env[options.envKey])
@@ -225,12 +236,15 @@ export function createOpenAiCompatibleSpeechProvider<
       }
       return next;
     },
-    resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
-        voice: trimToUndefined(params.voiceId ?? params.voice),
-        model: trimToUndefined(params.modelId ?? params.model),
-        speed: asFiniteNumber(params.speed),
-      }),
+    resolveTalkOverrides: ({ params }) => ({
+      ...(trimToUndefined(params.voiceId ?? params.voice) == null
+        ? {}
+        : { voice: trimToUndefined(params.voiceId ?? params.voice) }),
+      ...(trimToUndefined(params.modelId ?? params.model) == null
+        ? {}
+        : { model: trimToUndefined(params.modelId ?? params.model) }),
+      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
+    }),
     listVoices: async () => options.voices.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(resolveApiKey({ cfg, providerConfig: readProviderConfig(providerConfig) })),
@@ -246,7 +260,7 @@ export function createOpenAiCompatibleSpeechProvider<
       }
 
       const baseUrl = normalizeBaseUrl(
-        config.baseUrl ?? req.cfg.models?.providers?.[providerConfigKey]?.baseUrl,
+        config.baseUrl ?? readModelProviderConfig(req.cfg, providerConfigKey)?.baseUrl,
       );
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
       const {

@@ -6,10 +6,7 @@ import type {
   SpeechProviderPlugin,
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
-import {
-  createSpeechDirectiveParser,
-  removeUndefinedProperties,
-} from "openclaw/plugin-sdk/speech-provider";
+import { createSpeechDirectiveParser } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumberInRange,
   asOptionalObjectRecord,
@@ -182,12 +179,16 @@ export function createXaiSpeechProviderMetadata(
         responseFormat: responseFormat ?? base.responseFormat,
       };
     },
-    resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
-        voiceId: normalizeOptionalString(params.voiceId ?? params.voice),
-        language: normalizeXaiLanguageCode(params.language ?? params.languageCode),
-        speed: normalizeXaiSpeechSpeed(params.speed),
-      }),
+    resolveTalkOverrides: ({ params }) => {
+      const voiceId = normalizeOptionalString(params.voiceId ?? params.voice);
+      const language = normalizeXaiLanguageCode(params.language ?? params.languageCode);
+      const speed = normalizeXaiSpeechSpeed(params.speed);
+      return {
+        ...(voiceId === undefined ? {} : { voiceId }),
+        ...(language === undefined ? {} : { language }),
+        ...(speed === undefined ? {} : { speed }),
+      };
+    },
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||

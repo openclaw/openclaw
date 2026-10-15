@@ -2,7 +2,6 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
-  removeUndefinedProperties,
   parseSpeechDirectiveNumberOverride,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -229,12 +228,15 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat: responseFormat ?? base.responseFormat,
       };
     },
-    resolveTalkOverrides: ({ params }) =>
-      removeUndefinedProperties({
-        voice: normalizeOptionalString(params.voiceId),
-        model: normalizeOptionalString(params.modelId),
-        speed: asFiniteNumber(params.speed),
-      }),
+    resolveTalkOverrides: ({ params }) => ({
+      ...(normalizeOptionalString(params.voiceId) == null
+        ? {}
+        : { voice: normalizeOptionalString(params.voiceId) }),
+      ...(normalizeOptionalString(params.modelId) == null
+        ? {}
+        : { model: normalizeOptionalString(params.modelId) }),
+      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
+    }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
