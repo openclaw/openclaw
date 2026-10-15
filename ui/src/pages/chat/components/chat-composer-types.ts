@@ -163,6 +163,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?:
     | LegacyTemplateResult
+    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
     | ReturnType<typeof solidContent>
     | typeof emptyLegacyContent;
   footerContent?: JSX.Element;

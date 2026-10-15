@@ -28,7 +28,11 @@ export type PanelHostedTab = {
   url?: string;
   /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
   favicon?: string;
-  icon?: LegacyTemplateResult | Node | ReturnType<typeof solidContent>;
+  icon?:
+    | LegacyTemplateResult
+    | Node
+    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
+    | ReturnType<typeof solidContent>;
   title?: string | null;
   statusLabel?: string | null;
   badge?: string | null;
