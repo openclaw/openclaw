@@ -696,6 +696,8 @@ jobs:
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
         env:
+          # Resolve trusted tooling workspace packages from its tsconfig, not the candidate's.
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
@@ -903,6 +905,7 @@ jobs:
       - name: Qualify packed plugin runtime
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -928,6 +931,7 @@ jobs:
       - name: Scan exact plugin npm artifact
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: |
