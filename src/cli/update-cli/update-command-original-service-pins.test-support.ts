@@ -5,7 +5,7 @@ import {
 } from "../../daemon/runtime-pin-state.js";
 import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { OriginalServiceFixture } from "./update-command-original-service-current.test-support.js";
+import type { OriginalServiceFixture } from "./update-command-original-service-fixture.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { maybeRestartService } from "./update-command-service.js";
 

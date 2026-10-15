@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
@@ -17,14 +17,13 @@ import {
   settleGatewayServiceRebind,
   withGatewayServiceRebindCapture,
 } from "../../daemon/service-rebind.js";
-import type { GatewayServiceState } from "../../daemon/service.js";
 import * as integrity from "../../infra/package-update-integrity.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { OriginalServiceFixture } from "./update-command-original-service-fixture.test-support.js";
 import { registerRuntimePinPreservationTest } from "./update-command-original-service-pins.test-support.js";
 import {
   observeOriginalManagedServiceRuntime,
@@ -32,29 +31,11 @@ import {
 } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   compensateOriginalManagedService,
 } from "./update-command-service-recovery.js";
-
-export type OriginalServiceFixture = {
-  state: OpenClawTestState;
-  rootA: string;
-  rootB: string;
-  serviceNodeRunner: string;
-  before: PreManagedServiceStop;
-  serviceState: GatewayServiceState;
-  mocks: {
-    capability: Mock;
-    nativeRestart: Mock;
-    nativeInstall: Mock;
-    restart: Mock;
-    health: Mock;
-    readiness: Mock;
-  };
-};
 
 // Current composition only: real observations, admission and candidate-native helper;
 // receiver probe, native service and HTTP leaves are inert. No native command executes.
