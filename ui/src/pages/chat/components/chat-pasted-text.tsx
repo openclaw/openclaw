@@ -1,11 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
-import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
+import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 
@@ -59,14 +58,12 @@ function PastedText(props: PastedTextProps) {
     <Show
       when={props.composerAction}
       fallback={
-        <LitContent
-          value={renderAttachmentChip({
-            label: label(),
-            icon: icons.fileText,
-            onClick: props.onOpen,
-            onReveal: props.admission?.onAdmit,
-            elementRef: props.admission?.observeElement,
-          })}
+        <AttachmentPreviewChip
+          label={label()}
+          icon={<Icon name="fileText" />}
+          onClick={props.onOpen}
+          onReveal={props.admission?.onAdmit}
+          elementRef={props.admission?.observeElement}
         />
       }
     >

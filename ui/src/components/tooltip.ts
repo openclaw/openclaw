@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import type { LegacyTemplateResult } from "../lit/solid-content.tsx";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
 import {
   TooltipController,
@@ -9,7 +9,7 @@ import {
 export { consumeTooltipEscape };
 
 export interface TooltipProps extends TooltipPolicyProps {
-  contentTemplate?: TemplateResult;
+  contentTemplate?: LegacyTemplateResult;
 }
 export interface TooltipRuntime {
   request(open: boolean): boolean;
@@ -109,7 +109,7 @@ let viewImport: Promise<MountTooltipView> | undefined;
 export class TooltipElement extends HTMLElement implements TooltipProps {
   static observedAttributes = [...attributes.keys()];
   declare content: string;
-  declare contentTemplate: TemplateResult | undefined;
+  declare contentTemplate: LegacyTemplateResult | undefined;
   declare placement: TooltipPolicyProps["placement"];
   declare closeDelay: number;
   declare hoverDismissDelay: number | undefined;

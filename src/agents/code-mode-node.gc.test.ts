@@ -1,6 +1,7 @@
 import { EventEmitter, once } from "node:events";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GcSample } from "../infra/gc-observer.js";
 import { receiveWorkerMemoryPort, trackNativeWorkerForCpu } from "../infra/worker-cpu.js";
 import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
@@ -16,7 +17,16 @@ const fixture = vi.hoisted(() => ({
     | ((input: CodeModeNodeInput) => Promise<CodeModeWorkerThreadResult<undefined>>)
     | undefined,
   warn: vi.fn(),
+  capture: vi.fn(),
+  write: vi.fn(),
+  tracing: vi.fn(),
 }));
+// mock-isolation: Native capture has its own protocol proof; drive worker/host admission here.
+vi.mock("../logging/diagnostic-worker-gc-profile.js", () => ({
+  captureWorkerGcProfiles: fixture.capture,
+  writeWorkerGcProfiles: fixture.write,
+}));
+vi.mock("node:trace_events", () => ({ getEnabledCategories: fixture.tracing }));
 // The memory-port consumer runs on the Gateway main thread; Vitest runs in a worker.
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
@@ -41,6 +51,12 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 it("warns through the memory port with parked-cell attribution, bounded cadence, and idle reset", async () => {
+  const capture = createDeferred<{
+    status: "complete";
+    result: { heap: string; cpu: string };
+  }>();
+  fixture.capture.mockReturnValue(capture.promise);
+  fixture.write.mockResolvedValue(["synthetic.heapprofile.json", "synthetic.cpuprofile.json"]);
   const now = vi.spyOn(performance, "now").mockReturnValue(0);
   const previousUnhandled = process.listeners("unhandledRejection");
   const previousHandled = process.listeners("rejectionHandled");
@@ -123,9 +139,11 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
         external: expect.any(Number),
         arrayBuffers: expect.any(Number),
         heapSizeLimitBytes: expect.any(Number),
+        captureStatus: "requested",
       },
     ]);
     expect(gcAttribution.sessionKeyHash).toMatch(/^[a-f0-9]{16}$/);
+    await vi.waitFor(() => expect(fixture.capture).toHaveBeenCalledTimes(1));
     expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("private-session");
     await collect(20_000, 1000);
     expect(fixture.warn).toHaveBeenCalledTimes(1);
@@ -155,6 +173,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     await collect(140_000, 100);
     expect(fixture.warn).toHaveBeenCalledTimes(2);
+    expect(fixture.capture).toHaveBeenCalledTimes(1);
     expect(getWorkerMessageMetrics()).toContainEqual(
       expect.objectContaining({
         kind: "memory",
@@ -162,6 +181,29 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
         unmeasuredMessages: previousUnmeasured + 2,
       }),
     );
+    capture.resolve({
+      status: "complete",
+      result: { heap: "sanitized-heap", cpu: "sanitized-cpu" },
+    });
+    await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(3));
+    expect(fixture.warn.mock.calls[2]![1]).toMatchObject({
+      ...gcAttribution,
+      captureStatus: "complete",
+      profileFiles: ["synthetic.heapprofile.json", "synthetic.cpuprofile.json"],
+    });
+    expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("sanitized-heap");
+    expect(fixture.write).toHaveBeenCalledWith({ heap: "sanitized-heap", cpu: "sanitized-cpu" });
+    // The hourly admission resets even with no active cell; process tracing refuses capture.
+    await collect(3_600_001, 0);
+    fixture.tracing.mockReturnValue("v8");
+    await collect(3_610_001, 101);
+    await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(5));
+    expect(fixture.warn.mock.calls[4]![1]).toMatchObject({
+      activeCellCount: 0,
+      captureStatus: "unavailable",
+      captureReason: "tracing-active",
+    });
+    expect(fixture.capture).toHaveBeenCalledTimes(1);
   } finally {
     close();
     parent.port1.close();

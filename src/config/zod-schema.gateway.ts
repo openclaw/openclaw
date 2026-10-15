@@ -227,7 +227,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
-        /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+        /** Show the compact Community entry in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
         /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),

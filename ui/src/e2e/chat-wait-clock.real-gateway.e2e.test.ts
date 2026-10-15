@@ -303,7 +303,14 @@ suite.define(() => {
 
           proof.stage = "actual child completion and parent resume";
           provider.releaseChild();
-          await parent.getByRole("paragraph").filter({ hasText: fixture.resumedReply }).waitFor();
+          await expect
+            .poll(async () => (await rows()).parent.endedAt ?? 0)
+            .toBeGreaterThan(updated.parent.endedAt!);
+          const resumedReply = parent
+            .getByRole("paragraph")
+            .filter({ hasText: fixture.resumedReply });
+          await expect.poll(() => resumedReply.count()).toBe(1);
+          await resumedReply.waitFor();
           await waiting.waitFor({ state: "hidden" });
           const completed = await rows();
           expect(completed.parent.hasActiveSubagentRun ?? false).toBe(false);

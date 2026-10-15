@@ -353,6 +353,11 @@ later; reading status does not start scheduling or clear an active campaign. If
 the update channel cannot be resolved, `schedule` remains absent rather than
 claiming the scheduler is idle.
 
+A recent cached check can skip another registry lookup, but still publishes the
+installation details already discovered at startup. A current package install
+therefore shows **Up to date** in Settings → Updates even when automatic updates
+are off. Missing installation details do not imply that the install is current.
+
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run

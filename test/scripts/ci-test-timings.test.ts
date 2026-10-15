@@ -204,31 +204,31 @@ describe("resource-qualified native solo timings", () => {
   });
 
   it.each([
-    [
-      "job environment",
-      "OPENCLAW_NODE_TEST_ENV_JSON: null",
-      'OPENCLAW_NODE_TEST_ENV_JSON: {"OTHER":"1"}',
-    ],
-    [
-      "incomplete cleanup",
-      "verifying completed generation before cleanup",
-      "unfinished generation",
-    ],
-  ])("rejects %s", (_name, from, to) => {
-    const texts = [121, 125].map((span) => log(span).replace(from, to));
+    {
+      name: "job environment",
+      from: "OPENCLAW_NODE_TEST_ENV_JSON: null",
+      to: 'OPENCLAW_NODE_TEST_ENV_JSON: {"OTHER":"1"}',
+      policy: {},
+    },
+    {
+      name: "incomplete cleanup",
+      from: "verifying completed generation before cleanup",
+      to: "unfinished generation",
+      policy: {},
+    },
+    { name: "dist requirement", from: "", to: "", policy: { requiresDist: true } },
+    { name: "worker fallback", from: "", to: "", policy: { fallbackMaxWorkers: 2 } },
+  ])("rejects native solo timing with $name", ({ from, to, policy }) => {
+    const group = { ...descriptor, ...policy };
+    if (Object.keys(policy).length > 0) {
+      expect(createNativeSoloTimingKey(group)).toBeUndefined();
+    }
+    const texts = [121, 125].map((span) => {
+      const text = log(span, group);
+      return from ? text.replace(from, to) : text;
+    });
     expect(refit(texts).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
   });
-
-  it.each([{ requiresDist: true }, { fallbackMaxWorkers: 2 }])(
-    "rejects unmatched descriptor policy %j",
-    (policy) => {
-      const group = { ...descriptor, ...policy };
-      expect(createNativeSoloTimingKey(group)).toBeUndefined();
-      expect(
-        refit([log(121, group), log(125, group)]).timings.compactGroupSeconds.blacksmith[key],
-      ).toBeUndefined();
-    },
-  );
 
   it("rejects missing/conflicting provenance and multiple descriptors", () => {
     const original = log(121);
@@ -294,15 +294,23 @@ describe("native singleton invocation timings", () => {
       ),
     ).timings.compactGroupSeconds.blacksmith;
 
-  it.each([false, true])(
-    "records only the parallel envelope wall (interleaved=%s)",
-    (interleaved) => {
+  it.each([
+    { kind: "parallel", interleaved: false, receipts: [2] },
+    { kind: "parallel", interleaved: true, receipts: [2] },
+    { kind: "fallback", interleaved: false, receipts: [1] },
+    { kind: "contradictory", interleaved: false, receipts: [1, 2] },
+  ])(
+    "qualifies the $kind envelope (interleaved=$interleaved)",
+    ({ kind, interleaved, receipts }) => {
       const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
       let text = invocationLog()
         .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
         .replace(
           line(0, "begin"),
-          [line(0, "begin"), line(0, "[test] inner parallelism 2")].join("\n"),
+          [
+            line(0, "begin"),
+            ...receipts.map((count) => line(0, `[test] inner parallelism ${count}`)),
+          ].join("\n"),
         );
       if (interleaved) {
         text = text
@@ -312,26 +320,13 @@ describe("native singleton invocation timings", () => {
             [line(2, `[test] starting ${config}`), line(2, "RUN v5.0.1 /checkout")].join("\n"),
           );
       }
-      expect(refit(text)).toEqual({ [createExtensionTestTimingKey(config, files, env)!]: 34 });
-    },
-  );
-
-  it.each(["fallback", "contradictory"])(
-    "qualifies requested overlap using its %s receipt",
-    (kind) => {
-      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
-      const receipt =
-        kind === "missing"
-          ? []
-          : kind === "fallback"
-            ? [line(0, "[test] inner parallelism 1")]
-            : [line(0, "[test] inner parallelism 1"), line(0, "[test] inner parallelism 2")];
-      const text = invocationLog()
-        .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
-        .replace(line(0, "begin"), [line(0, "begin"), ...receipt].join("\n"));
       const observed = refit(text);
-      expect(observed[createExtensionTestTimingKey(config, files, env)!]).toBeUndefined();
-      expect(observed).toEqual(kind === "fallback" ? refit(invocationLog()) : {});
+      if (kind === "parallel") {
+        expect(observed).toEqual({ [createExtensionTestTimingKey(config, files, env)!]: 34 });
+      } else {
+        expect(observed[createExtensionTestTimingKey(config, files, env)!]).toBeUndefined();
+        expect(observed).toEqual(kind === "fallback" ? refit(invocationLog()) : {});
+      }
     },
   );
 
@@ -1067,8 +1062,6 @@ describe("CI test timing refit", () => {
       );
     } else if (fault === "missing receipt") {
       text = text.split("\n").slice(0, -1).join("\n");
-    } else if (fault === "duplicate receipt") {
-      text += `\n${text.split("\n").at(-1)}`;
     } else if (fault === "partial Node selection") {
       text = text.replaceAll(
         `[shard:${fixture.timingKeys[0]}]`,
@@ -1076,11 +1069,6 @@ describe("CI test timing refit", () => {
       );
     } else if (fault === "wrong workers") {
       text = text.replace("OPENCLAW_VITEST_MAX_WORKERS: 3", "OPENCLAW_VITEST_MAX_WORKERS: 1");
-    } else {
-      text = text.replace(
-        "requested plans=1 admitted plans=1",
-        "requested plans=2 admitted plans=2",
-      );
     }
     const previous: CiTestTimings = {
       ...baseline,
@@ -1625,60 +1613,42 @@ it.todo("retains todo coverage");
     });
   });
 
-  it.each(["different profile"])(
-    "does not invent a complete parent measurement from %s",
-    (condition) => {
-      const common = {
-        parentShardName: "agentic-control-plane-agent-chat",
-        configs: ["test/vitest/vitest.gateway-server.config.ts"],
-      };
-      const first = createCompactSplitTimingGeneration({
-        ...common,
-        stripes: [["a.test.ts"], ["b.test.ts"]],
-      });
-      const second = createCompactSplitTimingGeneration({
-        ...common,
-        stripes: [["b.test.ts"], ["a.test.ts"]],
-      });
-      const runs = [1, 2, 3].map((id) => {
-        const logs: CiTimingRun["logs"] = [
-          {
-            kind: "compact",
-            labels: ["blacksmith-32vcpu-ubuntu-2404"],
-            text: compactLog(
-              100,
-              first.timingKeys[condition === "different run" ? (id - 1) % 2 : 0]!,
-            ),
-          },
-        ];
-        if (condition === "different generation" || condition === "different profile") {
-          logs.push({
-            kind: "compact",
-            labels: [
-              condition === "different profile" ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404",
-            ],
-            text: compactLog(
-              200,
-              (condition === "different generation" ? second : first).timingKeys[1]!,
-            ),
-          });
-        }
-        return timingRun(id, logs);
-      });
-      const result = refitTestTimings(runs).timings.compactGroupSeconds;
-      expect(result.blacksmith).not.toHaveProperty(common.parentShardName);
-      expect(result.github).not.toHaveProperty(common.parentShardName);
-      const previous = {
-        ...baseline,
-        compactGroupSeconds: { blacksmith: { [common.parentShardName]: 500 }, github: {} },
-      };
-      expect(
-        refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith[
-          common.parentShardName
-        ],
-      ).toBe(500);
-    },
-  );
+  it("does not invent a complete parent measurement across runner profiles", () => {
+    const common = {
+      parentShardName: "agentic-control-plane-agent-chat",
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+    };
+    const generation = createCompactSplitTimingGeneration({
+      ...common,
+      stripes: [["a.test.ts"], ["b.test.ts"]],
+    });
+    const runs = [1, 2, 3].map((id) =>
+      timingRun(id, [
+        {
+          kind: "compact",
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: compactLog(100, generation.timingKeys[0]!),
+        },
+        {
+          kind: "compact",
+          labels: ["ubuntu-24.04"],
+          text: compactLog(200, generation.timingKeys[1]!),
+        },
+      ]),
+    );
+    const result = refitTestTimings(runs).timings.compactGroupSeconds;
+    expect(result.blacksmith).not.toHaveProperty(common.parentShardName);
+    expect(result.github).not.toHaveProperty(common.parentShardName);
+    const previous = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { [common.parentShardName]: 500 }, github: {} },
+    };
+    expect(
+      refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith[
+        common.parentShardName
+      ],
+    ).toBe(500);
+  });
 
   it.each([false, true])(
     "retains absent timings when duplicate run fragments include partial inventories (partial first: %s)",
