@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -10,6 +10,10 @@ const inventories = new Map();
 export function getRepositoryFileInventory(directory, selected) {
   const cwd = resolve(directory ?? repoRoot);
   const key = JSON.stringify([cwd, selected]);
+  const fullInventory = JSON.stringify([cwd, undefined]);
+  if (selected && inventories.has(fullInventory)) {
+    return inventories.get(fullInventory);
+  }
   if (!inventories.has(key)) {
     // Share working-tree facts without probing each inventoried owner. Include
     // untracked destinations and remove indexed paths deleted by unstaged renames.
@@ -52,16 +56,14 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  if (existsSync(resolve(cwd, file))) {
+  const inventory = getRepositoryFileInventory(cwd, [dirname(file)]);
+  const exists = (candidate) =>
+    inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
+  if (exists(file)) {
     return file;
   }
   const alternate = file.endsWith(".tsx") ? file.slice(0, -1) : `${file}x`;
-  if (existsSync(resolve(cwd, alternate))) {
-    return alternate;
-  }
-  // Sparse checkout owners can exist only in the index. Ordinary imports need no Git scan.
-  const inventory = getRepositoryFileInventory(cwd);
-  return !inventory?.has(file) && inventory?.has(alternate) ? alternate : file;
+  return exists(alternate) ? alternate : file;
 }
 
 /** Watch both extensions, including deleted paths that cannot be resolved on disk. */
