@@ -40,14 +40,22 @@ it.each([false, true])(
         expect(
           manager
             .getBranch()
-            .map((entry) => (entry.type === "message" ? entry.message.content : null)),
+            .map((entry) =>
+              entry.type === "message" && entry.message.role === "user"
+                ? entry.message.content
+                : null,
+            ),
         ).toEqual(["original", "tail", "newer input"]);
       } else {
         await expect(result).resolves.toMatchObject({ changed: true, rewrittenEntries: 1 });
         expect(
           manager
             .getBranch()
-            .map((entry) => (entry.type === "message" ? entry.message.content : null)),
+            .map((entry) =>
+              entry.type === "message" && entry.message.role === "user"
+                ? entry.message.content
+                : null,
+            ),
         ).toEqual(["replacement", "tail"]);
       }
       expect(observed).toEqual(original);
