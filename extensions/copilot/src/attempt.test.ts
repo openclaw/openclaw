@@ -395,14 +395,17 @@ afterEach(() => {
 });
 
 describe("runCopilotAttempt", () => {
-  it.each(["provider headers", "prepared header auth"] as const)(
-    "forwards BYOK %s on both session creation and the model request",
+  it.each(["provider headers", "prepared header auth", "token auth"] as const)(
+    "preserves BYOK %s in the pool, session, and model request",
     async (mode) => {
       const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
       const headers =
         mode === "provider headers"
           ? { "X-Tenant": "tenant-a", "X-Trace": "trace-1" }
-          : { "x-api-key": "header-secret" };
+          : mode === "prepared header auth"
+            ? { "x-api-key": "header-secret" }
+            : undefined;
       const model =
         mode === "provider headers"
           ? {
@@ -412,26 +415,47 @@ describe("runCopilotAttempt", () => {
               id: "claude-test",
               provider: "anthropic-proxy",
             }
-          : attachModelProviderRequestTransport(
-              {
+          : mode === "token auth"
+            ? {
                 api: "openai-responses",
-                baseUrl: "https://proxy.example.test/v1",
-                headers,
+                baseUrl: "https://api.example.test/v1",
                 id: "gpt-test",
-                provider: "custom-header-proxy",
-              },
-              { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
-            );
+                provider: "custom-openai",
+              }
+            : attachModelProviderRequestTransport(
+                {
+                  api: "openai-responses",
+                  baseUrl: "https://proxy.example.test/v1",
+                  headers,
+                  id: "gpt-test",
+                  provider: "custom-header-proxy",
+                },
+                { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
+              );
       await runCopilotAttempt(
         makeParams({
+          ...(mode === "token auth" ? { auth: { gitHubToken: "unrelated-token" } } : {}),
           model: model as never,
-          resolvedApiKey: mode === "provider headers" ? "byok-token" : "header-secret",
+          resolvedApiKey: mode === "prepared header auth" ? "header-secret" : "byok-token",
           authProfileId: `${model.provider}:main`,
         }),
-        { pool: makeFakePool(sdk) },
+        { pool },
       );
       const provider = requireCreateSessionConfig(sdk).provider;
-      expect(provider).toEqual(expect.objectContaining({ headers }));
+      if (mode === "token auth") {
+        const [key, options] = expectDefined(pool.acquire.mock.calls[0], "pool acquisition");
+        expect(key).toMatchObject({ authMode: "byok", authProfileId: "custom-openai:main" });
+        expect(options.gitHubToken).toBeUndefined();
+        expect(options.useLoggedInUser).toBe(false);
+        expect(provider).toEqual(
+          expect.objectContaining({
+            apiKey: "byok-token",
+            baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+          }),
+        );
+      } else {
+        expect(provider).toEqual(expect.objectContaining({ headers }));
+      }
       const sendOptions = requireSession(sdk).sendAndWait.mock.calls[0]?.[0] as {
         requestHeaders?: Record<string, string>;
       };
@@ -883,74 +907,52 @@ describe("runCopilotAttempt", () => {
     }
   });
 
-  it("does not hydrate prompt image paths outside workspace-only policy", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-image-policy-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideImage = path.join(outsideDir, "secret.png");
-    await fsp.mkdir(workspaceDir, { recursive: true });
-    await fsp.mkdir(outsideDir, { recursive: true });
-    await fsp.writeFile(outsideImage, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
+  it.each(["outside workspace", "relative to task cwd"] as const)(
+    "hydrates local prompt images according to workspace policy: %s",
+    async (mode) => {
+      const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-image-policy-"));
+      const workspaceDir = path.join(stateDir, "workspace");
+      const cwd = path.join(workspaceDir, "task-repo");
+      const imageDir = mode === "outside workspace" ? path.join(stateDir, "outside") : cwd;
+      const imagePath = path.join(imageDir, "image.png");
+      await fsp.mkdir(workspaceDir, { recursive: true });
+      await fsp.mkdir(imageDir, { recursive: true });
+      await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
 
-    try {
-      await runCopilotAttempt(
-        makeParams({
-          config: { tools: { fs: { workspaceOnly: true } } },
-          model: makeImageModel(),
-          prompt: `inspect ${outsideImage}`,
-          workspaceDir,
-        } as never),
-        { pool },
-      );
+      try {
+        await runCopilotAttempt(
+          makeParams({
+            config: { tools: { fs: { workspaceOnly: true } } },
+            model: makeImageModel(),
+            ...(mode === "relative to task cwd" ? { cwd } : {}),
+            prompt: mode === "outside workspace" ? `inspect ${imagePath}` : "inspect ./image.png",
+            workspaceDir,
+          } as never),
+          { pool },
+        );
 
-      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
-        | { attachments?: unknown[] }
-        | undefined;
-      expect(sendOptions?.attachments).toBeUndefined();
-    } finally {
-      await fsp.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves relative prompt image paths from task cwd", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-cwd-image-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const cwd = path.join(workspaceDir, "task-repo");
-    const imagePath = path.join(cwd, "relative.png");
-    await fsp.mkdir(cwd, { recursive: true });
-    await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    try {
-      await runCopilotAttempt(
-        makeParams({
-          config: { tools: { fs: { workspaceOnly: true } } },
-          cwd,
-          model: makeImageModel(),
-          prompt: "inspect ./relative.png",
-          workspaceDir,
-        } as never),
-        { pool },
-      );
-
-      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
-        | { attachments?: unknown[] }
-        | undefined;
-      expect(sendOptions?.attachments).toEqual([
-        {
-          type: "blob",
-          data: TINY_PNG_BASE64,
-          mimeType: "image/png",
-          displayName: "prompt-image-1",
-        },
-      ]);
-    } finally {
-      await fsp.rm(stateDir, { recursive: true, force: true });
-    }
-  });
+        const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+          | { attachments?: unknown[] }
+          | undefined;
+        if (mode === "outside workspace") {
+          expect(sendOptions?.attachments).toBeUndefined();
+        } else {
+          expect(sendOptions?.attachments).toEqual([
+            {
+              type: "blob",
+              data: TINY_PNG_BASE64,
+              mimeType: "image/png",
+              displayName: "prompt-image-1",
+            },
+          ]);
+        }
+      } finally {
+        await fsp.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     "resume",
@@ -1055,27 +1057,54 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  it("replay-shim: prior replayInvalid propagates even on an early-return failure", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
+  it.each(["unsupported model", "request proxy override"] as const)(
+    "rejects an unsupported provider before SDK session creation: %s",
+    async (mode) => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const model =
+        mode === "unsupported model"
+          ? { api: "openai-responses", id: "claude", provider: "anthropic" }
+          : attachModelProviderRequestTransport(
+              {
+                api: "openai-responses",
+                baseUrl: "https://proxy.example.test/v1",
+                id: "gpt-test",
+                provider: "custom-header-proxy",
+              },
+              { proxy: { mode: "env-proxy" } },
+            );
 
-    const result = await runCopilotAttempt(
-      makeParams({
-        model: { api: "openai-responses", id: "claude", provider: "anthropic" } as never,
-        initialReplayState: {
-          replayInvalid: true,
+      const result = await runCopilotAttempt(
+        makeParams({
+          model: model as never,
+          ...(mode === "unsupported model"
+            ? {
+                initialReplayState: {
+                  replayInvalid: true,
+                  hadPotentialSideEffects: true,
+                } as never,
+              }
+            : { resolvedApiKey: "header-secret", authProfileId: "custom-header-proxy:main" }),
+        }),
+        { pool },
+      );
+
+      expect(getPromptErrorCode(result)).toBe("model_not_supported");
+      expect(sdk.createSession).not.toHaveBeenCalled();
+      if (mode === "unsupported model") {
+        expect(result.replayMetadata).toEqual({
           hadPotentialSideEffects: true,
-        } as never,
-      }),
-      { pool },
-    );
-
-    expect(getPromptErrorCode(result)).toBe("model_not_supported");
-    expect(result.replayMetadata).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
+          replaySafe: false,
+        });
+      } else {
+        expect(
+          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
+            ?.message,
+        ).toContain("request proxy");
+      }
+    },
+  );
 
   it.each(["before start", "session establishment", "mid-stream"] as const)(
     "keeps cancellation external when aborted during %s",
@@ -1280,34 +1309,54 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it.each([false, true])(
-    "reports a release failure without masking a primary error (%s)",
-    async (hasPrimary) => {
+  it.each([
+    { stage: "release", hasPrimary: false },
+    { stage: "release", hasPrimary: true },
+    { stage: "disconnect", hasPrimary: false },
+    { stage: "disconnect", hasPrimary: true },
+  ] as const)(
+    "reports $stage failure without masking a primary error ($hasPrimary)",
+    async ({ stage, hasPrimary }) => {
       const agentEnd = vi.fn();
       installHooks([{ hookName: "agent_end", handler: agentEnd }]);
       const primaryError = new Error("send failed");
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const sdk = makeFakeSdk((session) => {
+        if (stage === "disconnect") {
+          session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+        }
         if (hasPrimary) {
           session.sendAndWait.mockRejectedValueOnce(primaryError);
+        } else if (stage === "disconnect") {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
         }
       });
       const pool = makeFakePool(sdk);
-      pool.release.mockRejectedValueOnce(new Error("release failed"));
+      if (stage === "release") {
+        pool.release.mockRejectedValueOnce(new Error("release failed"));
+      }
       const attempt = runCopilotAttempt(makeParams(), { pool });
       if (hasPrimary) {
         const result = await attempt;
         expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(primaryError);
-        expect(warnSpy).toHaveBeenCalledWith(
-          "[copilot-attempt] pool.release failed after primary error",
-          expect.objectContaining({ message: "release failed" }),
-        );
-      } else {
+        if (stage === "release") {
+          expect(warnSpy).toHaveBeenCalledWith(
+            "[copilot-attempt] pool.release failed after primary error",
+            expect.objectContaining({ message: "release failed" }),
+          );
+        }
+      } else if (stage === "release") {
         await expect(attempt).rejects.toThrow("release failed");
         expect(agentEnd).toHaveBeenCalledWith(
           expect.objectContaining({ error: "release failed", success: false }),
           expect.objectContaining({ sessionId: "session-1" }),
         );
+      } else {
+        const result = await attempt;
+        expect(
+          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
+            ?.message,
+        ).toBe("disconnect failed");
       }
     },
   );
@@ -1779,101 +1828,6 @@ describe("runCopilotAttempt", () => {
   });
 
   registerCopilotCleanupTests({ makeParams, requireSession });
-
-  it("cleanup on disconnect throw", async () => {
-    const primaryError = new Error("send failed");
-    const sdkWithPrimaryError = makeFakeSdk((session) => {
-      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-      session.sendAndWait.mockRejectedValueOnce(primaryError);
-    });
-    const poolWithPrimaryError = makeFakePool(sdkWithPrimaryError);
-
-    const first = await runCopilotAttempt(makeParams(), { pool: poolWithPrimaryError });
-    expect(projectAgentRunAttemptTerminal(first.terminal).promptError).toBe(primaryError);
-
-    const sdkWithoutPrimaryError = makeFakeSdk((session) => {
-      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-    });
-    const poolWithoutPrimaryError = makeFakePool(sdkWithoutPrimaryError);
-
-    const second = await runCopilotAttempt(makeParams(), { pool: poolWithoutPrimaryError });
-    expect(
-      (projectAgentRunAttemptTerminal(second.terminal).promptError as Error | undefined)?.message,
-    ).toBe("disconnect failed");
-  });
-
-  it("pool keying: BYOK does not resolve unrelated GitHub auth", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(
-      makeParams({
-        auth: { gitHubToken: "unrelated-token" } as never,
-        model: {
-          api: "openai-responses",
-          baseUrl: "https://api.example.test/v1",
-          id: "gpt-test",
-          provider: "custom-openai",
-        } as never,
-        resolvedApiKey: "byok-token",
-        authProfileId: "custom-openai:main",
-      } as never),
-      { pool },
-    );
-
-    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
-      authMode: string;
-      authProfileId?: string;
-    };
-    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
-      gitHubToken?: string;
-      useLoggedInUser?: boolean;
-    };
-    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
-      provider?: { apiKey?: string; baseUrl?: string };
-    };
-
-    expect(key.authMode).toBe("byok");
-    expect(key.authProfileId).toBe("custom-openai:main");
-    expect(options.gitHubToken).toBeUndefined();
-    expect(options.useLoggedInUser).toBe(false);
-    expect(cfg.provider).toEqual(
-      expect.objectContaining({
-        apiKey: "byok-token",
-        baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
-      }),
-    );
-  });
-
-  it("rejects BYOK providers with request transport policy overrides before creating a SDK session", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-    const model = attachModelProviderRequestTransport(
-      {
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.test/v1",
-        id: "gpt-test",
-        provider: "custom-header-proxy",
-      },
-      { proxy: { mode: "env-proxy" } },
-    );
-
-    const result = await runCopilotAttempt(
-      makeParams({
-        model: model as never,
-        resolvedApiKey: "header-secret",
-        authProfileId: "custom-header-proxy:main",
-      } as never),
-      { pool },
-    );
-
-    expect(getPromptErrorCode(result)).toBe("model_not_supported");
-    expect(
-      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
-    ).toContain("request proxy");
-    expect(sdk.createSession).not.toHaveBeenCalled();
-  });
 
   describe("canonical transcript journal", () => {
     afterEach(() => {
