@@ -235,7 +235,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             expect(recoveryCalls).toHaveLength(2);
             expect(input).toContain("INSPECTED_EFFECTS=1");
           } else {
-            expect(input).toContain(scenario.partial);
+            // Provider replay replaces aborted partial output; custody retains the user's task.
+            expect(input).toContain(scenario.request);
           }
           writeOpenAiResponsesText(response, {
             text: scenario.final,

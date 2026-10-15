@@ -955,7 +955,7 @@ and device presentation still require their normal client capabilities.
 Before resuming, the gateway classifies the transcript tail to choose the tool
 restriction for the continuation. An aborted turn is the interruption itself,
 so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
-partial streamed text stays in the transcript and the continuation picks up from
+already-recorded partial text stays in the transcript and the continuation picks up from
 the message beneath it, while a tool call left dangling is dropped from the next
 provider payload. Provider failures, completed assistant tails, empty transcripts,
 and stale pending approvals also continue from the existing transcript. States
