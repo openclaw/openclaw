@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readAuthProfileAuthorizationLifetime } from "./auth-profiles/authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./auth-profiles/authorization-observation.js";
+import { captureAuthProfileAuthorization } from "./auth-profiles/authorization.js";
 import { createOAuthManager } from "./auth-profiles/oauth-manager.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
@@ -21,6 +22,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "./auth-profiles/store-state-owner.test-support.js";
+import {
+  withAuthProfileStoreAgentDir,
+  withEnvOnlyAuthProfileStore,
+} from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 import { captureMcpAuthProfileAuthorization } from "./mcp-auth-profile-authorization.js";
@@ -53,12 +58,40 @@ async function foreign(root: Awaited<ReturnType<typeof seedRoot>>, script: strin
 const runtimeUrl = new URL("./auth-profiles/store-runtime.ts", import.meta.url).href;
 const captureUrl = new URL("./mcp-auth-profile-authorization.ts", import.meta.url).href;
 
-describe("MCP auth-profile authorization", () => {
-  it("enrolls actual inherited owners, survives usage and fresh process capture, and fences disposal", async () => {
+describe("auth-profile authorization", () => {
+  it.each(["personal", "env-only", "bounded-store"] as const)(
+    "rejects missing or unavailable %s authorization without substituting ambient credentials",
+    async (scope) => {
+      const root = await seedRoot("ambient-credential");
+      await withEnvAsync(root.env, async () => {
+        const capture = () =>
+          captureAuthProfileAuthorization({
+            profileId:
+              scope === "personal"
+                ? "personal:00000000-0000-4000-8000-000000000000:00000000-0000-4000-8000-000000000001"
+                : "shared",
+            agentDir: root.agentDir,
+            assertCurrent: source().assertCurrent,
+          });
+        await expect(
+          scope === "env-only"
+            ? withEnvOnlyAuthProfileStore(capture)
+            : scope === "bounded-store"
+              ? withAuthProfileStoreAgentDir(root.agentDir, root.stateDir, capture)
+              : capture(),
+        ).rejects.toMatchObject({
+          code:
+            scope === "personal" ? "MCP_AUTHORIZATION_RETIRED" : "MCP_AUTHORIZATION_UNAVAILABLE",
+        });
+      });
+    },
+  );
+
+  it("enrolls inherited owners through the generic API and preserves MCP capture across processes", async () => {
     const root = await seedRoot("original");
     await withEnvAsync(root.env, async () => {
       const caller = source();
-      const authority = await captureMcpAuthProfileAuthorization({
+      const authority = await captureAuthProfileAuthorization({
         profileId: "shared",
         agentDir: root.agentDir,
         assertCurrent: caller.assertCurrent,
@@ -264,7 +297,7 @@ describe("MCP auth-profile authorization", () => {
       };
       await persistAuthProfileBatch({ profiles: [{ profileId: "fixture:oauth", credential }] });
       const caller = source();
-      const authority = await captureMcpAuthProfileAuthorization({
+      const authority = await captureAuthProfileAuthorization({
         profileId: "fixture:oauth",
         agentDir: root.agentDir,
         assertCurrent: caller.assertCurrent,
