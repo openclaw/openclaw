@@ -151,7 +151,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             aria-hidden="true"
             prop:startMs={props.part.startedAt}
             prop:seed={props.part.key}
-            prop:phrases={props.options.workingPhrases}
+            prop:phrases={props.options.workingPhrases ?? props.branding.workingPhrases}
           />
         </Show>
         <Show when={runningSubagents() > 0}>
