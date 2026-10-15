@@ -41,14 +41,10 @@ it("refuses an active fragment whose dependency is absent", async () => {
 });
 
 it("refuses cyclic active fragment dependencies", async () => {
-  const base = fixtureDescriptor();
-  const descriptor = {
-    ...base,
-    fragments: base.fragments!.map((fragment) => ({
-      ...fragment,
-      dependencies: fragment.id === "labels" ? ["notes"] : ["labels"],
-    })),
-  };
+  const descriptor = fixtureDescriptor();
+  for (const fragment of descriptor.fragments!) {
+    fragment.dependencies = fragment.id === "labels" ? ["notes"] : ["labels"];
+  }
   using source = openFixture(descriptor, ["labels", "notes"]);
   await expect(
     admitDatabasePortDescriptor({ engine: "sqlite", db: source }, descriptor),
