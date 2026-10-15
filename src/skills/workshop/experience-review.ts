@@ -19,6 +19,7 @@ import {
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -104,9 +105,10 @@ export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
 ): Promise<void> {
   // The foreground root has closed by the idle timer's callback. Admit this
-  // detached review independently; a real Gateway drain still refuses it.
+  // detached review independently without retaining its transcript writer; a real
+  // Gateway drain still refuses the new root.
   await runWithGatewayDetachedWorkAdmission(
-    () => runSkillExperienceReviewInner(candidate),
+    () => runWithoutOwnedSessionTranscriptWrites(() => runSkillExperienceReviewInner(candidate)),
     "skills:experience-review",
   );
 }

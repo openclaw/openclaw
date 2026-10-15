@@ -11,6 +11,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import {
+  assertOwnedTranscriptWriteCommit,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
@@ -64,6 +68,43 @@ afterEach(async () => {
 });
 
 describe("runSkillExperienceReview", () => {
+  it("does not inherit the foreground transcript writer claim", async () => {
+    const candidate = await createExperienceReviewCandidate(
+      "review-writer-context",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+    );
+    setRuntimeConfigSnapshot(candidate.config);
+    const review = await vi.importActual<{
+      runSkillWorkshopReview: typeof runSkillWorkshopReview;
+    }>("./review-run.js");
+    mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+    mocks.runEmbeddedAgent.mockImplementation(async (params) => {
+      assertOwnedTranscriptWriteCommit({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: candidate.source.storePath,
+      });
+      return { meta: { durationMs: 1 } };
+    });
+
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: candidate.source,
+          assertCommitAllowed: () => {},
+          withTranscriptWrite: async (write) => await write(),
+        },
+        () => runSkillExperienceReview(candidate),
+      );
+
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    } finally {
+      mocks.runEmbeddedAgent.mockReset();
+    }
+  });
+
   it("does not dispatch user reply hooks for a detached experience review", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-user-reply-hook",
