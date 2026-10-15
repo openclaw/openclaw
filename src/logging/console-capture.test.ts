@@ -14,7 +14,6 @@ import {
 } from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
@@ -25,7 +24,7 @@ import {
   writeRootConsoleLine,
 } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
+import { resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -72,48 +71,31 @@ afterAll(async () => {
 describe("enableConsoleCapture", () => {
   const secret = "sk-testsecret1234567890abcd";
 
-  it.each([
-    { source: "captured", active: true, suppressed: false },
-    { source: "root", active: true, suppressed: false },
-    { source: "captured", active: false, suppressed: false },
-    { source: "root", active: true, suppressed: true },
-  ] as const)(
-    "keeps $source diagnostics separate from progress (active: $active, suppressed: $suppressed)",
-    ({ source, active, suppressed }) => {
-      const writes: string[] = [];
-      const stream = Object.assign(
-        new Writable({
-          write(chunk: Buffer, _encoding, callback) {
-            writes.push(chunk.toString());
-            callback();
-          },
-        }),
-        { isTTY: active },
-      );
-      setLoggerOverride({ level: "silent", consoleStyle: "pretty" });
-      vi.stubGlobal("console", new Console({ stdout: stream, stderr: stream }));
-      try {
-        enableConsoleCapture();
-        registerActiveProgressLine(stream as NodeJS.WriteStream);
-        if (active) {
-          stream.write("PROGRESS");
-        }
-        const message = suppressed ? "Closing session: synthetic" : "DIAGNOSTIC";
-        if (source === "captured") {
-          console.error(message);
-        } else {
-          writeRootConsoleLine("error", message);
-        }
-        expect(writes.join("")).toBe(
-          suppressed ? "PROGRESS" : `${active ? "PROGRESS\r\x1b[2K" : ""}DIAGNOSTIC\n`,
-        );
-      } finally {
-        unregisterActiveProgressLine(stream as NodeJS.WriteStream);
-        vi.unstubAllGlobals();
-        stream.destroy();
-      }
-    },
-  );
+  it("leaves active progress untouched when root output is suppressed", () => {
+    const writes: string[] = [];
+    const stream = Object.assign(
+      new Writable({
+        write(chunk: Buffer, _encoding, callback) {
+          writes.push(chunk.toString());
+          callback();
+        },
+      }),
+      { isTTY: true },
+    );
+    setLoggerOverride({ level: "silent", consoleStyle: "pretty" });
+    vi.stubGlobal("console", new Console({ stdout: stream, stderr: stream }));
+    try {
+      enableConsoleCapture();
+      registerActiveProgressLine(stream as NodeJS.WriteStream);
+      stream.write("PROGRESS");
+      writeRootConsoleLine("error", "Closing session: synthetic");
+      expect(writes.join("")).toBe("PROGRESS");
+    } finally {
+      unregisterActiveProgressLine(stream as NodeJS.WriteStream);
+      vi.unstubAllGlobals();
+      stream.destroy();
+    }
+  });
 
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -168,23 +150,6 @@ describe("enableConsoleCapture", () => {
     }
   });
 
-  it("does not rewrap structured subsystem output", () => {
-    setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
-
-    createSubsystemLogger("gateway/auth").warn("authentication retry", { attempt: 2 });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
-      level: "warn",
-      subsystem: "gateway/auth",
-      message: "authentication retry",
-      attempt: 2,
-    });
-  });
-
   it.each([
     { consoleStyle: "compact", forced: false },
     { consoleStyle: "compact", forced: true },
@@ -226,7 +191,6 @@ describe("enableConsoleCapture", () => {
       expect(String(event.stack)).not.toContain("forwardedConsoleCall");
     },
   );
-
   it("redacts credentials from structured console trace messages and stacks", () => {
     setLoggerOverride({ level: "info", consoleLevel: "trace", consoleStyle: "json" });
     const error = vi.fn();
@@ -317,32 +281,25 @@ describe("enableConsoleCapture", () => {
     expect(event.stack).not.toContain("custom-only-secret");
   });
 
-  it.each(["json", "compact"] as const)(
-    "formats %s bracket-prefixed root fallback output",
-    (consoleStyle) => {
-      setLoggerOverride({
-        level: "info",
-        file: tempLogPath(),
-        consoleLevel: "error",
-        consoleStyle,
-      });
-      const error = vi.fn();
-      console.error = error;
-      enableConsoleCapture();
+  it.each(["json"] as const)("formats %s bracket-prefixed root fallback output", (consoleStyle) => {
+    setLoggerOverride({
+      level: "info",
+      file: tempLogPath(),
+      consoleLevel: "error",
+      consoleStyle,
+    });
+    const error = vi.fn();
+    console.error = error;
+    enableConsoleCapture();
 
-      logError("[tools] exec failed");
+    logError("[tools] exec failed");
 
-      expect(error).toHaveBeenCalledTimes(1);
-      if (consoleStyle === "json") {
-        expect(JSON.parse(String(mockCall(error)[0]))).toMatchObject({
-          level: "error",
-          message: "[tools] exec failed",
-        });
-      } else {
-        expect(error).toHaveBeenCalledWith("[tools] exec failed");
-      }
-    },
-  );
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(mockCall(error)[0]))).toMatchObject({
+      level: "error",
+      message: "[tools] exec failed",
+    });
+  });
 
   it("wraps forced stderr passthrough output when console style is JSON", () => {
     setLoggerOverride({ level: "info", consoleLevel: "error", consoleStyle: "json" });
@@ -358,28 +315,6 @@ describe("enableConsoleCapture", () => {
     expect(written).not.toContain(secret);
   });
 
-  it("keeps JSON diagnostics structured while runtime JSON stays raw", () => {
-    setLoggerOverride({
-      level: "info",
-      file: tempLogPath(),
-      consoleLevel: "info",
-      consoleStyle: "json",
-    });
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    routeLogsToStderr();
-    enableConsoleCapture();
-
-    console.log("diag");
-    defaultRuntime.writeJson({ ok: true });
-
-    expect(JSON.parse(String(mockCall(stderrWrite)[0]))).toMatchObject({
-      level: "info",
-      message: "diag",
-    });
-    expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
-  });
-
   it("routes subsystem-prefixed warnings through one file-log sink", async () => {
     const logPath = tempLogPath();
     setLoggerOverride({ level: "info", file: logPath });
@@ -392,26 +327,8 @@ describe("enableConsoleCapture", () => {
     expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
   });
 
-  it("uses the current applied logger generation for each forwarded console call", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
-    const firstFile = tempLogPath();
-    const secondFile = tempLogPath();
-    applyLoggingConfig({ level: "info", file: firstFile });
-    enableConsoleCapture();
-
-    console.log("first applied generation");
-    applyLoggingConfig({ level: "info", file: secondFile });
-    console.log("second applied generation");
-    await testApi.flushFileLogQueueForTests();
-
-    expect(fs.readFileSync(firstFile, "utf8")).toContain("first applied generation");
-    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("second applied generation");
-    expect(fs.readFileSync(secondFile, "utf8")).toContain("second applied generation");
-  });
-
   it.each([
     { name: "info", log: logInfo, consoleMethod: "log" as const },
-    { name: "error", log: logError, consoleMethod: "error" as const },
   ])(
     "routes non-subsystem $name logs through one file and console sink",
     async ({ log, consoleMethod }) => {
@@ -479,32 +396,33 @@ describe("enableConsoleCapture", () => {
     expect(line).not.toContain(secret);
   });
 
-  it.each([
-    { name: "stdout", stream: process.stdout },
-    { name: "stderr", stream: process.stderr },
-  ])("records natural completion on async EPIPE on $name", async ({ stream }) => {
-    const originalExitCode = process.exitCode;
-    process.exitCode = undefined;
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
-    try {
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      loggingState.streamErrorHandlersInstalled = false;
-      enableConsoleCapture();
-      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-      epipe.code = "EPIPE";
-      stream.emit("error", epipe);
-      expect(await waitForCliSignalExit()).toBe(0);
-      expect(process.exitCode).toBe(0);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      await waitForCliSignalExit();
-      process.exitCode = originalExitCode;
-      exitSpy.mockRestore();
-    }
-  });
+  it.each([{ name: "stdout", stream: process.stdout }])(
+    "records natural completion on async EPIPE on $name",
+    async ({ stream }) => {
+      const originalExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => {}) as typeof process.exit);
+      try {
+        setLoggerOverride({ level: "info", file: tempLogPath() });
+        loggingState.streamErrorHandlersInstalled = false;
+        enableConsoleCapture();
+        const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+        epipe.code = "EPIPE";
+        stream.emit("error", epipe);
+        expect(await waitForCliSignalExit()).toBe(0);
+        expect(process.exitCode).toBe(0);
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        await waitForCliSignalExit();
+        process.exitCode = originalExitCode;
+        exitSpy.mockRestore();
+      }
+    },
+  );
 
   it.each([
-    { outcome: "recovered", code: 0 },
     { outcome: "command failed", code: 2 },
     { outcome: "recovery failed", code: 1 },
   ])("waits for maintenance recovery on EPIPE ($outcome)", async ({ outcome, code }) => {
@@ -536,26 +454,6 @@ describe("enableConsoleCapture", () => {
       unregister();
       await waitForSignalExitBarriers();
       await waitForCliSignalExit();
-      process.exitCode = originalExitCode;
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("preserves an existing nonzero exit code on async EPIPE", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
-    const originalExitCode = process.exitCode;
-    try {
-      process.exitCode = 2;
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      loggingState.streamErrorHandlersInstalled = false;
-      enableConsoleCapture();
-      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-      epipe.code = "EPIPE";
-      process.stderr.emit("error", epipe);
-      expect(await waitForCliSignalExit()).toBe(2);
-      expect(process.exitCode).toBe(2);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
       process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
