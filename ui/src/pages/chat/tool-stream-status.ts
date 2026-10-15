@@ -423,7 +423,8 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         phase: "answer",
         seq: payload.seq,
       });
-    } else if (payload.data.text || payload.data.delta) {
+    } else {
+      // Reconnect snapshots retain the assistant sequence without copying its text.
       reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
     }
     return true;
