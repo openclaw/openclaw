@@ -52,7 +52,7 @@ import type {
   PluginStateOperationHandler,
 } from "./plugin-state-store.types.js";
 import {
-  type PluginStateWorkerOperations,
+  type PluginStateWriteOperations,
   type PluginStateReadCommand,
   type PluginStateReadResult,
   pluginStateWorkerOperations,
@@ -165,11 +165,11 @@ export async function preparePluginStateOperation(input: PluginStateOperationInp
 }
 
 export function executePluginStateCommand(
-  command: SqliteWorkerCommand<PluginStateWorkerOperations>,
+  command: SqliteWorkerCommand<PluginStateWriteOperations>,
   options: OpenClawStateDatabaseOptions & { path: string },
   openDatabase: () => OpenClawStateDatabase,
   hasRetainedDatabase: boolean,
-): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
+): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
   const admit = (stage: "transaction" | "commit") =>
     requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {

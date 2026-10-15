@@ -110,6 +110,8 @@ export type PluginStateReadType =
   | "pluginState.entriesInKeyRange"
   | "pluginState.count";
 
+export type PluginStateWriteOperations = Omit<PluginStateWorkerOperations, PluginStateReadType>;
+
 export type PluginStateReadCommand = SqliteWorkerCommand<
   Pick<PluginStateWorkerOperations, PluginStateReadType>
 >;
@@ -244,7 +246,7 @@ export const pluginStateWorkerOperations = {
 export function isPluginStateWorkerCommand(command: {
   type: string;
   input: unknown;
-}): command is SqliteWorkerCommand<PluginStateWorkerOperations> {
+}): command is SqliteWorkerCommand<PluginStateWriteOperations> {
   return (
     !isPluginStateReadCommand(command) && Object.hasOwn(pluginStateWorkerOperations, command.type)
   );

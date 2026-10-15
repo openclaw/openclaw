@@ -44,6 +44,7 @@ import {
   isPluginStateReadCommand,
   type PluginStateWorkerOperations,
   type PluginStateWorkerRequests,
+  type PluginStateWriteOperations,
 } from "./plugin-state-worker-contract.js";
 import {
   capturePluginStateWorkerFailure,
@@ -51,7 +52,7 @@ import {
   type PluginStateWorkerFailure,
 } from "./plugin-state-worker-errors.js";
 
-type Scope = Pick<SqliteWorkerStore<PluginStateWorkerOperations>, "execute">;
+type Scope = Pick<SqliteWorkerStore<PluginStateWriteOperations>, "execute">;
 type HostAdmission = {
   context?: OpenClawStateWorkerContext;
   env?: NodeJS.ProcessEnv;
@@ -298,17 +299,13 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     ]);
     const operation = async (scope: Scope) => {
       operationStarted = true;
-      const result = await scope.execute<Key>(
-        command.input === undefined
-          ? command
-          : {
-              type: command.type,
-              input: {
-                ...command.input,
-                sessionEntryCurrentSources: currentEntries?.sources,
-              },
-            },
-      );
+      const result = await scope.execute({
+        type: typedCommand.type,
+        input: {
+          ...typedCommand.input,
+          sessionEntryCurrentSources: currentEntries?.sources,
+        },
+      });
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
@@ -318,7 +315,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
           result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
         installObservation?.(observation.row);
       }
-      return result.value;
+      // SAFETY: Dispatch preserves the caller's command/result pairing across the writer transport.
+      return result.value as PluginStateWorkerRequests[Key]["output"];
     };
     if (missing) {
       const result = await runOpenClawStateWorkerOperation(context, operation, {
