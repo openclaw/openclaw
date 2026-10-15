@@ -595,7 +595,11 @@ separate SQLite handle retention window remains 30 minutes.
 `openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
 starts and confirmed native exits through the same heartbeat. Retirement reasons
 are `idle_timeout`, `memory_pressure`, `closed`, `rotation`, `cancelled`,
-`failure`, or `exit` when an owner did not specify a reason. A retirement request
+`failure`, `eviction`, `idle-expiry`, `dispose`, `shutdown`, `crash`, `gc-thrash`,
+or `exit` when an owner did not specify a reason. Code Mode distinguishes warm-cache
+eviction, idle expiry, explicit disposal, host shutdown, native crash, and GC-watchdog
+retirement; see [Code Mode executors](/tools/code-mode/executors).
+A retirement request
 does not count until the Worker exits; failed termination and retries do not
 double-count. Counters survive exporter restarts and reset with the process.
 Use `60 * rate(openclaw_worker_started_total[5m])` for starts per minute by
