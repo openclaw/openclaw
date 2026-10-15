@@ -820,7 +820,6 @@
 ["extensions/line/src/bot-handlers.test.ts","openclaw/plugin-sdk/command-auth-native","5b1da443eefab9c4cdeff94774999cb275316b837b96e08bb773b93cf9928f0b",1]
 ["extensions/line/src/bot-handlers.test.ts","openclaw/plugin-sdk/conversation-runtime","91adea619aabd11f225623db8ba06ce0913bc667660ed515e5c9727cf800f18d",1]
 ["extensions/line/src/bot-handlers.test.ts","openclaw/plugin-sdk/reply-history","22099880d1ae5b2a6166835f7c1dbc272e22eddc37eda9c35bc0d97d991811bc",1]
-["extensions/line/src/bot-handlers.test.ts","openclaw/plugin-sdk/runtime-env","1d186b41d5937c8254d720250d241f6b056cafebd5d794979c358f0e0f274974",1]
 ["extensions/line/src/bot-handlers.test.ts","openclaw/plugin-sdk/runtime-group-policy","d236fc1c554849de8116bf1a36ebf66ecf2c29c91d5a05fdd10c3c5397546f50",1]
 ["extensions/line/src/bot-mention-context.test.ts","./send.js","8b1a9d0edd87730041ee3198d79370ec5e28c66a0afd06c16c9628ec9d354e02",1]
 ["extensions/line/src/bot-message-context.test.ts","./send.js","7cb08b90c703c6bff53d1eb498472e6a460f54cded898a28c9a406c2fc75a424",1]

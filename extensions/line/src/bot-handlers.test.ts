@@ -89,7 +89,8 @@ vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   warnMissingProviderGroupPolicyFallbackOnce: () => {},
 }));
 const logVerboseMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   danger: (text: string) => text,
   logVerbose: logVerboseMock,
 }));
@@ -762,7 +763,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
     expect(buildLinePostbackContextMock).toHaveBeenCalled();
-    expect(logVerboseMock.mock.calls.join()).not.toContain("line.action=play&line.device=tv");
+    expect(logVerboseMock.mock.calls.join(",")).not.toContain("line.action=play&line.device=tv");
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
