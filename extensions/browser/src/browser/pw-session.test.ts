@@ -5,12 +5,12 @@ import type { Dialog, Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import { getObservedBrowserStateForPage } from "./pw-session-state.js";
 import {
   armObservedDialogResponseOnPage,
   beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
-  getObservedBrowserStateForPage,
   isBrowserObservedDialogBlockedError,
   isDownloadStartingNavigationError,
   refLocator,

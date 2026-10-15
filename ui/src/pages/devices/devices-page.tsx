@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -602,7 +602,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const config = projectRuntimeConfig(context.runtimeConfig);
   createEffect(
     createMemo(() => props.routeData),
-    (data) => controller.setRouteData(data),
+    // Receipt adoption samples live admission; useGatewayPage owns Gateway observation.
+    (data) => untrack(() => controller.setRouteData(data)),
   );
   onCleanup(() => controller.dispose());
   const view = createMemo(() => {

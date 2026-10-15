@@ -11,8 +11,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
-  assertOpenClawStateWriteAllowedAtPath,
   inspectOpenClawStateOwnershipAtPath,
   type OpenClawExternalStateOwnership,
 } from "../state/openclaw-state-ownership.js";

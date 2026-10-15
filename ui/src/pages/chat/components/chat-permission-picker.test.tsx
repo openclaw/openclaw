@@ -96,10 +96,15 @@ it("keeps declared shortcuts in the menu and forwards ordinary typing to the com
   expect(onSelect).toHaveBeenCalledTimes(1);
 });
 
-it("preserves option content on unrelated refreshes while admitting permission changes", () => {
+it("preserves option content on unrelated refreshes while admitting permission changes", async () => {
   const options: ChatPermissionPickerProps = { canSelectFull: false, onSelect: vi.fn() };
   const [props, setProps] = createSignal(options);
   const { container } = mountSolid(() => <ChatPermissionPicker {...props()} />);
+  flush();
+  container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+  );
   const row = container.querySelector<HTMLElement>('[data-chat-permission-option="default"]')!;
   const content = row.querySelector(".chat-controls__permission-option-copy");
   const icon = row.querySelector(".chat-controls__permission-option-icon");
