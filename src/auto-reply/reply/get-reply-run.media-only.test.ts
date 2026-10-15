@@ -2084,7 +2084,7 @@ describe("runPreparedReply media-only handling", () => {
       });
       const expectedGroupChannel = usesBaseSession ? "#ops" : undefined;
       const call = requireRunReplyAgentCall(-1);
-      expect(buildGroupIntro).toHaveBeenCalledWith({
+      expect(vi.mocked(buildGroupIntro).mock.calls[0]?.[0]).toMatchObject({
         activation: usesBaseSession ? "always" : undefined,
         defaultActivation: "mention",
       });

@@ -57,6 +57,12 @@ export async function prepareCommandConversationContext(params: {
     });
     const ctx = { ...conversation.fields, CommandAuthorized: false };
     const shared = ctx.ChatType === "group" || ctx.ChatType === "channel";
+    const silentReplyPolicy = resolveSilentReplySettings({
+      cfg,
+      sessionKey,
+      surface: ctx.Surface ?? ctx.Provider,
+      conversationType: shared ? "group" : "direct",
+    }).policy;
     const sourceContext = buildSourceConversationContext({
       sessionCtx: ctx,
       sourceReplyDeliveryMode: await resolveSessionStableReplyMode({
@@ -66,12 +72,7 @@ export async function prepareCommandConversationContext(params: {
         sessionAgentId,
         sessionKey,
       }),
-      silentReplyPolicy: resolveSilentReplySettings({
-        cfg,
-        sessionKey,
-        surface: ctx.Surface ?? ctx.Provider,
-        conversationType: shared ? "group" : "direct",
-      }).policy,
+      silentReplyPolicy,
       silentToken: SILENT_REPLY_TOKEN,
     });
     if (sourceContext) {
@@ -86,6 +87,7 @@ export async function prepareCommandConversationContext(params: {
             defaultActivation: defaultGroupActivation(
               await resolveGroupRequireMention({ cfg, group: conversation.group }),
             ),
+            silentReplyPolicy,
           }),
       ]
         .filter(Boolean)
