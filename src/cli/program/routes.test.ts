@@ -9,6 +9,7 @@ import { tryRouteCli } from "../route.js";
 
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
@@ -21,6 +22,10 @@ vi.mock("../../commands/models/list.status-command.js", () => ({
 
 vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
+}));
+
+vi.mock("../daemon-cli/status.js", () => ({
+  runDaemonStatus: runDaemonStatusMock,
 }));
 
 function routeArgv(args = ""): string[] {
