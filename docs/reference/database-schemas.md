@@ -147,11 +147,9 @@ old. A hit skips startup snapshot, readiness, schema, and integrity inspection,
 including post-ready scans. The plain checksum-protected write needs no rename
 or fsync protocol; an incomplete seal falls back to full validation.
 
-Admitted facts belong to the physical store for the process lifetime and are
-shared with all workers and handles, including after the final handle closes.
-Write receipts and explicit invalidation, such as quarantine or maintenance,
-refresh the affected facts. Clean-close seals restore validated facts across
-process restarts without SQL.
+Admitted facts are shared with all workers and handles while the database is open.
+Final close releases their in-memory payloads; a clean-close seal restores validated
+facts on reopen without SQL. A close that cannot seal requires fresh admission.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without

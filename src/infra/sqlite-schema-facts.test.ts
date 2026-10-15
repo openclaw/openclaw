@@ -73,7 +73,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it("retains validation across closed handles and refreshes after DDL or replacement", () => {
+  it("shares validation across open handles and revalidates after final close or replacement", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");
     const first = openDatabase(undefined, true, filename);
@@ -92,17 +92,12 @@ describe("admitted SQLite schema facts", () => {
       first.close();
       const reopened = openDatabase("", true, filename);
       expect(tableExists(reopened, "original")).toBe(true);
-      expect(validations()).toHaveLength(0);
+      expect(validations()).toHaveLength(1);
       const sibling = openDatabase("", true, filename);
       expect(tableExists(sibling, "original")).toBe(true);
-      expect(validations()).toHaveLength(0);
-      sibling.close();
-      reopened.exec("CREATE TABLE added (id)");
-      reopened.close();
-      const afterDdl = openDatabase("", true, filename);
-      expect(tableExists(afterDdl, "added")).toBe(true);
       expect(validations()).toHaveLength(1);
-      afterDdl.close();
+      sibling.close();
+      reopened.close();
 
       const replacementPath = path.join(root, "replacement.sqlite");
       const replacement = new DatabaseSync(replacementPath);
@@ -116,7 +111,7 @@ describe("admitted SQLite schema facts", () => {
       replaced.close();
       const replacementReopened = openDatabase("", true, filename);
       expect(tableExists(replacementReopened, "replacement")).toBe(true);
-      expect(validations()).toHaveLength(2);
+      expect(validations()).toHaveLength(3);
     } finally {
       observation.restore();
     }

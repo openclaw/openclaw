@@ -97,6 +97,50 @@ describe("native session binding leases", () => {
     expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
   });
 
+  it.each([-70_000, 70_000])(
+    "keeps the lease wait deadline on the monotonic clock across a %d ms wall-clock jump",
+    async (jumpMs) => {
+      vi.useFakeTimers();
+      const { values, owner } = createLeaseFixture();
+      const key = "binding";
+      // A peer holds a live lease long enough that the owner must wait inside
+      // the acquisition loop while its 70s wait budget runs.
+      values.set(key, {
+        value: "peer",
+        lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
+      });
+      const pending = owner.transact(key, (current) => ({ next: current, result: true }));
+      // Attach an early catch so a mid-advance rejection never surfaces as an
+      // unhandled rejection before the assertion below observes it.
+      const settled = pending.then(
+        (v) => ({ ok: true as const, v }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      // Let the first busy iteration (update + monotonic sleep) settle.
+      await vi.advanceTimersByTimeAsync(1_000);
+      // Adjust the wall clock (Date.now) only; the monotonic budget is untouched.
+      vi.setSystemTime(Date.now() + jumpMs);
+      if (jumpMs > 0) {
+        // A forward jump past the 70s deadline must not prematurely time out an
+        // acquisition that has waited nothing, so release the peer lease only
+        // after the deadline check has run.
+        await vi.advanceTimersByTimeAsync(1_000);
+        values.set(key, { value: "peer" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(settled).resolves.toEqual({ ok: true, v: true });
+      } else {
+        // A backward jump must not stretch the wait past its budget: with the
+        // peer never releasing, the acquisition times out at the waitMs budget
+        // (70s) instead of hanging beyond it. Advance just past 70s monotonic
+        // so the deadline fires; a wall-clock-based deadline would need ~140s.
+        await vi.advanceTimersByTimeAsync(71_000);
+        await expect(settled).resolves.toMatchObject({ ok: false });
+        await expect(pending).rejects.toThrow("Binding lease timed out: binding");
+        vi.clearAllTimers();
+      }
+    },
+  );
+
   it.each(["transaction", "heartbeat"])(
     "fences a replaced lease at %s without deleting its successor",
     async (check) => {

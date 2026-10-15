@@ -50,12 +50,6 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
-Task pools whose canonical database access is entirely read-only declare
-`databaseAccess: "read-only"`. The transcript reader, memory retrieval, and chunk-preparation pools
-use this declaration so ordinary worker retirement preserves the store's admitted
-facts. A worker that may write still invalidates admission if it exits with an
-open database, because committed changes may lack their final publication receipt.
-
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
@@ -159,11 +153,9 @@ agent ownership checks, and destructive cleanup authority remain in place.
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
-then reuse them across handles and workers for the physical store's process
-lifetime. Closing the final handle preserves those facts for the next open.
-Write receipts and explicit invalidation refresh the affected facts. Fresh quarantine
-inspection rereads the decision row while reusing the admitted schema version;
-tracked DDL invalidates that version.
+then reuse them across handles and workers while admission retains a live
+reference. An idle reopen can reuse facts retained by another handle; closing
+the final handle retires those facts, so the next open admits the database again.
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
@@ -859,11 +851,10 @@ SQLite format, schema-version, integrity, required-index, and
 table-existence validation is shared across open handles and workers for each
 physical database. The first opener publishes admitted facts through the
 existing worker bootstrap and broker channel. Later handles, worker isolates,
-scopes, and requests reuse those facts even after every connection closes.
-Native close releases handle references without retiring admission facts. Worker
-exit removes its references; an exit with open handles also invalidates write,
-schema, and admission facts because committed changes may lack published receipts.
-Identity is the file's volume, inode, and stable birthtime, checked with
+scopes, and requests reuse those facts while an admitted connection remains open.
+The final native close or worker exit retires the facts and removes them from
+worker bootstrap snapshots. Reopening after every connection closes validates
+the database again. Identity is the file's volume, inode, and stable birthtime, checked with
 `fstat`; path equality or SQL version probes do not establish physical identity.
 A replaced or restored file requires its own first validation.
 The identity owner retains a descriptor for the process lifetime and checks its
@@ -871,10 +862,9 @@ The identity owner retains a descriptor for the process lifetime and checks its
 change time as birthtime, the existing normalized unknown-birthtime value remains
 in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
-from SQLite's native connection descriptor. Identity, schema, and row-write
-metadata survive ordinary close; writes and explicit invalidation update the
-applicable facts. Explicit database removal or maintenance can retire admission
-and the descriptor after joining its native consumers.
+from SQLite's native connection descriptor. This small identity record survives
+ordinary close; schema and row-write metadata do not. Explicit database removal
+or maintenance can retire the descriptor after joining its native consumers.
 This cleanup changes no persisted data, schema, or update procedure.
 
 Synchronous admission exchanges carry the requested physical database's facts and
