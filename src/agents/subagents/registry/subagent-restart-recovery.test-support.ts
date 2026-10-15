@@ -43,6 +43,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+// mock-isolation: Registry recovery owns both announcement exports without loading delivery state.
 vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn<
