@@ -1986,7 +1986,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
-src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
 src/gateway/server-node-events.ts	1
 src/gateway/server-plugin-in-process-dispatch.ts	3
