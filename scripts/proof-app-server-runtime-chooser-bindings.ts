@@ -40,8 +40,12 @@
  *      that dead-ends the next turn in `ensureSelectedAgentHarnessPlugin()`.
  *      Proven for both bridge harnesses, and `applyModelRuntimeDirective()` is
  *      run to show nothing is written to the session entry.
- *   8. Gate exemptions — the built-in `openclaw` runtime and an incompatible
- *      runtime keep their existing outcomes.
+ *   8. Gate exemptions — the built-in `openclaw` runtime stays ungated, and a
+ *      genuinely incompatible runtime keeps its unsupported message. `codex` is
+ *      that control: it is the one harness whose applicability is closed to its
+ *      own providers, so a non-OpenAI provider refuses it. A bound-but-additive
+ *      runtime such as `copilot` is NOT a valid negative control — it is still
+ *      accepted for an eligible unowned provider, which scenario 13b pins.
  *   9. Next-turn consequence — the real `ensureSelectedAgentHarnessPlugin()`
  *      is run against the real captured registry a disabled owner produces. It
  *      throws for the override the pre-fix directive persisted, and the
@@ -413,17 +417,31 @@ try {
     { kind: "set", runtime: "openclaw" },
     "the built-in openclaw runtime must not be gated on a harness owner plugin",
   );
+  // The negative control has to be a runtime whose applicability is genuinely
+  // CLOSED, and `codex` is the only one: `resolveCompatibleAgentRuntimeForProvider()`
+  // answers it with its binding rows alone (the `openai` row plus the virtual
+  // `codex` namespace) and never falls through to harness/manifest/CLI discovery,
+  // which is exactly what `main` does. Every other bound runtime is ADDITIVE --
+  // `copilot` for a non-`github-copilot` provider is ACCEPTED, not refused, via the
+  // enabled harness owner, so it cannot serve as an incompatible case here. That
+  // acceptance is a contract in its own right and scenario 13b pins it; the unit
+  // guard for this half is "keeps Codex closed to its own providers" in
+  // src/agents/session-runtime-compat.test.ts.
   const incompatible = resolveModelRuntimeDirective({
-    rawRuntime: "copilot",
+    rawRuntime: "codex",
     provider: "proof-standalone",
     cfg: config,
   });
   assert.ok(
     incompatible.kind === "invalid" &&
+      incompatible.runtime === "codex" &&
+      incompatible.errorText.includes('"codex"') &&
       incompatible.errorText.includes("is not supported for proof-standalone"),
     `an incompatible runtime must keep its unsupported message: ${JSON.stringify(incompatible)}`,
   );
-  console.log("[8] openclaw runtime ungated; incompatible runtime keeps its unsupported message");
+  console.log(
+    "[8] openclaw runtime ungated; closed codex runtime keeps its unsupported message for proof-standalone",
+  );
 
   // --- Scenario 9: the next turn the gate protects. ---------------------------
   const disabledCopilotConfig = {
