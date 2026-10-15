@@ -249,7 +249,11 @@ export async function runActiveReplySteer(
     );
     releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
-    if (!isCurrentOwner()) {
+    if (
+      !isCurrentOwner() ||
+      activeReplyOperation.result ||
+      activeReplyOperation.abortSignal.aborted
+    ) {
       return await fallback("reply-owner-ended", injectionTarget.runId);
     }
     if (steeringAuthority.shouldQueueAuthorityMismatch) {
