@@ -19,6 +19,10 @@ import {
 export async function verifyCollaborativeCancellation(signal: AbortSignal) {
   const { replyRunRegistry } = await import("../auto-reply/reply/reply-run-registry.registry.js");
   const injection = await import("../auto-reply/reply/reply-run-registry.message-injection.js");
+  const { enqueueMessageInjection } =
+    await import("../auto-reply/reply/message-injection-authority.js");
+  const { replyMessageInjectionTargetOwner } =
+    await import("../auto-reply/reply/reply-run-registry.contracts.js");
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   try {
     await patchProofConfig(
@@ -28,7 +32,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
       },
       ["tools.toolsBySender.id:alice.deny"],
     );
-    for (const phase of ["preparation", "injection"] as const) {
+    for (const phase of ["preparation", "injection", "queued"] as const) {
       for (const cancel of ["source", "incumbent"] as const) {
         const id = `collaborative_cancel_${phase}_${cancel}`;
         console.log("[collaborative cancellation start]", id);
@@ -48,6 +52,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           (error: unknown) => ({ result: undefined, error }),
         );
         let bob: ReturnType<typeof runHuman> | undefined;
+        let queuedPreparation: Promise<void> | undefined;
         try {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -61,6 +66,31 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             replyRunRegistry.get(scenario.sourceKey),
             "Alice's owner",
           );
+          const queuedTarget =
+            phase === "queued"
+              ? expectDefined(
+                  replyRunRegistry.resolveCurrentMessageInjectionTarget(scenario.sourceKey),
+                  "Alice's injection target",
+                )
+              : undefined;
+          if (queuedTarget) {
+            const blockerEntered = createDeferred();
+            queuedPreparation = enqueueMessageInjection(
+              queuedTarget[replyMessageInjectionTargetOwner].backendIdentity,
+              async () => {
+                blockerEntered.resolve();
+                await resume.promise;
+              },
+            );
+            await withinTest(
+              awaitGateBeforeSettlement(
+                blockerEntered.promise,
+                queuedPreparation,
+                "Injection queue blocker did not start",
+              ),
+              signal,
+            );
+          }
           let injectionStarted = false;
           const begin = injection.beginReplyMessageInjectionTarget;
           const observing = vi
@@ -68,6 +98,15 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             .mockImplementation((...args) => {
               if (args[1].includes(scenario.sourcePrompt)) {
                 injectionStarted = true;
+                if (queuedTarget) {
+                  expect(args[0][replyMessageInjectionTargetOwner].backendIdentity).toBe(
+                    queuedTarget[replyMessageInjectionTargetOwner].backendIdentity,
+                  );
+                  const pending = begin(...args);
+                  // Bob is behind the real FIFO blocker, before his first preparation.
+                  entered.resolve();
+                  return pending;
+                }
               }
               return begin(...args);
             });
@@ -79,6 +118,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             .mockImplementation(async (caller) => {
               const fingerprint = await project(caller);
               if (
+                phase !== "queued" &&
                 !held &&
                 caller.allowCollaborativeSteering &&
                 injectionStarted === (phase === "injection")
@@ -118,6 +158,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           // The first sink effect is already sent; its HTTP producer must settle.
           scenario.releaseIncumbent.resolve();
           const [aliceResult, bobResult] = await Promise.all([aliceOutcome, bobOutcome]);
+          await queuedPreparation;
           await waitForGatewayActiveWork(30_000);
           expect(providerErrors).toEqual([]);
           expect(outbound.filter((entry) => entry.to === scenario.recipient)).toEqual([]);
@@ -144,6 +185,10 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           } else {
             expect(bobResult.error).toBeUndefined();
             expect(bobResult.result?.deferredToActiveRun).toBe("followup");
+            expect(humanReplies.slice(firstReply)).toContainEqual({
+              sender: "bob",
+              text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+            });
             expect(scenario.accepted).toMatchObject({ status: "accepted" });
             expect(scenario.sourceRequests.length).toBeGreaterThan(0);
             expect(scenario.targetRequests.length).toBeGreaterThan(0);
@@ -166,7 +211,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
         } finally {
           resume.resolve();
           scenario.releaseIncumbent.resolve();
-          await Promise.allSettled([alice, bob]);
+          await Promise.allSettled([queuedPreparation, alice, bob]);
           await waitForGatewayActiveWork(30_000);
         }
       }

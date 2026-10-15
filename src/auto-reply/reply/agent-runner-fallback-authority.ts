@@ -8,6 +8,7 @@ import type {
   ReplyToolAuthorityRoute,
 } from "../../sessions/session-controller.contracts.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import type { FollowupRun } from "./queue/types.js";
 import { prepareFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
@@ -106,6 +107,11 @@ export async function resolveReplySteeringAuthority(
           toolAuthority: {
             read: () => {
               assertCurrent();
+              if (operation.result || operation.abortSignal.aborted) {
+                throw new MessageInjectionTargetUnavailableError(
+                  "Reply steering target is no longer running",
+                );
+              }
               const current = operation.projectToolAuthorityFingerprint(caller);
               if (!current) {
                 throw new Error("Reply steering authority is no longer current");
