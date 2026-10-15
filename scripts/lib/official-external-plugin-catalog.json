@@ -775,6 +775,29 @@
       }
     },
     {
+      "name": "@openclaw/speechify-speech",
+      "description": "OpenClaw Speechify speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "speechify",
+          "label": "Speechify"
+        },
+        "contracts": {
+          "speechProviders": [
+            "speechify"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/speechify-speech",
+          "npmSpec": "@openclaw/speechify-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",

@@ -137,7 +137,7 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openshell`, `policy`, `visitor-access`                               |
-| Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
+| Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `speechify`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`     |
 | Utilities and reports   | `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                                 |
 
 ## License notices

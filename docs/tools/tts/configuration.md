@@ -286,6 +286,23 @@ or blank, it keeps the base TTS voice.
 }
 ```
   </Tab>
+  <Tab title="Speechify">
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "speechify",
+    providers: {
+      speechify: {
+        apiKey: "${SPEECHIFY_API_KEY}",
+        speakerVoiceId: "geffen_32",
+        model: "simba-3.2",
+      },
+    },
+  },
+}
+```
+  </Tab>
 </Tabs>
 
 For Xiaomi `mimo-v2.5-tts-voicedesign`, omit `speakerVoice` and set `style` to

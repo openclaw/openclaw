@@ -73,6 +73,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "gradium",
     speechProviderIds: ["gradium"],
   },
+  speechify: {
+    pluginId: "speechify",
+    speechProviderIds: ["speechify"],
+  },
   groq: {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],

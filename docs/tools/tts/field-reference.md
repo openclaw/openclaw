@@ -193,4 +193,12 @@ and resolved values still fail startup or reject the update.
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>
   </Accordion>
+
+  <Accordion title="Speechify">
+    <ParamField path="apiKey" type="string">Env: `SPEECHIFY_API_KEY`.</ParamField>
+    <ParamField path="baseUrl" type="string">HTTPS Speechify API URL on `api.speechify.ai`. Default `https://api.speechify.ai`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `geffen_32`. Legacy alias: `voiceId`.</ParamField>
+    <ParamField path="model" type="string">Default `simba-3.2`. Also: `simba-3.0`, `simba-english`, `simba-multilingual`. Legacy alias: `modelId`.</ParamField>
+    <ParamField path="language" type="string">Optional locale hint such as `pt-BR`.</ParamField>
+  </Accordion>
 </AccordionGroup>

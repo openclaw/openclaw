@@ -756,6 +756,12 @@
       - any-glob-to-any-file:
           - "extensions/senseaudio/**"
           - "docs/providers/senseaudio.md"
+"extensions: speechify":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/speechify/**"
+          - "docs/providers/speechify.md"
+          - "docs/plugins/reference/speechify.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:

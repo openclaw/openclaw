@@ -2270,7 +2270,8 @@
                       "providers/fish-audio",
                       "providers/gradium",
                       "providers/inworld",
-                      "providers/senseaudio"
+                      "providers/senseaudio",
+                      "providers/speechify"
                     ]
                   },
                   {

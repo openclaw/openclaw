@@ -1,0 +1,26 @@
+{
+  "id": "speechify",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Speechify",
+  "description": "Speechify text-to-speech with streaming, voice notes, and telephony output.",
+  "setup": {
+    "providers": [
+      {
+        "id": "speechify",
+        "envVars": ["SPEECHIFY_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["speechify"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
