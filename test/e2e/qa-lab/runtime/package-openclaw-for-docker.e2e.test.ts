@@ -341,6 +341,7 @@ describe("package-openclaw-for-docker", () => {
   });
 
   it.each([
+    { linkedDependencies: false, runtimeExtension: ".js" },
     { linkedDependencies: true, runtimeExtension: ".js" },
     { linkedDependencies: false, runtimeExtension: ".mjs" },
   ])(
@@ -547,12 +548,20 @@ describe("package-openclaw-for-docker", () => {
   );
 
   it.each([
+    { failure: "missing-entry", metadata: {} },
     { failure: "missing-worker", metadata: {} },
+    { failure: "stale-metadata", metadata: { version: "2026.7.1" } },
+    { failure: "stale-peer-dependencies", metadata: { peerDependencies: { missing: "1.0.0" } } },
     { failure: "stale-peer-meta", metadata: { peerDependenciesMeta: {} } },
   ])("rejects $failure in a selected built plugin", async ({ failure, metadata }) => {
     const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
-    if (failure === "missing-worker") {
-      fs.rmSync(path.join(sourceDir, "dist/extensions/demo/worker.js"));
+    if (failure === "missing-entry" || failure === "missing-worker") {
+      fs.rmSync(
+        path.join(
+          sourceDir,
+          `dist/extensions/demo/${failure === "missing-worker" ? "worker" : "index"}.js`,
+        ),
+      );
     } else {
       fs.writeFileSync(
         path.join(sourceDir, "dist/extensions/demo/package.json"),
@@ -581,6 +590,7 @@ describe("package-openclaw-for-docker", () => {
   it.each([
     { id: "../outside", error: /invalid plugin id/ },
     { id: "missing", error: /unknown plugin id/ },
+    { id: "demo,other", error: /unknown plugin id/ },
   ])("rejects invalid selected plugin $id before packing", async ({ id, error }) => {
     const { sourceDir, outputDir, files } = createSelectedPluginPackageFixture();
     const runCaptureImpl = vi.fn();
@@ -2169,6 +2179,29 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 5000,
       }),
     ).rejects.toThrow(/exceeded captured stdout limit \(1024 bytes\)/u);
+  });
+
+  it("copies exact stdin bytes to a file and rejects capture conflicts", async () => {
+    const tempDir = tempDirs.make("openclaw-package-stdout-file-");
+    const stdinFilePath = path.join(tempDir, "stdin.bin");
+    const stdoutFilePath = path.join(tempDir, "stdout.bin");
+    const expected = Buffer.from([0, 1, 10, 13, 127, 128, 255]);
+    fs.writeFileSync(stdinFilePath, expected);
+    const output = await runCommandForTest(
+      process.execPath,
+      ["-e", "process.stdin.pipe(process.stdout)"],
+      process.cwd(),
+      { stdinFilePath, stdoutFilePath },
+    );
+
+    expect(output).toBe("");
+    expect(fs.readFileSync(stdoutFilePath)).toEqual(expected);
+    await expect(
+      runCommandForTest(process.execPath, ["-e", ""], process.cwd(), {
+        captureStdout: true,
+        stdoutFilePath: path.join(tempDir, "conflict.bin"),
+      }),
+    ).rejects.toThrow("captureStdout and stdoutFilePath cannot be combined");
   });
 
   it("restores source artifacts before exiting after receipt-read termination", async () => {

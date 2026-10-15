@@ -124,8 +124,12 @@ describe("update global helpers", () => {
     ).toBe("https://example.com/openclaw-main.tgz");
   });
 
-  it("does not derive an installed version from another package", () => {
-    expect(resolveExpectedInstalledVersionFromSpec("openclaw", "other@1.2.3")).toBeNull();
+  it.each([
+    { spec: "other@1.2.3", expected: null },
+    { spec: "openclaw@^1.2.3", expected: null },
+    { spec: "openclaw@=v1.2.3", expected: "1.2.3" },
+  ])("derives an exact installed version from $spec", ({ spec, expected }) => {
+    expect(resolveExpectedInstalledVersionFromSpec("openclaw", spec)).toBe(expected);
   });
 
   it("recognizes the installed version of a pinned package target", () => {
@@ -630,33 +634,47 @@ describe("update global helpers", () => {
     expect(resolveNpmGlobalPrefixLayoutFromGlobalRoot("/tmp/node_modules")).toBeNull();
   });
 
-  it("cleans only renamed package directories when pacman fails", async () => {
-    await withRestoredMocks(
-      [
-        mockProcessPlatform("linux"),
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult("", { code: 1 })),
-      ],
-      async () => {
-        await withTestDir({ prefix: "openclaw-update-cleanup-" }, async (root) => {
-          await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
-          await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
-          await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
-          await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
+  it.each(["missing", "failed"] as const)(
+    "cleans only renamed package directories when pacman is %s",
+    async (probe) => {
+      await withRestoredMocks(
+        [
+          mockProcessPlatform("linux"),
+          vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+            pkgQueryResult(
+              "",
+              probe === "missing"
+                ? {
+                    code: null,
+                    termination: "error",
+                    error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
+                  }
+                : { code: 1 },
+            ),
+          ),
+        ],
+        async () => {
+          await withTestDir({ prefix: "openclaw-update-cleanup-" }, async (root) => {
+            await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
+            await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
+            await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
+            await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
 
-          const result = await cleanupGlobalRenameDirs({
-            globalRoot: root,
-            packageName: "openclaw",
+            const result = await cleanupGlobalRenameDirs({
+              globalRoot: root,
+              packageName: "openclaw",
+            });
+            expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
+            expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
+            const packageDirStat = await fs.stat(path.join(root, "openclaw"));
+            const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
+            expect(packageDirStat.isDirectory()).toBe(true);
+            expect(markerFileStat.isFile()).toBe(true);
           });
-          expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
-          expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
-          const packageDirStat = await fs.stat(path.join(root, "openclaw"));
-          const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
-          expect(packageDirStat.isDirectory()).toBe(true);
-          expect(markerFileStat.isFile()).toBe(true);
-        });
-      },
-    );
-  });
+        },
+      );
+    },
+  );
 
   it("checks installed dist against the packaged inventory", async () => {
     await withTestDir({ prefix: "openclaw-update-global-pkg-" }, async (packageRoot) => {
@@ -703,6 +721,19 @@ describe("update global helpers", () => {
         `global package root resolves to source checkout: ${realCheckoutRoot}`,
       );
     });
+  });
+
+  it("fails closed on newer installs when the inventory is missing", async () => {
+    await withTestDir(
+      { prefix: "openclaw-update-global-missing-inventory-new-" },
+      async (packageRoot) => {
+        await writeGlobalPackageJson(packageRoot, "2026.4.15");
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+          `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+        );
+      },
+    );
   });
 
   it("rejects invalid inventory files during global verify", async () => {
