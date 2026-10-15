@@ -266,7 +266,7 @@ describe("doctor config flow", () => {
         gateway: { mode: "local" },
         messages: {
           responsePrefix: "keep-prefix",
-          queue: { allowCollaborativeSteering: value, debounceMs: 125 },
+          queue: { allowCollaborativeSteering: value, cap: 8 },
         },
       };
 
