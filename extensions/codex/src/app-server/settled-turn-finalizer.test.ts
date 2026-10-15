@@ -468,4 +468,19 @@ describe("runCodexSettledTurnFinalization", () => {
 
     await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
   });
+
+  it("refuses an echoed finalization prompt before the mirror owns its identity", async () => {
+    const prompt =
+      "The previous assistant turn completed its tool calls but did not produce a user-visible answer. " +
+      "Continue from the current transcript and produce the final user-visible answer now. " +
+      "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step.";
+    const attempt = { ...createAttempt(), prompt };
+    mocks.runBounded.mockResolvedValue({ ...boundedResult(), text: prompt });
+
+    const result = await finalize(attempt);
+
+    expect(mocks.mirror).not.toHaveBeenCalled();
+    expect(result.assistantTranscriptOwned).toBeUndefined();
+    expect(result.assistant.content).toEqual([{ type: "text", text: prompt }]);
+  });
 });
