@@ -107,7 +107,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "TypeScript @deprecated annotations and migration documentation; placement reads, retirement, and restart clearing warn once per plugin and capability family on legacy use, while GitHub orphan deferral shares the github-publication family warning",
     ],
     tests: [
-      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "test/type-contracts/gateway-placement-compat.ts",
       "src/gateway/worker-environments/placement-store.test.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.test.ts",
       "src/gateway/operator-approval-placement-grants.test.ts",

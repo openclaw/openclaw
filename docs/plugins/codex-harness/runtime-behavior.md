@@ -278,6 +278,15 @@ that exact parent turn has ended. Child results stay attached to the original
 session lifecycle; a reset, replaced binding, or revoked source cannot inherit
 its retained authority.
 
+Native child completion delivery stops permanently when its retry budget is
+exhausted or requester recovery blocks it. OpenClaw retires that child turn's
+pending assignment and follow-up receipt together, so later parent registrations
+and Gateway restarts do not restart delivery. A bounded system note in the parent
+transcript identifies the child, its status, and its result session key; a warning
+records retirement even if the transcript note cannot be written. Other pending
+turns of the same child remain independent. Parent subscription retention during
+ordinary completion retries is unchanged.
+
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
 Responses keep streaming after their upload capacity is released, so a long

@@ -202,18 +202,9 @@ suite.define(() => {
       await page
         .locator(".settings-row__title", { hasText: "Langue" })
         .waitFor({ timeout: 10_000 });
-      expect(await documentMarker(page)).toBeUndefined();
-      expect(documentRequestCount).toBe(1);
-      expect(
-        await page.evaluate(
-          () =>
-            JSON.parse(
-              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
-            )?.buildId,
-        ),
-      ).toBe("e2e");
-      await page.waitForTimeout(500);
-      expect(documentRequestCount).toBe(1);
+      expect(await documentMarker(page)).toBe("same-document");
+      expect(documentRequestCount).toBe(0);
+      expect(await page.evaluate(() => document.documentElement.lang)).toBe("fr");
       expect(new URL(page.url()).pathname).toBe("/settings/appearance");
     } finally {
       await page.unroute(frenchLocaleModule, abortFrenchLocale);

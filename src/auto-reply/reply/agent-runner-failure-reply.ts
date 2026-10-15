@@ -166,7 +166,11 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const isTimeout = classifyCompactionReason(reason) === "timeout";
+  const classification = classifyCompactionReason(reason);
+  if (classification === "unshrinkable_request") {
+    return `⚠️ ${reason}`;
+  }
+  const isTimeout = classification === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
     ? "⚠️ This conversation is too long, and shortening it took too long."

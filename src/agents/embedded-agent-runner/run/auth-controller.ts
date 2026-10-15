@@ -11,6 +11,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
+import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
@@ -579,32 +580,29 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    let nextIndex = state.profileIndex + 1;
-    while (nextIndex < params.profileCandidates.length) {
-      const candidateIndex = nextIndex++;
-      const candidate = params.profileCandidates[candidateIndex];
-      // Candidate exhaustion is run-local and never depends on a cooldown write.
-      state.profileIndex = candidateIndex;
-      if (
-        candidate &&
-        isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
-      ) {
-        continue;
-      }
-      try {
-        await applyApiKeyInfo(candidate, candidateIndex);
-        state.thinkLevel = params.initialThinkLevel;
-        params.attemptedThinking.clear();
-        return true;
-      } catch (err) {
-        if (err instanceof SecretSurfaceUnavailableError) {
-          throw err;
+    const advanced = await advanceAuthProfileCandidate({
+      candidates: params.profileCandidates,
+      state,
+      isAvailable: (candidate) =>
+        !candidate || !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
+      tryPrepare: async (candidate, index) => {
+        try {
+          await applyApiKeyInfo(candidate, index);
+          return true;
+        } catch (error) {
+          if (error instanceof SecretSurfaceUnavailableError) {
+            throw error;
+          }
+          await recordOAuthRefreshFailure(candidate, error);
+          return false;
         }
-        await recordOAuthRefreshFailure(candidate, err);
-      }
+      },
+    });
+    if (advanced) {
+      state.thinkLevel = params.initialThinkLevel;
+      params.attemptedThinking.clear();
     }
-    state.profileIndex = params.profileCandidates.length;
-    return false;
+    return advanced;
   };
 
   const initializeAuthProfile = async () => {

@@ -358,6 +358,7 @@ src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/context.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
@@ -1263,7 +1264,11 @@ src/infra/zstd-codec.ts
 src/logger.ts
 src/logging/config.ts
 src/logging/console.ts
+src/logging/diagnostic-cpu-profile.ts
+src/logging/diagnostic-heap-profile.ts
+src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-redaction.ts
+src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
 src/logging/json-console-line.ts
 src/logging/levels.ts
@@ -1527,6 +1532,7 @@ src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
+src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
@@ -1913,6 +1919,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-pool.ts

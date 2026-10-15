@@ -2496,12 +2496,11 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
       expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
+      expect(inputText).not.toContain("[content omitted]");
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
-        expect(inputText).not.toContain("[content omitted]");
       } else {
         expect(inputText).not.toContain("COBALT-ORCHID-7429");
-        expect(inputText).toContain("[content omitted]");
       }
     },
   );

@@ -149,6 +149,26 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Image viewing
+
+Uploaded and managed chat images use compressed, size-bounded previews instead
+of downloading original photos for display. The browser selects an appropriate pixel density
+for signed image URLs; authenticated image requests choose a bounded rendition
+for the viewport. Offscreen images wait until they approach the viewport.
+Artifact images also receive bounded previews over the authenticated WebSocket
+when the Gateway is on another origin or its HTTP media route is unavailable.
+A failed preview never silently falls back to downloading original bytes.
+
+Tap an image to open the zoomable viewer. The existing preview stays visible
+while a sharper, screen-sized rendition loads. If that request fails, **Retry**
+loads it again without replacing the preview or opening another tab. Swiping to
+a gallery image loads that selection, not the rest of the gallery in advance.
+**Download image** fetches the original only when selected. Copy and download
+also remain available from the image's action menu when a preview cannot load.
+Third-party image URLs retain a secondary browser link because their servers
+may allow image display but block cross-origin downloads; this is not a recovery
+action for uploaded or managed previews.
+
 ## Collaborator drafts
 
 In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing...** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
@@ -518,7 +538,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
-    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Open, Download, and Copy actions use the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated full-image downloads while the image remains cached.
+    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
     - Your pending prompt stays before its own saved assistant reply even when the reply arrives before history recovery finishes after reconnect; existing saved messages keep their transcript order.

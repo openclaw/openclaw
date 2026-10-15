@@ -1,4 +1,5 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-image-renditions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -27,7 +28,12 @@ export type ImageBlock = {
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
 export type ArtifactDownloadResolver = (
-  params: { sessionKey: string; artifactId: string; variant?: "full" | "thumbnail" },
+  params: {
+    sessionKey: string;
+    artifactId: string;
+    variant?: "full" | "thumbnail";
+    previewWidth?: ChatImageRenditionWidth;
+  },
   signal?: AbortSignal,
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 

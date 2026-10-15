@@ -17,7 +17,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { closeContext, mountLoginGate, renderLoginGate } from "./login-gate-e2e.test-support.ts";
+import { closeContext, renderLoginGate } from "./login-gate-e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI responsive login gate E2E",
@@ -736,22 +736,32 @@ suite.define(() => {
       page,
       controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
     );
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl);
-      await chatModule.request;
-      const mounting = mountLoginGate(page, null);
-      void mounting.catch(() => {});
-      // The held route cannot have mounted while the login presentation is changed.
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+      const chatModuleUrl = await chatModule.request;
+      const priorConnects = await gateway.deferNext("connect");
+      // Retry clears the owner error and pins the gate while the handshake is held.
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await gateway.waitForRequest("connect", { after: priorConnects });
       expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-      chatModule.release();
-      await mounting;
-      expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
       const help = page.locator(".login-gate__help");
       expect(await help.evaluate((element) => element.tagName)).toBe("DETAILS");
+      expect(await page.locator(".login-gate__failure").count()).toBe(0);
       expect(await help.getAttribute("open")).toBeNull();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(false);
+      chatModule.release();
+      await page.evaluate(`import(${JSON.stringify(chatModuleUrl)}).then(() => undefined)`);
+      await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {
