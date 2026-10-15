@@ -110,13 +110,11 @@ export function createCodexLifecycleHarness(options: {
         (response.status === "unsubscribed" || response.status === "notSubscribed")
       ) {
         current.subscribed = false;
-        if (!options.unsubscribe) {
-          current.loaded = false;
-          harness.send({
-            method: "thread/status/changed",
-            params: { threadId, status: { type: "notLoaded" } },
-          });
-        }
+        current.loaded = false;
+        harness.send({
+          method: "thread/status/changed",
+          params: { threadId, status: { type: "notLoaded" } },
+        });
       }
       return response;
     }

@@ -371,7 +371,8 @@ async function createManualResumeFixture(
   }
   const response = threadStartResult(threadId, { cwd: workspaceDir });
   const thread = { ...response.thread, path: rolloutPath };
-  const unsubscribed = createDeferred();
+  const unsubscribed = createDeferred<void>();
+  let unloaded = false;
   const harness = createFakeCodexAppServerClient(async (method: string) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
@@ -394,7 +395,7 @@ async function createManualResumeFixture(
           ...thread,
           status: options.active
             ? { type: "active", activeFlags: [] }
-            : { type: options.cold ? "notLoaded" : "idle" },
+            : { type: options.cold || unloaded ? "notLoaded" : "idle" },
         },
       };
     }
@@ -403,6 +404,7 @@ async function createManualResumeFixture(
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
       if (options.receipt !== "none" && options.receipt !== "stale") {
+        unloaded = options.receipt !== "unrelated";
         await harness.notify({
           method: "thread/status/changed",
           params: {
@@ -415,6 +417,7 @@ async function createManualResumeFixture(
       return { status: "unsubscribed" };
     }
     if (method === "thread/resume") {
+      unloaded = false;
       return { ...response, thread };
     }
     if (method === "thread/inject_items") {
@@ -687,7 +690,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
-  it("resumes idle A with current policy while B stays active and catalog leases come and go", async () => {
+  it("resumes unloaded A with current policy while B stays active and catalog leases come and go", async () => {
     const sessionFile = path.join(tempDir, "parallel-policy.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const threadId = "parallel-policy-a";
@@ -713,7 +716,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         throw new Error(`unexpected method: ${method}`);
       },
     });
-    fixture.seed(threadStartResult(threadId), { loaded: true, subscribed: false });
+    fixture.seed(threadStartResult(threadId));
     const siblingResponse = threadStartResult(siblingId);
     fixture.seed(
       {
@@ -1214,6 +1217,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     async (operation) => {
       const fixture = await createManualResumeFixture({ wireClient: true });
       await fixture.start();
+      await fixture.client.request("thread/unsubscribe", { threadId: fixture.threadId });
       fixture.wire!.writes.length = 0;
       const entered = createDeferred<void>();
       const proceed = createDeferred<void>();

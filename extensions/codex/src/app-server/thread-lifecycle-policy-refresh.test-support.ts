@@ -54,7 +54,7 @@ export function registerThreadPolicyRefreshTests({
       const agentDir = path.join(tempDir, "agent");
       const threadId = "managed-unload";
       const response = threadStartResult(threadId);
-      const unsubscribed = createDeferred();
+      const unsubscribed = createDeferred<void>();
       const requests: RpcRequest[] = [];
       const controller = new AbortController();
       const abandonClient = vi.fn(async () => {});

@@ -111,9 +111,7 @@ it.each(cases)(
     );
 
     const nativeProcesses = new Map<ChildProcess, { output: string }>();
-    const unsubscribeReceived = createDeferred();
     if (shutdown) {
-      let heldUnloadClock = false;
       const spawn = childProcess.spawn;
       const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
         // Keep native retention only in replacement controls, so no unload receipt arrives.
@@ -128,18 +126,12 @@ it.each(cases)(
           nativeProcesses.set(child, captured);
           child.stdout?.on("data", (chunk: Buffer) => {
             captured.output += chunk.toString();
-            if (!heldUnloadClock && captured.output.includes('"status":"unsubscribed"')) {
-              heldUnloadClock = true;
-              vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-              unsubscribeReceived.resolve();
-            }
           });
         }
         return child;
       });
       syncBuiltinESMExports();
       onTestFinished(() => {
-        vi.useRealTimers();
         spawnSpy.mockRestore();
         syncBuiltinESMExports();
       });
@@ -503,8 +495,6 @@ it.each(cases)(
     const beforeRecoveryProcesses = nativeProcesses.size;
     const continued = await start("Continue with changed instructions.", "second");
     if (exitGate) {
-      await unsubscribeReceived.promise;
-      await vi.advanceTimersByTimeAsync(2_000);
       await withTestTimeout(exitGate.waiting, 10_000, "startup did not wait for physical exit");
       expect(exitGate.child.exitCode).toBeNull();
       expect(exitGate.child.signalCode).toBeNull();
