@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -29,7 +29,11 @@ import {
   formatQaGatewayProcessBoundaryStartupFailure,
   stopQaGatewayChildProcessTree,
 } from "./gateway-child-process.js";
-import { waitForGatewayReady, waitForQaGatewayRestartBoundary } from "./gateway-child-readiness.js";
+import {
+  needsQaGatewayMigrationRestart,
+  waitForGatewayReady,
+  waitForQaGatewayRestartBoundary,
+} from "./gateway-child-readiness.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -497,6 +501,35 @@ describe("buildQaRuntimeEnv", () => {
     const developmentEnv = buildQaRuntimeEnv({ ...createParams({ NODE_ENV: "development" }) });
     expect(developmentEnv.NODE_ENV).toBe("development");
   });
+
+  it("does not inherit parent channel or provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      }),
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBeUndefined();
+  });
+
+  it("honors explicit channel and provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "inherited",
+        OPENCLAW_SKIP_PROVIDERS: "inherited",
+      }),
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "patched-channels",
+        OPENCLAW_SKIP_PROVIDERS: "patched-providers",
+      },
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
+  });
+
   it("maps live key aliases without replacing explicit provider keys", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -1003,6 +1036,15 @@ describe("buildQaRuntimeEnv", () => {
     expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
   });
 
+  it("preserves authored newer-version metadata so the packaged candidate refuses it", async () => {
+    const { start, recordPath } = await createPackagedFixture(
+      { QA_CONFIG_RUNTIME_VERSION: "2026.7.33" },
+      (cfg) => ({ ...cfg, meta: { lastTouchedVersion: "2026.9.4" } }),
+    );
+    await expect(start()).rejects.toThrow("config last written by newer runtime: 2026.9.4");
+    await expect(lstat(recordPath)).rejects.toThrow(/ENOENT/u);
+  });
+
   it.each(["anthropic", "help", "repair"] as const)(
     "blocks packaged gateway spawn with bounded redacted diagnostics when %s fails",
     async (phase) => {
@@ -1250,6 +1292,19 @@ describe("buildQaRuntimeEnv", () => {
       expect(postKillLivenessChecks).toBe(2);
       expect(child.kill).not.toHaveBeenCalled();
     }
+  });
+
+  it("does not retry an incomplete migration-convergence diagnostic", () => {
+    const details = "OpenClaw plugin migration inputs changed during startup convergence";
+    expect(needsQaGatewayMigrationRestart(details)).toBe(false);
+  });
+
+  it("recognizes a complete migration convergence diagnostic", () => {
+    expect(
+      needsQaGatewayMigrationRestart(
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+      ),
+    ).toBe(true);
   });
 
   it("preserves only sanitized gateway debug artifacts", async () => {
