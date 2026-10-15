@@ -7,6 +7,7 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
+import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   PluginStateOperationCommit,
@@ -19,11 +20,17 @@ import {
   observePluginStateEntry,
 } from "./plugin-state-store.comparison.worker.js";
 import {
+  isMissingPluginStateTableError,
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
-import { deletePluginStateEntry } from "./plugin-state-store.kernel.js";
+import {
+  deletePluginStateEntry,
+  lookupPluginStateEntry,
+  countLivePluginStateNamespaceEntries,
+  type PluginStateDatabase,
+} from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
@@ -31,6 +38,11 @@ import {
   movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
+import {
+  listPluginStateEntries,
+  listPluginStateEntriesInKeyRange,
+  lookupPluginStateEntries,
+} from "./plugin-state-store.reads.js";
 import {
   readPluginStateRetention,
   registerPluginStateEntry,
@@ -41,6 +53,8 @@ import type {
 } from "./plugin-state-store.types.js";
 import {
   type PluginStateWorkerOperations,
+  type PluginStateReadCommand,
+  type PluginStateReadResult,
   pluginStateWorkerOperations,
 } from "./plugin-state-worker-contract.js";
 import { capturePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
@@ -48,6 +62,75 @@ import {
   clearRuntimeHealthEntries,
   hasRuntimeHealthEntriesToClear,
 } from "./runtime-health-store.kernel.js";
+
+export function readPluginStateCommand(
+  store: PluginStateDatabase,
+  command: PluginStateReadCommand,
+): PluginStateReadResult {
+  const description = pluginStateWorkerOperations[command.type];
+  try {
+    switch (command.type) {
+      case "pluginState.lookup":
+        return { type: command.type, result: ok(lookupPluginStateEntry(store, command.input)) };
+      case "pluginState.lookupMany":
+        return {
+          type: command.type,
+          result: ok(
+            lookupPluginStateEntries(store, command.input).map((row) =>
+              row.ok ? row : err(capturePluginStateWorkerFailure(row.error)),
+            ),
+          ),
+        };
+      case "pluginState.entries":
+        return { type: command.type, result: ok(listPluginStateEntries(store, command.input)) };
+      case "pluginState.entriesInKeyRange":
+        return {
+          type: command.type,
+          result: ok(listPluginStateEntriesInKeyRange(store, command.input)),
+        };
+      default:
+        return {
+          type: command.type,
+          result: ok(
+            countLivePluginStateNamespaceEntries(store.db, { ...command.input, now: Date.now() }),
+          ),
+        };
+    }
+  } catch (error) {
+    // Lease bootstrap precedes creation of the plugin-state table; other missing tables are damage.
+    if (
+      isMissingPluginStateTableError(error) &&
+      !hasOpenClawStateTablesBeyondStartupCheckpoint(store.db)
+    ) {
+      return {
+        type: command.type,
+        result: ok(
+          command.type === "pluginState.lookup"
+            ? undefined
+            : command.type === "pluginState.count"
+              ? 0
+              : command.type === "pluginState.lookupMany"
+                ? command.input.keys.map(() => ok(undefined))
+                : [],
+        ),
+      };
+    }
+    return {
+      type: command.type,
+      result: err(
+        capturePluginStateWorkerFailure(
+          wrapPluginStateError(
+            error,
+            description.operation,
+            description.code,
+            description.message,
+            store.path,
+          ),
+        ),
+      ),
+    };
+  }
+}
 
 const operationHandlers = new Map<
   string,

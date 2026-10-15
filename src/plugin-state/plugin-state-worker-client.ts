@@ -264,7 +264,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
           current: true,
           preferIndependentWarmRead: true,
           mapError(error, phase) {
-            operationStarted = phase !== "before-read";
+            operationStarted = phase === "read";
             return error;
           },
         },
