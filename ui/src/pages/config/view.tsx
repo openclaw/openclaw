@@ -10,6 +10,7 @@ import { SettingsSegmented, SettingsPage } from "../../components/solid/settings
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { NotificationsSection } from "./notifications-section.tsx";
 import { SetupSection } from "./setup.tsx";
 import { AppearanceSection } from "./view-appearance.tsx";
@@ -162,7 +163,7 @@ export function Config(props: ConfigProps) {
           }
         : analysis.schema;
     const setupSchema = formSchema?.properties?.wizard;
-    const editorSchema = setupSchema
+    const editorSchemaBase = setupSchema
       ? {
           ...formSchema,
           properties: Object.fromEntries(
@@ -170,6 +171,10 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
+    // Curated settings controls own some schema leaves; keep them out of the generic form.
+    const editorSchema = editorSchemaBase
+      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
+      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]

@@ -197,6 +197,46 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("does not advertise the curated Appearance locale field through the raw ui section", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        ui: {
+          type: "object",
+          properties: {
+            seamColor: { type: "string", title: "Seam color" },
+            prefs: {
+              type: "object",
+              properties: {
+                locale: { type: "string", title: "Interface language" },
+                chatShowToolCalls: { type: "boolean", title: "Chat show tool calls" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "ui.seamColor": { advanced: false },
+      "ui.prefs.locale": { advanced: false },
+      "ui.prefs.chatShowToolCalls": { advanced: false },
+    };
+    const search = (query: string) =>
+      findSettingsSearchBlocks({ query, schema, value: {}, uiHints });
+
+    // The owned leaf must not open the generic ui section, or the hit dead-ends.
+    expect(search("interface language").some((block) => block.hash === "#config-section-ui")).toBe(
+      false,
+    );
+    // Sibling fields in the same section still open it.
+    expect(search("chat show tool calls")).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
+    expect(search("seam color")).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
+  });
+
   it("refreshes prepared schema tiers while searching current draft keys and access", () => {
     const schema = {
       type: "object",
