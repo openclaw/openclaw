@@ -12,7 +12,6 @@ import type {
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
-  OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 import { seconds, type LabelSet } from "./prometheus-format.js";
@@ -21,10 +20,16 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
+import {
+  createProviderUsageObserver,
+  type PrometheusExporterHealthUpdate,
+  type TrustedExporterDiagnosticsBridge,
+} from "./provider-usage-metrics.js";
 import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { isProviderUsagePollingEnabled } from "./service-runtime.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -563,24 +568,13 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
   };
 }
 
-type PrometheusExporterHealthUpdate = {
-  signal: "metrics";
-  transport: "prometheus-scrape";
-  status: "started" | "dropped";
-  reason?: "configured";
-};
-type TrustedExporterDiagnosticsBridge = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
-  reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
-};
-
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
   let unsubscribeWork: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
-  const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
+  const providerUsageObserver = createProviderUsageObserver(store);
+  const reportExporterHealth = (update: PrometheusExporterHealthUpdate) => {
     try {
       internalDiagnostics?.reportExporterHealth?.(update);
     } catch {
@@ -596,6 +590,12 @@ export function createDiagnosticsPrometheusExporter() {
 
   const service = {
     id: "diagnostics-prometheus",
+    reload: {
+      configPrefixes: [
+        "diagnostics.enabled",
+        "plugins.entries.diagnostics-prometheus.config.providerUsage",
+      ],
+    },
     start(ctx) {
       const subscribe = ctx.internalDiagnostics?.onEvent;
       if (!subscribe) {
@@ -634,8 +634,16 @@ export function createDiagnosticsPrometheusExporter() {
         { exclude: ["log.record"] },
         { includePrivateData: false },
       );
-      internalDiagnostics = ctx.internalDiagnostics;
-      reportExporterStatus({
+      internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
+      providerUsageObserver.start({
+        bridge: internalDiagnostics,
+        enabled: isDiagnosticsEnabled(ctx.config) && isProviderUsagePollingEnabled(ctx.config),
+        onError: (err) =>
+          ctx.logger.error(
+            `diagnostics-prometheus: provider usage handler failed: ${safeErrorMessage(err)}`,
+          ),
+      });
+      reportExporterHealth({
         signal: "metrics",
         transport: "prometheus-scrape",
         status: "started",
@@ -647,7 +655,8 @@ export function createDiagnosticsPrometheusExporter() {
       unsubscribeWork = undefined;
       unsubscribe?.();
       unsubscribe = undefined;
-      reportExporterStatus({
+      providerUsageObserver.stop();
+      reportExporterHealth({
         signal: "metrics",
         transport: "prometheus-scrape",
         status: "dropped",

@@ -16,6 +16,7 @@ import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types
 
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
+const googleGeminiCliProvider = "google-gemini-cli";
 
 describe("provider-usage.load", () => {
   beforeEach(() => {
@@ -154,6 +155,147 @@ describe("provider-usage.load", () => {
       }
     },
   );
+
+  it("does not dispatch usage after auth completes beyond the deadline", async () => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const auth = createDeferredCore<{ token: string }>();
+    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
+    const pending = scope.track(() =>
+      loadProviderUsageSummary({
+        providers: ["anthropic"],
+        config: {},
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        timeoutMs: 1,
+      }),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending).providers[0]?.error).toBe("Timeout");
+      expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+      auth.resolve({ token: "fixture-token" });
+      await scope.drain();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    } finally {
+      auth.resolve({ token: "fixture-token" });
+      await pending;
+      await scope.drain();
+    }
+  });
+
+  it("does not dispatch usage after caller authority is revoked during authentication", async () => {
+    const scope = new AsyncWorkScope();
+    const auth = createDeferredCore<{ token: string }>();
+    const authority = new AbortController();
+    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
+    const pending = scope.track(() =>
+      loadProviderUsageSummary({
+        providers: ["anthropic"],
+        config: {},
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        signal: authority.signal,
+      }),
+    );
+    try {
+      await vi.waitFor(() => expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce());
+      authority.abort(new DOMException("Observer released", "AbortError"));
+      auth.resolve({ token: "fixture-token" });
+      await scope.drain();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+      expect((await pending).providers[0]?.error).toBe("Observer released");
+    } finally {
+      auth.resolve({ token: "fixture-token" });
+      await pending;
+      await scope.drain();
+    }
+  });
+
+  it("loads snapshots for copilot gemini codex and Xiaomi providers", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
+        switch (provider) {
+          case "github-copilot":
+            return {
+              provider,
+              displayName: "GitHub Copilot",
+              windows: [{ label: "Chat", usedPercent: 20 }],
+            };
+          case googleGeminiCliProvider:
+            return {
+              provider,
+              displayName: "Gemini CLI",
+              windows: [{ label: "Pro", usedPercent: 40 }],
+            };
+          case "openai":
+            return {
+              provider,
+              displayName: "Codex",
+              windows: [{ label: "3h", usedPercent: 12 }],
+            };
+          case "xiaomi":
+            return {
+              provider,
+              displayName: "Xiaomi",
+              windows: [],
+            };
+          case "xiaomi-token-plan":
+            return {
+              provider,
+              displayName: "Xiaomi Token Plan",
+              windows: [{ label: "Token Plan", usedPercent: 15 }],
+            };
+          default:
+            return null;
+        }
+      },
+    );
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [
+        { provider: "github-copilot", token: "copilot-token" },
+        { provider: googleGeminiCliProvider, token: "gemini-token" },
+        { provider: "openai", token: "codex-token", accountId: "acc-1" },
+        { provider: "xiaomi", token: "xiaomi-token" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
+      ],
+      mockFetch,
+    );
+
+    expect(summary.providers.map((provider) => provider.provider)).toEqual([
+      "github-copilot",
+      googleGeminiCliProvider,
+      "openai",
+      "xiaomi",
+      "xiaomi-token-plan",
+    ]);
+    expect(
+      summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
+    ).toEqual([{ label: "Chat", usedPercent: 20 }]);
+    expect(
+      summary.providers.find((provider) => provider.provider === googleGeminiCliProvider)
+        ?.windows[0]?.label,
+    ).toBe("Pro");
+    expect(
+      summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
+    ).toBe("3h");
+    expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
+      [],
+    );
+    expect(
+      summary.providers.find((provider) => provider.provider === "xiaomi-token-plan")?.windows,
+    ).toEqual([{ label: "Token Plan", usedPercent: 15 }]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns empty provider list when auth resolves to none", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
+    const summary = await loadUsageWithAuth(loadProviderUsageSummary, [], mockFetch);
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+  });
 
   it("returns unsupported provider snapshots for unknown provider ids", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));

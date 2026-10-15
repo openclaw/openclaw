@@ -2,9 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { createPluginReloadCleanup } from "./server-plugin-reload-cleanup.js";
+import { startGatewayPluginServices } from "./server-plugin-services.js";
 
 export function createPluginReloadServices(
   runtime: Pick<
@@ -21,7 +22,7 @@ export function createPluginReloadServices(
     deferStartForPluginIds?: ReadonlySet<string>,
   ) =>
     withPluginRegistryPreparationScope(registry, () =>
-      startPluginServices({
+      startGatewayPluginServices({
         scheduler: runtime.scheduler,
         registry,
         config,
