@@ -2631,6 +2631,8 @@ describe("ci workflow guards", () => {
               RESTART_COMMANDS: restartFile,
               IOS_CI_PHASE: "tests",
               IOS_MAIN_TIER: String(tier === "main"),
+              IOS_FROZEN_TARGET: "false",
+              HISTORICAL_TARGET: "false",
               IOS_SIMULATOR_ID: "fixture-phone",
             },
           });

@@ -429,6 +429,12 @@ temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
 
+Connection-bound backends use `bindSqliteWorkerDatabase(db, backend)` from the
+same entrypoint for scope closure and synchronous transaction settlement checks.
+The backend supplies its command implementation and optional preparation or
+scope cleanup; it never closes the borrowed database. Transaction and commit
+admission remain with the executor and the store's write operation.
+
 Worker kernels that write derived data without changing any session facts wrap
 their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
 same subpath. This preserves resident session caches while the database-wide

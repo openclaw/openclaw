@@ -16,8 +16,19 @@ import {
   buildEmptyInteractiveReplyPayload,
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
+  buildPreflightCompactionFailureText,
 } from "./agent-runner-failure-reply.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+
+it("shows unshrinkable request guidance without verbose diagnostics", () => {
+  const reason =
+    "The estimated foreground request budget still exceeds the 32768-token model window " +
+    "(fixed instructions and tools: 40000; pending input: 10; retained history: 20). " +
+    "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.";
+  expect(
+    buildPreflightCompactionFailureText(`Preflight compaction required but failed: ${reason}`),
+  ).toBe(`⚠️ ${reason}`);
+});
 
 describe("buildEmptyInteractiveReplyPayload", () => {
   it("surfaces missing output for a mentioned group request even when silence is allowed", () => {

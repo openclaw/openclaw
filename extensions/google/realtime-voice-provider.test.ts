@@ -523,65 +523,55 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(onResponseDone.mock.calls).toEqual([[{ status: "completed" }]]);
   });
 
-  it("converts telephony input and Google PCM output at the bridge boundary", async () => {
-    const onAudio = vi.fn();
-    const bridge = await openConfiguredBridge({ onAudio });
-    bridge.sendAudio(Buffer.from([0xff, 0x00]));
-    const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
-    expect(sent.mimeType).toBe("audio/pcm;rate=16000");
-    const pcm = Buffer.from(sent.data, "base64");
-    expect(Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2))).toEqual([
-      0, -16062, -32124, -32124,
-    ]);
-    const output = Buffer.alloc(480);
-    output.set([0xfb, 0xff]);
-    content({
-      modelTurn: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "audio/L16;codec=pcm;rate=24000",
-              data: output.toString("base64url"),
+  it.each(["telephony", "pcm"] as const)(
+    "converts %s audio at the bridge boundary",
+    async (format) => {
+      const onAudio = vi.fn(),
+        onTranscript = vi.fn();
+      const bridge = await openConfiguredBridge({
+        ...(format === "pcm" ? { audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } : {}),
+        onAudio,
+        onTranscript,
+      });
+      const output = Buffer.alloc(480);
+      if (format === "telephony") {
+        output.set([0xfb, 0xff]);
+      }
+      bridge.sendAudio(format === "pcm" ? output : Buffer.from([0xff, 0x00]));
+      const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
+      expect(sent.mimeType).toBe("audio/pcm;rate=16000");
+      const pcm = Buffer.from(sent.data, "base64");
+      if (format === "pcm") {
+        expect(pcm).toHaveLength(320);
+      } else {
+        expect(Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2))).toEqual([
+          0, -16062, -32124, -32124,
+        ]);
+      }
+      content({
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: output.toString(format === "pcm" ? "base64" : "base64url"),
+              },
             },
-          },
-        ],
-      },
-    });
-    expect(onAudio).toHaveBeenCalledOnce();
-    expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-    expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
-  });
-
-  it("preserves PCM output and resamples PCM input without a mu-law hop", async () => {
-    const onAudio = vi.fn(),
-      onTranscript = vi.fn();
-    const bridge = await openConfiguredBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio,
-      onTranscript,
-    });
-    const output = Buffer.alloc(480);
-    bridge.sendAudio(output);
-    const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
-    expect(sent.mimeType).toBe("audio/pcm;rate=16000");
-    expect(Buffer.from(sent.data, "base64")).toHaveLength(320);
-    content({
-      modelTurn: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "audio/L16;codec=pcm;rate=24000",
-              data: output.toString("base64"),
-            },
-          },
-          { text: "internal reasoning", thought: true },
-          { text: "uncorrelated text" },
-        ],
-      },
-    });
-    expect(onAudio).toHaveBeenCalledExactlyOnceWith(output);
-    expect(onTranscript).not.toHaveBeenCalled();
-  });
+            { text: "internal reasoning", thought: true },
+            { text: "uncorrelated text" },
+          ],
+        },
+      });
+      expect(onAudio).toHaveBeenCalledOnce();
+      expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+      if (format === "pcm") {
+        expect(onAudio).toHaveBeenCalledExactlyOnceWith(output);
+      } else {
+        expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+      }
+      expect(onTranscript).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps Extended Thinking active across a filler utterance and tool call", async () => {
     const onResponseDone = vi.fn();
@@ -678,20 +668,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ["user", "Name a yellow fruit.", true],
       ["assistant", "A banana.", true],
     ]);
-  });
-
-  it("keeps forwarding Gemini 3.8 silence without ending the audio stream", async () => {
-    const bridge = await openConfiguredBridge({
-      providerConfig: { model: EXTENDED, silenceDurationMs: 60 },
-    });
-
-    const silence20ms = Buffer.alloc(160, 0xff);
-    for (let frame = 0; frame < 10; frame += 1) {
-      bridge.sendAudio(silence20ms);
-    }
-
-    expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
-    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(10);
   });
 
   it("omits tool names that Google Live cannot accept", async () => {
@@ -1050,10 +1026,18 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
-  it("marks the Google audio stream complete after sustained telephony silence", async () => {
-    const bridge = await openConfiguredBridge({ providerConfig: { silenceDurationMs: 60 } });
+  it.each([undefined, EXTENDED])("handles sustained telephony silence for %s", async (model) => {
+    const bridge = await openConfiguredBridge({ providerConfig: { model, silenceDurationMs: 60 } });
 
     const silence20ms = Buffer.alloc(160, 0xff);
+    if (model === EXTENDED) {
+      for (let frame = 0; frame < 10; frame += 1) {
+        bridge.sendAudio(silence20ms);
+      }
+      expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
+      expect(session.sendRealtimeInput).toHaveBeenCalledTimes(10);
+      return;
+    }
     bridge.sendAudio(silence20ms);
     bridge.sendAudio(silence20ms);
     bridge.sendAudio(silence20ms);
