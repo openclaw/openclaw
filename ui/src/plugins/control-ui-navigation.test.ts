@@ -1,11 +1,10 @@
 import { getObserver } from "@solidjs/signals";
-import { render as renderLit } from "lit";
-import { createSignal } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { icons } from "../components/icons.ts";
 import { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
+import { Icon } from "../components/solid/icon.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -218,15 +217,18 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   const children = [...parent.querySelectorAll<HTMLAnchorElement>(".nav-item--child")];
   expect(children.map((child) => child.textContent?.trim())).toEqual(["Alpha", "Beta", "Zulu"]);
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
-  const icon = document.createElement("div");
-  renderLit(icons.activity, icon);
+  const activityIcon = mountSolid(() => createComponent(Icon, { name: "activity" }), {
+    container: document.createElement("div"),
+  }).container;
   expect(
     [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
-  renderLit(icons.layers, icon);
+  ).toEqual([...activityIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  const layersIcon = mountSolid(() => createComponent(Icon, { name: "layers" }), {
+    container: document.createElement("div"),
+  }).container;
   expect(
     [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  ).toEqual([...layersIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

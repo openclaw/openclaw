@@ -14,8 +14,9 @@ import {
   LitContent,
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
-import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
@@ -89,7 +90,7 @@ defineSolidBridge<Props, Methods>(
         icon:
           content.kind === "mcp-app"
             ? icons.puzzle
-            : renderAttachmentFileIcon({ filename: label, mode: "preview-with-favicon" }),
+            : solidContent(AttachmentFileIcon, { filename: label, mode: "preview-with-favicon" }),
         className: content.kind === "loading" ? "is-connecting" : undefined,
       }));
       return props.activeId === null && tabs.length

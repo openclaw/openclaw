@@ -161,7 +161,7 @@ describe("Doctor state readability recovery", () => {
         schemaVersion: 19,
       });
       database.db.exec(`
-        DROP INDEX idx_task_runs_status;
+        DROP INDEX idx_task_runs_runtime_run;
         PRAGMA foreign_keys = OFF;
         INSERT INTO task_delivery_state (task_id, requester_origin_json)
           VALUES ('orphan-preserved', 'preserve orphan payload');
@@ -196,8 +196,14 @@ describe("Doctor state readability recovery", () => {
             .get(),
         ).toBeUndefined();
         expect(
-          repaired.prepare("SELECT name FROM pragma_index_info('idx_task_runs_status')").all(),
-        ).toEqual([{ name: "status" }]);
+          repaired.prepare("SELECT name FROM pragma_index_info('idx_task_runs_runtime_run')").all(),
+        ).toEqual([
+          { name: "runtime" },
+          { name: "run_id" },
+          { name: "source_id" },
+          { name: "created_at" },
+          { name: "task_id" },
+        ]);
         expect(readSqliteNumberPragma(repaired, "user_version")).toBe(
           OPENCLAW_STATE_SCHEMA_VERSION,
         );

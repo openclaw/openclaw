@@ -188,6 +188,7 @@ describe("prepared worker schema migration", () => {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
+            "Replaced retained task indexes with ordered cron history indexes (v24)",
             "Rebuilt canonical shared-state SQLite indexes (1)",
           ],
           warnings: [],

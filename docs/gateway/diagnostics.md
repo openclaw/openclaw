@@ -716,7 +716,9 @@ No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Node Code Mode likewise retains at most one completed
+normal idle timeout. Git metadata readers use a two-minute idle timeout so the
+one-minute PR polling and repository-discovery refreshes can reuse both readers.
+Node Code Mode likewise retains at most one completed
 Worker for five minutes, reusing it only when its runtime entry and heap limit
 match. Code Mode relies on V8's normal garbage collection rather than inspector
 collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical

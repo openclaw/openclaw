@@ -176,7 +176,7 @@ describe("meeting transcript chronology migration", () => {
         resolveSchemaMigrationBackupTables({
           kind: "state",
           foundVersion: MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION - 1,
-          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          supportedVersion: MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
         }),
       ).toEqual(backupTables);
       const { db } = await assertSqliteMigrationScopePreserved(scope, backupTables, () => {
