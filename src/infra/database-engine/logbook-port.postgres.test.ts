@@ -172,13 +172,13 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       assertCurrent,
     });
     namespaces.add(restored.namespace);
-    expect(
-      await inspectDatabasePort(
-        { engine: "postgres", db: client, namespace: restored.namespace },
-        descriptor,
-        storeId,
-      ),
-    ).toEqual(forward);
+    const { tables, allocations } = await inspectDatabasePort(
+      { engine: "postgres", db: client, namespace: restored.namespace },
+      descriptor,
+      storeId,
+      true,
+    );
+    expect({ tables, allocations }).toEqual(forward);
     using anchor = openNodeSqliteDatabase(anchorPath);
     expect(anchor.prepare("SELECT * FROM openclaw_engine_anchor").get()).toEqual({
       engine: "postgres",
@@ -222,8 +222,8 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       pluginIds: ["logbook"],
     });
     expect(plugins.plugins.find((plugin) => plugin.id === "logbook")?.backupResources).toEqual([
-      { disposition: "include", scope: "state", relativePath: "logbook/logbook.sqlite" },
       { disposition: "include", scope: "state", relativePath: "logbook/frames" },
+      { disposition: "include", scope: "state", relativePath: "logbook/logbook.sqlite" },
     ]);
     expect(
       logbookPortProvider.resolveRoots({ config, stateDir: directory, env: process.env, plugins }),
