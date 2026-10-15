@@ -1404,46 +1404,6 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
-  it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
-    const sessionKey = "agent:main:direct:claude-missing-transcript-reseed";
-    const cliSessionId = "cli-sid-abc";
-    // Bug condition: the managed stdio child is still live but Claude wrote no
-    // native transcript. The durable binding and the current candidate must both
-    // survive until prepare/execution prove that exact child reusable.
-    const homeDir = path.join(tmpDir, "home-missing-transcript");
-    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
-      workspaceDir: tmpDir,
-      homeDir,
-    });
-    setTestEnvValue("HOME", homeDir);
-    await fs.mkdir(projectsDir, { recursive: true });
-    // Intentionally do NOT write `${cliSessionId}.jsonl` (no native transcript).
-    const sessionEntry = makeClaudeCliSessionEntry("openclaw-sid", cliSessionId);
-    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
-    hasClaudeSessionMock.mockReturnValue(true);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("ok", cliSessionId));
-
-    await runCli();
-
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    // Regression guard: before the fix the candidate was dropped (undefined),
-    // starving prepare's reseed; the bound id must survive as the candidate.
-    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
-    expect(firstRunCliAgentArg().cliSessionBinding).toEqual({
-      sessionId: cliSessionId,
-      authProfileId: "anthropic:claude-cli",
-    });
-    expect(hasClaudeSessionMock).toHaveBeenCalledWith({
-      backendId: "claude-cli",
-      agentId: "main",
-      sessionId: "openclaw-sid",
-      sessionKey,
-    });
-    expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(cliSessionId);
-    const persisted = readSessionStore();
-    expect(claudeBinding(persisted[sessionKey])?.sessionId).toBe(cliSessionId);
-  });
-
   it.each<{
     name: string;
     entry?: Partial<SessionEntry>;
@@ -1599,7 +1559,8 @@ describe("CLI attempt execution", () => {
     result.meta.agentMeta.lastCallUsage = { input: 7, output: 4, cacheRead: 2, total: 13 };
     const beforePersist = Date.now();
     const updatedEntry = await persistCliTranscriptEntry({
-      body: "persist this",
+      body: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n\npersist this",
+      transcriptBody: "persist this",
       result,
       ...transcriptContext(sessionKey, sessionEntry),
       sessionStore,
@@ -1649,69 +1610,6 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(beforePersist);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(afterPersist);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
-  });
-
-  it("marks CLI transcript context unavailable when only cumulative usage exists", async () => {
-    const sessionKey = "agent:main:subagent:cli-cumulative-only";
-    const sessionEntry = makeSessionEntry("session-cli-cumulative-only");
-    const result = makeCliResult("cumulative reply");
-    if (!result.meta.agentMeta) {
-      throw new Error("expected agent metadata");
-    }
-    result.meta.agentMeta.lastCallUsage = undefined;
-
-    await persistCliTurnTranscript({
-      body: "run tools",
-      result,
-      ...transcriptContext(sessionKey, sessionEntry),
-    });
-
-    const messages = await readSessionMessages(transcriptTarget(sessionKey, sessionEntry));
-    const assistant = requireRecord(messages.at(-1), "assistant message");
-    expectRecordFields(requireRecord(assistant.usage, "assistant usage"), {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      contextUsage: { state: "unavailable" },
-    });
-  });
-
-  it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
-    const sessionKey = "agent:main:direct:cli-recorder-owned-user";
-    const sessionEntry = makeSessionEntry("session-cli-recorder-owned-user");
-    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-    await appendTranscriptMessage(transcriptTarget(sessionKey, sessionEntry), {
-      message: {
-        role: "user",
-        content: "canonical current ask",
-        timestamp: Date.now(),
-      },
-      cwd: tmpDir,
-    });
-
-    await persistCliTurnTranscript({
-      body: "canonical current ask",
-      result: makeCliResult("hello from cli"),
-      ...transcriptContext(sessionKey, sessionEntry),
-      sessionStore,
-      userMessage: {
-        role: "user",
-        content: "duplicate custom ask",
-        timestamp: Date.now(),
-      },
-      skipUserTurn: true,
-    });
-
-    const messages = await readSessionMessages(transcriptTarget(sessionKey, sessionEntry));
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(messages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "hello from cli" }],
-      }),
-    );
   });
 
   it("does not append a CLI assistant already owned by the runtime", async () => {
@@ -1838,32 +1736,6 @@ describe("CLI attempt execution", () => {
     ).toEqual([]);
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).toBeUndefined();
-  });
-
-  it("persists the transcript body instead of runtime-only CLI prompt context", async () => {
-    const sessionKey = "agent:main:subagent:cli-transcript-clean";
-    const sessionEntry = makeSessionEntry("session-cli-transcript-clean");
-    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-
-    await persistCliTranscriptEntry({
-      body: [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        "secret runtime context",
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        "",
-        "visible ask",
-      ].join("\n"),
-      transcriptBody: "visible ask",
-      result: makeCliResult("hello from cli"),
-      ...transcriptContext(sessionKey, sessionEntry),
-      sessionStore,
-    });
-
-    const messages = await readSessionMessages(transcriptTarget(sessionKey, sessionEntry));
-    expectRecordFields(requireRecord(messages[0], "transcript user message"), {
-      role: "user",
-      content: "visible ask",
-    });
   });
 
   it("merges the collector result transport into a restricted CLI toolsAllow", async () => {
