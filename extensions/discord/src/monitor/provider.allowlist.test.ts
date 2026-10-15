@@ -2,16 +2,18 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDiscordChannelPolicyBinding,
-  setDiscordChannelPolicyBindings,
+  findDiscordGuildPolicyKey,
+  setDiscordPolicyBindings,
 } from "../channel-policy-state.js";
+import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
 import * as channels from "../resolve-channels.js";
 import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
 describe("resolveDiscordAllowlistConfig", () => {
   afterEach(() => {
-    setDiscordChannelPolicyBindings("default", []);
-    setDiscordChannelPolicyBindings("work", []);
+    setDiscordPolicyBindings("default", []);
+    setDiscordPolicyBindings("work", []);
   });
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -135,9 +137,11 @@ describe("resolveDiscordAllowlistConfig", () => {
   it.each(["unresolved", "failed", "removed"])(
     "replaces previous channel bindings when a policy resolution is %s",
     async (outcome) => {
-      setDiscordChannelPolicyBindings("work", [
-        { guildKey: "145", channelKey: "ops", channelId: "246" },
-      ]);
+      setDiscordPolicyBindings(
+        "work",
+        [{ guildKey: "145", channelKey: "ops", channelId: "246" }],
+        new Map([["145", "ops"]]),
+      );
       if (outcome === "failed") {
         vi.mocked(channels.resolveDiscordChannelAllowlist).mockRejectedValueOnce(
           new Error("synthetic lookup failure"),
@@ -154,6 +158,57 @@ describe("resolveDiscordAllowlistConfig", () => {
       });
 
       expect(getDiscordChannelPolicyBinding("work", "145", "ops")).toBeUndefined();
+      expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+    },
+  );
+
+  it.each(["general", "246", undefined])(
+    "preserves resolved guild policy with channel %s",
+    async (channelKey) => {
+      const guilds = {
+        ops: {
+          tools: channelKey ? { allow: ["exec"] } : { deny: ["exec"] },
+          channels: channelKey ? { [channelKey]: { tools: { deny: ["exec"] } } } : undefined,
+        },
+      };
+      vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
+        {
+          input: channelKey ? `ops/${channelKey}` : "ops",
+          resolved: true,
+          guildId: "145",
+          guildName: "Ops",
+          channelId: channelKey ? "246" : undefined,
+          channelName: channelKey ? "general" : undefined,
+        },
+      ]);
+      const resolved = await resolve({ guildEntries: guilds });
+      const admittedGuild = resolved.guildEntries?.["145"];
+      expect(channelKey ? admittedGuild?.channels?.["246"]?.tools : admittedGuild?.tools).toEqual({
+        deny: ["exec"],
+      });
+      expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
+      const context = {
+        accountId: "default",
+        groupSpace: "145",
+        groupId: "246",
+        groupChannel: "general",
+      };
+      expect(
+        resolveDiscordGroupToolPolicy({
+          ...context,
+          cfg: {
+            channels: { discord: { guilds: { "*": { tools: { allow: ["exec"] } }, ...guilds } } },
+          },
+        }),
+      ).toEqual({ deny: ["exec"] });
+      expect(
+        resolveDiscordGroupToolPolicy({
+          ...context,
+          cfg: {
+            channels: { discord: { guilds: { ...guilds, "145": { tools: { allow: ["read"] } } } } },
+          },
+        }),
+      ).toEqual({ allow: ["read"] });
     },
   );
 });
