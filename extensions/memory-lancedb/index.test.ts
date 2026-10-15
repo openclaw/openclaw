@@ -439,14 +439,22 @@ describe("memory plugin e2e", () => {
     };
   }
 
-  test("config schema validates captureMaxChars range", () => {
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: { apiKey: OPENAI_API_KEY },
-        dbPath: getDbPath(),
-        captureMaxChars: 99,
-      });
-    }).toThrow("captureMaxChars must be between 100 and 10000");
+  test.each([
+    {
+      config: { captureMaxChars: 99 },
+      error: "captureMaxChars must be between 100 and 10000",
+    },
+    {
+      config: { storageOptions: { secret_key: "${TEST_MEMORY_STORAGE_MISSING}" } },
+      error: "Environment variable TEST_MEMORY_STORAGE_MISSING is not set",
+    },
+    {
+      config: { storageOptions: { region: "us-west-2", timeout: 30 } },
+      error: "storageOptions.timeout must be a string",
+    },
+  ])("config schema rejects invalid input: $error", ({ config, error }) => {
+    vi.stubEnv("TEST_MEMORY_STORAGE_MISSING", undefined);
+    expect(() => parseConfig(config)).toThrow(error);
   });
 
   test("registers as disabled instead of throwing when inspected without config", () => {
@@ -1384,28 +1392,34 @@ describe("memory plugin e2e", () => {
     expect(embeddingsCreate).not.toHaveBeenCalled();
   });
 
-  test("fails closed for auto-recall when the live plugin entry is removed", async () => {
-    const { embeddingsCreate, loadLanceDbModule, on, removePluginEntry } = setupMemoryHookHarness({
-      autoCapture: false,
-      autoRecall: true,
-      liveConfig: true,
-    });
-
-    removePluginEntry();
-
-    const beforePromptBuild = on.mock.calls.find(
-      ([hookName]) => hookName === "before_prompt_build",
-    )?.[1];
-
-    const result = await beforePromptBuild?.(
-      { prompt: "what editor should i use after memory is removed?", messages: [] },
-      withAllowedMemoryRecallAuthority({ agentId: "main" }),
-    );
-
-    expect(result).toBeUndefined();
-    expect(embeddingsCreate).not.toHaveBeenCalled();
-    expect(loadLanceDbModule).not.toHaveBeenCalled();
-  });
+  test.each(["before_prompt_build", "agent_end"] as const)(
+    "fails closed for %s when the live plugin entry is removed",
+    async (hookName) => {
+      const { add, embeddingsCreate, loadLanceDbModule, on, removePluginEntry } =
+        setupMemoryHookHarness({
+          autoCapture: hookName === "agent_end",
+          autoRecall: hookName === "before_prompt_build",
+          liveConfig: true,
+        });
+      removePluginEntry();
+      const hook = on.mock.calls.find(([name]) => name === hookName)?.[1];
+      const result = await hook?.(
+        hookName === "before_prompt_build"
+          ? { prompt: "what editor should i use after memory is removed?", messages: [] }
+          : {
+              success: true,
+              messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+            },
+        hookName === "before_prompt_build"
+          ? withAllowedMemoryRecallAuthority({ agentId: "main" })
+          : { agentId: "main" },
+      );
+      expect(result).toBeUndefined();
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+      expect(loadLanceDbModule).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+    },
+  );
 
   test("runs auto-capture through the registered agent_end hook", async () => {
     const {
@@ -1462,31 +1476,6 @@ describe("memory plugin e2e", () => {
     expect(memory.vector).toEqual([0.1, 0.2, 0.3]);
     expect(memory.importance).toBe(0.7);
     expect(memory.category).toBe("preference");
-  });
-
-  test("fails closed for auto-capture when the live plugin entry is removed", async () => {
-    const { add, embeddingsCreate, loadLanceDbModule, on, removePluginEntry } =
-      setupMemoryHookHarness({
-        autoCapture: true,
-        autoRecall: false,
-        liveConfig: true,
-      });
-
-    removePluginEntry();
-
-    const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
-
-    await agentEnd?.(
-      {
-        success: true,
-        messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
-      },
-      { agentId: "main" },
-    );
-
-    expect(embeddingsCreate).not.toHaveBeenCalled();
-    expect(loadLanceDbModule).not.toHaveBeenCalled();
-    expect(add).not.toHaveBeenCalled();
   });
 
   function preferences(...values: string[]) {
@@ -2106,33 +2095,6 @@ describe("memory plugin e2e", () => {
         },
       })?.storageOptions,
     ).toEqual({ region: "us-west-2", access_key: "env-access" });
-  });
-
-  test("config schema rejects missing storage environment references", () => {
-    vi.stubEnv("TEST_MEMORY_STORAGE_MISSING", undefined);
-    expect(() =>
-      parseConfig({
-        storageOptions: {
-          secret_key: "${TEST_MEMORY_STORAGE_MISSING}",
-        },
-      }),
-    ).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
-  });
-
-  test("config schema rejects storageOptions with non-string values", () => {
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        storageOptions: {
-          region: "us-west-2",
-          timeout: 30, // number, should fail
-        },
-      });
-    }).toThrow("storageOptions.timeout must be a string");
   });
 
   test("shouldCapture applies real capture rules", () => {

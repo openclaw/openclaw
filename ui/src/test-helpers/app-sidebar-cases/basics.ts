@@ -20,36 +20,26 @@ import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
-describe("AppSidebar invitation admission", () => {
-  it.each([
-    { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
-    { field: "draggingSidebarSection", value: "ungrouped", finish: "finishSidebarSectionDrag" },
-    { field: "draggingSidebarEntry", value: "route:home", finish: "finishSidebarEntryDrag" },
-  ] as const)(
-    "waits for $field to finish even without hover or focus",
-    async ({ field, value, finish }) => {
-      const { sidebar, context } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        createSessions("main", ["agent:main:main", "agent:main:task"]),
-      );
-      expect(sidebar.matches(":hover, :focus-within")).toBe(false);
-      sidebar.sessionOrganizer[field] = value;
-      const fetch = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
-      try {
+describe("AppSidebar community entry", () => {
+  it("follows the deployment flag without using the old invitation dismissal", async () => {
+    const { sidebar, context } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+    );
+    localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
+    const fetch = vi.spyOn(globalThis, "fetch");
+    try {
+      for (const enabled of [true, false]) {
+        fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
         await context.config.refresh();
         await sidebar.updateComplete;
-        expect(context.config.current.communityInvite).toBe(true);
-        expect(sidebar.querySelector(".community-invite-card")).toBeNull();
-        sidebar.sessionOrganizer[finish]();
-        await sidebar.updateComplete;
-        expect(sidebar.querySelector(".community-invite-card")).not.toBeNull();
-      } finally {
-        fetch.mockRestore();
+        expect(Boolean(sidebar.querySelector(".sidebar-community__entry"))).toBe(enabled);
       }
-    },
-  );
+    } finally {
+      fetch.mockRestore();
+      localStorage.removeItem("openclaw:control-ui:community-invite:v2");
+    }
+  });
 });
 
 describe("AppSidebar new session navigation", () => {

@@ -324,43 +324,26 @@ describe("Responses temperature support", () => {
 });
 
 describe("Responses reasoning effort", () => {
-  it("passes max through for GPT-5.6 Sol", () => {
-    expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
-
-    const params = {} as never;
-    applyCommonResponsesParams(
-      params,
-      gpt56SolModel,
-      { messages: [] },
-      {
-        reasoningEffort: "max",
-      },
-    );
-    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
-  });
-
-  it.each<{
-    model: Model<"openai-responses">;
-    reasoning: "minimal" | "high";
-    expected: string;
-  }>([
+  it.each([
+    { model: gpt56SolModel, reasoning: "max", resolvedEffort: "max", expected: "max" },
     {
       model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
       reasoning: "high",
+      resolvedEffort: "high",
       expected: "ProviderHigh",
     },
-  ])(
+  ] satisfies Array<{
+    model: Model<"openai-responses">;
+    reasoning: "max" | "high";
+    resolvedEffort: string;
+    expected: string;
+  }>)(
     "normalizes $reasoning to $expected at the request boundary",
-    ({ model, reasoning, expected }) => {
+    ({ model, reasoning, resolvedEffort, expected }) => {
+      const effort = resolveOpenAISimpleReasoningEffort(model, reasoning);
+      expect(effort).toBe(resolvedEffort);
       const params = {} as ResponseCreateParamsStreaming;
-      applyCommonResponsesParams(
-        params,
-        model,
-        { messages: [] },
-        {
-          reasoningEffort: resolveOpenAISimpleReasoningEffort(model, reasoning),
-        },
-      );
+      applyCommonResponsesParams(params, model, { messages: [] }, { reasoningEffort: effort });
       expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
     },
   );
@@ -713,6 +696,93 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it.each([
+    {
+      name: "rejects reuse of an active Responses tool-call output index",
+      input: [
+        itemEvent("added", toolItem("first_index_owner", ""), 0),
+        itemEvent("added", toolItem("second_index_owner", ""), 0),
+      ],
+      error: "Responses stream reused active tool-call output index 0",
+      events: ["toolcall_start"],
+    },
+    {
+      name: "rejects indexed Responses completions when call ids change",
+      input: [
+        itemEvent(
+          "added",
+          {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read_a",
+            name: "read",
+            arguments: "",
+          },
+          0,
+        ),
+        argumentsDelta('{"path":"README.md"}', 0, "encrypted_delta"),
+        itemEvent(
+          "done",
+          {
+            type: "function_call",
+            id: "fc_read_done",
+            call_id: "call_read_b",
+            name: "read",
+            arguments: '{"path":"README.md"}',
+          },
+          0,
+        ),
+        completed("resp_read"),
+      ],
+      error: "Responses stream changed output item identity",
+      events: ["toolcall_start", "toolcall_delta"],
+    },
+    {
+      name: "fails closed on ambiguous unindexed parallel argument events",
+      input: [
+        itemEvent("added", toolItem("ambiguous_first", "")),
+        itemEvent("added", toolItem("ambiguous_second", "")),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", {
+          type: "function_call",
+          id: "fc_ambiguous_first",
+          call_id: "call_ambiguous_first",
+          name: "computer",
+        }),
+        itemEvent("done", {
+          type: "function_call",
+          id: "fc_ambiguous_second",
+          call_id: "call_ambiguous_second",
+          name: "computer",
+        }),
+        completed("resp_ambiguous_unindexed"),
+      ],
+      error: "Responses stream completed with unresolved tool calls",
+      events: ["toolcall_start", "toolcall_start"],
+    },
+    {
+      name: "rejects a completed Responses tool call whose function name changed",
+      input: [
+        itemEvent("added", toolItem("name_conflict", "", "read"), 0),
+        itemEvent("done", toolItem("name_conflict", "{}", "write"), 0),
+      ],
+      error: "Responses stream changed tool-call function name from read to write",
+      events: ["toolcall_start"],
+    },
+  ])("$name", async ({ input, error, events: expectedEvents }) => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    await expect(
+      processResponsesStream(
+        streamResponsesEvents<(typeof input)[number]>(input),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow(error);
+    expect(events.map((event) => event.type)).toEqual(expectedEvents);
+  });
+
   it.each([["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false]])(
     "classifies encrypted replay rejection: %s",
     (message, status, expected) => {
@@ -1409,25 +1479,6 @@ describe("processResponsesStream", () => {
     });
   });
 
-  it("rejects reuse of an active Responses tool-call output index", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          itemEvent("added", toolItem("first_index_owner", ""), 0),
-          itemEvent("added", toolItem("second_index_owner", ""), 0),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
-  });
-
   it("routes indexed Responses tool arguments when item ids rotate", async () => {
     const output = createResponsesAssistantOutput(gpt56SolModel);
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1465,46 +1516,6 @@ describe("processResponsesStream", () => {
       "toolcall_delta",
       "toolcall_end",
     ]);
-  });
-
-  it("rejects indexed Responses completions when call ids change", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read",
-              call_id: "call_read_a",
-              name: "read",
-              arguments: "",
-            },
-          },
-          argumentsDelta('{"path":"README.md"}', 0, "encrypted_delta"),
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read_done",
-              call_id: "call_read_b",
-              name: "read",
-              arguments: '{"path":"README.md"}',
-            },
-          },
-          completed("resp_read"),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed output item identity");
-    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
@@ -1594,41 +1605,6 @@ describe("processResponsesStream", () => {
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
   });
 
-  it("fails closed on ambiguous unindexed parallel argument events", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_ambiguous_first",
-      call_id: "call_ambiguous_first",
-      name: "computer",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_ambiguous_second",
-      call_id: "call_ambiguous_second",
-      name: "computer",
-    };
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          { type: "response.output_item.added", item: { ...firstItem, arguments: "" } },
-          { type: "response.output_item.added", item: { ...secondItem, arguments: "" } },
-          { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-          { type: "response.output_item.done", item: firstItem },
-          { type: "response.output_item.done", item: secondItem },
-          completed("resp_ambiguous_unindexed"),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
-  });
-
   it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1699,84 +1675,65 @@ describe("processResponsesStream", () => {
     },
   );
 
-  it("rejects a completed Responses tool call whose function name changed", async () => {
-    const output = createAssistantOutput();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          itemEvent("added", toolItem("name_conflict", "", "read"), 0),
-          itemEvent("done", toolItem("name_conflict", "{}", "write"), 0),
-        ]),
-        output,
-        new AssistantMessageEventStream(),
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed tool-call function name from read to write");
-  });
-
-  it("routes omitted-index parallel arguments and completions without duplicates", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 0),
-      itemEvent("added", toolItem("second", ""), 1),
-      argumentsDelta('{"slot":', 0, "fc_first"),
-      argumentsDelta("0}", undefined, "fc_first"),
-      argumentsDelta('{"slot":', 1),
-      itemEvent("done", toolItem("second", '{"slot":1}')),
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      completed("resp_suffix"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
+  it.each([
+    {
+      name: "routes omitted-index parallel arguments and completions without duplicates",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        itemEvent("added", toolItem("second", ""), 1),
+        argumentsDelta('{"slot":', 0, "fc_first"),
+        argumentsDelta("0}", undefined, "fc_first"),
+        argumentsDelta('{"slot":', 1),
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_suffix"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 0, 1],
+      calls: 2,
+    },
+    {
+      name: "rejects omitted-index events whose identity mismatches the sole indexed call",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        argumentsDelta('{"wrong":true}', undefined, "fc_other"),
+        itemEvent("done", toolItem("other", '{"wrong":true}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_identity_mismatch"),
+      ],
+      content: [{ type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } }],
+      deltas: [],
+      calls: 1,
+    },
+    {
+      name: "keeps sequential omitted-index Responses calls unambiguous",
+      input: [
+        itemEvent("added", toolItem("first", ""), 7),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        itemEvent("added", toolItem("second", ""), 8),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        completed("resp_sequential"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 1],
+      calls: 2,
+    },
+  ])("$name", async ({ input, content, deltas, calls }) => {
+    const { output, events } = await collectResponses(input);
+    expect(output.content).toMatchObject(content);
     expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 0, 1]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
-  });
-
-  it("rejects omitted-index events whose identity mismatches the sole indexed call", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 0),
-      argumentsDelta('{"wrong":true}', undefined, "fc_other"),
-      itemEvent("done", toolItem("other", '{"wrong":true}')),
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      completed("resp_identity_mismatch"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-    ]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_delta")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
-  });
-
-  it("keeps sequential omitted-index Responses calls unambiguous", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 7),
-      { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      itemEvent("added", toolItem("second", ""), 8),
-      { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-      itemEvent("done", toolItem("second", '{"slot":1}')),
-      completed("resp_sequential"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 1]);
+      events.filter((event) => event.type === "toolcall_delta").map((event) => event.contentIndex),
+    ).toEqual(deltas);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(calls);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(calls);
   });
 
   it("pairs an item-only tool call with one generated call id", async () => {

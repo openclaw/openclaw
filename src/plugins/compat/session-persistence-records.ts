@@ -70,7 +70,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming the V2 or Async replacement; one shared runtime DEP_PLUGIN_SDK warning per plugin and github-publication family per process, including bounded unscoped SDK use",
     ],
     tests: [
-      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "test/type-contracts/gateway-placement-compat.ts",
       "src/state/github-publication.worker.test.ts",
       "src/gateway/github-publication-admission.test.ts",
       "src/gateway/server-methods/users-github.test.ts",
@@ -100,7 +100,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family per process on legacy use",
     ],
     tests: [
-      "src/plugin-sdk/session-persistence-compat.test.ts",
+      "test/type-contracts/session-persistence-compat.ts",
       "src/plugin-sdk/session-store-runtime.worker-patch.test.ts",
       "src/plugin-sdk/session-store-runtime.test.ts",
       "src/plugins/compat/registry.test.ts",
@@ -122,7 +122,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptContextVersion",
     ],
     tests: [
-      "src/plugin-sdk/codex-session-transcript-runtime.compat.test.ts",
+      "test/type-contracts/codex-session-transcript-runtime.compat.ts",
       "src/config/sessions/session-transcript-context-read.worker.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
@@ -181,7 +181,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     tests: [
       "src/plugin-sdk/session-transcript-lock.native.test.ts",
-      "src/plugin-sdk/session-transcript-preparation-compat.test.ts",
+      "test/type-contracts/session-transcript-preparation-compat.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
@@ -205,8 +205,8 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations and one shared DEP_SESSION_PERSISTENCE warning per plugin and upstream-link capability family; unscoped consumers share one SDK-level warning",
     ],
     tests: [
-      "src/plugin-sdk/session-catalog-upstream-compat.test.ts",
-      "src/plugin-sdk/agent-harness-session-compat.test.ts",
+      "test/type-contracts/session-catalog-upstream-compat.ts",
+      "test/type-contracts/agent-harness-session-compat.ts",
       "src/sessions/session-upstream-links.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
@@ -235,7 +235,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     tests: [
       "src/plugins/compat/registry.test.ts",
       "src/plugin-sdk/reply-runtime.contract.test.ts",
-      "src/plugin-sdk/gateway-session-observer-compat.test.ts",
+      "test/type-contracts/gateway-session-observer-compat.ts",
       "src/plugin-sdk/acp-runtime.test.ts",
       "src/gateway/session-observer.test.ts",
     ],
@@ -311,7 +311,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotation and one runtime DEP_SESSION_PERSISTENCE warning per plugin and capability family per process",
     ],
     tests: [
-      "src/plugin-sdk/agent-sessions.context-compat.test.ts",
+      "test/type-contracts/agent-sessions.context-compat.ts",
       "src/agents/sessions/session-manager-incognito.test.ts",
       "src/agents/sessions/session-manager-model-context-snapshot.test.ts",
       "src/plugins/compat/registry.test.ts",
@@ -333,7 +333,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
     ],
     tests: [
-      "src/plugin-sdk/session-reset-freshness-compat.test.ts",
+      "test/type-contracts/session-reset-freshness-compat.ts",
       "src/config/sessions/entry-freshness.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
@@ -379,7 +379,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/agent-harness-session-runtime.NativeSessionGenerationOperations",
     ],
     tests: [
-      "src/plugin-sdk/agent-harness-session-compat.test.ts",
+      "test/type-contracts/agent-harness-session-compat.ts",
       "src/agents/harness/native-session/binding-generation.test.ts",
       "src/agents/harness/native-session/binding-generation-authority.test.ts",
       "src/plugins/compat/registry.test.ts",
@@ -529,7 +529,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
     tests: [
-      "src/plugin-sdk/sqlite-runtime.preparation-compat.test.ts",
+      "test/type-contracts/sqlite-runtime.preparation-compat.ts",
       "src/state/openclaw-agent-execution.creation-witness.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
@@ -593,7 +593,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
     tests: [
-      "src/plugin-sdk/memory-core-host-engine-sessions.contract.test.ts",
+      "test/type-contracts/memory-core-host-engine-sessions.contract.ts",
       "src/config/sessions/session-actor-memory-corpus.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],

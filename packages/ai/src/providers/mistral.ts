@@ -606,23 +606,19 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  const converted = tools.flatMap((tool) => {
-    try {
-      const name = tool.name;
-      const description = tool.description;
-      const value = {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: structuredClone(tool.parameters),
-          strict: false,
-        },
-      } satisfies FunctionTool & { type: "function" };
-      return { name, description, value };
-    } catch {
-      return [];
-    }
+  const converted = tools.map((tool) => {
+    const name = tool.name;
+    const description = tool.description;
+    const value = {
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters: structuredClone(tool.parameters),
+        strict: false,
+      },
+    } satisfies FunctionTool & { type: "function" };
+    return { name, description, value };
   });
   return sortPromptCacheToolsByName(converted).map(({ value }) => value);
 }
