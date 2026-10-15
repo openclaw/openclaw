@@ -195,6 +195,36 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
     },
   );
 
+  it("lets pointer input reach actions covered by a read-only rich tip", async () => {
+    const { page } = await import("vitest/browser");
+    const f = await fixture();
+    f.tooltip.pointerThrough = true;
+    const card = document.createElement("div");
+    card.slot = "content";
+    card.innerHTML = "<strong>CPU usage</strong><dl><dt>Main thread</dt><dd>12%</dd></dl>";
+    f.tooltip.append(card);
+    await commitTooltip(f.tooltip);
+    await openTooltip(f);
+    const body = tooltipBody(f.tooltip);
+    const bounds = body.getBoundingClientRect();
+    const action = document.createElement("button");
+    action.textContent = "Minimize diagnostics";
+    action.style.cssText = `position: fixed; left: ${bounds.left}px; top: ${bounds.top}px; width: ${bounds.width}px; height: ${bounds.height}px`;
+    document.body.append(action);
+    expect(
+      document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
+    ).toBe(action);
+    let activated = false;
+    action.addEventListener("click", () => {
+      activated = true;
+    });
+    const hidden = afterPhase(f.tooltip, "closed");
+    await page.elementLocator(action).click();
+    expect(activated).toBe(true);
+    await hidden;
+    await expectVisibility(f, false);
+  });
+
   it("keeps rich tooltip links pointer-accessible", async () => {
     const { page } = await import("vitest/browser");
     const { link, tooltip } = await mountOpenTooltip(true);

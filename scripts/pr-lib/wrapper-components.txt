@@ -191,8 +191,10 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/openclaw-bun.json
 scripts/lib/package-dist-inventory-contract.mts
 scripts/lib/package-lifecycle-marker.mjs
+scripts/lib/pinned-bun.mts
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -230,6 +232,7 @@ scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/run-vitest.mts
+scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
 scripts/tsx.mjs
 scripts/verify-pr-hosted-gates.mjs

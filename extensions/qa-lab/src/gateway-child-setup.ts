@@ -10,7 +10,6 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
-  resolveQaRuntimeHostVersion,
   resolveQaStagedBundledPluginsRoot,
 } from "./bundled-plugin-staging.js";
 import {
@@ -387,17 +386,11 @@ export async function prepareQaGatewayChild(
       }
       const stagedPluginRuntime = usesPackagedCandidate
         ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
-        : {
-            ...(await createQaBundledPluginsDir({
-              repoRoot: params.repoRoot,
-              tempRoot,
-              allowedPluginIds,
-            })),
-            runtimeHostVersion: await resolveQaRuntimeHostVersion({
-              repoRoot: params.repoRoot,
-              allowedPluginIds,
-            }),
-          };
+        : await createQaBundledPluginsDir({
+            repoRoot: params.repoRoot,
+            tempRoot,
+            allowedPluginIds,
+          });
       env = buildQaRuntimeEnv({
         configPath,
         gatewayToken,

@@ -142,6 +142,11 @@ and scene readiness; it does not compare pixels against a baseline.
 
 ### Test runtime selection
 
+Local development and tests now default to the pinned Bun fork; CI keeps its
+planner-selected runtime. Main-only Node lanes, including Control UI tests, are
+a known Bun coverage gap: a change can pass main CI while breaking local Bun
+execution. PR and dual-runtime validation provide the current Bun coverage.
+
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
 Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,

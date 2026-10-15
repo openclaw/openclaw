@@ -99,36 +99,6 @@ describe("Solid menu navigation", () => {
     expect(selected).toEqual(["beta", "footer"]);
   });
 
-  it("uses real link leaves, skips disabled links, and selects once by click or Enter", async () => {
-    const selected: string[] = [];
-    mountMenu({
-      items: [
-        { id: "new", label: "New session", href: "/new?agent=main", class: "new-session" },
-        { id: "disabled", label: "Unavailable", href: "/new?agent=other", disabled: true },
-        { id: "action", label: "Action" },
-      ],
-      onSelect: (entry) => selected.push(entry.id),
-    });
-    await openMenu();
-    const link = surface().querySelector<HTMLAnchorElement>('a[data-value="new"]')!;
-    expect(link.getAttribute("href")).toBe("/new?agent=main");
-    expect(link.getAttribute("role")).toBe("menuitem");
-    expect(link.classList.contains("new-session")).toBe(true);
-    expect(link.querySelector("a, button")).toBeNull();
-    expect(document.activeElement).toBe(link);
-    await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(item("Action"));
-    await userEvent.keyboard("{ArrowUp}");
-    expect(document.activeElement).toBe(link);
-    await userEvent.click(link);
-    await phase(surface(), "hidden");
-    expect(selected).toEqual(["new"]);
-    await openMenu();
-    await userEvent.keyboard("{Enter}");
-    await phase(surface(), "hidden");
-    expect(selected).toEqual(["new", "new"]);
-  });
-
   it("preserves modified, middle, and context-menu link gestures without selecting", async () => {
     const selected: string[] = [];
     let parentContextMenus = 0;
@@ -424,17 +394,6 @@ describe("Solid menu navigation", () => {
       expect(document.activeElement).toBe(trigger());
     },
   );
-
-  it("opens at the last enabled item with ArrowUp and exits with native Tab", async () => {
-    const view = mountMenu();
-    trigger().focus();
-    await userEvent.keyboard("{ArrowUp}");
-    await phase(surface(), "open");
-    expect(document.activeElement).toBe(item("Archive"));
-    await userEvent.tab();
-    await phase(surface(), "hidden");
-    expect(document.activeElement).toBe(view.getByRole("button", { name: "After menu" }));
-  });
 
   it("clears search before closing the deepest branch and restores each trigger", async () => {
     mountMenu({

@@ -319,6 +319,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       const closing = createDeferred();
       const closeStarted = createDeferred();
       const forceReconnect = vi.fn();
+      const onStatus = vi.fn();
       const client = createClient(undefined, async (method) => {
         if (method === "talk.session.submitToolResult") {
           throw new Error("Submission failed");
@@ -338,7 +339,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         return defaultRelayResponse(method);
       });
       Object.assign(client, { forceReconnect });
-      const transport = await createTransport({ client });
+      const transport = await createTransport({ client, callbacks: { onStatus } });
       await startTransport(transport);
       await emitConsultAndWait(client);
       emitGatewayFrame({
@@ -346,6 +347,16 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         payload: { runId: "run-1", state: "final", message: { text: "Final answer" } },
       });
       await closeStarted.promise;
+      expect(onStatus).toHaveBeenLastCalledWith("error", "Submission failed");
+      expect(onStatus).not.toHaveBeenCalledWith("listening");
+      expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1);
+      expect(requestCallsFor(client, "talk.session.close")).toEqual([
+        [
+          "talk.session.close",
+          { sessionId: "relay-1", disposition: "detach" },
+          { timeoutMs: 8_000 },
+        ],
+      ]);
       if (replaced) {
         Object.assign(client, { hello: {} });
       }
@@ -571,37 +582,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     expect(() => transport.activate()).toThrow("consumer failed");
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-  });
-
-  it("forwards common Talk events from Gateway relay frames", async () => {
-    const onTalkEvent = vi.fn();
-    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
-      input: await prepareRealtimeTalkTestInput(),
-      callbacks: { onTalkEvent },
-      client: createClient(),
-      sessionKey: "main",
-    });
-    const talkEvent = {
-      id: "relay-1:1",
-      type: "session.ready",
-      sessionId: "relay-1",
-      seq: 1,
-      timestamp: "2026-05-05T00:00:00.000Z",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      payload: {},
-    } satisfies RealtimeTalkEvent;
-
-    await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "ready",
-      talkEvent,
-    });
-
-    expect(onTalkEvent).toHaveBeenCalledWith(talkEvent);
-    void transport.stop();
   });
 
   it("does not forward Talk events for another relay session", async () => {
@@ -1622,28 +1602,31 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("treats server relay tool results as terminal for active consult calls", async () => {
     const client = createConsultClient();
-    const transport = await createTransport({ client });
+    const onTalkEvent = vi.fn();
+    const transport = await createTransport({ client, callbacks: { onTalkEvent } });
 
     await startTransport(transport);
     await emitConsultAndWait(client);
 
+    const talkEvent = {
+      id: "relay-1:1",
+      type: "tool.progress",
+      sessionId: "relay-1",
+      seq: 1,
+      timestamp: "2026-05-05T00:00:00.000Z",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      callId: "call-1",
+      payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
+    } satisfies RealtimeTalkEvent;
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "toolResult",
       callId: "call-1",
-      talkEvent: {
-        id: "relay-1:1",
-        type: "tool.progress",
-        sessionId: "relay-1",
-        seq: 1,
-        timestamp: "2026-05-05T00:00:00.000Z",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        callId: "call-1",
-        payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
-      } satisfies RealtimeTalkEvent,
+      talkEvent,
     });
+    expect(onTalkEvent).toHaveBeenCalledWith(talkEvent);
     expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
 
     emitTalkEvent({

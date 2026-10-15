@@ -18,7 +18,7 @@ import { normalizeAllowFrom } from "./bot-access.js";
 import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
   TelegramMediaRef,
-  TelegramMessageContextSessionRuntimeOverrides,
+  TelegramMessageContextSessionRuntime,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -61,38 +61,10 @@ type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
 };
 
-type TelegramMessageContextSessionRuntime =
-  typeof import("./bot-message-context.session.runtime.js");
-
-const sessionRuntimeMethods = [
-  "buildChannelInboundEventContext",
-  "readAmbientTranscriptWatermarkAsync",
-  "readSessionUpdatedAtAsync",
-  "recordInboundSession",
-  "resolveAmbientTranscriptWatermarkKey",
-  "resolveInboundLastRouteSessionKey",
-  "resolvePinnedMainDmOwnerFromAllowlist",
-  "resolveStorePath",
-] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
-
-function hasCompleteSessionRuntime(
-  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
-): runtime is TelegramMessageContextSessionRuntime {
-  return Boolean(
-    runtime && sessionRuntimeMethods.every((method) => typeof runtime[method] === "function"),
-  );
-}
-
 export async function loadTelegramMessageContextSessionRuntime(
-  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+  runtime: TelegramMessageContextSessionRuntime | undefined,
 ): Promise<TelegramMessageContextSessionRuntime> {
-  if (hasCompleteSessionRuntime(runtime)) {
-    return runtime;
-  }
-  return {
-    ...(await import("./bot-message-context.session.runtime.js")),
-    ...runtime,
-  };
+  return runtime ?? import("./bot-message-context.session.runtime.js");
 }
 
 function replyTargetToChainEntry(

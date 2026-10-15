@@ -864,6 +864,8 @@ export function spawnWatchedVitestProcess({
   const testCommand = nativeBunFiles
     ? resolveNativeBunTestCommand(
         validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+        undefined,
+        env,
       )
     : directNodeArgs
       ? resolveVitestTestCommand(directNodeArgs, env)
