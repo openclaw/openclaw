@@ -555,11 +555,16 @@ export function projectPlainTextToolCallBlocks(
       retainedOutputStart = result.length + index - cursor;
     }
     const blockStart = skipLineIndentation(text, index);
-    const scan = scanPlainTextToolCall(text, blockStart);
-    if ((scan.kind !== "invalid" || scan.next > blockStart + 1) && isProtected(blockStart)) {
+    if (
+      (text[blockStart] === "[" ||
+        text[blockStart] === "<" ||
+        HARMONY_CHANNELS.some((channel) => channel[0] === text[blockStart])) &&
+      isProtected(blockStart)
+    ) {
       index += 1;
       continue;
     }
+    const scan = scanPlainTextToolCall(text, blockStart);
     if (scan.kind === "invalid") {
       // The scanner owns everything before `at` as one malformed candidate. Honor that
       // progress so nested line starts inside its payload are not rescanned quadratically.

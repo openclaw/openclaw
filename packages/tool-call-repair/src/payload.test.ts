@@ -83,6 +83,18 @@ describe("scanPlainTextJsonToolCall", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
+  it("does not scan payloads inside protected code examples", () => {
+    const raw = "```text\n" + "[tool:read] {\n".repeat(128) + "```";
+    const tracked = trackStringOperations(raw);
+    expect(
+      stripPlainTextToolCallBlocks(tracked.text, {
+        resolveProtectedRanges: () => [{ start: 0, end: raw.length }],
+      }),
+    ).toBe(raw);
+    expect(tracked.indexedReads).toBeGreaterThan(0);
+    expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
+  });
+
   it.each([
     "[guide](https://example.test)\nUse `code` here.",
     "[guide][reference]\n\n[reference]: https://example.test\n\n```js\nconst x = {};\n```",
