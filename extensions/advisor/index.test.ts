@@ -673,6 +673,7 @@ describe("advisor", () => {
         expect.objectContaining({
           sessionKey: "agent:main:main",
           text: expect.stringContaining("Return to the requested README typo"),
+          displayText: "Return to the requested README typo; leave CI unchanged.",
         }),
       );
       expect(run.steer.mock.calls[0]?.[0].text.split("\n\n").at(-1)).toBe(

@@ -48,6 +48,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
     context,
     () => params.assertOwned(),
     observed,
+    params.context.maintenanceScope,
   ).catch((error: unknown) => {
     if (error instanceof Error) {
       error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;

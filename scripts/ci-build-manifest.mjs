@@ -686,6 +686,7 @@ if (uiE2eSelection) {
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
   "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
