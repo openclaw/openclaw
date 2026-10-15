@@ -52,6 +52,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { acquireStartupMigrationLeaseWithWait } from "./startup-migration-checkpoint.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
@@ -406,7 +407,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   };
 }
 
-function createWorktreeInserter(db: DatabaseSync, root: string, stateDir: string) {
+function createWorktreeInserter(db: EngineConnection, root: string, stateDir: string) {
   const insert = db.prepare(
     `INSERT INTO worktrees (
       id, repo_fingerprint, repo_root, path, branch, base_ref, owner_kind,
