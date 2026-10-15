@@ -158,6 +158,10 @@ suite.define(() => {
       "const timeout = 3000;",
       'const label = "Working";',
       "return { owner, retries, timeout, label };",
+      "const café = '😀';",
+      "const spacing={ value: 1 };",
+      "const repeated = 1;",
+      "const repeated = 1;",
     ];
     const after = [
       'const auditLabel = "session:" + owner;',
@@ -165,6 +169,10 @@ suite.define(() => {
       "const timeout = 5000;",
       'const label = "Running";',
       "return { owner, retries, timeout, label, auditLabel };",
+      "const café = '🚀';",
+      "const spacing = {value: 1};",
+      "const repeated = 2;",
+      "const repeated = 2;",
     ];
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
@@ -174,16 +182,16 @@ suite.define(() => {
           root: "/workspace/example",
           branch: "feature/retries",
           baseRef: "main",
-          additions: 5,
-          deletions: 4,
+          additions: after.length,
+          deletions: before.length,
           files: [
             {
               path: "src/retry.ts",
               status: "modified",
-              additions: 5,
-              deletions: 4,
+              additions: after.length,
+              deletions: before.length,
               patch: [
-                "@@ -10,6 +10,7 @@",
+                `@@ -10,${before.length + 2} +10,${after.length + 2} @@`,
                 " function run(owner: string) {",
                 ...before.map((line) => "-  " + line),
                 ...after.map((line) => "+  " + line),
@@ -234,18 +242,30 @@ suite.define(() => {
             )
             .filter(Boolean),
         );
-    expect(await changedText(".session-diff-split__side--left")).toEqual(["2", "3000", "Working"]);
+    expect(await changedText(".session-diff-split__side--left")).toEqual([
+      "2",
+      "3000",
+      "Working",
+      "😀",
+      "{ ",
+      "1",
+      "1",
+    ]);
     expect(await changedText(".session-diff-split__side--right")).toEqual([
       "3",
       "5000",
       "Running",
       ", auditLabel",
+      "🚀",
+      " {",
+      "2",
+      "2",
     ]);
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
     await expect
       .poll(() => changedText(".chat-diff__row--add"))
-      .toEqual(["3", "5000", "Running", ", auditLabel"]);
+      .toEqual(["3", "5000", "Running", ", auditLabel", "🚀", " {", "2", "2"]);
   });
 
   it("opens a renamed session diff when Review is added from the panel menu", async () => {

@@ -138,11 +138,14 @@ checks also default to five minutes.
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime" />
+    <a id="ensure-a-supported-node-js-runtime" />
     Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
     On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26-alpine` container or a glibc-based host instead.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git" />
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
   </Step>
   <Step title="Install OpenClaw">
@@ -357,7 +360,8 @@ system Node packages.
     Linux ARMv7 stops before installation because official Node 24+ ARMv7 binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host.
     On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git-1" />
     If Git is missing, attempts install via apt/dnf/yum/apk on Linux or Homebrew on macOS.
     On FreeBSD, install Git with `pkg install git` before retrying.
   </Step>
@@ -494,10 +498,14 @@ its existing service-refresh behavior.
 ### Flow (install.ps1)
 
 <Steps>
-  <Step title="Ensure PowerShell + Windows environment">
+  <Step title="Check PowerShell and Windows">
+    <a id="ensure-powershell-windows-environment" />
+    <a id="ensure-powershell-%2B-windows-environment" />
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime-1" />
+    <a id="ensure-a-supported-node-js-runtime-1" />
     If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">

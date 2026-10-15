@@ -39,6 +39,14 @@ describe("ClawHub detail content", () => {
     await expect
       .element(page.getByRole("button", { name: "Install Guide", exact: true }))
       .toBeVisible();
+    const footer = container.querySelector<HTMLElement>(
+      "openclaw-modal-actions.skill-reader-dialog__actions",
+    )!;
+    expect(footer.parentElement?.lastElementChild).toBe(footer);
+    expect(body.contains(footer)).toBe(false);
+    const footerTop = footer.getBoundingClientRect().top;
+    body.scrollTop = body.scrollHeight;
+    expect(footer.getBoundingClientRect().top).toBe(footerTop);
     expect(body.clientWidth).toBeGreaterThan(0);
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
     for (const child of body.children) {

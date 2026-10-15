@@ -1,9 +1,9 @@
 import { setImmediate as yieldToGateway } from "node:timers/promises";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 const CONTEXT_PROJECTION_BATCH_SIZE = 512;
 

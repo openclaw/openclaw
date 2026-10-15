@@ -1739,3 +1739,49 @@ openclaw-chat-files-panel,
   margin-left: auto;
   flex: none;
 }
+
+/* Keep code folding separate from file disclosure and unchanged-source gaps. */
+.session-diff__code-toggle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.session-diff__code-toggle svg {
+  width: 12px;
+  height: 12px;
+}
+.session-diff .chat-diff__gutter,
+.session-diff-split__gutter {
+  position: relative;
+  padding-left: 16px;
+}
+.session-diff__code-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 12px;
+  border: 0;
+  background: var(--bg-accent);
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+}
+.session-diff__code-placeholder > svg {
+  width: 14px;
+  height: 14px;
+}
+.session-diff__code-toggle:hover,
+.session-diff__code-placeholder:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}

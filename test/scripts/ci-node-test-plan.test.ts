@@ -325,21 +325,43 @@ function selectFixtureProjects(owns: (config: string) => boolean) {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it("keeps the scheduled main inventory within its reserved compact capacity", () => {
-    const jobs = createNodeTestShardBundles({
-      includeProofTests: true,
-      includeReleaseOnlyPluginShards: false,
-      includeReleaseOnlyToolingShards: true,
-      includeReleaseOnlyRuntimeTests: false,
-      includePrExemptRuntimeTests: true,
-      compactMode: "pull-request",
-      compactNodeJobCap: 76,
-      runnerBackend: "hybrid",
-    });
-    // Main's 77 Node rows reserve one for the separate worker-E2E owner.
-    expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
-    expect(jobs.length).toBeLessThanOrEqual(78);
-  });
+  it.each([false, true])(
+    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
+    (extraGroup) => {
+      const original = fullSuiteVitestShards.slice();
+      if (extraGroup) {
+        // A new isolated group must not exhaust main's capacity on arrival.
+        fullSuiteVitestShards.push({
+          name: "synthetic-capacity-growth",
+          config: "fixture-capacity.config.ts",
+          projects: ["test/vitest/vitest.hooks.config.ts"],
+        });
+      }
+      try {
+        const jobs = createNodeTestShardBundles({
+          includeProofTests: true,
+          includeReleaseOnlyPluginShards: false,
+          includeReleaseOnlyToolingShards: true,
+          includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: true,
+          compactMode: "pull-request",
+          compactNodeJobCap: 76,
+          mainValidation: true,
+          runnerBackend: "hybrid",
+        });
+        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
+        expect(jobs.length).toBeLessThanOrEqual(78);
+        expect(
+          jobs
+            .flatMap((job) => job.groups)
+            .filter((group) => group.shard_name === "synthetic-capacity-growth"),
+        ).toHaveLength(extraGroup ? 1 : 0);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+      }
+    },
+  );
 
   function smallCapacityJobs(count: number): CompactNodeTestShard[] {
     return Array.from({ length: count }, (_, index) => ({
@@ -794,6 +816,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           job.groups.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2"),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    { profile: "native" as const, limit: 420, jobs: 2 },
+    { profile: "main-validation" as const, limit: 420, jobs: 1 },
+    { profile: "main-validation" as const, limit: 150, jobs: 2 },
+  ])("packs $profile tooling within its $limit-second test budget", ({ profile, limit, jobs }) => {
+    const before = measuredToolingFixture().slice(0, 2);
+    const after = rebalanceMeasuredSerialJobs(before, {
+      ...measuredPackingOptions,
+      profile,
+      estimateGroup: () => ({ seconds: 210, complete: true }),
+      testSecondsLimit: () => limit,
+    });
+    expect(after).toHaveLength(jobs);
+    expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+    expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(true);
+    expect(after.map((job) => job.predictedSeconds)).toEqual(jobs === 1 ? [420] : [210, 210]);
   });
 
   it("packs hosted hourly tooling only with complete supplied prices and ignores native tails", () => {
@@ -3193,6 +3233,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     },
   );
+
+  it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
+    const targets = [
+      "src/gateway/openai-http.test.ts",
+      "src/agents/embedded-agent-runner/compact.small-context.test.ts",
+      "src/agents/embedded-agent-runner/stream-resolution.test.ts",
+      "src/gateway/client-callsites.guard.test.ts",
+      "src/gateway/server-plugin-subagent-runtime.fork-transport.test.ts",
+    ];
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "mixed selected serial plan",
+    );
+    const groups = plan.flatMap((job) => job.groups);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(plan.filter((job) => job.planConcurrency === 2)).toHaveLength(1);
+    for (const job of plan) {
+      expect(job.runner).toBe(
+        job.planConcurrency === 2
+          ? "blacksmith-32vcpu-ubuntu-2404"
+          : "blacksmith-16vcpu-ubuntu-2404",
+      );
+    }
+    for (const group of groups) {
+      expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe("2");
+    }
+  });
 
   it.each(["github"])(
     "shares one prepared runtime across affordable %s groups",

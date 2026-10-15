@@ -7,7 +7,7 @@ export const DatabaseConfigSchema = z
   .strictObject({
     engine: z.enum(["sqlite", "postgres"]).optional().register(configUiMetadata, {
       label: "Database Engine (Experimental)",
-      help: "Store engine (default: sqlite). Experimental postgres selects every store with a registered PostgreSQL schema; other stores stay on SQLite. Existing SQLite data cannot be ported yet.",
+      help: "Store engine (default: sqlite). Experimental postgres selects every store with a registered PostgreSQL schema; other stores stay on SQLite. Port existing data in supported families with openclaw database port while the Gateway is stopped.",
     }),
     postgres: z
       .strictObject({
@@ -39,7 +39,7 @@ export const DatabaseConfigSchema = z
   .optional()
   .register(configUiMetadata, {
     label: "Database (Experimental)",
-    help: "Database engine selection. SQLite is the supported default; experimental PostgreSQL currently supports workboard. Doctor reports each store's engine and warns about stores that remain on SQLite.",
+    help: "Database engine selection. SQLite is the supported default; experimental PostgreSQL applies to supported store families. Doctor reports each store's engine and warns about stores that remain on SQLite.",
   });
 
 export const { labels: DATABASE_FIELD_LABELS, help: DATABASE_FIELD_HELP } =

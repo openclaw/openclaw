@@ -496,7 +496,6 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   );
   return {
     activeRunId: state.chatRunId,
-    activeRunSessionKey: state.chatRunId ? state.sessionKey : undefined,
     connected: state.connected,
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
@@ -4103,7 +4102,9 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(search!.value).toBe("claude");
 
-    const nestedPicker = document.createElement("wa-dropdown");
+    const nestedPicker = document.createElement("div");
+    nestedPicker.setAttribute("role", "menu");
+    nestedPicker.setAttribute("popover", "manual");
     const nestedTrigger = document.createElement("button");
     nestedPicker.append(nestedTrigger);
     details!.append(nestedPicker);

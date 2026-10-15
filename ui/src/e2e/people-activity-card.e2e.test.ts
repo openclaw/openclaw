@@ -111,7 +111,7 @@ async function expectMultilineTitle(title: Locator) {
 }
 
 async function selectOnlineView(page: Page, touch = false) {
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Online", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
   if (touch) {
     await online.tap();
   } else {

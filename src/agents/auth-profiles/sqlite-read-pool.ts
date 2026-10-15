@@ -16,10 +16,8 @@ import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.j
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
@@ -91,7 +89,7 @@ function armReadHandleIdleClose(pathname: string, entry: AuthProfileReadHandle):
     entry.idleTimer.refresh();
     return;
   }
-  const timer = runInSqliteMaintenanceContext(() =>
+  const timer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       if (authProfileReadDatabases.get(pathname) !== entry || entry.idleTimer !== timer) {
         return;

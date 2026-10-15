@@ -44,9 +44,7 @@ export class CodexNativeSubagentCompletionDelivery {
     const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
-      if (this.attempts.get(childState) === attempt) {
-        this.attempts.delete(childState);
-      }
+      this.attempts.delete(childState);
     };
     void attempt.then(release, release);
     return attempt;
@@ -66,10 +64,7 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     let deferredToForeground = false;
     try {
-      if (
-        childState.cancellationRequested &&
-        childState.pendingCompletion?.status === "cancelled"
-      ) {
+      if (childState.cancellationRequested && completion.status === "cancelled") {
         // Stop owns durable cancellation acknowledgement before releasing this child.
         return;
       }

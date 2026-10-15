@@ -43,6 +43,7 @@ export type { BrowserPanelControllerHost } from "./browser-panel-operation-owner
 /** Browser session, navigation, capture, and input lifecycle for the docked surface. */
 export class BrowserPanelController implements PanelLifecycleController {
   running: boolean | null = null;
+  canAutoResizeViewport = false;
   tabs: BrowserPanelTab[] = [];
   /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
   activeTargetId: string | null = null;
@@ -163,6 +164,7 @@ export class BrowserPanelController implements PanelLifecycleController {
   resetBrowserState(): void {
     this.invalidateViewOperations();
     this.setState("running", null);
+    this.setState("canAutoResizeViewport", false);
     const nativeTab = this.native.activeTab ?? this.native.tabs[0];
     this.setState("tabs", this.native.tabs);
     this.setState("activeTargetId", nativeTab?.id ?? null);
@@ -212,6 +214,7 @@ export class BrowserPanelController implements PanelLifecycleController {
         return;
       }
       this.setState("running", snapshot.running);
+      this.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
       this.setState(
         "tabs",
         this.native.mergeRemoteTabs(this.operations.retainTabSnapshot(client, snapshot.tabs)),

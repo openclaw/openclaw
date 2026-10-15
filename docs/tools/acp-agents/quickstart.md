@@ -87,6 +87,7 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `droid`      | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
 | `fast-agent` | fast-agent-mcp ACP adapter                     | Fetched on demand with `uvx`.                                                       |
 | `gemini`     | Gemini CLI ACP adapter                         | Requires Gemini CLI auth or API key setup.                                          |
+| `grok-build` | Grok Build CLI (`grok agent stdio`)            | Requires Grok Build installed and authenticated on the host.                        |
 | `iflow`      | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `kilocode`   | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                 |
 | `kimi`       | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                            |
@@ -94,12 +95,17 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `mux`        | Mux CLI ACP adapter                            | Fetched on demand with `npx`.                                                       |
 | `opencode`   | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
 | `openclaw`   | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
+| `pool`       | Poolside Agent (`pool acp`)                    | Requires the Poolside CLI installed and authenticated on the Gateway host.          |
 | `qoder`      | Qoder CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `qwen`       | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
 | `trae`       | Trae CLI ACP adapter                           | Adapter availability and model control depend on the installed CLI.                 |
 
 `pi` (pi-acp) is also registered in the acpx backend but is not a coding
 harness in the same sense as the others above.
+
+`grok-build` is the ACPX agent target that launches the Grok Build CLI, not
+the xAI model id `xai/grok-build-0.1`. Pass `grok-build` as `agentId` for ACP;
+use the xAI model id only in an OpenClaw model field.
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
 policy still checks `acp.allowedAgents` and any
