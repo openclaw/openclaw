@@ -1,13 +1,17 @@
 import type { EventEmitter } from "node:events";
-import type { MatrixClient as MatrixJsSdkClient } from "matrix-js-sdk/lib/matrix.js";
 import { expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
-import { type FakeMatrixEvent, makeMatrixEvent } from "./event.test-support.js";
+import {
+  type FakeMatrixEvent,
+  makeMatrixEvent,
+  type MatrixEventDecryptor,
+} from "./event.test-support.js";
 
 type DecryptRetentionContext = {
   createSdkClient: () => MatrixClient;
-  getMatrixJsClient: () => Pick<MatrixJsSdkClient, "decryptEventIfNeeded"> &
-    Pick<EventEmitter, "emit">;
+  getMatrixJsClient: () => Pick<EventEmitter, "emit"> & {
+    decryptEventIfNeeded: MatrixEventDecryptor;
+  };
 };
 
 export function registerDecryptRetentionTests(context: DecryptRetentionContext): void {

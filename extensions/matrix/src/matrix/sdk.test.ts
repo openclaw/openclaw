@@ -37,6 +37,7 @@ import {
   FakeMatrixEvent,
   makeDecryptedMessageEvent,
   makeMatrixEvent,
+  type MatrixEventDecryptor,
 } from "./sdk/event.test-support.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import {
@@ -201,7 +202,7 @@ type MatrixJsClientStub = {
     MatrixJsSdkClient["secretStorage"],
     "getDefaultKeyId" | "getKey" | "checkKey"
   >;
-  decryptEventIfNeeded: ReturnType<typeof vi.fn>;
+  decryptEventIfNeeded: ReturnType<typeof vi.fn<MatrixEventDecryptor>>;
   relations: ReturnType<typeof vi.fn>;
   syncApi: SyncApi;
 };
@@ -285,7 +286,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
     getKey: vi.fn(async () => null),
     checkKey: vi.fn(async () => false),
   };
-  client.decryptEventIfNeeded = vi.fn(async () => {});
+  client.decryptEventIfNeeded = vi.fn<MatrixEventDecryptor>(async () => {});
   client.relations = vi.fn(async () => ({
     originalEvent: null,
     events: [],
