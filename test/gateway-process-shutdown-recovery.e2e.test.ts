@@ -510,6 +510,8 @@ it(
             scenario.phase = "recovery";
           }
           expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
+          const resetRevision = readStoppedEntry(reset).lifecycleRevision;
+          expect(resetRevision).toBeTypeOf("string");
           await instance.startGateway();
           expect(instance.child?.pid).not.toBe(predecessor);
           await connect();
@@ -518,9 +520,16 @@ it(
           void finishing.catch(() => {});
           await gate(reset.recoverySeen.promise);
           phase = "revoke-recovery";
-          expect(
-            await client!.request("sessions.reset", { key: reset.key, reason: "reset" }),
-          ).toMatchObject({ ok: true });
+          const resetResult = await client!.request<{
+            ok: boolean;
+            entry: { sessionId: string; lifecycleRevision: string };
+          }>("sessions.reset", { key: reset.key, reason: "reset" });
+          expect(resetResult).toMatchObject({
+            ok: true,
+            entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
+          });
+          expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
+          expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
           await gate(provider.resetResponseClosed);
           reset.releaseResponse.resolve();
           reset.phase = "cancelled";
@@ -529,8 +538,7 @@ it(
             agentId: "main",
           });
           const replacement = afterReset.sessions.find((row) => row.key === reset.key);
-          expect(replacement?.sessionId).not.toBe(reset.sessionId);
-          expect(replacement?.hasActiveRun).toBe(false);
+          expect(replacement).toMatchObject({ sessionId: reset.sessionId, hasActiveRun: false });
           expect(afterReset.sessions.find((row) => row.key === stopped.key)).toMatchObject({
             status: "killed",
             hasActiveRun: false,
