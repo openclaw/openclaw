@@ -198,6 +198,7 @@ function writeRows(
     return `CASE WHEN ?${text} THEN CAST(?${value} AS TEXT) ELSE ?${value} END`;
   });
   const writer = target.prepare(`${insert} VALUES (${values.join(", ")})`);
+  writer.setReadBigInts(true);
   for (const row of rows) {
     writer.run(...row);
   }
@@ -447,9 +448,9 @@ export function restoreScopedMigrationSnapshot(params: {
           // DROP TABLE removes planner rows even when the migration does not own statistics.
           // Buffer current rows, including later ANALYZE results, through the archive's byte codec.
           const preservedStatistics = undeclaredStatistics.map((name) => {
-            // SAFETY: SQLite owns the table_info column names for its planner statistics tables.
             const tableColumns = target
               .prepare(`PRAGMA main.table_info(${quote(name)})`)
+              // SAFETY: SQLite owns the table_info column names for its planner statistics tables.
               .all() as Array<{ name: string }>;
             const columns = ["rowid", ...tableColumns.map((column) => column.name)];
             return {
