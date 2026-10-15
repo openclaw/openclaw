@@ -117,15 +117,22 @@ suite.define(() => {
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const publish = (nextModels: typeof models) =>
-      cli([
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(nextModels),
-        "--strict-json",
-        "--replace",
+    const publish = async (nextModels: typeof models) => {
+      const snapshot = record(JSON.parse(await cli(["gateway", "call", "config.get", "--json"])));
+      return cli([
+        "gateway",
+        "call",
+        "config.patch",
+        "--params",
+        JSON.stringify({
+          baseHash: snapshot.hash,
+          raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
+          replacePaths: ["models.providers.fixture.models"],
+          response: "summary",
+        }),
+        "--json",
       ]);
+    };
     const handoff = record(JSON.parse(await cli(["dashboard", "--json"])));
     if (typeof handoff.browserUrl !== "string") {
       throw new Error("Dashboard browser handoff missing");
