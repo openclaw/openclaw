@@ -65,48 +65,6 @@ describe("codex command: CLI sessions listing", () => {
     expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
   });
 
-  it("still says a Codex CLI session search was cut when it matched nothing", async () => {
-    const listCodexCliSessionsOnNode = vi.fn(async () => ({
-      node: { nodeId: "mb-m5", displayName: "mb-m5" },
-      result: {
-        codexHome: "/Users/mariano/.codex",
-        scannedFileCount: 342,
-        sessionFileCount: 2928,
-        searchTruncated: true,
-        sessions: [],
-      },
-    }));
-
-    const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
-
-    // An empty answer to a cut search is the one a caller is most likely to read as "no such
-    // session exists", so the notice has to reach this path and not just the non-empty one.
-    expect(result.text).toContain("No Codex CLI sessions returned");
-    expect(result.text).toContain("Searched 342 of 2928 rollouts");
-  });
-
-  it("says a Codex CLI search covering every rollout still left content unread", async () => {
-    const listCodexCliSessionsOnNode = vi.fn(async () => ({
-      node: { nodeId: "mb-m5", displayName: "mb-m5" },
-      result: {
-        codexHome: "/Users/mariano/.codex",
-        scannedFileCount: 12,
-        sessionFileCount: 12,
-        searchTruncated: true,
-        unreadSpanCount: 2,
-        sessions: [],
-      },
-    }));
-
-    const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
-
-    // Every file was opened, so there is no "N of M" clause to print — but two of them were only
-    // windowed, and saying nothing would present that as an exhaustive "no such session".
-    expect(result.text).toContain("No Codex CLI sessions returned");
-    expect(result.text).toContain("2 rollouts were too large to read whole");
-    expect(result.text).not.toContain("Searched 12 of 12");
-  });
-
   it("keeps the truncation notice unquantified when the node reported no rollout counts", async () => {
     const listCodexCliSessionsOnNode = vi.fn(async () => ({
       node: { nodeId: "mb-m5", displayName: "mb-m5" },
@@ -179,6 +137,9 @@ describe("codex command: CLI sessions listing", () => {
 
     const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
 
+    // An empty answer to a cut search is the one a caller is most likely to read as "no such
+    // session exists", so the notice has to reach this path and not just the non-empty one.
+    expect(result.text).toContain("No Codex CLI sessions returned");
     // Naming the rerun is what keeps a bounded scan from reading as a permanent loss: the 928
     // rollouts this one never opened are still reachable, and the notice has to say how.
     expect(result.text).toContain("Searched 2000 of 2928 rollouts");
@@ -204,7 +165,9 @@ describe("codex command: CLI sessions listing", () => {
 
     // Every file was opened, so there is no "N of M" clause — but two of them were only windowed,
     // and the complete search clears that cause too by reading each rollout whole. Suppressing the
-    // offer here would strand the one rerun that can still answer the question.
+    // offer here would strand the one rerun that can still answer the question. Saying nothing at
+    // all would present a windowed scan as an exhaustive "no such session".
+    expect(result.text).toContain("No Codex CLI sessions returned");
     expect(result.text).toContain("2 rollouts were too large to read whole");
     expect(result.text).not.toContain("Searched 12 of 12");
     expect(result.text).toContain(
