@@ -7,7 +7,11 @@ import {
   readGeminiCliCredentialsCached,
   resolveCodexCliHomePath,
 } from "../agents/cli-credentials.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import {
+  resolveConfiguredRouteModelLabel,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -123,7 +127,18 @@ export async function detectInferenceBackends(
       cfg: options.config ?? {},
       ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
     });
-    const modelRef = `${resolved.provider}/${resolved.model}`;
+    // Discovery must advertise exactly the label configured-route activation
+    // resolves: a qualified alias labels the concrete model, a literal catalog
+    // namespace (OpenRouter's `openrouter/openrouter/fusion`) keeps its authored
+    // spelling, and the separated auth-profile suffix is dropped.
+    const profileId = splitTrailingAuthProfile(existingModel).profile;
+    const modelRef = resolveConfiguredRouteModelLabel({
+      cfg: options.config ?? {},
+      ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
+      configuredRef: existingModel,
+      resolved,
+      ...(profileId ? { profileId } : {}),
+    });
     candidates.push({
       kind: "existing-model",
       // Approval and activation bind to the executable target, not a mutable

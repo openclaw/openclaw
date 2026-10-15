@@ -26,6 +26,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import { activateSetupInference } from "./setup-inference-activate.js";
 
 // Mirrors OPENROUTER_DEFAULT_MODEL_REF from extensions/openrouter/onboard.ts.
 // Kept as a literal so this core test does not pull a bundled extension into
@@ -193,3 +194,95 @@ it("discovers the same Fusion identity that activation resolves", async () => {
   );
   expect(route?.modelLabel).toBe(discovered?.modelRef);
 });
+
+it.each([
+  {
+    name: "a saved openrouter/auto primary",
+    primary: "openrouter/auto",
+    expected: "openrouter/auto",
+  },
+  {
+    name: "a saved primary with its auth-profile suffix",
+    primary: "openrouter/auto@openrouter:default",
+    expected: "openrouter/auto",
+  },
+  {
+    name: "a literal Fusion catalog namespace",
+    primary: "openrouter/openrouter/fusion",
+    expected: "openrouter/openrouter/fusion",
+  },
+])(
+  "activates the discovered Current model for $name without a changed-model rejection",
+  async ({ primary, expected }) => {
+    // Discovery and activation must agree on the saved model's identity:
+    // Model Setup advertises the discovered "Current model" ref, and the
+    // existing-model activation compares it with the configured route label
+    // before verifying inference. A mismatch is rejected as "The configured
+    // default model changed" before any model turn runs.
+    const config = {
+      agents: { defaults: { model: { primary } }, entries: { main: {} } },
+      models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, JSON.stringify(config));
+    const snapshot = await readSnapshot();
+    expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
+
+    const candidates = await detectInferenceBackends({
+      config: snapshot.runtimeConfig,
+      agentId: "main",
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({ found: false, command }),
+        readCodexCliCredentials: () => null,
+      },
+    });
+    const discovered = candidates.find((candidate) => candidate.kind === "existing-model");
+    expect(discovered?.modelRef).toBe(expected);
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(
+      snapshot.runtimeConfig,
+      undefined,
+      {},
+      snapshot,
+    );
+    expect(route?.modelLabel).toBe(discovered?.modelRef);
+
+    const runEmbeddedAgent = vi.fn(async () => ({
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "OK",
+        executionTrace: { winnerProvider: "openrouter", winnerModel: expected },
+      },
+    }));
+    const result = await activateSetupInference({
+      kind: "existing-model",
+      modelRef: discovered?.modelRef,
+      surface: "gateway",
+      runtime: {
+        log() {},
+        error() {},
+        exit() {
+          throw new Error("Unexpected exit");
+        },
+      },
+      deps: {
+        readConfigFileSnapshot: readSnapshot,
+        createTempDir: () => fs.mkdtemp(path.join(temp.home, "probe-")),
+        runEmbeddedAgent: runEmbeddedAgent as never,
+      },
+    });
+    if (!result.ok) {
+      expect(result.error).not.toContain("configured default model changed");
+    }
+    if (primary.includes("@")) {
+      // The identity check passed; this fixture stores no credential for the
+      // named saved sign-in, so activation stops at the credential lookup.
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error).toContain("No credentials found");
+    } else {
+      // The discovered candidate passed the identity check and reached live
+      // inference verification.
+      expect(runEmbeddedAgent).toHaveBeenCalled();
+    }
+  },
+);
