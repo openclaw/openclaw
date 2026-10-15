@@ -438,27 +438,6 @@ describe("Crabbox worker provider", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("returns an enrolled node transport without command-line credentials", async () => {
-    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-    const provider = providerWithRunner(async (argv, options) => {
-      calls.push({ argv, options });
-      return commandResult({ stdout: argv[1] === "inspect" ? inspectJson() : "" });
-    });
-    await expect(
-      provider.provision(PROFILE, OPERATION_ID, { executionMode: "remote-exec" }),
-    ).resolves.toEqual({ leaseId: LEASE_ID, node: { deviceId: "device-1" }, sharedHost: false });
-    const enrollment = calls.find(({ argv }) => argv[1] === "run")!;
-    expect(enrollment).toBeDefined();
-    expect(String(enrollment.options.input)).toContain("--ephemeral");
-    expect(String(enrollment.options.input)).not.toContain("secret-setup-value");
-    expect(String(enrollment.options.input)).not.toContain("synthetic-bootstrap-token");
-    expect(enrollment.argv).toContain("CRABBOX_WORKER_BOOTSTRAP_TOKEN");
-    const argumentsUsed = calls.flatMap(({ argv }) => argv);
-    for (const forbidden of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
-      expect(argumentsUsed).not.toContain(forbidden);
-    }
-  });
-
   it.each([
     {
       name: "non-PNG bytes",
@@ -481,29 +460,6 @@ describe("Crabbox worker provider", () => {
     expect(() => createCrabboxWorkerProvider({ state: crabboxState, wallpaperPath })).toThrow(
       message,
     );
-  });
-
-  it.each([
-    {
-      options: { executionMode: "unsupported" as never },
-      message: "Crabbox execution mode is unsupported",
-    },
-    {
-      options: { os: "windows/unknown" },
-      message: "Crabbox target must be linux or windows/wsl2 or windows/normal or macos",
-    },
-    {
-      options: { machineClass: "x".repeat(129) },
-      message: "Crabbox machine class must be a non-empty string of at most 128 characters",
-    },
-  ])("rejects invalid provision options %j before allocation", async ({ options, message }) => {
-    const runCommand = vi.fn<CrabboxCommandRunner>();
-    const provider = providerWithRunner(runCommand);
-    await expect(provider.provision(PROFILE, OPERATION_ID, options)).rejects.toMatchObject({
-      code: "invalid_profile",
-      message,
-    });
-    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("runs profile setup with sentinels while keeping the proxy and enrollment credentials separate", async () => {
@@ -540,10 +496,21 @@ describe("Crabbox worker provider", () => {
     });
 
     await expect(
-      provider.provision({ ...PROFILE, setup, setupSecrets: SETUP_SECRETS }, OPERATION_ID),
-    ).resolves.toMatchObject({ leaseId: LEASE_ID });
+      provider.provision({ ...PROFILE, setup, setupSecrets: SETUP_SECRETS }, OPERATION_ID, {
+        executionMode: "remote-exec",
+      }),
+    ).resolves.toEqual({ leaseId: LEASE_ID, node: { deviceId: "device-1" }, sharedHost: false });
     const setupCall = calls.find((call) => call.argv[1] === "egress");
     const enrollmentCall = calls.find((call) => call.argv[1] === "run");
+    expect(enrollmentCall).toBeDefined();
+    expect(String(enrollmentCall?.options.input)).toContain("--ephemeral");
+    expect(String(enrollmentCall?.options.input)).not.toContain("secret-setup-value");
+    expect(String(enrollmentCall?.options.input)).not.toContain("synthetic-bootstrap-token");
+    expect(enrollmentCall?.argv).toContain("CRABBOX_WORKER_BOOTSTRAP_TOKEN");
+    const argumentsUsed = calls.flatMap(({ argv }) => argv);
+    for (const forbidden of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
+      expect(argumentsUsed).not.toContain(forbidden);
+    }
     expect(setupCall?.argv).toEqual([
       SIBLING_BINARY,
       "egress",
@@ -1241,7 +1208,18 @@ describe("Crabbox worker provider", () => {
     expect(calls).toEqual(["warmup", "inspect"]);
   });
 
-  it.each<[WorkerProfile, string]>([
+  it.each<[WorkerProfile, string, Parameters<WorkerProvider["provision"]>[2]?]>([
+    [{}, "Crabbox execution mode is unsupported", { executionMode: "unsupported" as never }],
+    [
+      {},
+      "Crabbox target must be linux or windows/wsl2 or windows/normal or macos",
+      { os: "windows/unknown" },
+    ],
+    [
+      {},
+      "Crabbox machine class must be a non-empty string of at most 128 characters",
+      { machineClass: "x".repeat(129) },
+    ],
     [{ provider: " " }, "provider"],
     [{ class: null }, "class"],
     [{ warmImage: "yes" }, "warmImage must be a boolean"],
@@ -1280,12 +1258,14 @@ describe("Crabbox worker provider", () => {
       { provider: "gcp", desktop: true },
       "Crabbox desktop profiles support only AWS, Azure, and coordinator-backed Hetzner",
     ],
-  ])("rejects invalid profile %j", async (patch, message) => {
+  ])("rejects invalid provision input %j (%s, options %j)", async (patch, message, options) => {
     const runCommand = vi.fn<CrabboxCommandRunner>();
     const provider = providerWithRunner(runCommand);
-    await expect(provider.provision({ ...PROFILE, ...patch }, OPERATION_ID)).rejects.toMatchObject({
+    await expect(
+      provider.provision({ ...PROFILE, ...patch }, OPERATION_ID, options),
+    ).rejects.toMatchObject({
       code: "invalid_profile",
-      message: expect.stringContaining(message),
+      message: options ? message : expect.stringContaining(message),
     });
     expect(runCommand).not.toHaveBeenCalled();
   });

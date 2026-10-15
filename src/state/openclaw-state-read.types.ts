@@ -174,6 +174,12 @@ export type OpenClawStateReadCommand =
       >[0];
     }
   | { type: "operatorApprovals.hasDue"; nowMs: number }
+  | {
+      type: "operatorApprovals.prepareReplay";
+      input: Parameters<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readOperatorApprovalReplayInDatabase
+      >[0];
+    }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | { type: "operatorApprovals.placementGrant"; input: PlacementGrantReadInput }
@@ -350,6 +356,12 @@ export type OpenClawStateReadResult =
       >;
     }
   | { type: "operatorApprovals.hasDue"; hasDue: boolean }
+  | {
+      type: "operatorApprovals.prepareReplay";
+      replay: ReturnType<
+        typeof import("../gateway/operator-approval-store.kernel.worker.js").readOperatorApprovalReplayInDatabase
+      >;
+    }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
   | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
   | { type: "operatorApprovals.placementGrant"; rows: PlacementGrantRows }

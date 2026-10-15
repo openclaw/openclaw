@@ -182,6 +182,24 @@ describe("history text chip source admission", () => {
         }
       }
       expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
+      if (kind === "paste") {
+        const activation = new KeyboardEvent("keydown", {
+          key: trigger === "focus" ? " " : "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        chip?.dispatchEvent(activation);
+        expect(activation.defaultPrevented).toBe(true);
+        expect(view.open).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            kind: "attachment",
+            attachmentKind: "document",
+            title: "pasted-text-123.txt",
+            plainText: true,
+            sourceIdentity: item.attachment.url,
+          }),
+        );
+      }
     },
   );
 

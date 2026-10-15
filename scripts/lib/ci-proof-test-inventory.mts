@@ -23,6 +23,7 @@ export const RELEASE_ONLY_UI_TEST_FILES: ReadonlySet<string> = new Set(
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
     "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
     "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
