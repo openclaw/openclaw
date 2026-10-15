@@ -171,20 +171,20 @@ test("agents.list returns the roster when optional prepared model facts are unav
   ]);
 });
 
-test("agents.list returns visible rows without waiting for a hidden agent avatar", async () => {
-  const config: OpenClawConfig = {
+function avatarRosterConfig(agents: string[]): OpenClawConfig {
+  return {
     agents: {
       ownership: "explicit",
       entries: {
         ops: { identity: { name: "Operations" } },
-        research: { identity: { avatar: "avatar.png" } },
+        research: { identity: { name: "Research", avatar: "avatar.png" } },
       },
     },
     gateway: {
       roles: {
         definitions: {
           reader: {
-            agents: ["ops"],
+            agents,
             scopes: ["operator.read"],
             sessions: { others: "none" },
           },
@@ -192,7 +192,10 @@ test("agents.list returns visible rows without waiting for a hidden agent avatar
       },
     },
   };
-  const client: GatewayClient = {
+}
+
+function avatarRosterClient(): GatewayClient {
+  return {
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -212,6 +215,11 @@ test("agents.list returns visible rows without waiting for a hidden agent avatar
       updatedAt: 1,
     },
   };
+}
+
+test("agents.list returns visible rows without waiting for a hidden agent avatar", async () => {
+  const config = avatarRosterConfig(["ops"]);
+  const client = avatarRosterClient();
   const entered = createDeferred();
   const release = createDeferred();
   vi.spyOn(avatarRuntime, "prepareLocalAgentAvatar").mockImplementation(async () => {
@@ -237,6 +245,50 @@ test("agents.list returns visible rows without waiting for a hidden agent avatar
     await response;
   }
 });
+
+test.each([
+  { initial: ["ops"], current: ["ops", "research"] },
+  { initial: ["ops", "research"], current: ["research"] },
+])(
+  "agents.list applies avatar-time role changes from $initial to $current",
+  async ({ initial, current }) => {
+    let config = avatarRosterConfig(initial);
+    config.agents!.entries!.ops!.identity!.avatar = "ops.png";
+    const entered = createDeferred();
+    const release = createDeferred();
+    vi.spyOn(avatarRuntime, "prepareLocalAgentAvatar").mockImplementation(async (input) => {
+      if (input.source === "ops.png") {
+        entered.resolve();
+        await release.promise;
+      }
+      return { ok: false, reason: "missing" };
+    });
+    const response = listAgentsViaRpc(
+      false,
+      { getRuntimeConfig: () => config },
+      avatarRosterClient(),
+    );
+    try {
+      await entered.promise;
+      config = avatarRosterConfig(current);
+    } finally {
+      release.resolve();
+    }
+    const result = await response;
+    expect(result.agents.map(({ id }) => id)).toEqual(current);
+    expect(result).toMatchObject({
+      defaultId: "ops",
+      ownership: "explicit",
+      selectionRequired: true,
+      mainKey: "main",
+      scope: "per-sender",
+    });
+    expect(result.agents.find(({ id }) => id === "research")?.identity).toMatchObject({
+      name: "Research",
+      avatarUrl: expect.any(String),
+    });
+  },
+);
 
 test("agents.list starts legacy scalar catalog reads before awaiting siblings", async () => {
   await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
