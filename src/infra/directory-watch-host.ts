@@ -68,6 +68,7 @@ function startHost(): Host {
     const lines = (buffered + chunk).split("\n");
     buffered = lines.pop() ?? "";
     for (const line of lines) {
+      // SAFETY: HOST_SCRIPT is the only writer and sends exactly this shape.
       const message = JSON.parse(line) as { id: number; event?: string; filename?: string | null };
       const watch = started.watches.get(message.id);
       if (!watch) {
@@ -95,6 +96,7 @@ function startHost(): Host {
   child.stdin.on("error", () => {});
   child.unref();
   for (const stream of [child.stdin, child.stdout]) {
+    // SAFETY: stdio "pipe" streams are net.Socket instances, which own unref().
     (stream as Partial<{ unref(): void }>).unref?.();
   }
   return started;
