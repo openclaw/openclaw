@@ -9,6 +9,7 @@ const matchingParams = {
   canUseInternalRuntimeHandoff: true,
   expectedExistingSessionId: "session-1",
   resolvedSessionId: "session-1",
+  resolvedSessionKey: "agent:main:discord:dm:123",
   runId: "recovery-run-1",
   sessionEntry: {
     sessionId: "session-1",
@@ -43,6 +44,7 @@ const matchingTargetlessParams = {
 
 const matchingInternalParams = {
   ...matchingParams,
+  resolvedSessionKey: "agent:main:dashboard:recovered-cli",
   sessionEntry: {
     ...matchingParams.sessionEntry,
     restartRecoverySourceIngress: "internal",

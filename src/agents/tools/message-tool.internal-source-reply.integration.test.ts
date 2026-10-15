@@ -86,64 +86,83 @@ afterEach(() => {
 });
 
 describe("WebChat message tool internal source reply", () => {
-  it("delivers a targetless progress send to the session after CLI chat restart recovery", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "recovered-cli-source-" },
-      async (state) => {
-        const sessionKey = "agent:main:dashboard:recovered-cli";
-        const sessionId = "recovered-cli-session";
-        const runId = "recovery-run";
-        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
-        const scope = { agentId: "main", sessionKey, sessionId, storePath };
-        const { sessionLifecyclePatch } = buildRestartSafeChatTranscriptState({
-          admission: { requestFingerprint: "cli-chat-request" },
-          clientRunId: "interrupted-cli-run",
-          startedAt: 1,
-          sourceIngress: "internal",
-        });
-        const entry = {
-          ...sessionLifecyclePatch,
-          sessionId,
-          updatedAt: 2,
-          restartRecoveryDeliveryRunId: runId,
-        };
-        await replaceSessionEntry(scope, entry);
-        const recovery = resolveAgentRestartRecoveryContext({
-          isRestartRecoveryResumeRun: true,
-          canUseInternalRuntimeHandoff: true,
-          expectedExistingSessionId: sessionId,
-          resolvedSessionId: sessionId,
-          runId,
-          sessionEntry: entry,
-        });
-        expect(recovery?.pinnedWidgetAuthoring).toBeUndefined();
-        const tool = createCurrentSourceMessageTool({
-          agentSessionKey: sessionKey,
-          runSessionKey: sessionKey,
-          sessionId,
-          agentId: "main",
-          runId,
-          currentChannelProvider: recovery?.messageChannel,
-        });
-        const result = await tool.execute("recovered-progress", {
-          action: "send",
-          message: "Still working after restart.",
-          final: false,
-        });
-        expect(result.details).toMatchObject({
-          sourceReplySink: "internal-ui",
-          sourceReplyTranscriptOwner: true,
-        });
-        const assistants = (await loadTranscriptEvents(scope))
-          .map(readTranscriptEventMessage)
-          .filter((message) => message?.role === "assistant");
-        expect(assistants).toHaveLength(1);
-        expect(assistants[0]?.content).toEqual([
-          { type: "text", text: "Still working after restart." },
-        ]);
-      },
-    );
-  });
+  it.each([
+    { sessionKey: "agent:main:dashboard:recovered-cli", delivers: true },
+    { sessionKey: "agent:main:webchat:dm:recovered-cli", delivers: true },
+    { sessionKey: "agent:main:telegram:direct:123", delivers: false },
+  ])(
+    "keeps targetless recovered CLI progress internal for $sessionKey",
+    async ({ sessionKey, delivers }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "recovered-cli-source-" },
+        async (state) => {
+          const sessionId = "recovered-cli-session";
+          const runId = "recovery-run";
+          const storePath = path.join(
+            state.stateDir,
+            "agents",
+            "main",
+            "sessions",
+            "sessions.json",
+          );
+          const scope = { agentId: "main", sessionKey, sessionId, storePath };
+          const { sessionLifecyclePatch } = buildRestartSafeChatTranscriptState({
+            admission: { requestFingerprint: "cli-chat-request" },
+            clientRunId: "interrupted-cli-run",
+            startedAt: 1,
+            sourceIngress: "internal",
+          });
+          const entry = {
+            ...sessionLifecyclePatch,
+            sessionId,
+            updatedAt: 2,
+            restartRecoveryDeliveryRunId: runId,
+          };
+          await replaceSessionEntry(scope, entry);
+          const recovery = resolveAgentRestartRecoveryContext({
+            isRestartRecoveryResumeRun: true,
+            canUseInternalRuntimeHandoff: true,
+            expectedExistingSessionId: sessionId,
+            resolvedSessionId: sessionId,
+            resolvedSessionKey: sessionKey,
+            runId,
+            sessionEntry: entry,
+          });
+          expect(recovery?.pinnedWidgetAuthoring).toBeUndefined();
+          const tool = createCurrentSourceMessageTool({
+            agentSessionKey: sessionKey,
+            runSessionKey: sessionKey,
+            sessionId,
+            agentId: "main",
+            runId,
+            currentChannelProvider: recovery?.messageChannel,
+          });
+          const send = tool.execute("recovered-progress", {
+            action: "send",
+            message: "Still working after restart.",
+            final: false,
+          });
+          if (!delivers) {
+            await expect(send).rejects.toThrow("Action send requires a target.");
+            expect(await loadTranscriptEvents(scope)).toEqual([]);
+            return;
+          }
+          const result = await send;
+          expect(result.details).toMatchObject({
+            sourceReplySink: "internal-ui",
+            sourceReplyTranscriptOwner: true,
+          });
+          const assistants = (await loadTranscriptEvents(scope))
+            .map(readTranscriptEventMessage)
+            .filter((message) => message?.role === "assistant");
+          expect(assistants).toHaveLength(1);
+          expect(assistants[0]?.content).toEqual([
+            { type: "text", text: "Still working after restart." },
+          ]);
+        },
+      );
+    },
+  );
 
   it("refuses an internal-source transcript commit after its real cron admission closes", async () => {
     await withOpenClawTestState(
