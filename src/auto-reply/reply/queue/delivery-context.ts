@@ -479,6 +479,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
+    deliveryCorrelations: source.deliveryCorrelations,
+    onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,

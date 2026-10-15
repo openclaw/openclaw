@@ -46,8 +46,8 @@ function fixture(platform = "linux", version = "12.3.4") {
     .replaceAll("process.platform", JSON.stringify(platform))
     .replaceAll("process.arch", '"x64"')
     .replace(
-      version === "12.9.0"
-        ? "8f64efa0b792986ca98ae568791bcd7722807e274c4f0c1d9853c62116495c584119db98762a2a5343b1684d361b9ae26fdd16d551666d7635346d3fae830ddd"
+      version === "12.10.1"
+        ? "ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c"
         : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
       wrapperHash,
     )
@@ -80,7 +80,7 @@ function fixture(platform = "linux", version = "12.3.4") {
 
 describe("pnpm image archive consumer", () => {
   it.each([
-    { platform: "win32", version: "12.9.0" },
+    { platform: "win32", version: "12.10.1" },
     { platform: "linux", version: "12.3.4" },
   ])(
     "seeds $platform jobs from verified $version archives into private Corepack state",
@@ -119,7 +119,7 @@ describe("pnpm image archive consumer", () => {
   );
 
   it.each([
-    { platform: "win32", version: "12.9.0", name: "pnpm-12.9.0.tgz" },
+    { platform: "win32", version: "12.10.1", name: "pnpm-12.10.1.tgz" },
     { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
     { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
   ])(

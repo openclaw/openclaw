@@ -5,12 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { containerCheck, streamContainerEvents } from "./client-container.js";
 
 const state = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "buffered" | "pending" | "unexpected-response",
+  behavior: "close" as
+    | "close"
+    | "open"
+    | "buffered"
+    | "pending"
+    | "unexpected-response"
+    | "malformed",
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
   terminations: 0,
 }));
-vi.mock("./ws-runtime.js", () => ({
+vi.mock("./ws-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ws-runtime.js")>()),
   WebSocket: class extends EventEmitter {
     private flushed = false;
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
@@ -26,6 +33,10 @@ vi.mock("./ws-runtime.js", () => ({
         } else if (state.behavior === "buffered") {
           this.emit("open");
           this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+        } else if (state.behavior === "malformed") {
+          this.emit("message", Buffer.from("private-inbound-message"));
+          this.emit("message", Buffer.from('{"envelope":{"timestamp":3}}'));
+          this.close();
         } else {
           if (state.behavior === "open") {
             this.emit("open");
@@ -84,6 +95,19 @@ describe("container receive health", () => {
 });
 
 describe("container receive lifecycle", () => {
+  it("reports malformed frames without logging inbound content and keeps receiving", async () => {
+    state.behavior = "malformed";
+    const error = vi.fn();
+    const onEvent = vi.fn();
+    const stream = streamContainerEvents({ baseUrl, logger: { error }, onEvent });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await stream;
+
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ envelope: { timestamp: 3 } });
+    expect(error).toHaveBeenCalledExactlyOnceWith("[signal-ws] parse error: invalid JSON frame");
+  });
+
   it("drains accepted and socket-buffered events before resolving shutdown", async () => {
     state.behavior = "buffered";
     const log = vi.fn();

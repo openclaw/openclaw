@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

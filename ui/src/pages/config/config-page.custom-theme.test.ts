@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
-import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
+import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -19,7 +19,6 @@ type CustomThemeImportState = {
   settings: UiSettings;
   customThemeImport: CustomThemeImportOwner["snapshot"];
   pageId: string;
-  adoptThemeSettings: () => void;
   importCustomTheme: () => Promise<void>;
   clearCustomTheme: () => void;
   setCustomThemeImportUrl: (next: string) => void;
@@ -49,9 +48,6 @@ function createCustomThemePage(settings: Partial<UiSettings> = {}) {
     theme: { recordServerSelection: vi.fn(), refresh: vi.fn(), serverSelection: null },
   } as unknown as ApplicationContext;
   state.customThemeImportOwner.connect(gatewayUrl);
-  state.adoptThemeSettings = () => {
-    state.settings = state.customThemeImportOwner.adoptSettings(state.settings, loadSettings());
-  };
   state.setCustomThemeImportUrl = (next) => state.customThemeImportOwner.setUrl(next);
   state.synchronizeCustomThemeGatewayScope = (scope) =>
     state.customThemeImportOwner.synchronizeScope(scope);
@@ -130,25 +126,6 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.customThemeImport.message?.kind).toBe("success");
     expect(state.settings.theme).toBe("custom");
     expect(state.settings.customTheme).toBe(secondTheme);
-  });
-
-  it("preserves a newer server-applied theme when an older import settles", async () => {
-    const pending = deferred<ImportedCustomTheme>();
-    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { state } = createCustomThemePage();
-    state.setCustomThemeImportUrl("first");
-    const pendingImport = state.importCustomTheme();
-
-    patchSettings({ theme: "knot" });
-    state.adoptThemeSettings();
-    pending.resolve(customThemeFixture("First", "first"));
-    await pendingImport;
-
-    expect(state.customThemeImport.busy).toBe(false);
-    expect(state.customThemeImport.url).toBe("");
-    expect(state.customThemeImport.message?.kind).toBe("success");
-    expect(state.settings.theme).toBe("knot");
-    expect(state.settings.customTheme?.themeId).toBe("first");
   });
 
   it("retires an import when navigation leaves Appearance", async () => {

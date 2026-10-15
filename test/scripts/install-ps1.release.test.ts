@@ -1305,6 +1305,8 @@ try {
         $caseSpec = @{ mode = $scenario.Mode; failure = $scenario.Failure; version = $scenario.Version }
         [IO.File]::WriteAllText((Join-Path $caseRoot 'case.json'), ($caseSpec | ConvertTo-Json -Compress))
         [IO.File]::WriteAllText((Join-Path $target 'package.json'), ('{"packageManager":"pnpm@' + $scenario.Version + '"}'))
+        # This fixture stubs HEAD validation; declare its checkout metadata before package setup.
+        New-Item -ItemType Directory -Path (Join-Path $target '.git') | Out-Null
         foreach ($dir in @($target, $foreign)) { [IO.File]::WriteAllText((Join-Path $dir 'pnpm-lock.yaml'), 'unchanged') }
         $manifest = [IO.File]::ReadAllText((Join-Path $target 'package.json'))
         foreach ($kind in @('npm', 'ambient', 'corepack')) {

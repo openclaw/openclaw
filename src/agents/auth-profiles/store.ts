@@ -47,7 +47,6 @@ import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.
 import {
   loadPersistedAuthProfileStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
-  loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
   mergePersistedAuthProfileState,
 } from "./persisted.js";
@@ -106,6 +105,7 @@ import {
   inspectPersistedSharedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
   resolveAuthProfileStoreOwner,
   runAuthProfileWriteTransaction,
@@ -939,20 +939,18 @@ export function createAuthProfileStoreRuntime(
       if (preparedRows) {
         return loadPersistedAuthProfileStoreFromRows(preparedRows, databasePath);
       }
-      const store =
-        !effectiveAgentDir && env && !effectiveOptions?.database
-          ? loadPersistedSharedAuthProfileStore(env)
-          : loadPersistedAuthProfileStore(
-              effectiveAgentDir,
-              resolvePersistedLoadOptions(effectiveOptions),
-            );
-      if (
-        !store &&
-        (!effectiveAgentDir && env && !effectiveOptions?.database
-          ? inspectPersistedSharedAuthProfileStoreRaw(env)
-          : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database)
-        ).status !== "missing"
-      ) {
+      const sharedEnv = !effectiveAgentDir && !effectiveOptions?.database ? env : undefined;
+      const inspected = sharedEnv
+        ? inspectPersistedSharedAuthProfileStoreRaw(sharedEnv)
+        : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database);
+      const store = mergePersistedAuthProfileState(
+        inspected.status === "readable" ? inspected.raw : null,
+        () =>
+          sharedEnv
+            ? readPersistedSharedAuthProfileStateRaw(sharedEnv)
+            : readPersistedAuthProfileStateRaw(effectiveAgentDir, effectiveOptions?.database),
+      );
+      if (!store && inspected.status !== "missing") {
         throw new AuthProfileStoreUnreadableError(effectiveOptions?.database?.path ?? databasePath);
       }
       return store;
@@ -984,6 +982,10 @@ export function createAuthProfileStoreRuntime(
       );
     }
     const store = readStore();
+    effectiveOptions?.onReadSource?.({
+      databasePath,
+      hasStore: store !== null,
+    });
     if (!preparedRows && !effectiveOptions?.database) {
       recordRuntimeAuthProfilePersistedStore(databasePath, store);
     }
@@ -1284,6 +1286,7 @@ export function createAuthProfileStoreRuntime(
   const {
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForCatalogAsync,
     ensureAuthProfileStore,
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
@@ -1836,6 +1839,7 @@ export function createAuthProfileStoreRuntime(
     loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForCatalogAsync,
     ensureAuthProfileStore,
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,

@@ -64,8 +64,8 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 ## Rejected Experiments
 
 - **Declaration-fixture owner selection (2026-10-02):**
-  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
-  path, so product PRs that edit one do not select the four declaration suites
+  `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
+  entrypoint closures, so product PRs that edit one do not select the four declaration suites
   built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
   broke `write-unified-entry-dts` that way; hourly scheduled CI
   ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))

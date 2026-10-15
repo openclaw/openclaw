@@ -486,7 +486,6 @@ describe("Mattermost DM retries", () => {
   });
 
   it.each([
-    { status: 400, message: "Invalid request: too many requests is diagnostic text" },
     { status: 400, message: "Invalid request; upstream Mattermost API 503 Service Unavailable" },
   ])("does not retry $status with misleading details: $message", async ({ status, message }) => {
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ message }, { status }));

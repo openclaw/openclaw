@@ -826,6 +826,9 @@ const enSettings = {
       checking: "Checking…",
       empty: "No supported coding apps are available.",
       note: "Update installed agents from Control UI",
+      enabled: "{name} is enabled.",
+      sessionExpired:
+        "This setup session ended. Close this dialog and check the installed agent status.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",

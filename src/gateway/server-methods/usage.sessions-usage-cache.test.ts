@@ -1,30 +1,27 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
-  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(),
   loadSessionCostSummariesFromCache: vi.fn(),
 }));
 
-vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
-  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
-    "../../config/sessions/combined-store-gateway-read.js",
-  )),
-  loadCombinedSessionStoreForGatewayCoreAsync: mocks.loadCombinedSessionStoreForGatewayCoreAsync,
-}));
 vi.mock("../../infra/session-cost-usage.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
@@ -34,6 +31,10 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
 }));
 
 import { usageHandlers } from "./usage.js";
+import {
+  createUsageSessionStoreFixture,
+  type UsageSessionStoreFixture,
+} from "./usage.test-support.js";
 
 let config: OpenClawConfig = {
   session: {},
@@ -43,6 +44,8 @@ let config: OpenClawConfig = {
     entries: { main: {}, opus: {} },
   },
 };
+
+let projectionFixture: UsageSessionStoreFixture = { store: {} };
 
 const baseParams = {
   startDate: "2026-02-01",
@@ -75,12 +78,23 @@ async function runSessionsUsage(
 ) {
   const respond = vi.fn();
   const handler = expectDefined(usageHandlers[method], "usage handler");
-  await handler({
-    respond,
-    params,
-    client: client ?? null,
-    context: { getRuntimeConfig: () => runtimeConfig },
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+  const projection = createSessionRowProjectionFixture({
+    cfg: runtimeConfig,
+    ...projectionFixture,
+  });
+  try {
+    await handler({
+      respond,
+      params,
+      client: client ?? null,
+      context: bindSessionRowProjection(
+        { getRuntimeConfig: () => runtimeConfig },
+        () => projection,
+      ),
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+  } finally {
+    projection.dispose();
+  }
   expect(respond).toHaveBeenCalledTimes(1);
   if (method === "usage.cost") {
     expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -94,26 +108,11 @@ type StoredFixture = { key: string; agentId: string; entry: SessionEntry };
 
 function mockStore(rows: StoredFixture[], stateDir: string) {
   const store = Object.fromEntries(rows.map(({ key, entry }) => [key, entry]));
-  mocks.loadCombinedSessionStoreForGatewayCoreAsync.mockReturnValue({
-    durableTargets: [],
-    storePath: "(multiple)",
+  projectionFixture = createUsageSessionStoreFixture(
     store,
-    targetsBySessionKey: new Map(
-      rows.map(({ key, agentId, entry }) => [
-        key,
-        {
-          agentId,
-          entry,
-          readSourceEntry: (sourceKey: string) => store[sourceKey],
-          resolveSourceKey: (sourceKey: string) => sourceKey,
-          storeTarget: {
-            agentId,
-            storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
-          },
-        },
-      ]),
-    ),
-  });
+    rows.map(({ key, agentId }) => [key, agentId] as const),
+    (agentId) => path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+  );
 }
 
 describe("sessions.usage result cache and owner attribution", () => {
@@ -136,6 +135,37 @@ describe("sessions.usage result cache and owner attribution", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps process-local incognito metadata in broad usage results", async () => {
+    await withOpenClawTestState({ label: "usage-incognito" }, async (state) => {
+      const key = "agent:main:dashboard:incognito-usage";
+      const sessionId = "private-usage";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: state.env,
+      });
+      await replaceSessionEntry(
+        { agentId: "main", env: state.env, sessionKey: key, storePath },
+        { sessionId, incognito: true, updatedAt: 1_000, label: "Private usage" },
+      );
+      mocks.discoverAllSessions.mockResolvedValueOnce([
+        { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}`, mtime: 1_000 },
+      ]);
+      mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
+        summaries: [{ ...createEmptyCostUsageTotals(), totalTokens: 13 }],
+        cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+      });
+
+      const result: SessionsUsageResult = await runSessionsUsage({
+        range: "all",
+        agentId: "main",
+      });
+      expect(result.sessions).toMatchObject([
+        { key, sessionId, label: "Private usage", usage: { totalTokens: 13 } },
+      ]);
+      expect(result.totals.totalTokens).toBe(13);
+    });
   });
 
   it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
@@ -269,17 +299,6 @@ describe("sessions.usage result cache and owner attribution", () => {
 
 function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, number>) {
   const creatorConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
-  mocks.loadCombinedSessionStoreForGatewayCoreAsync.mockReturnValue({
-    store: rows,
-    targetsBySessionKey: new Map(
-      Object.keys(rows).map((key) => [
-        key,
-        { agentId: "main", storeTarget: { agentId: "main", storePath: "/tmp/usage.sqlite" } },
-      ]),
-    ),
-    durableTargets: [],
-    storePath: "(multiple)",
-  });
   mocks.discoverAllSessions.mockResolvedValue(
     Object.keys(tokens).map((sessionId, index) => ({
       sessionId,
@@ -320,15 +339,28 @@ function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, numb
     runtimeConfig = creatorConfig,
   ) => {
     const respond = vi.fn();
-    await expectDefined(
-      usageHandlers["sessions.usage"],
-      "usage handler",
-    )({
-      params: { range: "all", agentId: "main", limit: 1, ...params },
-      respond,
-      client,
-      context: { getRuntimeConfig: () => runtimeConfig },
-    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+    const projection = createSessionRowProjectionFixture({
+      cfg: runtimeConfig,
+      store: rows,
+      agentId: "main",
+      storePath: "/tmp/usage.sqlite",
+    });
+    try {
+      await expectDefined(
+        usageHandlers["sessions.usage"],
+        "usage handler",
+      )({
+        params: { range: "all", agentId: "main", limit: 1, ...params },
+        respond,
+        client,
+        context: bindSessionRowProjection(
+          { getRuntimeConfig: () => runtimeConfig },
+          () => projection,
+        ),
+      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+    } finally {
+      projection.dispose();
+    }
     expect(respond).toHaveBeenCalledOnce();
     const response = expectDefined(respond.mock.calls[0], "usage response");
     expect(response[0], JSON.stringify(response[2])).toBe(true);

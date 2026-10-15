@@ -503,6 +503,8 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
         expect(warn).not.toHaveBeenCalled();
         expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
+        expect(f.scope.canLaunch()).toBe(false);
+        expect(f.scope.canAcceptLaunch()).toBe(true);
         if (timing === "pending") {
           expect(completeInBackground).not.toHaveBeenCalled();
         } else {
@@ -553,25 +555,6 @@ it.each(["transaction", "commit"] as const)(
       } finally {
         admission.mockRestore();
       }
-    });
-  },
-);
-
-it.each(["running", "terminal"] as const)(
-  "retains acceptance authority after a %s lifecycle publication",
-  async (status) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      await f.register();
-      await f.change((draft) => {
-        draft.execution = {
-          ...draft.execution,
-          status,
-          startedAt: 10,
-          ...(status === "terminal" ? { endedAt: 20 } : {}),
-        };
-      });
-      expect(f.scope.canLaunch()).toBe(false);
-      expect(f.scope.canAcceptLaunch()).toBe(true);
     });
   },
 );

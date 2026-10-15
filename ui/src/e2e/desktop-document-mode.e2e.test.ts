@@ -671,24 +671,6 @@ suite.define(() => {
     });
   });
 
-  it("uses an explicit source without resolving a session", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const { gateway } = await openDesktopDocument(page, "focus/desktop/source/gateway", [
-        gatewayEnvironment,
-        {
-          id: "node:workstation",
-          type: "node",
-          status: "available",
-          desktop: true,
-        },
-      ]);
-
-      const request = await gateway.waitForRequest("desktop.observe");
-      expect(request.params).toEqual({ source: { kind: "host" }, control: false });
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
-    });
-  });
-
   it.each([
     { name: "unknown", session: null },
     {

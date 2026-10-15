@@ -234,6 +234,136 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
   });
 });
 
+it.each(["warm", "restarted"] as const)(
+  "preserves tree cursors and complete append bodies in a %s actor",
+  async (residency) => {
+    await withActor((f) => {
+      const replayMessage = { ...question.message, idempotencyKey: "cursor-probe" };
+      const initial = transcript(f);
+      initial[1] = { ...question, message: replayMessage };
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        replaceSqliteTranscriptEventsInTransaction(f.database, f.scope, initial);
+      });
+      f.read();
+      const appendEvent = (event: Record<string, unknown> & { id: string }) => {
+        const outcome = f.mutate({
+          type: "session.actor.appendTranscriptEvent",
+          input: {
+            target: f.target,
+            commandId: event.id,
+            phaseId: "turn",
+            sessionId: f.scope.sessionId,
+            lifecycleRevision: null,
+            eventJson: JSON.stringify(event),
+          },
+        });
+        expect(outcome).toMatchObject({
+          kind: "committed",
+          receipt: { transcript: { appendedEvents: [{ event }] } },
+        });
+      };
+      let command = 0;
+      const appendMessage = (message: typeof replayMessage) => {
+        if (residency === "restarted") {
+          f.restartActor();
+        }
+        return f.mutate({
+          type: "session.actor.appendToolResult",
+          input: {
+            target: f.target,
+            commandId: `message-${command++}`,
+            phaseId: "turn",
+            append: {
+              kind: "message",
+              input: { scope: f.scope, messageJson: JSON.stringify(message), cwd: "/synthetic" },
+            },
+          },
+        });
+      };
+      const expectVisibleTail = (entryId: string) => {
+        expect(appendMessage(replayMessage)).toMatchObject({
+          kind: "committed",
+          value: {
+            kind: "message",
+            value: {
+              snapshot: {
+                ok: true,
+                value: {
+                  result: { appended: false, messageId: "question", message: replayMessage },
+                  visibleTail: { entryId },
+                },
+              },
+            },
+          },
+        });
+      };
+      const side = {
+        type: "custom",
+        id: "side",
+        parentId: "answer",
+        appendMode: "side",
+        customType: "synthetic-side-state",
+        data: { body: "Preserve the entire side payload. ".repeat(100) },
+      };
+      appendEvent(side);
+      expectVisibleTail("answer");
+      const leaf = {
+        type: "leaf",
+        id: "selected-leaf",
+        parentId: "side",
+        targetId: "question",
+        appendParentId: "answer",
+      };
+      appendEvent(leaf);
+      expectVisibleTail("question");
+      const continued = {
+        ...replayMessage,
+        content: "Continue the selected branch",
+        idempotencyKey: "continued",
+      };
+      expect(appendMessage(continued)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: { appendedEvents: [{ event: { parentId: "answer", message: continued } }] },
+        },
+      });
+      const parentless = {
+        type: "custom",
+        id: "parentless",
+        customType: "synthetic-parentless-state",
+        data: { body: "Keep the missing parent field and this payload" },
+      };
+      appendEvent(parentless);
+      expectVisibleTail("parentless");
+      const following = {
+        ...replayMessage,
+        content: "Follow the parentless entry",
+        idempotencyKey: "following",
+      };
+      expect(appendMessage(following)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedEvents: [{ event: { parentId: "parentless", message: following } }],
+          },
+        },
+      });
+      expect(
+        readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
+          JSON.parse(row.eventJson),
+        ),
+      ).toEqual([
+        ...initial,
+        side,
+        leaf,
+        expect.objectContaining({ type: "message", parentId: "answer", message: continued }),
+        parentless,
+        expect.objectContaining({ type: "message", parentId: "parentless", message: following }),
+      ]);
+    });
+  },
+);
+
 it("advances retained context through native actor appends and preserves it through bookkeeping", async () => {
   await withActor(async (f) => {
     replace(f);

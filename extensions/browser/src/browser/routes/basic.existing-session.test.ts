@@ -104,7 +104,7 @@ function createManagedProfileState(
   return {
     resolved: {
       enabled: true,
-      headless: false,
+      headless: true,
       headlessSource: "default",
       noSandbox: false,
       executablePath,
@@ -121,7 +121,7 @@ function createManagedProfileState(
           cdpIsLoopback: true,
           userDataDir: "/tmp/openclaw-profile",
           color: "#FF4500",
-          headless: false,
+          headless: true,
           headlessSource: "default",
           attachOnly: false,
           ...profileOverrides,

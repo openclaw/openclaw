@@ -9,6 +9,7 @@
 
 import type { Diagnostic } from "../ast.js";
 import { parseJsonc } from "../jsonc/parse.js";
+import { sourceLineEnding } from "../source.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
 
 interface JsonlParseResult {
@@ -20,9 +21,7 @@ export function parseJsonl(raw: string): JsonlParseResult {
   const diagnostics: Diagnostic[] = [];
   // Use the dominant newline (CRLF wins ties) for rendering and unterminated
   // appends. Targeted edits preserve existing separators verbatim.
-  const crlfCount = (raw.match(/\r\n/g) ?? []).length;
-  const lfCount = (raw.match(/\n/g) ?? []).length;
-  const lineEnding: "\r\n" | "\n" = crlfCount > 0 && crlfCount * 2 >= lfCount ? "\r\n" : "\n";
+  const lineEnding = sourceLineEnding(raw);
 
   // Trim trailing newline so we don't fabricate a blank line at EOF
   // for files that end with `\n` (which is most of them).

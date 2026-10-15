@@ -417,10 +417,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       params.configuredProfileId !== undefined ||
       modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
-    const authSessionEntry =
-      shouldUseEphemeralSession && preparedSessionState.sessionEntry
-        ? { ...preparedSessionState.sessionEntry }
-        : preparedSessionState.sessionEntry;
+    const authSessionEntry = preparedSessionState.sessionEntry
+      ? { ...preparedSessionState.sessionEntry }
+      : undefined;
     if (params.autoFallbackPrimaryProbe && authSessionEntry) {
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
     }
@@ -428,6 +427,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       shouldUseEphemeralSession && authSessionEntry && authSessionKey !== undefined
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
+    if (authSessionStore && authSessionEntry && authSessionKey !== undefined) {
+      authSessionStore[authSessionKey] = authSessionEntry;
+    }
     const selection = await resolveSessionAuthSelection({
       cfg,
       provider,

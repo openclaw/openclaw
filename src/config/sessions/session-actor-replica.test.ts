@@ -810,7 +810,10 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     const selected = readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"]);
     expect(selected?.snapshots).toEqual(["skillsSnapshot"]);
     expect(selected?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
-    selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    expect(selected?.entry?.skillsSnapshot).toBe(before.entry?.skillsSnapshot);
+    expect(() => {
+      selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    }).toThrow(TypeError);
     expect(readSessionActorEntryFacts(entryTarget)?.entry?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
     );
@@ -830,13 +833,18 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       ],
       "row-facts-reader",
     );
-    retainedEntry.label = "Reader edit after retention";
-    projection.hasBoard = true;
     const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry).toBe(retainedEntry);
+    expect(retained.projection).toBe(projection);
     expect(retained.entry?.label).toBeUndefined();
     expect(retained.projection?.hasBoard).toBe(false);
-    retained.entry!.label = "Caller edit after reading";
-    retained.projection!.hasBoard = true;
+    expect(readSessionActorEntryFacts(entryTarget)?.entry).toBe(retained.entry);
+    expect(() => {
+      retained.entry!.label = "Caller edit after reading";
+    }).toThrow(TypeError);
+    expect(() => {
+      retained.projection!.hasBoard = true;
+    }).toThrow(TypeError);
     expect(readSessionActorEntryFacts(entryTarget)?.entry?.label).toBeUndefined();
     expect(readSessionActorEntryFacts(entryTarget)?.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"])?.snapshots).toEqual([]);

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
-import type { RequirementsMetadata } from "./requirements.js";
+import { isOsRequirementSatisfied, type RequirementsMetadata } from "./requirements.js";
 
 /** Checks a config path with fallback defaults only when the path is unresolved. */
 export function isConfigPathTruthyWithDefaults(
@@ -44,11 +44,11 @@ export function evaluateRuntimeEligibility(
     isConfigPathTruthy: (pathStr: string) => boolean;
   },
 ): boolean {
-  const osList = params.os ?? [];
   if (
-    osList.length > 0 &&
-    !osList.includes(params.platform ?? process.platform) &&
-    !params.remotePlatforms?.some((platform) => osList.includes(platform))
+    !isOsRequirementSatisfied(params.os ?? [], [
+      params.platform ?? process.platform,
+      ...(params.remotePlatforms ?? []),
+    ])
   ) {
     return false;
   }

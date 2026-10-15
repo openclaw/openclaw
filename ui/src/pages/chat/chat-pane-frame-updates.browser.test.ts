@@ -2,7 +2,13 @@ import { html } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
+import {
+  createInitializationContext,
+  createTestChatPane,
+  connectPaneTestView,
+} from "./chat-pane.test-support.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 
 // MessageChannel supplies distinct browser tasks without a timer or a real-frame race.
 async function task(action: () => void) {
@@ -38,7 +44,7 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: html`<span>${pane.presentationTitle}</span><span>${pane.paneId}</span>`,
+      layout: html`<span>${pane.paneLabel}</span><span>${pane.paneId}</span>`,
     }),
     presentedChanged: () => {},
   });
@@ -69,7 +75,7 @@ it.each([false, true])(
     pane.presented = false;
     for (let index = 0; index < 6; index++) {
       await task(() => {
-        pane.presentationTitle = `hidden revision ${index}`;
+        pane.paneLabel = `hidden revision ${index}`;
         pane.paneId = `parked-pane-${index}`;
         pane.requestUpdate();
       });
@@ -102,7 +108,7 @@ it.each(["request", "property", "state"] as const)(
     const lifecycle = pane.chatState.createRenderLifecycle();
     await task(() => {
       if (trigger === "property") {
-        pane.presentationTitle = "immediate property";
+        pane.paneLabel = "immediate property";
       } else if (trigger === "state") {
         lifecycle.invalidate();
       } else {
@@ -132,6 +138,52 @@ it("keeps an unpresented pane parked when the document becomes visible", async (
   expect(updates).toHaveBeenCalledTimes(1);
 });
 
+it("absorbs a queued stream frame into a property commit and accepts the next stream", async () => {
+  let nextFrame = 1;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextFrame++;
+    frames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  const { pane } = await mountPane();
+  const state = createPageState(
+    createInitializationContext(),
+    pane.chatState.createRenderLifecycle(),
+    pane,
+  );
+  pane.state = state;
+  pane.chatState.attach(state);
+  Object.assign(pane, {
+    render: () => ({ layout: html`<output>${state.chatStream}</output>` }),
+  });
+  const updates = vi.spyOn(pane, "render");
+  state.chatStream = "First stream revision";
+  requestChatPageUpdate(state, "animation-frame");
+  const queuedFrame = frames.get(state.chatStreamRenderFrame!);
+  expect(queuedFrame).toBeDefined();
+
+  await task(() => {
+    pane.paneLabel = "Property revision";
+  });
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("First stream revision");
+  expect(updates).toHaveBeenCalledOnce();
+  queuedFrame?.(0);
+  await task(() => {});
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledOnce();
+
+  state.chatStream = "Next stream revision";
+  requestChatPageUpdate(state, "animation-frame");
+  frames.get(state.chatStreamRenderFrame!)?.(0);
+  await task(() => {});
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledTimes(2);
+  expect(pane.textContent).toContain("Next stream revision");
+});
+
 it("releases a disconnected pane's parked update and renders after reconnect", async () => {
   const { pane, updates } = await mountPane(false);
   pane.requestUpdate();
@@ -147,7 +199,7 @@ it("releases a disconnected pane's parked update and renders after reconnect", a
   await pane.updateComplete;
   expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();
-  pane.presentationTitle = "reconnected revision";
+  pane.paneLabel = "reconnected revision";
   await pane.updateComplete;
   expect(updates).toHaveBeenCalledTimes(1);
   expect(pane.textContent).toContain("reconnected revision");

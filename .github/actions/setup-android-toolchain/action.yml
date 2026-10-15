@@ -73,10 +73,10 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.android-sdk
-        key: ${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}
+        key: ${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}
         # Emulator archives may seed from base; base runs must never restore the larger payload.
         restore-keys: |
-          ${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}
+          ${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-base', runner.os) || '' }}
 
     - name: Setup Android SDK command-line tools
       shell: bash
@@ -135,7 +135,7 @@ runs:
         packages=(
           "platform-tools"
           "platforms;android-37.0"
-          "build-tools;36.0.0"
+          "build-tools;37.0.0"
         )
         if [[ "${INSTALL_SCREENSHOT_EMULATORS}" == "true" ]]; then
           case "${RUNNER_ARCH}" in

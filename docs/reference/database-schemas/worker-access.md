@@ -50,6 +50,12 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Task pools whose canonical database access is entirely read-only declare
+`databaseAccess: "read-only"`. The transcript reader, memory retrieval, and chunk-preparation pools
+use this declaration so ordinary worker retirement preserves the store's admitted
+facts. A worker that may write still invalidates admission if it exits with an
+open database, because committed changes may lack their final publication receipt.
+
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
@@ -153,9 +159,11 @@ agent ownership checks, and destructive cleanup authority remain in place.
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
-then reuse them across handles and workers while admission retains a live
-reference. An idle reopen can reuse facts retained by another handle; closing
-the final handle retires those facts, so the next open admits the database again.
+then reuse them across handles and workers for the physical store's process
+lifetime. Closing the final handle preserves those facts for the next open.
+Write receipts and explicit invalidation refresh the affected facts. Fresh quarantine
+inspection rereads the decision row while reusing the admitted schema version;
+tracked DDL invalidates that version.
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
@@ -298,8 +306,10 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
-Durable actor residency retains narrow navigation and exact byte accounting,
-not settled append bodies. Full bodies stay in SQLite and committed append
+Durable actor residency retains only tree links (`type`, `id`, `parentId`,
+`targetId`, `appendParentId`, and `appendMode`) and exact byte accounting.
+Cold hydration projects those fields in SQL; model-context navigation belongs
+to the history reader. Full bodies stay in SQLite and committed append
 receipts; retries read canonical storage when their payload is no longer in the
 current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
 the UTF-8 size of the primary prepared event or message payload (summed message
@@ -665,6 +675,13 @@ worker when initializer rollback or harness cleanup is present; initializer
 rollback is consumed only after the committed receipt. Opaque harness cleanup is
 deprecated and runs after commit, with failures reported as warnings.
 
+Saved session-send recovery discovers current sessions with unconsumed queued or
+interrupted inputs in one metadata query per store through the existing session
+reader. It opens bounded input history only for those candidates. The history
+owner still reconciles lost queued-input custody, and delivery still checks
+current endpoints and communication permissions before dispatch. New inputs
+accepted after discovery belong to their ordinary live delivery owner.
+
 Released synchronous SDK readers and cross-store authorization checks remain
 explicitly counted. Incognito reads memory actor state without SQL. Cross-store checks protect
 visibility, membership, and conversation authority that the destination worker
@@ -842,10 +859,11 @@ SQLite format, schema-version, integrity, required-index, and
 table-existence validation is shared across open handles and workers for each
 physical database. The first opener publishes admitted facts through the
 existing worker bootstrap and broker channel. Later handles, worker isolates,
-scopes, and requests reuse those facts while an admitted connection remains open.
-The final native close or worker exit retires the facts and removes them from
-worker bootstrap snapshots. Reopening after every connection closes validates
-the database again. Identity is the file's volume, inode, and stable birthtime, checked with
+scopes, and requests reuse those facts even after every connection closes.
+Native close releases handle references without retiring admission facts. Worker
+exit removes its references; an exit with open handles also invalidates write,
+schema, and admission facts because committed changes may lack published receipts.
+Identity is the file's volume, inode, and stable birthtime, checked with
 `fstat`; path equality or SQL version probes do not establish physical identity.
 A replaced or restored file requires its own first validation.
 The identity owner retains a descriptor for the process lifetime and checks its
@@ -853,9 +871,10 @@ The identity owner retains a descriptor for the process lifetime and checks its
 change time as birthtime, the existing normalized unknown-birthtime value remains
 in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
-from SQLite's native connection descriptor. This small identity record survives
-ordinary close; schema and row-write metadata do not. Explicit database removal
-or maintenance can retire the descriptor after joining its native consumers.
+from SQLite's native connection descriptor. Identity, schema, and row-write
+metadata survive ordinary close; writes and explicit invalidation update the
+applicable facts. Explicit database removal or maintenance can retire admission
+and the descriptor after joining its native consumers.
 This cleanup changes no persisted data, schema, or update procedure.
 
 Synchronous admission exchanges carry the requested physical database's facts and
@@ -1865,8 +1884,10 @@ reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
 Worker transport already detaches these internal postimages. Settlement and
-replica installation share them without another deep freeze or copy; internal
-borrowers treat snapshots and receipts as read-only and copy before editing.
+replica installation share them without another copy. Installation freezes the
+entry facts exposed to shared readers; the complete transcript graph is not
+deep-frozen. Internal borrowers treat snapshots and receipts as read-only and
+copy before editing.
 Replica residency uses an approximate heap budget based on string lengths and
 object/slot overhead, without serializing postimages or transcript bodies just
 to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
@@ -1912,8 +1933,11 @@ repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
-a cold miss loads the requested entries in one existing worker batch. Complete
-entry commit receipts refresh the entry projection without claiming transcript,
+a cold miss loads the requested entries in one existing worker batch. Retained
+entry facts are frozen and shared, including selected prompt snapshots and sharing
+records. Mutable turn and workspace owners make shallow working copies when they
+adopt these facts; the public SDK detaches its mutable result at its own boundary.
+Complete entry commit receipts refresh the entry projection without claiming transcript,
 membership, or pending-input coverage. Missing ancillary facts still use the
 existing reader. Scoped receipt counters keep unrelated session writes from
 evicting resident entries, while a before/after write-token check preserves one

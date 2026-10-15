@@ -5,6 +5,11 @@ export const STATE_SCHEMA_INLINE_PLUGIN_NAME = "openclaw:inline-state-schemas";
 
 const STATE_SCHEMA_MODULES = [
   {
+    modulePath: "extensions/logbook/src/logbook-postgres-schema.ts",
+    schemaPath: "extensions/logbook/src/logbook-schema.postgres.sql",
+    exportName: "LOGBOOK_POSTGRES_SCHEMA_SQL",
+  },
+  {
     modulePath: "extensions/workboard/src/workboard-postgres-schema.ts",
     schemaPath: "extensions/workboard/src/workboard-schema.postgres.sql",
     exportName: "WORKBOARD_POSTGRES_SCHEMA_SQL",

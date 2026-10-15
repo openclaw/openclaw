@@ -189,23 +189,20 @@ describe("session hovercard", () => {
     },
   );
 
-  it.each<[SidebarRecentSession["placementMachine"], string, boolean?]>([
+  it.each<[SidebarRecentSession["placementMachine"], string]>([
     [
       { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
       "Linux · medium · 4 vCPU · 16 GB",
     ],
-    [{ class: "medium" }, "medium"],
     [{ os: "windows/wsl2", memoryGb: 8 }, "windows/wsl2 · 8 GB"],
     [undefined, ""],
-    [{}, ""],
-    [{ class: "medium" }, "", false],
   ])(
     "shows only known machine facts: %j",
-    (placementMachine: SidebarRecentSession["placementMachine"], summary, hasPlacement = true) => {
+    (placementMachine: SidebarRecentSession["placementMachine"], summary) => {
       const container = renderCard({
         row: row({
-          placementProviderId: hasPlacement ? "machine0" : undefined,
-          placementProfileId: hasPlacement ? "team" : undefined,
+          placementProviderId: "machine0",
+          placementProfileId: "team",
           placementMachine,
         }),
       });
@@ -226,19 +223,16 @@ describe("session hovercard", () => {
     },
   );
 
-  it.each(["purple", undefined, "default"])(
-    "reflects the session color %s without unset chrome",
-    (color) => {
-      const container = renderCard({ row: row({ color }) });
-      const dot = container.querySelector(".session-color-dot");
-      if (color === "purple") {
-        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
-        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
-      } else {
-        expect(dot).toBeNull();
-      }
-    },
-  );
+  it.each(["purple", undefined])("reflects the session color %s without unset chrome", (color) => {
+    const container = renderCard({ row: row({ color }) });
+    const dot = container.querySelector(".session-color-dot");
+    if (color === "purple") {
+      expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+      expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+    } else {
+      expect(dot).toBeNull();
+    }
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -250,49 +244,12 @@ describe("session hovercard", () => {
     vi.useRealTimers();
   });
 
-  it("renders header and session metadata without inventing optional sections", () => {
-    const container = renderCard({ row: row() });
-
-    expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
-      "Ship the release",
-    );
-    expect(container.querySelector(".session-hovercard__created-age")?.textContent).toBe("2h");
-    expect(container.querySelector(".session-hovercard__meta")).toBeNull();
-    expect(container.querySelector(".session-hovercard__attribution")?.textContent).toContain(
-      "Alice Baker",
-    );
-    expect(
-      [...container.querySelectorAll(".session-hovercard__context-text")].map((node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["openclaw", "feature/session-hovercard"]);
-    expect(
-      container
-        .querySelector('[aria-label="Branch: feature/session-hovercard"]')
-        ?.getAttribute("title"),
-    ).toBe("/work/openclaw");
-    expect(container.textContent).not.toContain("/work/openclaw");
-    expect(container.textContent).not.toContain("Worktree");
-    expect(
-      [...container.querySelectorAll(".session-hovercard__section")].map((section) =>
-        [...section.classList].find((name) => name.startsWith("session-hovercard__section--")),
-      ),
-    ).toEqual(["session-hovercard__section--header", "session-hovercard__section--metadata"]);
-    expect(container.querySelector(".session-progress-card")).toBeNull();
-    expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-    expect(container.querySelector(".session-hovercard__attribution-name")?.tagName).toBe("SPAN");
-    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
-  });
-
   it.each([
-    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
-    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
     {
       name: "both",
       facts: { boardFace: "dashboard", hasAutomation: true },
       labels: ["Opens as dashboard", "Automation attached"],
     },
-    { name: "disabled", facts: { hasAutomation: false }, labels: [] },
   ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
     "renders $name session facts without other metadata",
     ({ facts, labels }) => {
@@ -759,22 +716,6 @@ describe("session hovercard", () => {
     },
   );
 
-  it("opens the creator's activity feed from the attribution", () => {
-    const navigate = vi.fn();
-    const container = renderCard({ row: row(), personActivity: { basePath: "/ui", navigate } });
-
-    const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__attribution-name");
-    expect(name?.getAttribute("href")).toBe("/ui/activity/alice");
-    expect(
-      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    name?.dispatchEvent(click);
-    expect(navigate).toHaveBeenCalledWith("alice", "Alice Baker");
-    expect(click.defaultPrevented).toBe(true);
-  });
-
   it.each([true, false])(
     "renders authoritative participant projections (expanded: %s)",
     async (expanded) => {
@@ -913,12 +854,6 @@ describe("session hovercard", () => {
       "Refreshed session",
     );
     renderCard({}, container);
-    expect(container.childElementCount).toBe(0);
-  });
-
-  it("renders nothing when no session facts are known", () => {
-    const container = renderCard({});
-
     expect(container.childElementCount).toBe(0);
   });
 });

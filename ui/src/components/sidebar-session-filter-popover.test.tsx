@@ -16,13 +16,13 @@ it.each([false, true])(
     onTestFinished(() => container.remove());
     if (chosen) {
       container.addEventListener(
-        "overlay-show",
+        "toggle",
         () => {
           container
             .querySelector<HTMLButtonElement>(".sidebar-session-filter-panel button")
             ?.focus();
         },
-        { once: true },
+        { once: true, capture: true },
       );
     }
     mountSolid(

@@ -12,6 +12,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import * as diagnostics from "../logging/code-mode-diagnostic.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
@@ -853,7 +854,40 @@ describe("session store bridge", () => {
     });
   });
 
+  it.each([
+    { name: "invalid key", set: { "": true }, cause: TypeError },
+    { name: "oversized value", set: { key: "x".repeat(256 * 1024) }, cause: RangeError },
+    {
+      name: "oversized store",
+      set: Object.fromEntries(
+        ["a", "b", "c", "d", "e"].map((key) => [key, "x".repeat(256 * 1024 - 2)]),
+      ),
+      cause: RangeError,
+    },
+  ])("keeps $name replay failures distinct from guest input", async ({ set, cause }) => {
+    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+    const h = sessionStoreHarness(executor);
+    await h.manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set,
+      delete: [],
+      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+    });
+    const result = resultDetails(await h.exec('return await load("key");'));
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "bridge",
+      error: expect.stringContaining("repair the session"),
+    });
+    expect(log).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: expect.any(cause) }),
+      expect.objectContaining({ failurePhase: "bridge", failureCode: "tool_error" }),
+    );
+  });
+
   it("keeps bridge provenance for uncaught typed store errors", async () => {
+    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const h = sessionStoreHarness(executor);
     const result = resultDetails(await h.exec('await store("a", "x".repeat(256 * 1024));'));
     expect(result).toMatchObject({
@@ -863,6 +897,11 @@ describe("session store bridge", () => {
       bridgeDispatchStarted: true,
     });
     expect(String(result.error)).toMatch(/^RangeError/);
+    expect(log).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      expect.any(RangeError),
+      expect.objectContaining({ failurePhase: "bridge", failureCode: "store_range" }),
+    );
   });
 
   it("retains writes across wait, hides them from sibling cells, and commits once", async () => {

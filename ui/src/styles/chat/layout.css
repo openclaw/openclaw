@@ -2174,6 +2174,7 @@ openclaw-chat-video-player {
 
 .chat-pr__number {
   min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: 650;
 }
 

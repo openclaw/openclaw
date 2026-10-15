@@ -54,6 +54,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
   "session.tool",
+  "socket.drain",
 ]);
 
 type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
@@ -665,6 +666,7 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
+        state.socket.batchWrites?.();
         if (typeof frame === "string") {
           state.socket.send(frame, sent);
         } else {

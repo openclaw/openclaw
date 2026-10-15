@@ -226,6 +226,7 @@ describe("voice-call doctor state migration", () => {
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
         expect.stringMatching(
           /^Migrated Voice Call SQLite tables to SQLite STRICT typing \(\d+\)$/,
         ),

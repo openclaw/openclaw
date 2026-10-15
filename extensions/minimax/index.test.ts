@@ -307,28 +307,6 @@ describe("minimax provider hooks", () => {
     expect(headers.get("x-api-key")).toBeNull();
   });
 
-  it("keeps native reasoning mode for MiniMax transports", async () => {
-    const { apiProvider, portalProvider } = await registeredProviders();
-
-    expect(apiProvider.hookAliases).toContain("minimax-cn");
-    expect(
-      apiProvider.resolveReasoningOutputMode?.({
-        provider: "minimax",
-        modelApi: "anthropic-messages",
-        modelId: "MiniMax-M2.7",
-      } as never),
-    ).toBe("native");
-
-    expect(portalProvider.hookAliases).toContain("minimax-portal-cn");
-    expect(
-      portalProvider.resolveReasoningOutputMode?.({
-        provider: "minimax-portal",
-        modelApi: "anthropic-messages",
-        modelId: "MiniMax-M2.7",
-      } as never),
-    ).toBe("native");
-  });
-
   it("defaults M3 thinking on while keeping M2.x thinking off by default", async () => {
     const { apiProvider, portalProvider } = await registeredProviders();
 

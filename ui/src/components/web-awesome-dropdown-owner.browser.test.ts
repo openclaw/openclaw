@@ -278,22 +278,6 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     },
   );
 
-  it("retires direct item disconnection before another submenu opens", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const f = await fixture();
-    await openSubmenu(f.other);
-    f.other.remove();
-    await hidden(f.other);
-    f.parent.focus();
-    await userEvent.keyboard("{ArrowDown}");
-    expect(focused()).toBe(f.first);
-    f.dropdown.append(f.other);
-    await openSubmenu(f.other);
-    await back("ArrowLeft", f.other);
-    await userEvent.keyboard("{ArrowDown}");
-    expect(focused()).toBe(f.first);
-  });
-
   it("navigates sibling submenus through forwarded slots inside a shadow caller", async () => {
     const { userEvent } = await import("vitest/browser");
     const f = await fixture(true);

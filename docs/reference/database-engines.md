@@ -52,17 +52,25 @@ that stores without a PostgreSQL schema remain on SQLite.
 | `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
 
-Workboard is currently the only PostgreSQL-supported store. Shared state,
-agent/session storage, and other stores continue using SQLite. Incognito storage
+The supported PostgreSQL families are:
+
+- **Workboard:** runtime storage, bidirectional database ports, and matched backups.
+- **Logbook:** runtime frames, batches, observations, cards, and standups;
+  bidirectional database ports; and matched backups. Frame images remain local
+  file artifacts under `logbook/frames`. Ports preserve their stored paths and
+  leave the files in place. Backups include that directory alongside the database
+  export and anchor; retain it when restoring or moving an installation.
+
+Shared state, agent/session storage, and other stores continue using SQLite. Incognito storage
 remains memory-only. A supported store never silently falls back to SQLite when
 its PostgreSQL connection or admission fails.
 
-Use `openclaw database port` to move existing workboard data between engines.
+Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no
 configuration or data migration.
 
-## Port existing workboard stores
+## Port existing stores
 
 Stop the Gateway first, through the service owner that normally manages it, and
 stop embedded agents using the same state directory. The command refuses a live
@@ -75,8 +83,14 @@ openclaw database port --to postgres --dry-run
 openclaw database port --to postgres
 ```
 
-The command inventories all existing registered workboard stores, including
-disabled workboard plugin stores. It does not create missing stores. Shared state,
+Port, backup, restore, and fingerprint operations share one database-family
+provider registry. Each provider resolves its stores and supplies the generated
+schema descriptor and expected PostgreSQL catalog. **Workboard and Logbook are registered families.** State, agent, Team Reports,
+and Matrix-root support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
+refuses the operation and names the supported families.
+
+The command inventories all existing registered stores, including
+disabled plugin stores. It does not create missing stores. Shared state,
 agent databases, and safety journals remain on SQLite; shared-state and agent
 support await their respective PostgreSQL migrations. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
@@ -190,7 +204,15 @@ and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapsh
 then applies the existing user-backup sanitizer before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
-the connection DSN. Preserve the complete matched set: an anchor alone contains
+the connection DSN. Active optional fragments come from the source catalog,
+not from enabled-plugin configuration; a missing required fragment dependency
+refuses the copy. Restore re-admits that same fragment set. Canonical triggers
+are installed after loading rows, while declared derived projections are omitted
+from copying and rebuilt by their owner before verification. Unknown triggers
+and views refuse the operation. Owners can migrate an older SQLite source only
+in the operation's private copy; the original capture remains intact.
+
+Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
 
 PostgreSQL restore verifies the matched set, loads a fresh owned namespace, and

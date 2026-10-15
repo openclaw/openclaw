@@ -25,7 +25,7 @@ import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
-import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./queue/types.js";
+import type { QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -108,8 +108,6 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Receives terminal queue-cap outcomes without widening the public reply API. */
-  onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Delivers queued replies only through their originating Gateway admission. */
   onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Overrides persisted queue mode for this reply only. */

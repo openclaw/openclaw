@@ -8,6 +8,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
+  LOGBOOK_SCHEMA_VERSION,
+  SCHEMA as LOGBOOK_SCHEMA_SQL,
+} from "../extensions/logbook/src/store-schema.ts";
+import {
   SCHEMA_VERSION,
   WORKBOARD_SCHEMA_SQL,
 } from "../extensions/workboard/src/workboard-schema.ts";
@@ -17,6 +21,10 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
+import {
+  TASK_RUN_INDEX_RETIREMENT_V24_SQL,
+  TASK_RUN_INDEX_REPLACEMENTS_V24,
+} from "../src/state/openclaw-state-db-schema-v24-indexes.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -32,14 +40,17 @@ import {
   assertPostgresTriggers,
   translatePostgresTriggers,
 } from "./lib/postgres-schema-triggers.mts";
+import { checkStateTaskIndexMigration } from "./lib/postgres-state-index-conformance.mts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MINIMUM_POSTGRES_VERSION = 16;
 const WORKBOARD_OUTPUT = "extensions/workboard/src/workboard-schema.postgres.sql";
 const WORKBOARD_PORT_OUTPUT = "src/infra/database-engine/workboard-port.generated.json";
+const LOGBOOK_OUTPUT = "extensions/logbook/src/logbook-schema.postgres.sql";
+const LOGBOOK_PORT_OUTPUT = "src/infra/database-engine/logbook-port.generated.json";
 const OUTPUT = "src/state/postgres-schema.generated";
 export const pendingPromotion: readonly { name: string; reason: string }[] = Object.freeze([]);
-export const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
+const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
   column,
   reason: "PostgreSQL text cannot hold NUL; the guard is enforced by the type.",
 }));
@@ -54,6 +65,43 @@ function tableStatements(data: Catalog): string[] {
         )
         .map((item) => item.sql!),
   );
+}
+
+/** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
+function generateDatabasePortMetadata(
+  db: import("node:sqlite").DatabaseSync,
+  data: Catalog,
+  source: { id: string; version: number; sqlite: string; postgres: string },
+) {
+  const postData = tableStatements(data).find((sql) =>
+    data.objects.some(
+      (object) =>
+        ["index", "foreignKey", "triggerFunction", "trigger"].includes(object.kind) &&
+        object.sql === sql,
+    ),
+  );
+  const split = postData ? source.postgres.indexOf(postData) : source.postgres.length;
+  if (split < 0) {
+    throw new Error(`Generated PostgreSQL port DDL differs from ${source.id} catalog`);
+  }
+  return {
+    id: source.id,
+    version: source.version,
+    minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
+    schema: "",
+    sqlite: source.sqlite,
+    tables: portTables(data),
+    objects: data.objects
+      .filter((item) => item.kind === "check")
+      .map(({ table, kind, sql }) => ({ table, kind, sql })),
+    triggers: db
+      .prepare(
+        "SELECT name, tbl_name AS 'table', sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+      )
+      .all(),
+    preData: [0, split],
+    postData: [split, source.postgres.length],
+  };
 }
 
 export async function generateWorkboardPostgresSchema() {
@@ -75,22 +123,50 @@ export async function generateWorkboardPostgresSchema() {
       "-- The connection owner supplies search_path and the admission transaction.",
       ...statements,
     ].join("\n\n")}\n`;
-    // String ranges reuse the bootstrap SQL without maintaining a second DDL copy.
-    const postDataStart = statements[data.tables.length];
-    const split = postDataStart ? postgresSql.indexOf(postDataStart) : postgresSql.length;
-    const portMetadata = {
+    const portMetadata = generateDatabasePortMetadata(db, data, {
       id: "workboard",
       version: SCHEMA_VERSION,
-      minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
-      schema: "",
       sqlite: WORKBOARD_SCHEMA_SQL,
-      tables: portTables(data),
-      objects: data.objects
-        .filter((item) => item.kind === "check")
-        .map(({ table, kind, sql }) => ({ table, kind, sql })),
-      preData: [0, split],
-      postData: [split, postgresSql.length],
+      postgres: postgresSql,
+    });
+    return {
+      catalog: data,
+      sql: postgresSql,
+      portMetadata,
     };
+  } finally {
+    db.close();
+  }
+}
+
+export async function generateLogbookPostgresSchema() {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(LOGBOOK_SCHEMA_SQL);
+    // Empty schema leaves qualification to the connection owner's search_path.
+    const data = catalog(db, "");
+    // SQLite owns its AUTOINCREMENT ledger; port allocation metadata preserves it.
+    const omissions = data.objects.filter(
+      (item) => item.sql === null && item.table !== "sqlite_sequence",
+    );
+    if (omissions.length) {
+      throw new Error(
+        `Logbook PostgreSQL schema has unsupported objects: ${omissions.map((item) => `${item.kind} ${item.table}.${item.name}: ${item.reason}`).join("; ")}`,
+      );
+    }
+    const statements = tableStatements(data);
+    const postgresSql = `${[
+      "-- Generated by pnpm db:postgres:gen --target logbook. Do not edit.",
+      "-- The connection owner supplies search_path and the admission transaction.",
+      ...statements,
+    ].join("\n\n")}\n`;
+    const portMetadata = generateDatabasePortMetadata(db, data, {
+      id: "logbook",
+      version: LOGBOOK_SCHEMA_VERSION,
+      sqlite: LOGBOOK_SCHEMA_SQL,
+      postgres: postgresSql,
+    });
     return {
       catalog: data,
       sql: postgresSql,
@@ -198,6 +274,24 @@ export async function generatePostgresSchemas(
         files[fragment.file] = runtimeDdl(
           data.objects.filter((item) => ownership.get(item.table) === fragment.id),
         );
+      }
+      if (root === ROOT) {
+        const replacements = TASK_RUN_INDEX_REPLACEMENTS_V24.map((indexName) => {
+          const index = data.objects.find(
+            (item) =>
+              item.kind === "index" && item.table === "task_runs" && item.name === indexName,
+          );
+          assert.ok(
+            index && index.sql?.startsWith("CREATE INDEX "),
+            `Missing translated shared-state v24 index: ${indexName}`,
+          );
+          return index.sql;
+        });
+        files["state-v23-v24.postgres.sql"] = `${[
+          "-- Generated v23-to-v24 forward DDL; the owner supplies search_path, transaction, and version publication.",
+          TASK_RUN_INDEX_RETIREMENT_V24_SQL.trim(),
+          ...replacements,
+        ].join("\n\n")}\n`;
       }
       if (!options.reportOnly) {
         files["runtime.ts"] = formatGeneratedModule(
@@ -330,7 +424,7 @@ async function verifyPostgres(
   }
 }
 
-export async function checkPostgresCatalog(connection: string): Promise<void> {
+async function checkPostgresCatalog(connection: string): Promise<void> {
   const { Client } = await import("pg");
   const client = new Client({ connectionString: connection });
   const prefix = `conformance_${process.pid}`;
@@ -369,6 +463,14 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
       const row = (await client.query(sql)).rows[0];
       return row.catalog ?? row.triggers;
     });
+    await checkStateTaskIndexMigration(
+      client,
+      `${prefix}_state`,
+      generated.files["state-v23-v24.postgres.sql"]!,
+    );
+    console.log(
+      `${prefix}_state: verified v23-to-v24 task index migration, retained payload, and complete index definitions`,
+    );
     await client.query(`SET search_path = ${quote(`${prefix}_agent`)}`);
     await client.query("BEGIN");
     await client.query(`CREATE OR REPLACE FUNCTION openclaw_memory_index_sources_trigger()
@@ -436,9 +538,31 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         console.log(`Generated ${file}`);
       }
     }
+  } else if (values.target === "logbook") {
+    if (values.out || values["verify-psql"]) {
+      throw new Error(
+        "The logbook target writes its committed artifact; --out and --verify-psql are canonical-only",
+      );
+    }
+    const { sql, portMetadata } = await generateLogbookPostgresSchema();
+    for (const [file, content] of Object.entries({
+      [LOGBOOK_OUTPUT]: sql,
+      [LOGBOOK_PORT_OUTPUT]: `${JSON.stringify(portMetadata, null, 2)}\n`,
+    })) {
+      const output = path.join(ROOT, file);
+      if (values.verify) {
+        if (fs.readFileSync(output, "utf8") !== content) {
+          throw new Error(`${file} is stale; run pnpm db:postgres:gen --target logbook`);
+        }
+        console.log(`${file}: up to date`);
+      } else {
+        fs.writeFileSync(output, content);
+        console.log(`Generated ${file}`);
+      }
+    }
   } else {
     if (values.target !== "canonical") {
-      throw new Error("Use --target canonical or --target workboard");
+      throw new Error("Use --target canonical, --target workboard or --target logbook");
     }
     const out = values.out ?? path.join(ROOT, OUTPUT);
     const result = await generatePostgresSchemas(ROOT, values["schema-prefix"], {

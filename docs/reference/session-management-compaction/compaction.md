@@ -89,6 +89,12 @@ replacement also cancel stale work. Accepted compaction commits remain accounted
 for, and an unlimited command timeout remains unlimited. One-shot local commands using OpenClaw's managed loop
 record an intentional skip without marking a memory flush successful.
 
+A newly created isolated sub-agent skips transcript-based compaction estimation
+before its first turn when its in-process launch carries the committed creation
+fact. Forked and resumed children keep normal preflight maintenance. Later turns
+use the child's current transcript and counters; the creation fact is not retained
+as an empty-transcript cache.
+
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
