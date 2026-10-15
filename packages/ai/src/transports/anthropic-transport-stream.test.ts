@@ -933,8 +933,10 @@ describe("anthropic transport stream", () => {
         anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 1 }),
         { type: "message_stop" },
       ],
+      buffered: false,
+      unsealed: true,
     },
-  ])("rejects $name", async ({ model, events }) => {
+  ])("rejects $name", async ({ model, events, buffered, unsealed }) => {
     mockSse(events);
     const stream = await startTransportStream(makeAnthropicTransportModel(model));
     const eventTypes: string[] = [];
@@ -945,8 +947,16 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(eventTypes.at(-1)).toBe("error");
     expect(eventTypes).not.toContain("done");
-    expect(eventTypes).not.toContain("toolcall_end");
-    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+    if (unsealed) {
+      expect(eventTypes).not.toContain("toolcall_end");
+      expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+    } else {
+      expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+    }
+    if (buffered) {
+      expect(eventTypes).toEqual(["error"]);
+      expect(result.content).toEqual([]);
+    }
   });
 
   it("preserves a pre-tool text block without inferring a commentary phase", async () => {
