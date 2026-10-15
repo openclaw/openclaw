@@ -10,6 +10,7 @@ const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const readDaemonRuntimePinForInstall = vi.hoisted(() =>
   vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
 );
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
 vi.mock("../daemon/runtime-pin-state.js", () => ({
   readDaemonRuntimePinForInstall,
   withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
