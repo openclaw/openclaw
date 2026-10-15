@@ -5782,7 +5782,7 @@ jobs:
         run: python3 -I -S scripts/swift-build-cache-metadata.py record ios
 
       - name: Save iOS test build products
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.record-ios-build-cache-metadata.outcome == 'success'
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && steps.record-ios-build-cache-metadata.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
