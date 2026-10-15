@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
@@ -880,7 +881,9 @@ describe("post-activation failure settlement without inference", () => {
         running: mocks.healthy,
         runtime: { ...state.runtime, status: mocks.healthy ? "running" : "stopped" },
       }));
-      mocks.restartCommand.mockImplementation(async () => {
+      vi.mocked(resolveGatewayService).mockReturnValue(createMockGatewayService());
+      mocks.restartCommand.mockImplementation(async (restart, action) => {
+        restart.onGatewayStartAttempted?.(action);
         if (migration) {
           expect(agentVersion).toBe(23);
         }
