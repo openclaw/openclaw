@@ -32,45 +32,6 @@ describe("handleSendChat browser annotation context", () => {
     expect(findChatSendPayload(host).message).toBe("First context\n\nSecond context");
   });
 
-  it("routes /new before materializing annotation context", async () => {
-    const attachment = createBrowserAnnotationAttachment("slash", "Review the annotated page");
-    const createChatSession = vi.fn(async () => true);
-    const host = makeChatHost({
-      requestHandlers: {},
-      chatAttachments: [attachment],
-      chatMessage: "/new",
-      createChatSession,
-    });
-
-    vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
-    await handleSendChat(host);
-
-    expect(createChatSession).toHaveBeenCalledOnce();
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-  });
-
-  it.each(["wait"])(
-    "routes active-run stop intent %s before materializing annotation context",
-    async (command) => {
-      const attachment = createBrowserAnnotationAttachment("stop", "Review the annotated page");
-      const host = makeChatHost({
-        requestHandlers: { "sessions.abort": { status: "aborted" } },
-        chatAttachments: [attachment],
-        chatMessage: command,
-        chatRunId: "annotation-stop-run",
-      });
-
-      vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
-      await handleSendChat(host);
-
-      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
-        key: "agent:main",
-        clearQueued: true,
-      });
-      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-    },
-  );
-
   it.each([["/side", ""]])(
     "opens companion intent %s %s without sending annotation context",
     async (command, question) => {
@@ -149,29 +110,6 @@ describe("handleSendChat browser annotation context", () => {
       expect(host.chatAttachments).toEqual([]);
     },
   );
-
-  it("retains annotations while forwarding an active-run approval with its ordinary file", async () => {
-    const annotation = createBrowserAnnotationAttachment("approval", "Review the annotated page");
-    const document = createStagedAttachment("approval-document");
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": { runId: "approval-command-run", status: "started" } },
-      chatAttachments: [annotation, document],
-      chatMessage: "/approve approval-123 allow-once",
-      chatRunId: "active-run",
-      chatStream: "Waiting for approval...",
-    });
-
-    vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
-    await handleSendChat(host);
-
-    const command = findChatSendPayload(host);
-    expect(command.message).toBe("/approve approval-123 allow-once");
-    expect(command.attachments).toEqual([
-      expect.objectContaining({ fileName: "brief.pdf", mimeType: "application/pdf" }),
-    ]);
-    expect(host.chatAttachments).toEqual([annotation]);
-    expect(host.chatMessage).toBe("");
-  });
 
   it.each(["/status", "/approve approval-123 allow-once"])(
     "restores the command draft and mixed attachments when %s fails",

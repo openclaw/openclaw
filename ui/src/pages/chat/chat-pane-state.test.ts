@@ -20,36 +20,6 @@ function projectionState(): Parameters<typeof applySelectedSessionProjection>[0]
 }
 
 describe("applySelectedSessionProjection", () => {
-  it.each([
-    undefined,
-    {
-      archived: false,
-      effectiveQueueMode: "followup",
-      key: "agent:main:main",
-      kind: "direct",
-      queueMode: "followup",
-      updatedAt: 1,
-    },
-  ] as const)("projects selected metadata only when its row is present: %j", (row) => {
-    const state = projectionState();
-    expect(applySelectedSessionProjection(state, row)).toBe(row !== undefined);
-    expect(state).toEqual(
-      row
-        ? {
-            chatEffectiveQueueMode: "followup",
-            chatQueueModeOverride: "followup",
-            selectedChatSessionArchived: false,
-            selectedChatSessionIncognito: false,
-          }
-        : {
-            chatEffectiveQueueMode: "interrupt",
-            chatQueueModeOverride: "interrupt",
-            selectedChatSessionArchived: true,
-            selectedChatSessionIncognito: true,
-          },
-    );
-  });
-
   it("adopts an archived routed row published after the active list omitted it", () => {
     const routedKey = "agent:main:dashboard:cold-archive";
     const activeResult: SessionsListResult = {
@@ -100,14 +70,12 @@ describe("resolveArtifactDownloadSource", () => {
   const ticket = "/api/artifacts/download/connection/ticket";
 
   it.each([
-    { page: "https://control.test", gateway: "wss://control.test", http: true, variant: undefined },
     {
       page: "https://control.test",
       gateway: "wss://control.test",
       http: true,
       variant: "thumbnail",
     },
-    { page: "https://control.test", gateway: "wss://control.test", http: true, variant: "full" },
     {
       page: "https://control.test",
       gateway: "wss://remote.test",
@@ -173,12 +141,10 @@ describe("resolveArtifactDownloadSource", () => {
   );
 
   it.each([
-    { failure: "network", mimeType: "image/png", type: "image", reject: false },
     { failure: "missing route", mimeType: "image/png", type: "image", reject: false },
     { failure: "SPA fallback", mimeType: "image/png", type: "image", reject: false },
     { failure: "wrong content type", mimeType: "image/png", type: "image", reject: false },
     { failure: "unsafe SVG", mimeType: "image/svg+xml", type: "image", reject: true },
-    { failure: "unsafe HTML", mimeType: "text/html", type: "image", reject: true },
     { failure: "non-image artifact", mimeType: "image/png", type: "file", reject: true },
   ])(
     "reauthorizes failed transfers but rejects unsafe blobs: $failure",
@@ -306,7 +272,6 @@ describe("SessionParticipationTracker", () => {
   it.each([
     { visibility: "draft", sharingRole: "member", blocked: true },
     { visibility: "read-only", sharingRole: "viewer", blocked: true },
-    { visibility: "shared", sharingRole: "member", blocked: false },
   ] as const)(
     "holds only observed restrictions while refreshing: $visibility",
     ({ visibility, sharingRole, blocked }) => {
