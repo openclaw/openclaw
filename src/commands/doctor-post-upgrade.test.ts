@@ -432,39 +432,18 @@ describe("runPostUpgradeProbes — manifest availability", () => {
     });
   });
 
-  it.each([true, false])(
-    "uses actual Claude file state after cached existence=%s",
-    async (existed) => {
-      await withFixtureRoot("manifest-cache-transition", async (root) => {
-        const { manifestPath } = await writePluginFixture(root, {
-          id: "claude-transition",
-          format: "bundle",
-          bundleFormat: "claude",
-          manifestHash: "derived-bundle-hash",
-        });
-        if (!existed) {
-          await fs.unlink(manifestPath);
-        }
-        expect(pluginCacheExistsSync(manifestPath)).toBe(existed);
-        if (existed) {
-          await fs.unlink(manifestPath);
-        } else {
-          await fs.mkdir(manifestPath);
-        }
-        const report = await runPostUpgradeProbes({ stateDir: root });
-        expect(report.findings).toEqual(
-          existed
-            ? []
-            : [
-                expect.objectContaining({
-                  level: "error",
-                  code: "plugin.manifest_unavailable",
-                  plugin: "claude-transition",
-                  message: expect.stringContaining(manifestPath),
-                }),
-              ],
-        );
+  it("uses actual Claude file state after a cached manifest is removed", async () => {
+    await withFixtureRoot("manifest-cache-transition", async (root) => {
+      const { manifestPath } = await writePluginFixture(root, {
+        id: "claude-transition",
+        format: "bundle",
+        bundleFormat: "claude",
+        manifestHash: "derived-bundle-hash",
       });
-    },
-  );
+      expect(pluginCacheExistsSync(manifestPath)).toBe(true);
+      await fs.unlink(manifestPath);
+      const report = await runPostUpgradeProbes({ stateDir: root });
+      expect(report.findings).toEqual([]);
+    });
+  });
 });

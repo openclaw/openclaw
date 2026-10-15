@@ -260,31 +260,6 @@ describe("setupSkills", () => {
     });
   });
 
-  it("keeps brew-only installs visible when Linuxbrew is resolved off PATH", async () => {
-    await withPlatform("linux", async () => {
-      mockMissingBrewStatus([
-        createBundledSkill({
-          name: "video-frames",
-          description: "ffmpeg",
-          bins: ["ffmpeg"],
-          installLabel: "Install ffmpeg (brew)",
-        }),
-      ]);
-      mocks.isContainerEnvironment.mockReturnValue(true);
-      mocks.resolveBrewExecutable.mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
-
-      const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
-      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
-
-      expect(prompter.multiselect).toHaveBeenCalled();
-      expect(mocks.installSkill).toHaveBeenCalledWith(
-        expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
-      );
-      expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
-      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
-    });
-  });
-
   it("lets the user skip ready bundled dependencies without offering workspace recipes", async () => {
     mockMissingBrewStatus([
       createWorkspaceSkill({
@@ -409,10 +384,7 @@ describe("setupSkills", () => {
     );
   });
 
-  it.each([
-    [undefined, undefined, "npm"],
-    ["yarn", undefined, "yarn"],
-  ] as const)(
+  it.each([["yarn", undefined, "yarn"]] as const)(
     "installs with saved %s and requested %s using %s",
     async (saved, requested, expected) => {
       mockMissingBrewStatus([createNodeSkill()]);

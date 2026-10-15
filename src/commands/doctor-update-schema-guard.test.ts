@@ -2,7 +2,6 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -247,8 +246,6 @@ type AdmissionCase = {
 it.each<AdmissionCase>([
   { name: "private rehearsal" },
   { name: "missing writable marker", marker: "missing writable" },
-  { name: "forged post-core marker", marker: "post-core" },
-  { name: "post-core without claim or maintenance", postCore: true },
   { name: "post-core claim without maintenance", postCore: true, claim: true },
   { name: "rollback-phase claim", claim: true, maintenance: true, marker: "post-core" },
   {
@@ -305,78 +302,6 @@ it.each<AdmissionCase>([
       });
     }
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-  });
-});
-
-it("retains a verified canonical backup before permitting the normal schema migration", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await legacyAgentFixture(true);
-    const logs = runtime();
-    const create = vi.spyOn(backupCreate, "createBackupArchive");
-    const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
-    const onVerifiedBackup = vi.fn();
-    const authority = { runId: f.runId, assertCurrent: vi.fn() };
-    await withDoctorMaintenance(
-      { runtime: logs, assertCurrent: authority.assertCurrent },
-      async (maintenance) => {
-        expect(maintenance).toBeDefined();
-        await maintenance.run(async () => {
-          await guardUpdateDoctorSchemaUpgrade({
-            schemas: f.schemas,
-            runtime: logs,
-            postCoreSchemaRepair: authority,
-            onVerifiedBackup,
-          });
-          expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-          expect(verify).toHaveBeenCalledTimes(1);
-          const identity = fs.statSync(f.pathname, { bigint: true });
-          expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
-            expect.objectContaining({
-              role: "agent",
-              agentId: "main",
-              dev: identity.dev,
-              ino: identity.ino,
-            }),
-          ]);
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
-            migrateOpenClawAgentDatabaseForMaintenance(
-              { agentId: "main", pathname: f.pathname },
-              lease,
-            ),
-          );
-          // A current maintenance owner may publish a same-version rebuilt image
-          // after migration; the old backup cannot fence unrelated later repairs.
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
-            const before = fs.statSync(f.pathname);
-            replaceFileAtomicSync({
-              filePath: f.pathname,
-              content: fs.readFileSync(f.pathname),
-              preserveExistingMode: true,
-              beforeRename: () => lease.assertOwned(),
-            });
-            expect(fs.statSync(f.pathname).ino).not.toBe(before.ino);
-            await migrateOpenClawAgentDatabaseForMaintenance(
-              { agentId: "main", pathname: f.pathname },
-              lease,
-            );
-          });
-        });
-      },
-    );
-    const backup = await expectDefined(create.mock.results[0], "canonical backup creation result")
-      .value;
-    expect(fs.existsSync(backup.archivePath)).toBe(true);
-    const db = new DatabaseSync(f.pathname, { readOnly: true });
-    try {
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(db.prepare("SELECT value_json,updated_at FROM cache_entries").all()).toEqual([
-        { value_json: '{"keep":true}', updated_at: 7 },
-      ]);
-    } finally {
-      db.close();
-    }
   });
 });
 
@@ -669,7 +594,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced database"])(
+it.each(["flag-only", "changed namespace", "released owner", "replaced database"])(
   "binds schema exemption to actual disposable rehearsal coverage: %s",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

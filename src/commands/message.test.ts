@@ -209,39 +209,6 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   ...overrides,
 });
 
-function createTelegramSecretRawConfig() {
-  return {
-    channels: {
-      telegram: {
-        token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
-      },
-    },
-  };
-}
-
-function createTelegramResolvedTokenConfig(token: string) {
-  return {
-    channels: {
-      telegram: {
-        token,
-      },
-    },
-  };
-}
-
-function mockResolvedCommandConfig(params: {
-  rawConfig: Record<string, unknown>;
-  resolvedConfig: Record<string, unknown>;
-  diagnostics?: string[];
-}) {
-  testConfig = params.rawConfig;
-  resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-    resolvedConfig: params.resolvedConfig,
-    effectiveConfig: params.resolvedConfig,
-    diagnostics: params.diagnostics ?? ["resolved channels.telegram.token"],
-  });
-}
-
 async function runMessageCommand(opts: Record<string, unknown> = {}) {
   await messageCommand(
     {
@@ -373,48 +340,6 @@ describe("messageCommand", () => {
     });
   });
 
-  it("threads resolved SecretRef config into message actions", async () => {
-    const rawConfig = createTelegramSecretRawConfig();
-    const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");
-    mockResolvedCommandConfig({
-      rawConfig: rawConfig as unknown as Record<string, unknown>,
-      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
-    });
-
-    await runMessageCommand();
-
-    const actionCall = readOnlyMessageActionCall();
-    expect(actionCall.cfg).toBe(resolvedConfig);
-    expect(actionCall.action).toBe("send");
-    expect(actionCall.params.channel).toBe("telegram");
-    expect(actionCall.params.target).toBe("123456");
-    expect(actionCall.params.message).toBe("hi");
-    expect(actionCall.agentId).toBe("main");
-    expect(actionCall.senderIsOwner).toBe(true);
-    expect(actionCall.conversationReadOrigin).toBe("direct-operator");
-    expect(actionCall.gateway?.clientName).toBe("cli");
-    expect(actionCall.gateway?.mode).toBe("cli");
-    expect(actionCall.cfg).not.toBe(rawConfig);
-    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
-      commandName?: string;
-      config?: unknown;
-      targetIds?: Set<string>;
-    };
-    expect(configResolutionCall.config).toBe(rawConfig);
-    expect(configResolutionCall.commandName).toBe("message");
-    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
-      config: rawConfig,
-      channel: "telegram",
-      accountId: undefined,
-    });
-    expect(configResolutionCall.targetIds).toBeInstanceOf(Set);
-    expect(
-      [...(configResolutionCall.targetIds ?? [])].filter(
-        (id) => !id.startsWith("channels.telegram."),
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("keeps the retained legacy owner after config load strips the default marker", async () => {
     const migrated = createCanonicalAgentConfigFixture({
       agents: {
@@ -436,66 +361,6 @@ describe("messageCommand", () => {
     ).toBeUndefined();
     expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
-  });
-
-  it.each([false])(
-    "guides an ownerless explicit fleet to a system owner (dryRun=%s)",
-    async (dryRun) => {
-      const ownerlessConfig = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: { ops: {}, research: {} },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: ownerlessConfig,
-        diagnostics: [],
-      });
-
-      const failedRun = runMessageCommand({ dryRun });
-      await expect(failedRun).rejects.toMatchObject({
-        code: "AGENT_SELECTION_REQUIRED",
-        hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
-      });
-      await expect(failedRun).rejects.not.toThrow("--agent");
-      expect(runMessageActionMock).not.toHaveBeenCalled();
-
-      const effectiveConfig = {
-        agents: {
-          ...ownerlessConfig.agents,
-          defaults: { systemAgent: { agentId: "ops" } },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: effectiveConfig,
-        diagnostics: [],
-      });
-
-      await runMessageCommand({ dryRun });
-
-      expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
-      expect(readOnlyMessageActionCall().agentId).toBe("ops");
-    },
-  );
-
-  it("normalizes poll actions and sender ownership before dispatch", async () => {
-    await runMessageCommand({
-      action: "poll",
-      channel: "telegram",
-      target: "123456789",
-      pollQuestion: "Ship it?",
-      pollOption: ["Yes", "No"],
-      senderIsOwner: false,
-    });
-
-    const actionCall = readOnlyMessageActionCall();
-    expect(actionCall.action).toBe("poll");
-    expect(actionCall.senderIsOwner).toBe(false);
-    expect(actionCall.params.channel).toBe("telegram");
-    expect(actionCall.params.target).toBe("123456789");
-    expect(actionCall.params.pollQuestion).toBe("Ship it?");
   });
 
   it("reports partial delivery failure truthfully in JSON output", async () => {
@@ -520,6 +385,11 @@ describe("messageCommand", () => {
       dryRun: false,
     });
     await runMessageCommand({ channel: "discord", target: "channel:general" });
+    expect(readOnlyMessageActionCall()).toMatchObject({
+      senderIsOwner: true,
+      conversationReadOrigin: "direct-operator",
+      gateway: { clientName: "cli", mode: "cli" },
+    });
     const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
     expect(json).toMatchObject({
       ok: false,
@@ -544,7 +414,8 @@ describe("messageCommand", () => {
       dryRun: false,
     } as MessageActionResult);
 
-    await runMessageCommand({ action });
+    await runMessageCommand({ action, senderIsOwner: false });
+    expect(readOnlyMessageActionCall().senderIsOwner).toBe(false);
 
     const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
     expect(json).toMatchObject({

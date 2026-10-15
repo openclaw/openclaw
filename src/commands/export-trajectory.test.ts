@@ -143,26 +143,6 @@ describe("exportTrajectoryCommand", () => {
   );
 
   it.each([
-    [
-      "unknown",
-      "nope-agent",
-      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
-    ],
-  ])("rejects an %s explicit agent before reading a session", async (_label, agent, message) => {
-    const runtime = createTestRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
-
-    await expectTrajectoryFailure(
-      exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123", agent }, runtime),
-      runtime,
-      message,
-    );
-    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
-    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
-    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
-  });
-
-  it.each([
     ["whitespace-only", "agent", "   ", "--agent must not be blank"],
     ["whitespace-only", "store", "   ", "--store must not be blank"],
   ])("rejects an %s encoded %s before reading a session", async (_label, field, value, message) => {

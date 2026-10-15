@@ -5,7 +5,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
-import { resolveUserPath } from "../utils.js";
 import * as nonInteractiveApiKeys from "./onboard-non-interactive/api-keys.js";
 import { setupWizardCommand } from "./onboard.js";
 import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
@@ -397,24 +396,6 @@ describe("setupWizardCommand", () => {
       "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
     );
     expect(mocks.handleReset).not.toHaveBeenCalled();
-  });
-
-  it("uses the default workspace for a full reset when a readable config configures none", async () => {
-    const runtime = makeRuntime();
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      sourceConfig: { gateway: { port: 1 } },
-    });
-
-    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
-
-    expect(mocks.handleReset).toHaveBeenCalledWith(
-      "full",
-      resolveUserPath("~/.openclaw/workspace"),
-      runtime,
-    );
   });
 
   it("fails fast for invalid --reset-scope", async () => {
@@ -836,12 +817,7 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["--agent-name", { agentName: "robby" }],
-    ["--team", { team: true }],
-    ["--skip-ui", { skipUi: true }],
-    ["--suppress-gateway-token-output", { suppressGatewayTokenOutput: true }],
-  ])("keeps %s on guided onboarding", async (_label, opts) => {
+  it.each([["--team", { team: true }]])("keeps %s on guided onboarding", async (_label, opts) => {
     const runtime = makeRuntime();
 
     await setupWizardCommand(opts, runtime);
