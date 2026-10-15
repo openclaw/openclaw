@@ -215,11 +215,19 @@ function post(id: string, root: string, author: string, text: string): Post {
   };
 }
 
+function observedDeferred<T>() {
+  const deferred = Promise.withResolvers<T>();
+  // Observe immediately; awaiting the original promise still surfaces its rejection.
+  void deferred.promise.catch(() => {});
+  return deferred;
+}
+
 describe("X publication production-owner composition", () => {
   installGatewayTestHooks();
 
   it("renews stale X authority for public creation and rejects revocation before commit", async ({
     signal,
+    onTestFailed,
   }) => {
     const channels: OpenClawConfig["channels"] = {
       x: {
@@ -352,8 +360,29 @@ describe("X publication production-owner composition", () => {
     console.info("[x-proof] model runtime prepared");
 
     let activeCase: Case = "allowed";
+    let interruptedWait: Error | undefined;
+    onTestFailed(() => {
+      // Vitest records its timeout before the aborted test body finishes unwinding.
+      if (interruptedWait) {
+        throw interruptedWait;
+      }
+    });
+    const waitFor = async <T>(description: string, work: PromiseLike<T>) => {
+      try {
+        return await withinTest(work, signal);
+      } catch (error) {
+        if (!signal.aborted) {
+          throw error;
+        }
+        // Cleanup uses the same signal; preserve the first interrupted await.
+        interruptedWait ??= new Error(`X publication ${activeCase}: waiting for ${description}`, {
+          cause: error,
+        });
+        throw interruptedWait;
+      }
+    };
     let creating = false;
-    let creationSettled = Promise.withResolvers<void>();
+    let creationSettled = observedDeferred<void>();
     let revokedInCatalogWait = false;
     let delegationRevokedInCatalogWait = false;
     let authorRevokedInCatalogWait = false;
@@ -421,9 +450,9 @@ describe("X publication production-owner composition", () => {
 
     const outcomes = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
-    const childWritten = Promise.withResolvers<string>();
+    const childWritten = observedDeferred<string>();
     const childRuns = new Set<Promise<unknown>>();
-    const model = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+    const runModel = async (params: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) => {
       const admitted =
         params.admittedRunContext ??
         (await expectDefined(params.preparedRunAdmission, "production reply-owned admission").admit(
@@ -442,7 +471,7 @@ describe("X publication production-owner composition", () => {
       );
       // The deterministic model replaces the runner, including its admitted caller
       // boundary. Child tools must not borrow the intake turn’s completed receipt.
-      const work = withGatewayToolCallerIdentity(modelCaller, async () => {
+      return withGatewayToolCallerIdentity(modelCaller, async () => {
         if (
           params.userTurnTranscriptRecorder &&
           !params.userTurnTranscriptRecorder.hasPersisted()
@@ -517,11 +546,17 @@ describe("X publication production-owner composition", () => {
             outcomes.set(activeCase, result.details);
             if (isRecord(result.details) && typeof result.details.error === "string") {
               text = deniedWorkSessionReply;
+              if (!creationRequests.some(({ kind }) => kind === activeCase)) {
+                creationSettled.reject(new Error(result.details.error));
+              }
             }
             console.info("[x-proof] spawn result", activeCase, result.details);
           } catch (error) {
             outcomes.set(activeCase, { error: String(error) });
             text = deniedWorkSessionReply;
+            if (!creationRequests.some(({ kind }) => kind === activeCase)) {
+              creationSettled.reject(error);
+            }
             console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
@@ -600,9 +635,14 @@ describe("X publication production-owner composition", () => {
           acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(admitted.operationalRunInstance),
         };
       });
-      if (child) {
+    };
+    const model = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation((params) => {
+      const work = runModel(params);
+      if (params.sessionKey?.includes(":dashboard:")) {
         childRuns.add(work);
-        void work.catch((error: unknown) => childWritten.reject(error));
+        void work.catch(childWritten.reject);
+      } else {
+        void work.catch(creationSettled.reject);
       }
       return work;
     });
@@ -622,7 +662,7 @@ describe("X publication production-owner composition", () => {
     });
     const channel = api.runtime.channel;
     const originalDispatch = channel.inbound.dispatch;
-    let dispatched = Promise.withResolvers<void>();
+    let dispatched = observedDeferred<void>();
     // Pass-through observation only: no replacement result or ingress capability.
     channel.inbound.dispatch = async (...args) => {
       console.info("[x-proof] real dispatch entered", activeCase);
@@ -670,8 +710,8 @@ describe("X publication production-owner composition", () => {
           setRuntimeConfigSnapshot(restored);
         }
         activeCase = kind;
-        creationSettled = Promise.withResolvers<void>();
-        dispatched = Promise.withResolvers<void>();
+        creationSettled = observedDeferred<void>();
+        dispatched = observedDeferred<void>();
         rejectMonitor = dispatched.reject;
         rejectIngress = dispatched.reject;
         const rootId = String(500 + index * 100);
@@ -717,7 +757,8 @@ describe("X publication production-owner composition", () => {
                   monitor,
                   "X monitor ended before production reply dispatch",
                 );
-          await withinTest(
+          await waitFor(
+            "reply dispatch",
             dispatch.catch((error: unknown) => {
               // Author removal forbids final delivery. Registry retirement may
               // instead reject the monitor's last plugin-runtime callback.
@@ -729,25 +770,27 @@ describe("X publication production-owner composition", () => {
                 throw error;
               }
             }),
-            signal,
           );
           if (kind !== "guest") {
-            await withinTest(creationSettled.promise, signal);
+            await waitFor("sessions.create settlement", creationSettled.promise);
           }
         } finally {
           rejectMonitor = undefined;
           rejectIngress = undefined;
           abort.abort();
           try {
-            await monitor.catch((error: unknown) => {
-              if (kind !== "owner-retired" || !ownerRetiredInCatalogWait) {
-                throw error;
-              }
-              // Retirement can reject the monitor's last plugin-runtime callback.
-              expect(String(error)).toContain("reloaded or disabled");
-            });
+            await waitFor(
+              "monitor shutdown",
+              monitor.catch((error: unknown) => {
+                if (kind !== "owner-retired" || !ownerRetiredInCatalogWait) {
+                  throw error;
+                }
+                // Retirement can reject the monitor's last plugin-runtime callback.
+                expect(String(error)).toContain("reloaded or disabled");
+              }),
+            );
           } finally {
-            await scheduling.close();
+            await waitFor("scheduler shutdown", Promise.resolve(scheduling.close()));
           }
         }
         if (kind === "owner-retired") {
@@ -801,7 +844,7 @@ describe("X publication production-owner composition", () => {
           expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
           if (kind === "allowed") {
             expect(outcomes.get(kind)).toMatchObject({ status: "accepted", publicRead: true });
-            const key = await withinTest(childWritten.promise, signal);
+            const key = await waitFor("child transcript write", childWritten.promise);
             const entry = expectDefined(
               loadSessionEntry({ agentId: "coder", sessionKey: key, storePath: childStore }),
               "committed child row",
@@ -817,9 +860,9 @@ describe("X publication production-owner composition", () => {
               identities: [key, entry.sessionId],
             });
             if (childReleased) {
-              await withinTest(childReleased, signal);
+              await waitFor("child admission release", childReleased);
             }
-            await withinTest(projection.prepareMembership(), signal);
+            await waitFor("projection membership", projection.prepareMembership());
             expect(
               isPublicSessionShareActive(
                 cfg(),
@@ -832,16 +875,19 @@ describe("X publication production-owner composition", () => {
                 projection,
               ),
             ).toBe(true);
-            const response = await sendRequest(http, {
-              path: new URL(
-                expectDefined(
-                  resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
-                  "canonical child URL",
-                ),
-              ).pathname,
-              host: "localhost",
-              remoteAddress: "127.0.0.1",
-            });
+            const response = await waitFor(
+              "anonymous public read",
+              sendRequest(http, {
+                path: new URL(
+                  expectDefined(
+                    resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
+                    "canonical child URL",
+                  ),
+                ).pathname,
+                host: "localhost",
+                remoteAddress: "127.0.0.1",
+              }),
+            );
             expect(response.res.statusCode, response.getBody()).toBe(200);
             expect(response.getBody()).toContain(
               "X publication composition: durable child answer.",
@@ -870,22 +916,31 @@ describe("X publication production-owner composition", () => {
       }
     } finally {
       channel.inbound.dispatch = originalDispatch;
-      await Promise.allSettled(childRuns);
-      model.mockRestore();
-      http.emit("close");
-      projection.dispose();
-      const children = rows().filter(({ sessionKey }) => sessionKey.includes(":dashboard:"));
-      await Promise.all(
-        children.flatMap(({ sessionKey, entry }) => {
-          const drain = getSessionWorkAdmissionRelease({
-            scope: childStore,
-            identities: [sessionKey, entry.sessionId],
-          });
-          return drain ? [drain] : [];
-        }),
-      );
-      markPluginRegistryRetired(builder.registry);
-      networkCase = undefined;
+      try {
+        await waitFor("child model settlement", Promise.allSettled(childRuns));
+      } finally {
+        model.mockRestore();
+        http.emit("close");
+        projection.dispose();
+        try {
+          const children = rows().filter(({ sessionKey }) => sessionKey.includes(":dashboard:"));
+          await waitFor(
+            "child admission cleanup",
+            Promise.all(
+              children.flatMap(({ sessionKey, entry }) => {
+                const drain = getSessionWorkAdmissionRelease({
+                  scope: childStore,
+                  identities: [sessionKey, entry.sessionId],
+                });
+                return drain ? [drain] : [];
+              }),
+            ),
+          );
+        } finally {
+          markPluginRegistryRetired(builder.registry);
+          networkCase = undefined;
+        }
+      }
     }
   });
 });
