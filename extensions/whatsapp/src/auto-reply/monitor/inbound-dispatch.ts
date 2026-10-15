@@ -39,9 +39,13 @@ import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
+import type {
+  ChannelReplyOnModelSelected,
+  WhatsAppDispatchPipeline,
+  WhatsAppReplyPlan,
+} from "./inbound-dispatch.types.js";
 import type { updateLastRouteInBackground } from "./last-route.js";
 import {
-  createChannelMessageReplyPipeline,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
@@ -58,14 +62,6 @@ import {
   type ReplyPayload,
   type resolveAgentRoute,
 } from "./runtime-api.js";
-
-type ChannelReplyOnModelSelected = NonNullable<
-  ReturnType<typeof createChannelMessageReplyPipeline>["onModelSelected"]
->;
-
-type WhatsAppDispatchPipeline = {
-  responsePrefix?: string;
-} & Record<string, unknown>;
 
 type VisibleReplyTarget = {
   id?: string;
@@ -548,7 +544,7 @@ export function createWhatsAppReplyPlan(params: {
   turnAdoptionLifecycle?: NonNullable<
     NonNullable<ChannelInboundTurnPlan["replyOptions"]>["turnAdoptionLifecycle"]
   >;
-}) {
+}): WhatsAppReplyPlan {
   const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
   const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
