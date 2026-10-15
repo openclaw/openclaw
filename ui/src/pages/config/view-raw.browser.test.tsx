@@ -138,6 +138,24 @@ describe("config raw editing and redaction", () => {
     expect(props.onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
+  it("retains the focused raw editor across equivalent config publications", () => {
+    const { container, props } = renderConfigView({ formMode: "raw" });
+    document.body.append(container);
+    try {
+      const textarea = required(container, ".config-raw-field textarea", HTMLTextAreaElement);
+      textarea.focus();
+      textarea.setSelectionRange(1, 3);
+
+      renderConfigInto({ ...props }, container);
+
+      expect(required(container, ".config-raw-field textarea", HTMLTextAreaElement)).toBe(textarea);
+      expect(document.activeElement).toBe(textarea);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 3]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("pins the raw editor while an unsaved raw draft is authoritative", () => {
     const { container } = renderConfigView({
       formMode: "form",

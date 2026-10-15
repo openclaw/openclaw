@@ -106,7 +106,7 @@ export function tooltipTitleText(item: Locator) {
 
 type HeldModuleContext = {
   closing: boolean;
-  pages: Map<Page, Array<{ close: () => void; installed: ReturnType<Page["route"]> }>>;
+  pages: Map<Page, Array<{ close: () => Promise<void>; installed: ReturnType<Page["route"]> }>>;
 };
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
@@ -129,19 +129,29 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   // Cleanup can cancel an unused hold; callers still receive the original rejection.
   void request.promise.catch(() => {});
   const release = () => gate.resolve();
+  const callbacks = new Set<Promise<void>>();
   let requests = 0;
-  const installed = page.route(module, async (route) => {
-    requests += 1;
-    try {
-      const response = await route.fetch();
-      expect(response.status()).toBe(200);
-      request.resolve(route.request().url());
-      await gate.promise;
-      await route.fulfill({ response });
-    } catch (error) {
-      request.reject(error);
-      throw error;
+  const installed = page.route(module, (route) => {
+    if (held.closing) {
+      return route.fallback();
     }
+    requests += 1;
+    const callback = (async () => {
+      try {
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        request.resolve(route.request().url());
+        await gate.promise;
+        await route.fulfill({ response });
+      } catch (error) {
+        request.reject(error);
+        throw error;
+      }
+    })();
+    callbacks.add(callback);
+    const completed = () => callbacks.delete(callback);
+    void callback.then(completed, completed);
+    return callback;
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
@@ -149,6 +159,8 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
     close: () => {
       release();
       request.reject(new Error("Browser context cleanup canceled the held module request"));
+      // unrouteAll(wait) can auto-continue a sibling before its held fetch completes.
+      return settleControlUiCleanup([...callbacks]);
     },
     installed,
   });
@@ -313,10 +325,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             }
           },
           async () => {
-            for (const registration of registrations) {
-              registration.close();
-            }
-            // Release all gates before joining active page/context callbacks.
+            // Release every gate before joining callbacks, then remove interception.
+            await settleControlUiCleanup(registrations.map(({ close }) => close()));
             await settleControlUiCleanup(registrations.map(({ installed }) => installed));
           },
           () =>

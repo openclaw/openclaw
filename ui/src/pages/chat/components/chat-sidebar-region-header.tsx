@@ -100,7 +100,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
         id: type.slot,
         label: type.label,
         class: "side-panel-type-menu__item session-menu__item",
-        attributes: { value: type.slot },
         content: <PanelTypeOption type={type} />,
       })),
   );
