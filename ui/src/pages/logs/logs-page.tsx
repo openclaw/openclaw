@@ -101,7 +101,9 @@ export function LogsPage() {
     },
     ensureInitialData: (change) => {
       const quiet = !change.identityChanged && untrack(status).hasLoaded;
-      void loadLogs({ reset: true, quiet }).then((current) => {
+      // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
+      // file read and redaction pass per reconnect.
+      void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
         if (current && !quiet) {
           setForceFollow((revision) => revision + 1);
         }
