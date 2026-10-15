@@ -15,23 +15,17 @@ type DiagnosticEventListenerPresence = {
   trustedCount: number;
 };
 
-function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
-  const state = resolveGlobalSingleton<DiagnosticEventListenerPresence>(
-    DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
-    () => ({
-      broadInterestCount: 0,
-      eventInterestDeltas: new Map(),
-      interestListeners: new Map(),
-      marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
-      internalCount: 0,
-      trustedCount: 0,
-    }),
-  );
-  state.broadInterestCount ??= 0;
-  state.eventInterestDeltas ??= new Map();
-  state.interestListeners ??= new Map();
-  return state;
-}
+const listenerPresence = resolveGlobalSingleton<DiagnosticEventListenerPresence>(
+  DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
+  () => ({
+    broadInterestCount: 0,
+    eventInterestDeltas: new Map(),
+    interestListeners: new Map(),
+    marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
+    internalCount: 0,
+    trustedCount: 0,
+  }),
+);
 
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];
@@ -69,7 +63,7 @@ export function updateInternalDiagnosticEventInterest(
   interest: InternalDiagnosticEventInterest | undefined,
   delta: 1 | -1,
 ): void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   const previouslyUninterested = [...state.interestListeners].filter(
     ([type]) => !hasInternalDiagnosticEventInterest(type),
   );
@@ -91,7 +85,7 @@ export function updateInternalDiagnosticEventInterest(
 }
 
 export function onInternalDiagnosticEventInterest(type: string, listener: () => void): () => void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   const listeners = state.interestListeners.get(type) ?? new Set<() => void>();
   state.interestListeners.set(type, listeners);
   listeners.add(listener);
@@ -103,12 +97,12 @@ export function onInternalDiagnosticEventInterest(type: string, listener: () => 
 }
 
 export function hasInternalDiagnosticEventInterest(type: string): boolean {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   return state.broadInterestCount + (state.eventInterestDeltas.get(type) ?? 0) > 0;
 }
 
 export function resetInternalDiagnosticEventListenerPresence(): void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   state.internalCount = 0;
   state.trustedCount = 0;
   state.broadInterestCount = 0;
@@ -119,12 +113,12 @@ export function setInternalDiagnosticEventListenerCounts(
   internalCount: number,
   trustedCount: number,
 ): void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   state.internalCount = internalCount;
   state.trustedCount = trustedCount;
 }
 
 export function hasInternalDiagnosticEventListeners(): boolean {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   return state.internalCount > 0 || state.trustedCount > 0;
 }

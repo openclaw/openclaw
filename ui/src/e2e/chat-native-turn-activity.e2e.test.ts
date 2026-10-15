@@ -28,7 +28,6 @@ suite.define(() => {
       });
       await expect.poll(() => thread.count()).toBe(0);
       await expect.poll(() => composer.textContent()).toBe("");
-      await expect.poll(() => sidebar.count()).toBeGreaterThan(0);
       await source.request;
       const idleFavicon = await favicon.getAttribute("href");
       expect(idleFavicon).toMatch(/^\/favicon\.svg(?:\?|$)/u);
@@ -39,24 +38,19 @@ suite.define(() => {
           .getPropertyValue(root.dataset.themeMode === "light" ? "--info" : "--accent")
           .trim();
       });
-      // Roster activity does not establish asynchronous favicon composition readiness.
-      await expect
-        .poll(() =>
-          favicon.evaluate((icon) => {
-            const href = icon.getAttribute("href");
-            const prefix = "data:image/svg+xml,";
-            if (!href?.startsWith(prefix)) {
-              return null;
-            }
-            const svg = new DOMParser().parseFromString(
-              decodeURIComponent(href.slice(prefix.length)),
-              "image/svg+xml",
-            );
-            return svg.documentElement.lastElementChild?.getAttribute("fill");
-          }),
-        )
-        .toBe(workingColor);
+      await expect.poll(() => sidebar.count()).toBeGreaterThan(0);
+      await expect.poll(() => favicon.getAttribute("href")).toMatch(/^data:image\/svg\+xml,/);
       const activeFavicon = await favicon.getAttribute("href");
+      expect(
+        await favicon.evaluate((icon) => {
+          const href = icon.getAttribute("href")!;
+          const svg = new DOMParser().parseFromString(
+            decodeURIComponent(href.slice(href.indexOf(",") + 1)),
+            "image/svg+xml",
+          );
+          return svg.documentElement.lastElementChild?.getAttribute("fill");
+        }),
+      ).toBe(workingColor);
       await emit(
         2,
         "item",
