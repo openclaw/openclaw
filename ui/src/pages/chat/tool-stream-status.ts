@@ -369,6 +369,14 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (
+    payload.stream === "lifecycle" &&
+    payload.data.phase === "start" &&
+    host.chatRunStartup?.state === "status" &&
+    host.chatRunStartup.phase === "finishing"
+  ) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+  }
   if (payload.stream === "lifecycle" && payload.data.phase === "finishing") {
     reconcileChatRunStartup(host, {
       state: "status",

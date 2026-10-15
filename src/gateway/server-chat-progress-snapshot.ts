@@ -189,7 +189,14 @@ export function updateChatRunProgressSnapshot(
         candidate.data.reviewId === data.reviewId,
     );
   const isSummaryProgress =
-    isTool || isItem || isUsage || isRetryStatus || isFallbackStatus || isFinishing || isAssistant || isNotice;
+    isTool ||
+    isItem ||
+    isUsage ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isAssistant ||
+    isNotice;
   if (
     !isSummaryProgress &&
     (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))

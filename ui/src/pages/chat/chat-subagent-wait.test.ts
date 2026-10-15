@@ -531,9 +531,13 @@ describe("chat waiting on subagents", () => {
       const draw = mountWorkingIndicator(container, part, options);
       expect(container.textContent).toContain("Working…");
       expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+      const subagentActivity = renderSubagentActivity(projection.activity, onOpenSubagent);
+      if (typeof subagentActivity === "symbol") {
+        throw new Error("Expected running child activity");
+      }
       draw({
         ...options,
-        subagentActivity: renderSubagentActivity(projection.activity, onOpenSubagent),
+        subagentActivity,
       });
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");

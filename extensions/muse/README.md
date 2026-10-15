@@ -23,6 +23,10 @@ streams assistant and tool activity through the Gateway. Once the answer is save
 and Muse starts its post-answer reminder work, the chat activity indicator stops.
 The run remains active until Muse reports turn completion, so Stop and queued
 messages keep their normal behavior during background finalization.
+Native tool starts restore visible activity, including when they follow assistant
+text. `finishing` settles an attempt rather than the logical run: newer retry,
+fallback, or foreground activity restores the indicator, while older replayed
+events cannot replace the newer state.
 
 ## Package
 

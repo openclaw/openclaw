@@ -127,8 +127,18 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             <openclaw-chat-retry-status prop:retryAt={props.options.retryAt} />
           </Show>
         </span>
+        <Show
+          when={props.options.outputTokens !== null && props.options.outputTokens !== undefined}
+        >
+          <Show when={!working() || continuation() || indicator() === "none"}>
+            <span aria-hidden="true">·</span>
+          </Show>
+          <span class="chat-working-indicator__tokens">
+            {outputTokensLabel(props.options.outputTokens!)}
+          </span>
+        </Show>
         <Show when={!waitingApproval()}>
-          <Show when={props.options.startupLabel}>
+          <Show when={props.options.startupLabel || props.options.outputTokens != null}>
             <span aria-hidden="true">·</span>
           </Show>
           <openclaw-elapsed-time
@@ -136,23 +146,13 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
             prop:startMs={props.part.startedAt}
           />
         </Show>
-        <Show
-          when={props.options.outputTokens !== null && props.options.outputTokens !== undefined}
-          fallback={
-            <Show when={working()}>
-              <openclaw-working-phrase
-                aria-hidden="true"
-                prop:startMs={props.part.startedAt}
-                prop:seed={props.part.key}
-                prop:phrases={props.options.workingPhrases}
-              />
-            </Show>
-          }
-        >
-          <span aria-hidden="true">·</span>
-          <span class="chat-working-indicator__tokens">
-            {outputTokensLabel(props.options.outputTokens!)}
-          </span>
+        <Show when={props.options.outputTokens == null && working()}>
+          <openclaw-working-phrase
+            aria-hidden="true"
+            prop:startMs={props.part.startedAt}
+            prop:seed={props.part.key}
+            prop:phrases={props.options.workingPhrases}
+          />
         </Show>
         <Show when={runningSubagents() > 0}>
           <span aria-hidden="true">·</span>
@@ -239,13 +239,13 @@ export function TurnRecapRow(props: {
           <BrandGlyph branding={branding.read()} claw="claw" />
         </span>
       </Show>
-      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
       <Show when={typeof props.recap.outputTokens === "number"}>
+        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
         <span class="chat-turn-recap__sep" aria-hidden="true">
           ·
         </span>
-        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
       </Show>
+      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
     </div>
   );
 }

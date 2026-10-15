@@ -37,7 +37,12 @@ export function reconcileChatRunStartup(
   }
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
-    if (current.state === "status" && current.phase === "finishing") {
+    // Finishing settles one attempt, not the run. Only newer agent activity can resume it.
+    if (
+      current.state === "status" &&
+      current.phase === "finishing" &&
+      (next.seq === undefined || (current.seq !== undefined && next.seq <= current.seq))
+    ) {
       return;
     }
     if (

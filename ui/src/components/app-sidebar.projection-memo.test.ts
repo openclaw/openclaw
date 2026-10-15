@@ -457,8 +457,33 @@ describe("sidebar projection memo", () => {
       sessionKey: target.key,
       runId: "answer-run",
       seq: 2,
-      stream: "tool",
-      data: { phase: "start", toolCallId: "inspect", name: "read" },
+      stream: "item",
+      data: {
+        kind: "tool",
+        phase: "start",
+        itemId: "inspect",
+        toolCallId: "inspect",
+        name: "read_file",
+        title: "Read file",
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing", error: "retryable" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 4,
+      stream: "run_status",
+      data: { phase: "retrying", message: "Retrying" },
     });
     await settleLitElement(sidebar);
     expect(spinner(target.key)).not.toBeNull();
@@ -470,7 +495,7 @@ describe("sidebar projection memo", () => {
       data: { phase: "finishing" },
     });
     await settleLitElement(sidebar);
-    expect(spinner(target.key)).toBeNull();
+    expect(spinner(target.key)).not.toBeNull();
     expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
   });
 
