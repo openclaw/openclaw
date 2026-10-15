@@ -33,7 +33,6 @@ function removeStaleProxyDirs(parentDir: string): void {
 export async function startGatewaySecretEgressProxy(params: {
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
-  upstreamCaFiles?: readonly string[];
 }): Promise<SecretEgressProxyWorkerHandle> {
   const parentDir = path.join(resolveStateDir(), "secret-egress-proxy");
   fs.mkdirSync(parentDir, { recursive: true, mode: SECRET_EGRESS_PROXY_DIR_MODE });
@@ -46,7 +45,6 @@ export async function startGatewaySecretEgressProxy(params: {
   try {
     proxy = await startSecretEgressProxyWorker({
       caDir: proxyDir,
-      upstreamCaFiles: params.upstreamCaFiles,
       ...(params.allowedHosts !== undefined ? { allowedHosts: params.allowedHosts } : {}),
       ...(params.bypassHosts ? { bypassHosts: params.bypassHosts } : {}),
       onFailure: () => {

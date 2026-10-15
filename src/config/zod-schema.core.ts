@@ -134,10 +134,6 @@ export const SecretsConfigSchema = z
         enabled: z.boolean().optional(),
         allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
         bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
-        upstreamCaFiles: z
-          .array(z.string().min(1).refine(isAbsolutePath, "Expected an absolute CA file path"))
-          .max(16)
-          .optional(),
       })
       .optional(),
     providers: z.object({}).catchall(SecretProviderSchema).optional(),

@@ -15,7 +15,6 @@ import type {
   SecretEgressWorkerReady,
   SecretEgressWorkerReply,
 } from "./proxy-worker.types.js";
-import { SecretEgressUpstreamCaError } from "./upstream-ca.js";
 
 export type SecretEgressProxyWorkerHandle = Awaited<
   ReturnType<typeof startSecretEgressProxyWorker>
@@ -26,7 +25,6 @@ export async function startSecretEgressProxyWorker(params: {
   caDir: string;
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
-  upstreamCaFiles?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
   onFailure?: () => void;
 }) {
@@ -37,7 +35,6 @@ export async function startSecretEgressProxyWorker(params: {
     execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     workerData: {
       caDir: params.caDir,
-      upstreamCaFiles: params.upstreamCaFiles,
       allowedHosts: params.allowedHosts,
       bypassHosts: params.bypassHosts,
       authority,
@@ -56,14 +53,11 @@ export async function startSecretEgressProxyWorker(params: {
   let nextId = 0;
   let failure: Error | undefined;
   let stopping: Promise<void> | undefined;
-  const fail = (cause?: unknown) => {
+  const fail = () => {
     if (failure) {
       return;
     }
-    failure =
-      cause instanceof SecretEgressUpstreamCaError
-        ? cause
-        : new Error("Secret egress proxy Worker is unavailable; restart the Gateway.");
+    failure = new Error("Secret egress proxy Worker is unavailable; restart the Gateway.");
     Atomics.store(authority, 0, 1);
     ready.reject(failure);
     for (const request of pending.values()) {
@@ -85,11 +79,7 @@ export async function startSecretEgressProxyWorker(params: {
     if (message.kind === "ready") {
       ready.resolve(message);
     } else if (message.kind === "fatal") {
-      fail(
-        message.upstreamCaFileIndex === undefined
-          ? undefined
-          : new SecretEgressUpstreamCaError(message.upstreamCaFileIndex),
-      );
+      fail();
     } else if (message.kind === "audit") {
       params.onAudit(message.event);
     } else {

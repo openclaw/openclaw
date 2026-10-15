@@ -342,21 +342,18 @@ For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, 
 
 See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
 
-### Additional upstream CA certificates
+## Private CA trust
 
-`secrets.egressProxy.upstreamCaFiles` accepts up to 16 absolute paths to PEM files
-containing private CA certificates, for example `/etc/openclaw/certs/internal-ca.pem`.
-Each file must contain only CA certificates and whitespace (maximum 1 MiB).
-Unreadable, empty, malformed, or non-CA files prevent proxy startup; no listener
-is published with a partially loaded trust set. Do not provide private keys.
+The Gateway snapshots Node's configured default certificate authorities when the
+secret-egress proxy starts, and preserves bundled public roots. That same trust
+set is used for verified upstream HTTPS and the CA bundle supplied to protected
+subprocesses. Configure private CAs through Node startup settings such as
+`NODE_EXTRA_CA_CERTS=/etc/openclaw/certs/internal-ca.pem`, then restart the Gateway.
+Node reads this file at process startup; changing it in a running command does not
+change the Gateway's trust. Node's normal handling of unreadable or malformed
+extra-CA files applies; the proxy does not add a separate file-admission setting.
 
-These certificates extend, rather than replace, the Gateway proxy's upstream
-trust. TLS chain and hostname verification, destination bindings, traffic
-allowlists, and revocation remain enabled. Trust applies to all intercepted
-upstream destinations, so add only operator-controlled CAs. It is not added to
-subprocess trust bundles and does not affect blind bypass tunnels or standalone
-model-egress jobs. `NODE_EXTRA_CA_CERTS` on the caller is not a substitute.
-Restart the Gateway after changing the paths or certificate contents.
-
-This setting does not change the documented compatibility limits for non-443
-HTTPS destinations.
+Configured CAs may authenticate any permitted upstream, not just one host.
+Certificate-chain and hostname verification, exact-host secret bindings, traffic
+allowlists, and process-grant revocation remain enforced. This does not establish
+support for protected secret substitution on non-443 HTTPS ports.

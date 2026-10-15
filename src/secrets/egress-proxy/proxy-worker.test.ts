@@ -56,12 +56,10 @@ function trackSocket(socket: Socket): void {
   socket.on("error", () => {});
 }
 
-async function startWorker(onFailure = failure, upstreamCaFiles?: readonly string[]) {
+async function startWorker(onFailure = failure) {
   const caDir = dirs.make("openclaw-egress-worker-");
-  if (!upstreamCaFiles) {
-    for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
-      fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
-    }
+  for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
+    fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
   }
   const created = createDeferredCore<Worker>();
   const onWorker = (worker: Worker) => created.resolve(worker);
@@ -70,7 +68,6 @@ async function startWorker(onFailure = failure, upstreamCaFiles?: readonly strin
     const handle = await startSecretEgressProxyWorker({
       caDir,
       allowedHosts: ["localhost"],
-      upstreamCaFiles,
       onAudit: (event) => auditEvents.push(event),
       onFailure,
     });
@@ -184,32 +181,6 @@ afterEach(async () => {
 });
 
 describe("secret egress Worker boundary", () => {
-  it("reports invalid CA configuration across the native Worker boundary", async () => {
-    const onFailure = vi.fn();
-    await expect(
-      startSecretEgressProxyWorker({
-        caDir: dirs.make("openclaw-invalid-worker-ca-"),
-        upstreamCaFiles: [path.join(seedDir, "missing.pem")],
-        onAudit: () => {},
-        onFailure,
-      }),
-    ).rejects.toThrow("secrets.egressProxy.upstreamCaFiles[0]");
-    expect(onFailure).toHaveBeenCalledOnce();
-  });
-
-  it("carries explicit upstream CA files into the native Worker", async () => {
-    const { handle } = await startWorker(failure, [path.join(seedDir, "root-ca.pem")]);
-    const grant = await register(handle);
-    expect(await readResponse(await openRequest(grant, { owner: handle }))).toEqual({
-      status: 200,
-      body: "ok",
-    });
-    expect(observed).toEqual([{ authorization: `Bearer ${secret}`, body: "" }]);
-    expect(fs.readFileSync(handle.caCertPath, "utf8")).not.toBe(
-      fs.readFileSync(path.join(seedDir, "root-ca.pem"), "utf8"),
-    );
-  });
-
   it("keeps a multi-secret job's Basic credentials scoped to its registered grant", async () => {
     const password = sealSecretSentinel("synthetic-worker-password", { label: "WORKER_PASSWORD" });
     const unrelated = sealSecretSentinel("synthetic-unrelated-worker-secret", {
