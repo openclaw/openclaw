@@ -21,6 +21,7 @@ import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
 import { registerNostrAdmissionTests } from "./nostr-bus.admission.test-support.js";
 import { startNostrBus } from "./nostr-bus.js";
+import { registerNostrGatewayAdmissionTests } from "./nostr-gateway.admission.test-support.js";
 import { createNostrRelayFixture, PREFIX_ACK_REASON } from "./nostr-relay.test-harness.js";
 import { getNostrRuntime, setNostrRuntime } from "./runtime.js";
 import {
@@ -372,3 +373,5 @@ describe("Nostr outbound relay failover", () => {
 });
 
 describe("Nostr local admission", registerNostrAdmissionTests);
+
+describe("Nostr Gateway admission", registerNostrGatewayAdmissionTests);
