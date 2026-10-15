@@ -7,7 +7,7 @@ import {
   sameFileContentsSync,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -166,7 +166,7 @@ function copySourceFile(
     try {
       physicalSourcePath = fs.realpathSync.native(sourcePath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (extractErrorCode(error) === "ENOENT") {
         throw new SqliteSourceChangedError(`SQLite source disappeared: ${sourcePath}`, {
           cause: error,
         });
