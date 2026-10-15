@@ -395,7 +395,7 @@ describe("chat pane retained presentation lifecycle", () => {
     ]);
   });
 
-  it("ignores an open dropdown in an inactive retained pane", () => {
+  it("ignores an open shortcut menu in an inactive retained pane", () => {
     const app = document.body.appendChild(document.createElement("openclaw-app"));
     const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
@@ -409,14 +409,16 @@ describe("chat pane retained presentation lifecycle", () => {
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
-    const retainedDropdown = retainedPane.appendChild(
-      document.createElement("wa-dropdown"),
-    ) as HTMLElement & { open: boolean };
-    retainedDropdown.open = true;
+    const retainedMenu = retainedPane.appendChild(document.createElement("div"));
+    retainedMenu.setAttribute("role", "menu");
+    retainedMenu.setAttribute("popover", "manual");
+    const shortcut = retainedMenu.appendChild(document.createElement("button"));
+    shortcut.dataset.shortcut = "4";
+    retainedMenu.showPopover();
 
     try {
       target.dispatchEvent(
-        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+        new KeyboardEvent("keydown", { key: "4", bubbles: true, composed: true }),
       );
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });

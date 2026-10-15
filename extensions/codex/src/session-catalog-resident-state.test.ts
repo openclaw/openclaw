@@ -5,7 +5,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -39,9 +38,7 @@ function catalogState(namespace: string) {
 function createSnapshotFixture(namespace: string, rows: CodexThread[], homeId = namespace) {
   const native = { rows };
   const openState = () => catalogState(namespace);
-  const readNative = vi.fn(async () =>
-    projectCodexCatalogPage({ data: native.rows }, { sanitize: sanitizeTerminalText }),
-  );
+  const readNative = vi.fn(async () => projectCodexCatalogPage({ data: native.rows }));
   const createIndex = (state = openState()) =>
     new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
   return { native, openState, readNative, createIndex };
@@ -61,10 +58,7 @@ describe("resident Codex catalog SQLite durability", () => {
   it("prunes obsolete cached rows in background before native hydration without deleting fresh replacements", async () => {
     const state = catalogState("resident-obsolete-authority-test");
     const native = idleThread({ id: "fresh", source: "cli", preview: "Current native request" });
-    const projected = await projectCodexCatalogPage(
-      { data: [native] },
-      { sanitize: sanitizeTerminalText },
-    );
+    const projected = await projectCodexCatalogPage({ data: [native] });
     const legacy = structuredClone(projected.rows[0]!);
     Reflect.deleteProperty(legacy, "nativeMetadata");
     await state.register("obsolete-cache-key", { version: 1, kind: "row", row: legacy });
@@ -145,8 +139,7 @@ describe("resident Codex catalog SQLite durability", () => {
       homeId: source.sourceHomeId,
       localSessionsRoot: root,
       state: openState(),
-      readNative: async () =>
-        projectCodexCatalogPage({ data: [current] }, { sanitize: sanitizeTerminalText }),
+      readNative: async () => projectCodexCatalogPage({ data: [current] }),
       assertCurrent: () => {},
     });
     try {
@@ -270,10 +263,7 @@ describe("resident Codex catalog SQLite durability", () => {
       if (paused) {
         await nativeAllowed.promise;
       }
-      return projectCodexCatalogPage(
-        { data: structuredClone(native) },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({ data: structuredClone(native) });
     });
     const createIndex = () =>
       new CodexCatalogIndex({
@@ -369,10 +359,7 @@ describe("resident Codex catalog SQLite durability", () => {
       if (offline) {
         await metadata.promise;
       }
-      return projectCodexCatalogPage(
-        { data: [structuredClone(native)] },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({ data: [structuredClone(native)] });
     });
     const createIndex = () =>
       new CodexCatalogIndex({
@@ -446,10 +433,7 @@ describe("resident Codex catalog SQLite durability", () => {
     ];
     const openState = () => catalogState("resident-mutations-test");
     const readNative = vi.fn(async () =>
-      projectCodexCatalogPage(
-        { data: structuredClone(native) },
-        { sanitize: sanitizeTerminalText },
-      ),
+      projectCodexCatalogPage({ data: structuredClone(native) }),
     );
     const createIndex = () =>
       new CodexCatalogIndex({

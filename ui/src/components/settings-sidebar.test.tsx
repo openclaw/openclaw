@@ -47,7 +47,7 @@ const sidebarAgentProps = () => ({
   agentIdentity: {
     get: () => null,
     entries: () => [],
-    ensure: async () => {},
+    ensure: vi.fn(async () => {}),
     invalidate: () => {},
     subscribe: () => () => {},
   },
@@ -674,6 +674,7 @@ describe("Settings agent selector", () => {
       const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
       trigger.click();
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main", "research"]);
       const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
       research.click();
       await waitForSolid(() =>

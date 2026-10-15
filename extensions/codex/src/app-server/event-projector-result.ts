@@ -64,7 +64,6 @@ class CodexProjectionSettlement extends AgentHarnessProjectionSettlement<Embedde
         item.type === "agentMessage" &&
         item.phase !== "commentary" &&
         item.delivery !== "async" &&
-        typeof item.text === "string" &&
         item.text.trim().length > 0,
     );
     return turn?.status === "completed" && answer ? { turn, answer } : undefined;

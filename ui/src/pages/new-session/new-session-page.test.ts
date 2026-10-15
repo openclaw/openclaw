@@ -305,9 +305,8 @@ describe("new session draft route ownership", () => {
     link.href = "#target";
     const menu = append(document.createElement("div"));
     menu.setAttribute("role", "menu");
-    menu.setAttribute("popover", "manual");
+    menu.popover = "manual";
     const menuItem = menu.appendChild(document.createElement("button"));
-    menuItem.type = "button";
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));

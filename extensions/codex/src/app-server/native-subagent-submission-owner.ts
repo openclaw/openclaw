@@ -290,7 +290,7 @@ export class CodexNativeSubagentSubmissionOwner {
     const foreground = state.owners.size > 0;
     const custody: SubmissionCustody = {
       completionCustody: completionCustody?.retain(),
-      receipt: Object.freeze({ ...receipt }),
+      receipt,
       owner,
       release: foreground ? this.dependencies.retain(state, receipt.childThreadId) : () => {},
       recorded: Promise.resolve(),

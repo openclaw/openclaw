@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
@@ -79,13 +78,10 @@ describe("resident Codex catalog", () => {
     const readNative = vi.fn(async (params: CodexThreadListParams) => {
       const offset = Number(params.cursor ?? 0);
       const limit = params.limit ?? 64;
-      return projectCodexCatalogPage(
-        {
-          data: nativeRows.slice(offset, offset + limit),
-          nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
-        },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({
+        data: nativeRows.slice(offset, offset + limit),
+        nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
+      });
     });
     const index = new CodexCatalogIndex({
       homeId: "idle-safety-reconcile",
@@ -136,7 +132,7 @@ describe("resident Codex catalog", () => {
       if (readNative.mock.calls.length > 1) {
         await blocked;
       }
-      return projectCodexCatalogPage({ data: [native] }, { sanitize: sanitizeTerminalText });
+      return projectCodexCatalogPage({ data: [native] });
     });
     const index = new CodexCatalogIndex({
       homeId: "blocked-safety-reconcile",
@@ -167,8 +163,7 @@ describe("resident Codex catalog", () => {
     const index = new CodexCatalogIndex({
       homeId: "native-order",
       assertCurrent: () => {},
-      readNative: async () =>
-        projectCodexCatalogPage({ data: native }, { sanitize: sanitizeTerminalText }),
+      readNative: async () => projectCodexCatalogPage({ data: native }),
     });
     try {
       await index.initialize();
@@ -232,9 +227,7 @@ describe("resident Codex catalog", () => {
     const root = path.join(tempDirs.make("openclaw-resident-currency-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: [existing] }, { sanitize: sanitizeTerminalText }),
-    );
+    const readNative = vi.fn(async () => projectCodexCatalogPage({ data: [existing] }));
     const index = new CodexCatalogIndex({
       homeId: "currency",
       localSessionsRoot: root,
@@ -330,10 +323,7 @@ describe("resident Codex catalog", () => {
     const root = path.join(tempDirs.make("openclaw-catalog-outage-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli" });
     existing.path = await writeCatalogRollout(root, existing);
-    const page = await projectCodexCatalogPage(
-      { data: [existing] },
-      { sanitize: sanitizeTerminalText },
-    );
+    const page = await projectCodexCatalogPage({ data: [existing] });
     const readNative = vi.fn(async () => page);
     const index = new CodexCatalogIndex({
       homeId: "file-scan-outage",

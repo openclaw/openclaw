@@ -15,7 +15,6 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";

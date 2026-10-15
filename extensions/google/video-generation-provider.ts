@@ -358,7 +358,7 @@ async function generateGoogleVideoViaRest(params: {
     body: {
       instances: [{ prompt: params.prompt }],
       parameters: {
-        ...(typeof params.durationSeconds === "number"
+        ...(params.durationSeconds !== undefined
           ? { durationSeconds: params.durationSeconds }
           : {}),
         ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
@@ -474,7 +474,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           image: resolveInputImage(req),
           video: resolveInputVideo(req),
           config: {
-            ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
+            ...(durationSeconds !== undefined ? { durationSeconds } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),
             ...(resolution ? { resolution } : {}),
           },
