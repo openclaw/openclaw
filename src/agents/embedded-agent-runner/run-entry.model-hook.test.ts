@@ -76,6 +76,7 @@ it.each([
     const hook = vi.fn(() => ({
       providerOverride: "fixture",
       modelOverride: "local",
+      thinkingOverride: "xhigh" as const,
       fallbacksOverride: scenario.fallbacksOverride,
     }));
     const registry = createEmptyPluginRegistry();
@@ -115,6 +116,11 @@ it.each([
       behavior: { kind: "maintenance" },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
+        expect(options.resolvedModelSelection?.thinkingOverride).toBe(
+          !scenario.locked && (attempts.length === 0 || scenario.fallbacksOverride !== undefined)
+            ? "xhigh"
+            : undefined,
+        );
         attempts.push({ model, final: options.isFinalFallbackAttempt });
         if (attempts.length === 1) {
           throw new FailoverError("Synthetic local endpoint unavailable", { reason: "timeout" });

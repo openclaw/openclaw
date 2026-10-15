@@ -329,7 +329,12 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           const isFallbackRetry = runOptions.forceFallbackRetry === true || candidateIndex > 0;
           // A hook-supplied chain owns subsequent candidates; legacy hooks may reroute each one.
           const resolvedModelSelection = hookOwnsFallbacks
-            ? { provider, modelId: model, fallbacksOverride: selection.fallbacksOverride }
+            ? {
+                provider,
+                modelId: model,
+                fallbacksOverride: selection.fallbacksOverride,
+                thinkingOverride: hookSelection?.thinkingOverride,
+              }
             : candidateIndex === 0 && options.modelRoutingProvenance.stage === "initial"
               ? hookSelection
               : undefined;

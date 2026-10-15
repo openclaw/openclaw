@@ -1,5 +1,6 @@
 import { resolveOpenAIResponsesRequestContextTokens } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
@@ -92,7 +93,7 @@ export async function resolveHookModelSelection(params: {
 }) {
   const selection: { provider: string; modelId: string } & Pick<
     PluginHookBeforeModelResolveResult,
-    "fallbacksOverride"
+    "fallbacksOverride" | "thinkingOverride"
   > = {
     provider: params.provider,
     modelId: params.modelId,
@@ -135,6 +136,14 @@ export async function resolveHookModelSelection(params: {
     selection.fallbacksOverride = modelResolveOverride.fallbacksOverride;
   }
 
+  const thinkingOverride = normalizeThinkLevel(
+    typeof modelResolveOverride?.thinkingOverride === "string"
+      ? modelResolveOverride.thinkingOverride
+      : undefined,
+  );
+  if (thinkingOverride !== undefined) {
+    selection.thinkingOverride = thinkingOverride;
+  }
   return selection;
 }
 

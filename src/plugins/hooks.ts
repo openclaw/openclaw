@@ -22,6 +22,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { mergeBeforeModelResolveResults } from "./hook-before-model-resolve.js";
 import { readClaimingHookAdmission, type ClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
@@ -1107,12 +1108,7 @@ export function createHookRunner(
 
   return {
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: (acc, next) => ({
-        // Keep the first defined override so higher-priority hooks win, including [].
-        modelOverride: acc?.modelOverride ?? next.modelOverride,
-        providerOverride: acc?.providerOverride ?? next.providerOverride,
-        fallbacksOverride: acc?.fallbacksOverride ?? normalizeHookList(next.fallbacksOverride),
-      }),
+      mergeResults: (acc, next) => mergeBeforeModelResolveResults(acc, next, normalizeHookList),
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,

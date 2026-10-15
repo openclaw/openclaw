@@ -122,6 +122,8 @@ export type AgentRunModelOptions = {
   /** Outer model-fallback owner facts for this admitted attempt. */
   modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   thinkLevel?: ThinkLevel;
+  /** True when this turn explicitly selected or reset its thinking level. */
+  thinkLevelExplicit?: boolean;
   /** Run-scoped selection intent for declared chat-template effort. */
   thinkingExplicit?: boolean;
   fastMode?: FastMode;

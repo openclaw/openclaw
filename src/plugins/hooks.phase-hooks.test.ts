@@ -605,6 +605,7 @@ it.each([
           result: {
             modelOverride: "low-model",
             providerOverride: "low-provider",
+            thinkingOverride: "medium",
             fallbacksOverride: lower,
           },
         },
@@ -620,6 +621,7 @@ it.each([
           result: {
             modelOverride: "high-model",
             providerOverride: "high-provider",
+            thinkingOverride: "xhigh",
             fallbacksOverride: higher,
           },
         },
@@ -630,6 +632,7 @@ it.each([
     ).resolves.toEqual({
       modelOverride: priority ? "high-model" : "low-model",
       providerOverride: priority ? "high-provider" : "low-provider",
+      thinkingOverride: priority ? "xhigh" : "medium",
       fallbacksOverride: expected,
     });
     expect(broken).toHaveBeenCalledOnce();

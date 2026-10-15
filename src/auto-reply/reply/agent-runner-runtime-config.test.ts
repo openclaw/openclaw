@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
-function makeRun(config: OpenClawConfig): FollowupRun["run"] {
+function makeRun(
+  config: OpenClawConfig,
+  thinkLevelOverride?: FollowupRun["run"]["thinkLevelOverride"],
+): FollowupRun["run"] {
   return {
     sessionId: "session-1",
     agentId: "agent-1",
@@ -32,6 +35,7 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
       },
     ],
     thinkLevel: "medium",
+    thinkLevelOverride,
     verboseLevel: "off",
     reasoningLevel: "none",
     execOverrides: {},
@@ -101,4 +105,24 @@ describe("buildEmbeddedRunExecutionParams runtime config", () => {
 
     expect(resolved.toolBindings).toEqual(run.toolBindings);
   });
+
+  it.each([
+    { thinkLevelOverride: undefined, thinkLevelExplicit: false },
+    { thinkLevelOverride: "high" as const, thinkLevelExplicit: true },
+    { thinkLevelOverride: "default" as const, thinkLevelExplicit: true },
+  ])(
+    "carries current-turn thinking authority: $thinkLevelOverride",
+    async ({ thinkLevelOverride, thinkLevelExplicit }) => {
+      const resolved = await buildEmbeddedRunExecutionParams({
+        run: makeRun({}, thinkLevelOverride),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        runId: "run-1",
+        sessionCtx: {},
+        hasRepliedRef: undefined,
+      });
+
+      expect(resolved).toMatchObject({ thinkLevel: "medium", thinkLevelExplicit });
+    },
+  );
 });

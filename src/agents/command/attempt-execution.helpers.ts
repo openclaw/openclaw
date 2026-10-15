@@ -5,6 +5,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -39,11 +40,26 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+export function resolveAttemptRouteParams(params: {
+  modelOverride: string;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
+  resolvedThinkLevel: ThinkLevel | undefined;
+  opts: { thinking?: string; thinkingOnce?: string };
+}) {
+  return {
+    model: params.modelOverride,
+    modelRoutingProvenance: params.modelRoutingProvenance,
+    thinkLevel: params.resolvedThinkLevel,
+    thinkLevelExplicit: Boolean(params.opts.thinking || params.opts.thinkingOnce),
+  };
+}
 
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;

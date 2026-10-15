@@ -33,7 +33,7 @@ export type RunEntryModelResolve = {
 export type ResolvedRunEntryModelSelection = {
   provider: string;
   modelId: string;
-} & Pick<PluginHookBeforeModelResolveResult, "fallbacksOverride">;
+} & Pick<PluginHookBeforeModelResolveResult, "fallbacksOverride" | "thinkingOverride">;
 
 export type RunEntryCandidateOptions = {
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
