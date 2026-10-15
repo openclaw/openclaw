@@ -77,6 +77,11 @@ and worker-owned reads retain their own custody. In-place writes from another pr
 are unsupported while the Gateway owns the database. Credential effects still check
 current published credential authority at the fetch boundary without reading SQL.
 
+Ordinary auth helpers supply a native read-only opener to the auth reader pool.
+The artifact-preserving opener is imported on demand for inspection reads, keeping
+parent-side snapshot orchestration out of ordinary auth loading. Handle admission,
+reuse, and retirement remain owned by the pool.
+
 Generic scoped SQLite reads share at most four process slots, matched by captured
 runtime generation, environment, working directory, and spawn-broker owner.
 Compatible requests serialize on their slot and pass their database identity,
