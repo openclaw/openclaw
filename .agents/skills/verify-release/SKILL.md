@@ -127,16 +127,22 @@ the live tag, workflow, registry, provenance, and image state.
 
 ## Shared live smoke
 
+Read [isolated smoke setup](references/live-smoke.md) before running these
+checks. Preserve the native OS credential environment; isolate OpenClaw with
+its own selectors, not by changing `HOME`. Record API-key and OAuth results
+separately; one does not prove the other.
+
 After the track-specific publication checks pass:
 
 1. Published package smoke:
-   - In `/tmp`, isolated HOME:
+   - In a disposable installation/cache with isolated OpenClaw state:
      `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
    - Run at least one harmless command that touches the published CLI surface,
      for example `plugins --help` or `gateway --help`.
 2. Dev Gateway live model smoke:
-   - Use temp HOME/workspace, not the user's normal state:
-     `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
+   - Use the reference's disposable state/config/workspace and unused port.
+     Run in the foreground, bound to loopback, with `--auth none`; never use
+     `--force` or the user's normal Gateway state.
    - Resolve the launched Gateway's bound port from its startup output or log.
    - For `--auth none`, require unauthenticated
      `GET http://127.0.0.1:<PORT>/healthz` to return HTTP 200 with the exact JSON
@@ -144,8 +150,10 @@ After the track-specific publication checks pass:
    - Reserve `gateway health --json` for intentionally credentialed or
      device-paired smoke, passing the explicit credential required by that
      Gateway.
-   - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
-     prompt, explicit session key, JSON output, and a known-available model.
+   - Run one Gateway-backed agent turn with the selected authentication path,
+     short prompt, explicit session key, JSON output, and a known-available
+     model. Use an inherited API key or an independently owned OAuth fixture
+     as described in the reference; never copy live refresh tokens.
    - If the configured default model fails as unavailable, record that caveat
      and retry with the newest known-good OpenAI model instead of declaring the
      release failed.
