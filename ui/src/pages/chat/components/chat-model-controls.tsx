@@ -225,7 +225,7 @@ function resolveCatalogTriggerStatus(
 
 function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
-  effort?: ChatEffortPickerParams;
+  effort: ChatEffortPickerParams;
 }> {
   return createMemo(() => {
     const catalog = prepareChatModelCatalog(props.modelCatalog);
