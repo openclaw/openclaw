@@ -70,7 +70,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming the V2 or Async replacement; one shared runtime DEP_PLUGIN_SDK warning per plugin and github-publication family per process, including bounded unscoped SDK use",
     ],
     tests: [
-      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "test/type-contracts/gateway-placement-compat.ts",
       "src/state/github-publication.worker.test.ts",
       "src/gateway/github-publication-admission.test.ts",
       "src/gateway/server-methods/users-github.test.ts",
@@ -235,7 +235,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     tests: [
       "src/plugins/compat/registry.test.ts",
       "src/plugin-sdk/reply-runtime.contract.test.ts",
-      "src/plugin-sdk/gateway-session-observer-compat.test.ts",
+      "test/type-contracts/gateway-session-observer-compat.ts",
       "src/plugin-sdk/acp-runtime.test.ts",
       "src/gateway/session-observer.test.ts",
     ],
