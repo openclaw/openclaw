@@ -95,7 +95,9 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         { root: rootB, opts: { run } },
         before,
       );
-      if (!original) throw new Error("missing original observation");
+      if (!original) {
+        throw new Error("missing original observation");
+      }
       mocks.restart.mockResolvedValue("accepted");
       expect(
         await maybeRestartService({
@@ -266,7 +268,9 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         throw new Error("missing original observation");
       }
       const originalPin = original.definition.runtimePin;
-      if (!originalPin) throw new Error("missing migrated pin");
+      if (!originalPin) {
+        throw new Error("missing migrated pin");
+      }
       const originalCommand = structuredClone(serviceState.command!);
       const originalDigest = await fingerprintGatewayServiceDefinition(originalCommand);
       let receipt: ReturnType<typeof currentGatewayServiceRebindReceipt>;

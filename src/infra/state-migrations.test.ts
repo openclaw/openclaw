@@ -54,6 +54,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { acquireStartupMigrationLeaseWithWait } from "./startup-migration-checkpoint.js";
+import { migrateDaemonRuntimePins } from "./state-migrations.daemon-runtime-pins.js";
 import {
   autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
@@ -640,6 +641,7 @@ describe("state migrations", () => {
       cfg.agents = { entries: { main: {} } };
       const databasePath = openOpenClawStateDatabase({ env }).path;
       await closeStateDatabaseForTest();
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
       const draft = path.join(
         stateDir,
         "skill-workshop",

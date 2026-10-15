@@ -10,7 +10,6 @@ import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
-import { withDaemonRuntimePinStore } from "../../daemon/runtime-pin-store.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   createPackageIntegrityReader,
@@ -23,6 +22,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -571,6 +571,9 @@ it.each([
       `,
       );
     }
+    if (original) {
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+    }
     const created = createUpdateRun({ trigger: foreground ? "api" : "cli" }, { env });
     const parentDriver = parentOwns
       ? adoptUpdateRun(created.runId, { env }).origin.driver
@@ -595,14 +598,6 @@ it.each([
     });
     // Original runtime intent belongs to the pre-migration observation. The old
     // parent must not reopen its state DB after the candidate advances the schema.
-    // The synthetic updater owns database custody; seed its completed pin migration locally.
-    if (original) {
-      withDaemonRuntimePinStore(env, true, (db) => {
-        db.prepare("INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'complete', 1)").run(
-          database.path,
-        );
-      });
-    }
     const originalRuntimePin = original
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;

@@ -1,4 +1,3 @@
-// Daemon intent is local even when the selected shared-state engine is remote.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -51,6 +50,16 @@ export function resolveDaemonRuntimePinStorePath(env: NodeJS.ProcessEnv): string
   return path.join(resolveStateDir(env), "control", "services.sqlite");
 }
 
+function createPrivateIfMissing(create: () => void): void {
+  try {
+    create();
+  } catch (error) {
+    if (!(error instanceof FsSafeError && error.code === "already-exists")) {
+      throw error;
+    }
+  }
+}
+
 /** CLI/service one-shots and migration workers use the same local owner. */
 export function withDaemonRuntimePinStore<T>(
   env: NodeJS.ProcessEnv,
@@ -60,12 +69,7 @@ export function withDaemonRuntimePinStore<T>(
   const pathname = resolveDaemonRuntimePinStorePath(env);
   const directory = path.dirname(pathname);
   const parent = fs.lstatSync(directory, { throwIfNoEntry: false });
-  if (
-    parent &&
-    (!parent.isDirectory() ||
-      parent.isSymbolicLink() ||
-      (process.getuid && parent.uid !== process.getuid()))
-  ) {
+  if (parent && (!parent.isDirectory() || (process.getuid && parent.uid !== process.getuid()))) {
     throw new Error("Runtime pin store directory is unsafe.");
   }
   if (!parent && !writable) {
@@ -74,23 +78,11 @@ export function withDaemonRuntimePinStore<T>(
   if (writable) {
     if (!parent) {
       fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      try {
-        createDirectorySync(directory, { private: true });
-      } catch (error) {
-        if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-          throw error;
-        }
-      }
+      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
     }
     applyPrivateModeSync(directory, 0o700);
     if (!fs.existsSync(pathname)) {
-      try {
-        createFileSync(pathname, { private: true }).close();
-      } catch (error) {
-        if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-          throw error;
-        }
-      }
+      createPrivateIfMissing(() => createFileSync(pathname, { private: true }).close());
     }
   }
   const opened = openRootFileSync({

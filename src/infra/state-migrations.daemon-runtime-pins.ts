@@ -39,6 +39,12 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
     releaseLabel: "Daemon runtime pin",
     errorLabel: "Failed migrating daemon runtime pins",
     run: async (lockedEnv) => {
+      const previous = withDaemonRuntimePinStore(lockedEnv, false, (db) =>
+        db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
+      );
+      if (previous?.phase === "complete" && previous.source_state === sourceState) {
+        return { changes: [], warnings: [] };
+      }
       const moved = !fs.existsSync(sourceState)
         ? 0
         : runOpenClawStateWriteTransaction(

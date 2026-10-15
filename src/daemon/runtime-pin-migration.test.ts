@@ -27,6 +27,8 @@ describe("runtime pin migration before service resume", () => {
     "preserves stored intent through $entry (malformed=$malformed)",
     async ({ entry, malformed }) => {
       await withOpenClawTestState({ label: "runtime-pin-resume" }, async (state) => {
+        // Leave the receipt absent while creating private files on the actual host platform.
+        withDaemonRuntimePinStore(state.env, true, () => undefined);
         vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(state.stateDir);
         const env = { ...state.env, OPENCLAW_LAUNCHD_LABEL: "dev.openclaw.migration-fixture" };

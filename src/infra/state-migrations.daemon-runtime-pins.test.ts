@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -68,6 +69,20 @@ function seedSource(rows: DaemonRuntimePinRow[]): void {
 }
 
 describe("daemon runtime pin owner migration", () => {
+  it("does not write shared state after migration completes", async () => {
+    seedSource([]);
+    expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+    closeOpenClawStateDatabaseForTest();
+    using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+      expect(writer.isTransaction).toBe(true);
+    } finally {
+      writer.exec("ROLLBACK");
+    }
+  });
+
   it("records complete custody for fresh installations without creating shared state", async () => {
     expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
     expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(true);

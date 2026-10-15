@@ -32,8 +32,14 @@ type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
 
-const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+const readPin = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -1232,7 +1238,7 @@ describe("finalizeSetupWizard", () => {
   it.each([undefined, "node"] as const)(
     "passes installed pin intent to the reinstall owner (explicit=%s)",
     async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "pin-version", stored: true, pin };
       readPin.mockReturnValue(expected);
       let installed = true;

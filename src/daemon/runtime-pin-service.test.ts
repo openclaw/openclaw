@@ -13,6 +13,7 @@ import {
   readDaemonRuntimePinMigrationPending,
   withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
+import { withDaemonRuntimePinStore } from "./runtime-pin-store.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
   GatewayServiceCommandConfig,
@@ -57,7 +58,6 @@ vi.mock("../infra/gateway-supervision.js", () => ({
   assertGatewayServiceMutationAllowed: vi.fn(),
 }));
 beforeEach(() => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   native.command = null;
   native.loaded.mockReset().mockResolvedValue(true);
   native.runtime.mockReset().mockResolvedValue({ status: "running" });
@@ -83,11 +83,22 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
+const withDarwinRuntimePinState: typeof withOpenClawTestState = (options, run) =>
+  withOpenClawTestState(options, async (state) => {
+    // Create private files on the real host; an empty schema still requires migration.
+    withDaemonRuntimePinStore(state.env, true, () => undefined);
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      return await run(state);
+    } finally {
+      platform.mockRestore();
+    }
+  });
 describe("native service runtime pin persistence", () => {
   it.each(["gateway", "node"] as const)(
     "admits pending migration before %s uninstall",
     async (kind) => {
-      await withOpenClawTestState({ label: "pin-uninstall-migration" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-uninstall-migration" }, async (state) => {
         const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
         expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
         native.uninstall.mockImplementationOnce(async () => {
@@ -102,7 +113,7 @@ describe("native service runtime pin persistence", () => {
   it.each(["before-native-write", "before-persistence"] as const)(
     "rejects a pin changed %s without overwriting the newer intent",
     async (phase) => {
-      await withOpenClawTestState({ label: "pin-native-late-change" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native-late-change" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
@@ -140,7 +151,7 @@ describe("native service runtime pin persistence", () => {
   );
 
   it("keeps pin-unaware default writes read-only for runtime metadata", async () => {
-    await withOpenClawTestState({ label: "pin-native-default" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-default" }, async (state) => {
       const service = resolveGatewayService();
       const args = {
         env: state.env,
@@ -160,7 +171,7 @@ describe("native service runtime pin persistence", () => {
   it.each(["gateway", "node"] as const)(
     "requires explicit %s runtime intent for rewrites and removes the pin on uninstall",
     async (kind) => {
-      await withOpenClawTestState({ label: "pin-native" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native" }, async (state) => {
         const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
         const scope = { kind, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
@@ -211,7 +222,7 @@ describe("native service runtime pin persistence", () => {
     },
   );
   it("does not commit on failed native write or mismatched readback", async () => {
-    await withOpenClawTestState({ label: "pin-native-failure" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-failure" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
       await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
@@ -233,7 +244,7 @@ describe("native service runtime pin persistence", () => {
     });
   });
   it("does not claim an unchanged definition when custody is lost during installed pin readback", async () => {
-    await withOpenClawTestState({ label: "pin-native-custody" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-custody" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
       await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
@@ -274,7 +285,7 @@ describe("native service runtime pin persistence", () => {
     });
   });
   it("refuses a definition changed after planning without writing or clearing prior metadata", async () => {
-    await withOpenClawTestState({ label: "pin-native-drift" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-drift" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
       await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
@@ -293,7 +304,7 @@ describe("native service runtime pin persistence", () => {
     });
   });
   it("serializes concurrent pin plans and refuses the stale writer before native mutation", async () => {
-    await withOpenClawTestState({ label: "pin-native-concurrent" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-concurrent" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
       await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
@@ -315,7 +326,7 @@ describe("native service runtime pin persistence", () => {
   it.each([false, true])(
     "checks an unpinned guarded definition under the native lock (changed=%s)",
     async (changed) => {
-      await withOpenClawTestState({ label: "pin-native-guarded-unpinned" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native-guarded-unpinned" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
@@ -349,7 +360,7 @@ describe("native service runtime pin persistence", () => {
   it.each([false, true])(
     "preserves a stop before the guarded runtime writer acquires its lock (disable=%s)",
     async (disable) => {
-      await withOpenClawTestState({ label: "pin-native-intervening-stop" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native-intervening-stop" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
@@ -393,7 +404,7 @@ describe("native service runtime pin persistence", () => {
   it.each(["stage", "install"] as const)(
     "admits a running service to a guarded %s",
     async (action) => {
-      await withOpenClawTestState({ label: "pin-native-running" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native-running" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
@@ -418,7 +429,7 @@ describe("native service runtime pin persistence", () => {
   it.each(["unknown", "inspection-failed", "disabled"])(
     "refuses a guarded runtime switch when native state is %s",
     async (reason) => {
-      await withOpenClawTestState({ label: "pin-native-unknown-running" }, async (state) => {
+      await withDarwinRuntimePinState({ label: "pin-native-unknown-running" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
         await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
@@ -448,7 +459,7 @@ describe("native service runtime pin persistence", () => {
   );
 
   it("admits a guarded fresh install without requiring an existing running service", async () => {
-    await withOpenClawTestState({ label: "pin-native-fresh" }, async (state) => {
+    await withDarwinRuntimePinState({ label: "pin-native-fresh" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
       await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
