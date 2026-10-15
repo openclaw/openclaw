@@ -1,3 +1,4 @@
+import { html } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
@@ -43,6 +44,29 @@ function findRenderKey(wantSurprise: boolean): string {
 }
 
 describe("ChatWorkingIndicator", () => {
+  it("promotes child activity above supporting totals and restores the standalone glyph", () => {
+    const { container, draw } = mountIndicator(
+      { kind: "reading-indicator", key: "task-first", startedAt: 1 },
+      { outputTokens: 4_100 },
+    );
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    draw({
+      outputTokens: 4_100,
+      subagentActivity: html`<div class="task-first-probe">Backend implementation</div>`,
+    });
+    const task = container.querySelector(".task-first-probe");
+    const status = container.querySelector(".chat-working-indicator");
+    expect(task).not.toBeNull();
+    expect(status?.classList.contains("chat-working-indicator--supporting")).toBe(true);
+    expect(task!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(status?.textContent).toContain("4.1k output tokens");
+    draw({ outputTokens: 4_100 });
+    expect(container.querySelector(".task-first-probe")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator--supporting")).toBeNull();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
+
   it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
     const { container, draw } = mountIndicator(
       { kind: "reading-indicator", key: "brand-test", startedAt: 1 },

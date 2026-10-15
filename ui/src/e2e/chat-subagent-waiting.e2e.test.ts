@@ -263,6 +263,21 @@ suite.define(() => {
           (await indicator.locator(".chat-working-indicator__tokens").textContent())?.trim();
         await reportUsage(runId, 4_100);
         await expect.poll(workingTokens).toBe("4.1k output tokens");
+        if (artifactDir) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [activityRow, indicator],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "working-light-1280.png"), frame.png);
+        }
+        const activityBounds = await activityRow.boundingBox();
+        const statusBounds = await indicator.boundingBox();
+        expect(activityBounds).not.toBeNull();
+        expect(statusBounds).not.toBeNull();
+        expect(activityBounds!.y + activityBounds!.height).toBeLessThanOrEqual(statusBounds!.y);
+        expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
         const yieldCall = {
           role: "assistant",
           content: [

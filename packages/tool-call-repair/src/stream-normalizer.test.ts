@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  normalizePlainTextToolCallStreamEvents,
   projectScrubbedPlainTextToolCallMessage,
   type PlainTextToolCallNameMatcher,
 } from "./stream-normalizer.js";
@@ -644,6 +645,67 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
       },
     );
     expectLiteral(events, text, textContent(text));
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents calls after visible text", () => {
+  const leading = '[tool:read]\n{"path":"a"}\n';
+  const trailing = '[tool:read]\n{"path":"b"}\n';
+
+  it.each<[string, string[], string]>([
+    ["one chunk", [`${leading}Done.\n${trailing}`], "Done.\n"],
+    ["later chunk", [`${leading}Done.\n`, trailing], "Done.\n"],
+    ["split name", [`${leading}Done.\n[tool:re`, 'ad]\n{"path":"b"}\n'], "Done.\n"],
+    ["split marker", [`${leading}Done.\n[to`, 'ol:read]\n{"path":"b"}\n'], "Done.\n"],
+    ["split payload", [`${leading}Done.\n[tool:read]\n{"path":"b`, '"}\n'], "Done.\n"],
+    ["split function", [`${leading}Done.\n<funct`, "ion=read></function>"], "Done.\n"],
+    ["stray closing tag", [`${leading}[/tool]\n${trailing}`], "[/tool]\n"],
+    ["literal fenced call", [leading + fencedExample], fencedExample],
+  ])("keeps streamed and terminal prose consistent: %s", async (_name, chunks, visible) => {
+    const text = chunks.join("");
+    const events = await normalize(
+      [...streamDeltas(...chunks), doneAssistantEvent("stop", textContent(text), "stop")],
+      { protectFences: true },
+    );
+    expect(textDeltas(events).join("")).toBe(visible);
+    expectTerminalContent(events, "done", textContent(visible));
+  });
+
+  it.each(["eof", "done", "error"] as const)(
+    "flushes prose but hides unfinished calls at %s",
+    async (terminal) => {
+      const raw = `${leading}Done.\n[tool:read`;
+      const events = await normalize(withTerminal([streamTextDelta(raw)], terminal, raw));
+      expect(textDeltas(events)).toEqual(["Done.\n"]);
+      expectTerminalContent(events, terminal, textContent("Done.\n"));
+      expect(JSON.stringify(events)).not.toContain("[tool:");
+    },
+  );
+
+  it("releases prose before a later call grows past the payload cap", async () => {
+    const prose = "Done.\n".repeat(45_000);
+    let visible = "";
+    async function* source() {
+      yield streamTextDelta(`${leading}${prose}[tool:read]\n{"path":"`);
+      expect(visible).toBe(prose);
+      yield streamTextDelta(oversized);
+      yield streamTextDelta('"}\nAfter.');
+    }
+    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+      matcher,
+      createPromotedToolCallEvents: () => [],
+      normalizeTerminalMessage: () => undefined,
+    })) {
+      if (
+        event &&
+        typeof event === "object" &&
+        "delta" in event &&
+        typeof event.delta === "string"
+      ) {
+        visible += event.delta;
+      }
+    }
+    expect(visible).toBe(`${prose}After.`);
   });
 });
 
