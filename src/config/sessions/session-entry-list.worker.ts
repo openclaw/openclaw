@@ -8,6 +8,7 @@ import {
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import {
@@ -44,6 +45,27 @@ export function readSessionEntryList(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.pendingInputRecovery) {
+          if (!hasSessionPendingInputsSchema(database.db)) {
+            return [];
+          }
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_pending_inputs as input")
+              .innerJoin("session_nodes as session", (join) =>
+                join
+                  .onRef("session.session_key", "=", "input.session_key")
+                  .onRef("session.current_session_id", "=", "input.session_id"),
+              )
+              .select("input.session_key")
+              .distinct()
+              .where("input.consumed_event_id", "is", null)
+              // Queued inputs without live custody become interrupted in the history owner.
+              .where("input.state", "in", ["queued", "interrupted"]),
+          ).rows.map((row) => row.session_key);
+          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
+        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listSqliteSessionEntriesFromDatabase(

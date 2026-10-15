@@ -18,7 +18,7 @@ export type PostgresSchemaFragment = {
   dependencies: readonly string[];
   activation: "first-use" | "version-additive";
 };
-export type PostgresSchemaDefinition = {
+type PostgresSchemaDefinition = {
   postgres: string;
   postgresFragments?: readonly PostgresSchemaFragment[];
 };

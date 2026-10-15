@@ -378,7 +378,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private intentionallyClosed = false;
   // Native reconnect keeps the already accepted FIFO prefix stable.
   private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
-  private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
   private responseInterrupted = false;
@@ -443,7 +442,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.closeNotified = false;
     this.setupCompleteReceived = false;
     this.sessionConfigured = false;
-    this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     const resumesExistingSession =
@@ -847,10 +845,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     for (const chunk of this.pendingAudio.drain()) {
       this.sendAudio(chunk);
     }
-    if (!this.sessionReadyFired) {
-      this.sessionReadyFired = true;
-      this.config.onReady?.();
-    }
+    this.config.onReady?.();
   }
 
   private handleServerContent(content: LiveServerContent): void {

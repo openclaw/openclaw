@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Dynamic } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -208,30 +208,28 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (
                     <span class="sidebar-online__counts" aria-hidden="true">
                       <For each={["running", "open"] as const}>
-                        {(kind) =>
-                          workload()![kind] > 0 ? (
-                            <>
+                        {(kind) => (
+                          <Show when={workload()![kind] > 0}>
+                            <span
+                              class={`sidebar-online__${kind}`}
+                              data-session-count={kind}
+                              title={t(`presence.sessions.${kind}Count`, {
+                                count: String(workload()![kind]),
+                              })}
+                            >
                               <span
-                                class={`sidebar-online__${kind}`}
-                                data-session-count={kind}
-                                title={t(`presence.sessions.${kind}Count`, {
-                                  count: String(workload()![kind]),
-                                })}
+                                class={
+                                  kind === "running"
+                                    ? "session-run-spinner"
+                                    : "sidebar-online__open-icon"
+                                }
                               >
-                                <span
-                                  class={
-                                    kind === "running"
-                                      ? "session-run-spinner"
-                                      : "sidebar-online__open-icon"
-                                  }
-                                >
-                                  {kind === "running" ? undefined : <Icon name="messageCircle" />}
-                                </span>
-                                <span class="sidebar-online__count">{workload()![kind]}</span>
+                                {kind === "running" ? undefined : <Icon name="messageCircle" />}
                               </span>
-                            </>
-                          ) : undefined
-                        }
+                              <span class="sidebar-online__count">{workload()![kind]}</span>
+                            </span>
+                          </Show>
+                        )}
                       </For>
                     </span>
                   ) : undefined}

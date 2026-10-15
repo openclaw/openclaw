@@ -197,10 +197,6 @@ suite.define(() => {
           };
           for (const index of [0, 1, 2]) {
             await persist(index);
-            // Saved tool rows share a collapsed activity group once both steps arrive.
-            if (reasoningLevel === "on" && index === 1) {
-              await expandRawDetails();
-            }
             await expect.poll(() => reasoning(index).count()).toBe(1);
             expect(await pane.locator(".chat-thinking").count()).toBe(3);
             await expectStepOrder();

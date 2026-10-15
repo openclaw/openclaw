@@ -17,6 +17,7 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   createGatewayRequestMock,
@@ -24,7 +25,7 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
@@ -33,8 +34,8 @@ import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -72,21 +73,23 @@ describe("chat account selection", () => {
     };
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
-    const draw = () =>
+    const draw = () => {
+      const section = renderChatModelAccountControl({
+        owner: state,
+        client: state.client,
+        selection: state.chatAccountSelection,
+        model: "openai/gpt-5.5",
+        disabled: false,
+        ownsSelection: () => current,
+        onSelect,
+        onManage,
+        onRequestUpdate: () => draw(),
+      });
       render(
-        renderChatModelAccountControl({
-          owner: state,
-          client: state.client,
-          selection: state.chatAccountSelection,
-          model: "openai/gpt-5.5",
-          disabled: false,
-          ownsSelection: () => current,
-          onSelect,
-          onManage,
-          onRequestUpdate: () => draw(),
-        })?.render(0),
+        section ? solidContent(ChatModelAccountSectionView, section.viewProps(0)) : undefined,
         container,
       );
+    };
     draw();
     return {
       container,
@@ -331,7 +334,7 @@ describe("chat pane composer controls", () => {
       ).toBe(String(!connected));
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
       const permissionContainer = document.createElement("div");
-      render(solidTemplate(ChatPermissionPicker, controls.permissionPicker), permissionContainer);
+      render(solidContent(ChatPermissionPicker, controls.permissionPicker), permissionContainer);
       expect(
         permissionContainer.querySelector('[data-chat-permission-select="true"]'),
       ).not.toBeNull();
@@ -347,6 +350,11 @@ describe("chat pane composer controls", () => {
 
   it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => {
+      render(undefined, container);
+      container.remove();
+    });
     const selectedSession: GatewaySessionRow = {
       key: "agent:main:permission-test",
       kind: "direct",
@@ -371,17 +379,17 @@ describe("chat pane composer controls", () => {
       agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
-    render(solidTemplate(ChatPermissionPicker, controls.permissionPicker), container);
-    expect(container.querySelector("wa-dropdown-item")).toBeNull();
-    container.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    render(solidContent(ChatPermissionPicker, controls.permissionPicker), container);
     flush();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    trigger.click();
+    const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
+    await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
     const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
     expect(heading?.textContent?.trim()).toBe("Execution permissions");
-    expect(heading?.closest("wa-dropdown-item")).toBeNull();
-    const docsLink = container.querySelector<HTMLElement>(
-      "wa-dropdown > wa-dropdown-item.chat-controls__permission-learn-more",
-    );
+    expect(heading?.closest('[role="menuitem"]')).toBeNull();
+    const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/permission-modes",
@@ -390,8 +398,6 @@ describe("chat pane composer controls", () => {
     const rel = docsLink?.getAttribute("rel")?.split(/\s+/).toSorted();
     expect(rel).toEqual(["noopener", "noreferrer"]);
 
-    const dropdown = container.querySelector<HTMLElement>(".chat-controls__permission-picker");
-    dropdown?.setAttribute("open", "");
     const full = container.querySelector<HTMLElement>('[data-chat-permission-option="full"]');
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
@@ -410,7 +416,7 @@ describe("chat pane composer controls", () => {
     expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
-    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
+    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
     await vi.waitFor(() =>
       expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined(),
     );
@@ -420,8 +426,9 @@ describe("chat pane composer controls", () => {
       expect.objectContaining({ agentId: undefined, expectedSessionId: "permission-test-session" }),
     );
 
-    dropdown?.setAttribute("open", "");
-    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    trigger.click();
+    await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
     await Promise.resolve();
     expect(patch).toHaveBeenLastCalledWith(
       selectedSession.key,

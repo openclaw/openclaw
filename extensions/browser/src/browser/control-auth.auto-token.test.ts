@@ -298,7 +298,6 @@ describe("ensureBrowserControlAuth", () => {
       generatedAuthField: "token",
     });
   });
-
   it("still auto-generates in trusted-proxy mode when only token SecretRef is set", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

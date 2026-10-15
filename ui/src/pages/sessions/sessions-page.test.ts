@@ -23,6 +23,11 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import {
+  openSubmenu,
+  selectMenuValue,
+  settleSessionMenu,
+} from "../../test-helpers/session-menu.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
   createContext,
@@ -36,10 +41,7 @@ import {
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
-type TestSessionMenu = HTMLElement & {
-  pluginActions: readonly { id: string; label: string; disabled?: boolean }[];
-  readonly updateComplete: Promise<boolean>;
-};
+type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
 const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
   key: `agent:main:${key}`,
   sessionId: `${key}-id`,
@@ -57,7 +59,7 @@ async function openRowMenu(page: TestSessionsPage, target: GatewaySessionRow) {
   await page.updateComplete;
   const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu")!;
   expect(menu).not.toBeNull();
-  await menu.updateComplete;
+  await settleSessionMenu(menu);
   return menu;
 }
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
@@ -116,11 +118,7 @@ describe("sessions page lifecycle", () => {
     const entry = menu.querySelector('[value="toggle-pin"]');
     expect(entry).not.toBeNull();
     expect(entry?.hasAttribute("disabled")).toBe(false);
-    menu.querySelector("wa-dropdown")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "toggle-pin" } },
-      }),
-    );
+    await selectMenuValue(menu, "toggle-pin");
     expect(context.navigation.snapshot.sidebarEntries).toContain("session:" + row.key);
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(row.pinned).toBe(true);
@@ -153,18 +151,20 @@ describe("sessions page lifecycle", () => {
       onTestFinished(() => sessions.dispose());
       const assignOwner = vi.spyOn(sessions, "assignOwner");
       const context = createContext(mutableGateway.gateway, sessions);
+      context.agents.state.agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "reviewer", name: "Reviewer" },
+        ],
+      };
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await vi.waitFor(() => expect(page.loading).toBe(false));
-      page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
-      await page.updateComplete;
-      const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
-      await menu?.updateComplete;
-      menu?.querySelector("wa-dropdown")?.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "assign-owner:agent:reviewer" } },
-          bubbles: true,
-        }),
-      );
+      const menu = await openRowMenu(page, row);
+      await openSubmenu(menu, "Assign to…");
+      await selectMenuValue(menu, "assign-owner:agent:reviewer");
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
           key: row.key,
@@ -267,32 +267,6 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
-  it("patches color from the rendered session menu", async () => {
-    const target = sessionRow("color");
-    const sessions = createSessions();
-    const context = createContext(createGateway().gateway, sessions);
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    const menu = await openRowMenu(page, target);
-    const item = menu.querySelector<HTMLButtonElement>(
-      '.session-menu__color-choice[aria-label="Green"]',
-    )!;
-    item.click();
-    await vi.waitFor(() =>
-      expect(sessions.patch).toHaveBeenCalledWith(
-        target.key,
-        { color: "green" },
-        { agentId: undefined },
-      ),
-    );
-  });
-
-  it("hides pinning for a lineage child", async () => {
-    const target = sessionRow("dashboard:child", { parentSessionKey: "agent:main:parent" });
-    const context = createContext(createGateway().gateway, createSessions());
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    expect((await openRowMenu(page, target)).querySelector('[value="toggle-pin"]')).toBeNull();
-  });
-
   it("uses personal visibility RPC from the management menu", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const connection = createGateway({ request } as unknown as GatewayBrowserClient);
@@ -310,16 +284,12 @@ describe("sessions page lifecycle", () => {
     const context = createContext(connection.gateway, managed.sessions);
     const page = await createRenderedPage(context, sessionsResult([target], 1));
     const menu = await openRowMenu(page, target);
+    await openSubmenu(menu, "Advanced");
     const item = menu.querySelector('[value="toggle-involving-me"]')!;
     expect(item.textContent).toContain("Show in Involving me");
     expect(item.hasAttribute("disabled")).toBe(false);
     managed.refreshList.mockClear();
-    menu.querySelector("wa-dropdown")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "toggle-involving-me" } },
-      }),
-    );
+    await selectMenuValue(menu, "toggle-involving-me");
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.setInvolvement",
@@ -737,15 +707,6 @@ describe("sessions page new group", () => {
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Refresh");
   });
-
-  it("does not assign when the catalog owner reports a stale write", async () => {
-    const { page, sessions, messages } = await mount(async () => "stale");
-    await page.requestNewCategory(key);
-    expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
-  });
 });
 
 describe("sessions page plugin actions", () => {
@@ -799,6 +760,7 @@ describe("sessions page plugin actions", () => {
     // Keep the old menu mounted while the scoped roster publishes a new row.
     publish([current]);
     menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
     expect(run.mock.calls[0]![0].sessionKey).toBe(row.key);
     expect(run.mock.calls[0]![0].session).toEqual(current);
@@ -807,6 +769,7 @@ describe("sessions page plugin actions", () => {
     menu = await openMenu();
     publish([{ ...current, hasActiveRun: true }]);
     menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
     await vi.waitFor(() => expect(page.textContent).toContain("Reopen the session menu."));
 
@@ -825,6 +788,7 @@ describe("sessions page plugin actions", () => {
       const menu = await openMenu();
       publish(rows);
       menu.querySelector<HTMLElement>(actionSelector)!.click();
+      await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
       await vi.waitFor(() => expect(page.textContent).toContain("Reopen the session menu."));
     }

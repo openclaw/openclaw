@@ -37,7 +37,6 @@ export async function runProviderPluginAuthMethodUnpersisted(
     assertCurrent,
     env: params.env,
     agentDir: params.agentDir,
-    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,

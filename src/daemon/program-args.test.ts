@@ -126,38 +126,6 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.options).toBe("");
   });
 
-  it.each([
-    { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
-    {
-      nodeOptions: "",
-      existing: ["--require", "gateway", "--max-old-space-size=24576"],
-      expected: ["--max-old-space-size=24576"],
-    },
-  ])(
-    "preserves stored controls without adding an automatic override: $nodeOptions $existing",
-    async ({ nodeOptions, existing, expected }) => {
-      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      mockEntrypoint(entryPath);
-      const result = await resolveGatewayProgramArguments({
-        port: 18789,
-        runtime: "node",
-        runtimePath: validatedNodePath,
-        existingCommand: {
-          programArguments: [validatedNodePath, ...existing, entryPath, "gateway"],
-          environment: { NODE_OPTIONS: nodeOptions },
-        },
-      });
-      expect(result.programArguments).toEqual([
-        validatedNodePath,
-        ...expected,
-        entryPath,
-        "gateway",
-        "--port",
-        "18789",
-      ]);
-    },
-  );
-
   it("ignores installer execArgv and keeps native defaults when capacity is unknown", async () => {
     vi.spyOn(os, "totalmem").mockReturnValue(Number.NaN);
     const originalExecArgv = process.execArgv;

@@ -19,6 +19,7 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -54,6 +55,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { WizardCancelledError } from "../wizard/prompts.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import { fixture, modelRef, tempDirs } from "./setup-inference-activate.test-support.js";
 import {
@@ -363,13 +365,39 @@ it("activates and restores setup credentials off-thread while preserving later n
 });
 
 it.each([
-  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: undefined },
-  { selectedModel: "meta/muse-spark-1.2", modelName: "Muse Spark 1.2", selectModel: undefined },
-  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: true },
-  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: false },
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: undefined,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.2",
+    modelName: "Muse Spark 1.2",
+    selectModel: undefined,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: true,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: false,
+    outcome: "success",
+  },
+  ...["cancel", "authority", "verification"].map((outcome) => ({
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: undefined,
+    outcome,
+  })),
 ])(
-  "activates the Muse route for main (model: $selectedModel, selectModel: $selectModel)",
-  async ({ selectedModel, modelName, selectModel }) => {
+  "sets up the Muse route for main (model: $selectedModel, selectModel: $selectModel, $outcome)",
+  async ({ selectedModel, modelName, selectModel, outcome }) => {
     const setup = await fixture({ codex: true, primaryModel: modelRef });
     const starter = "meta/muse-spark-1.3";
     const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
@@ -395,6 +423,12 @@ it.each([
         ...setup.config.models,
         providers: {
           ...setup.config.models?.providers,
+          openai: {
+            ...setup.config.models?.providers?.openai,
+            baseUrl: "https://provider.example/v1",
+            models: setup.config.models?.providers?.openai?.models ?? [],
+            apiKey: "synthetic-working-primary-key",
+          },
           meta: {
             baseUrl: "https://api.meta.ai/v1",
             models: [],
@@ -428,7 +462,6 @@ it.each([
             profiles: [],
             defaultModel: starter,
             agentRuntimeId: "muse",
-            nativeRuntimeConsent: ["muse"],
           }),
         },
       ],
@@ -443,7 +476,10 @@ it.each([
         pluginRecord("openai"),
       ],
     });
-    const verifySetup = vi.fn(async () => {});
+    const phases: string[] = [];
+    const verifySetup = vi.fn(async () => {
+      phases.push("verify");
+    });
     setup.pluginRegistry.agentHarnesses.push({
       pluginId: "muse",
       source: "test",
@@ -451,6 +487,7 @@ it.each([
         id: "muse",
         label: "Muse Code",
         authBootstrap: "harness",
+        executionEnvironment: "host-only",
         supports: () => ({ supported: true }),
         verifySetup,
         runAttempt: async () => {
@@ -466,6 +503,7 @@ it.each([
     installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
       expect(entry.pluginId).toBe("muse");
       await beforePersistentEffect?.();
+      phases.push("install");
       return {
         installed: true,
         status: "installed",
@@ -480,6 +518,50 @@ it.each([
         },
       };
     });
+    let authorized = true;
+    const activateCandidate = () =>
+      setup.runWithMetadata(() =>
+        activateSetupInference({
+          kind: "provider-auth",
+          authChoice: "muse-code",
+          agentId: "main",
+          modelRef: selectedModel,
+          ...(selectModel === undefined ? {} : { selectModel }),
+          nativeSessionCatalogsEnabled: false,
+          surface: "gateway",
+          runtime: createNonExitingRuntime(),
+          prompter: setup.prompter,
+          onActivationStarted: () => phases.push("activate"),
+          deps: setup.deps,
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("setup authority revoked");
+            }
+          },
+        }),
+      );
+    if (outcome !== "success") {
+      if (outcome === "cancel") {
+        vi.mocked(setup.prompter.select).mockRejectedValueOnce(new WizardCancelledError());
+        await expect(activateCandidate()).rejects.toThrow(WizardCancelledError);
+      } else if (outcome === "authority") {
+        vi.mocked(setup.prompter.select).mockImplementationOnce(async () => {
+          authorized = false;
+          return "continue";
+        });
+        await expect(activateCandidate()).rejects.toThrow("setup authority revoked");
+      } else {
+        verifySetup.mockRejectedValueOnce(new Error("native verification refused"));
+        expect(await activateCandidate()).toMatchObject({ ok: false });
+      }
+      const unchanged = (await readConfigFileSnapshot()).sourceConfig;
+      expect(unchanged.agents).toEqual(config.agents);
+      expect(unchanged.plugins).toEqual(config.plugins);
+      if (outcome !== "verification") {
+        expect(verifySetup).not.toHaveBeenCalled();
+      }
+      return;
+    }
     if (selectModel === false) {
       vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
         choice,
@@ -549,6 +631,16 @@ it.each([
           tracker.wizardSessions.get(params.sessionId),
           "login session",
         );
+        let consent = await session.next();
+        while (consent.step?.type === "progress") {
+          consent = await session.next();
+        }
+        expect(consent.step).toMatchObject({
+          type: "select",
+          message: expect.stringContaining("Use Muse Code’s native permissions?"),
+        });
+        expect(verifySetup).not.toHaveBeenCalled();
+        await session.answer(expectDefined(consent.step, "consent step").id, "continue");
         await whenAdmittedWizardSessionSettled(session);
         expect(session.getStatus(), session.getError()).toBe("done");
         await expect(session.next()).resolves.toMatchObject({
@@ -561,21 +653,14 @@ it.each([
         resetConfigRuntimeState();
       }
     } else {
-      const result = await setup.runWithMetadata(() =>
-        activateSetupInference({
-          kind: "provider-auth",
-          authChoice: "muse-code",
-          agentId: "main",
-          modelRef: selectedModel,
-          ...(selectModel === undefined ? {} : { selectModel }),
-          nativeSessionCatalogsEnabled: false,
-          surface: "gateway",
-          runtime: createNonExitingRuntime(),
-          prompter: setup.prompter,
-          deps: setup.deps,
-        }),
-      );
+      const result = await activateCandidate();
       expect(result).toMatchObject({ ok: true, modelRef: selectedModel, modelName });
+    }
+    if (selectModel !== false) {
+      expect(phases.indexOf("activate")).toBeLessThan(phases.indexOf("install"));
+      const verification = phases.indexOf("verify");
+      expect(verification).toBeGreaterThan(phases.indexOf("install"));
+      expect(phases.indexOf("activate", verification + 1)).toBeGreaterThan(verification);
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
     expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
@@ -603,6 +688,7 @@ it.each([
     expect(verifySetup).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
     );
+    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(setup.run).not.toHaveBeenCalled();
   },
 );

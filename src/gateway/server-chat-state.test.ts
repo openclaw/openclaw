@@ -252,6 +252,38 @@ describe("createChatRunState", () => {
     },
   );
 
+  it.each(["full", "summary"] as const)("retains answer finalization for %s reconnects", (mode) => {
+    const state = createChatRunState();
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 1,
+        ts: 1,
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { stream: "lifecycle", data: { phase: "finishing" } },
+    ]);
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 2,
+        ts: 2,
+        stream: "assistant",
+        data: { text: "More output" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { seq: 2, stream: "assistant" },
+    ]);
+  });
+
   it.each(["full", "summary"] as const)(
     "replays the current fallback transition until resumed %s activity",
     (mode) => {

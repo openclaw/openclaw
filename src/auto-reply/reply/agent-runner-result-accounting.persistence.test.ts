@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -276,36 +275,6 @@ it("keeps incognito accounting and final custody on the retained memory owner", 
   }
 });
 
-it("publishes a prepared final only after its worker completion commits without host transactions", async () => {
-  const fixture = await createFixture();
-  const payload = { text: "durable final" };
-  fixture.context.execution.result.payloads = [payload];
-  const sql = observeHostDataSql();
-  try {
-    const result = await finalizeReplyAgentRun(fixture.context);
-    expect(result).toMatchObject({ text: "durable final" });
-    expect(
-      sql.queries.filter((query) =>
-        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
-      ),
-    ).toEqual([]);
-    const final = Array.isArray(result) ? result[0] : result;
-    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
-    expect(completion).toMatchObject({
-      sessionId: fixture.sessionId,
-      sessionKey: fixture.context.sessionKey,
-      storePath,
-    });
-    expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
-      intentId: completion?.intentId,
-      deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
-      text: "durable final",
-    });
-  } finally {
-    sql.restore();
-  }
-});
-
 it("completes against the settled writer when the caller still has its pre-run entry", async () => {
   const fixture = await createFixture();
   fixture.context.execution.sessionWriter = {
@@ -364,6 +333,15 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       },
     });
     await controller.admitUserTurn();
+    const settled = {
+      ...fixture.read()!,
+      status: "done" as const,
+      endedAt: 1_000,
+      updatedAt: 1_000,
+    };
+    await fixture.replace(settled);
+    context.activeSessionEntry = settled;
+    context.activeSessionStore![sessionKey] = settled;
     context.prepareRestartClaimCleanup = controller.prepareCompletionCleanup;
     context.execution.result.meta.agentMeta = {
       sessionId,
@@ -398,6 +376,9 @@ it.each(["success", "publication-failure", "rollback"] as const)(
         expect(fixture.read()).toEqual(before);
       } else {
         expect(fixture.read()).toMatchObject({
+          status: "done",
+          endedAt: 1_000,
+          updatedAt: 1_000,
           inputTokens: 120,
           outputTokens: 8,
           pendingFinalDelivery: { text: "done", deliveries: [{ state: "prepared" }] },
@@ -411,6 +392,22 @@ it.each(["success", "publication-failure", "rollback"] as const)(
         expect(observer.commands).toHaveLength(commandsBeforeCleanup);
       }
       expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+      if (outcome === "success") {
+        context.replyOperation.complete();
+        await actor.release();
+        await disposeOpenClawAgentDatabaseByPath(storePath);
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        expect(fixture.read()).toMatchObject({
+          status: "done",
+          endedAt: 1_000,
+          updatedAt: 1_000,
+          inputTokens: 120,
+          outputTokens: 8,
+          restartRecoveryTerminalRunIds: ["source-turn"],
+          pendingFinalDelivery: { text: "done" },
+        });
+        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+      }
     } finally {
       observer.restore();
     }

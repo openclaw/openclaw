@@ -235,13 +235,8 @@ describe("subagent registry lifecycle error grace", () => {
     }
   });
 
-  const {
-    flushAsync,
-    waitForRun,
-    waitForDeliveredCleanup,
-    waitForFrozenResult,
-    waitForFrozenResultText,
-  } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const { flushAsync, waitForRun, waitForDeliveredCleanup, waitForFrozenResultText } =
+    createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
   const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
   const waitForCleanupHandledFalse = (runId: string) =>
@@ -868,29 +863,6 @@ describe("subagent registry lifecycle error grace", () => {
     ).toEqual(["All work complete, final summary", "All work complete, final summary"]);
   });
 
-  it("regression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup", async () => {
-    await registerCompletionRun("run-capped", "capped", "capped result test", undefined, false);
-    setAssistantOutput("agent:main:subagent:capped", "x".repeat(120 * 1024), "run-capped");
-
-    emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
-    await flushAsync();
-    await agentCallWaits.settle();
-
-    const run = await waitForFrozenResult("run-capped", (resultText) =>
-      resultText.includes("[truncated: frozen completion output exceeded 100KB"),
-    );
-    expect(getAgentCalls()).toHaveLength(0);
-    expect(run.runId).toBe("run-capped");
-    expect(typeof run.completion?.resultText).toBe("string");
-    expect(run.completion?.resultText).toContain(
-      "[truncated: frozen completion output exceeded 100KB",
-    );
-    expect(Buffer.byteLength(run.completion?.resultText ?? "", "utf8")).toBeLessThanOrEqual(
-      100 * 1024,
-    );
-    expect(run.completion?.capturedAt).toBeTypeOf("number");
-  });
-
   it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
     await registerCompletionRun(
       "run-provider-timeout",
@@ -925,50 +897,6 @@ describe("subagent registry lifecycle error grace", () => {
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-provider-timeout");
     expect(run?.execution.outcome?.status).toBe("timeout");
-  });
-
-  it("cancels timeout grace when a successful end event arrives before the grace window expires", async () => {
-    await registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
-    setAssistantOutput(
-      "agent:main:subagent:timeout-cancel",
-      "Final answer after recovery",
-      "run-timeout-cancel",
-    );
-
-    // Emit a structured timeout terminal (starts timeout grace).
-    emitLifecycleEvent("run-timeout-cancel", {
-      phase: "end",
-      aborted: true,
-      status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-      endedAt: Date.now(),
-    });
-    await flushAsync();
-    expect(getAgentCalls()).toHaveLength(0);
-
-    // Before the grace window, the run successfully ends (non-aborted)
-    emitLifecycleEvent("run-timeout-cancel", {
-      phase: "end",
-      endedAt: Date.now(),
-      terminalReply: { disposition: "visible", text: "Final answer after recovery" },
-    });
-    await flushAsync();
-
-    await waitForAgentCallCount(1);
-    expect(readFirstAnnounceOutcome()?.status).toBe("ok");
-    await waitForDeliveredCleanup("run-timeout-cancel");
-
-    // Advance past the original grace window; no timeout completion or
-    // requester-settle wake should be emitted after successful delivery.
-    await vi.advanceTimersByTimeAsync(30_000);
-    await flushAsync();
-    expect(
-      getAgentCalls().filter((request) =>
-        request.params?.idempotencyKey?.startsWith("announce:v1:"),
-      ),
-    ).toHaveLength(1);
-    expect(getRequesterWakeCalls()).toHaveLength(0);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

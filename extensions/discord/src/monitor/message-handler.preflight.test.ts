@@ -6,7 +6,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as discordMessagesApi from "../internal/api.messages.js";
 import { ChannelType, MessageType } from "../internal/discord.js";
-import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
@@ -1171,7 +1170,7 @@ describe("preflightDiscordMessage", () => {
     },
   );
 
-  it("handles partial thread channel owner getters during mention preflight", async () => {
+  it("uses fetched thread metadata during mention preflight", async () => {
     const threadId = "thread-partial-owner";
     const parentId = "parent-partial-owner";
     const message = createDiscordMessage({
@@ -1180,21 +1179,6 @@ describe("preflightDiscordMessage", () => {
       content: "thread hello",
       author: HUMAN,
     });
-    Object.defineProperty(message, "channel", {
-      value: createPartialDiscordChannelWithThrowingGetters(
-        {
-          id: threadId,
-          isThread: () => true,
-          ownerId: "owner-1",
-          parentId,
-          parent: { id: parentId, name: "general" },
-        },
-        ["ownerId", "parentId", "parent"],
-      ),
-      configurable: true,
-      enumerable: true,
-    });
-
     const result = await runGuildPreflight({
       client: createThreadClient({
         threadId,

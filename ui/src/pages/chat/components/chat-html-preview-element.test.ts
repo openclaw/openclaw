@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
-import { ContextProvider } from "@lit/context";
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
 import "./chat-html-preview-element.tsx";
 
@@ -30,11 +31,8 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
       },
     },
   };
-  const wrapper = document.createElement("div");
-  const provider = new ContextProvider(wrapper, {
-    context: applicationContext,
-    initialValue: context as unknown as ApplicationContext,
-  });
+  // SAFETY: This transport fixture only consumes the Gateway portion of application context.
+  const wrapper = createApplicationContextProvider(context as unknown as ApplicationContext);
   const view = document.createElement("openclaw-chat-html-preview");
   view.html = html;
   view.sourceIdentity = "file:example.html";
@@ -44,7 +42,7 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
     view,
     context,
     request,
-    setContext: (next: ApplicationContext) => provider.setValue(next),
+    setContext: (next: ApplicationContext) => wrapper.setContext(next),
     notify: () => {
       for (const listener of listeners) {
         listener();
@@ -393,9 +391,11 @@ describe("ordinary HTML preview transport", () => {
     "rejects invalid or Gateway-origin sandbox metadata (%s)",
     async (sandboxPort) => {
       const { view } = mount(vi.fn().mockResolvedValue({ ...metadata, sandboxPort }));
-      await expect
-        .poll(() => view.querySelector('[role="alert"]')?.textContent)
-        .toContain("Sandbox host URL is invalid");
+      await waitForSolid(() => {
+        expect(view.querySelector('[role="alert"]')?.textContent).toContain(
+          "Sandbox host URL is invalid",
+        );
+      });
       expect(view.querySelector("iframe")).toBeNull();
     },
   );
@@ -469,9 +469,9 @@ describe("ordinary HTML preview transport", () => {
       .mockRejectedValueOnce(new Error("Preview denied"))
       .mockResolvedValue(metadata);
     const { view } = mount(request);
-    await expect
-      .poll(() => view.querySelector('[role="alert"]')?.textContent)
-      .toContain("Preview denied");
+    await waitForSolid(() => {
+      expect(view.querySelector('[role="alert"]')?.textContent).toContain("Preview denied");
+    });
     view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledOnce();

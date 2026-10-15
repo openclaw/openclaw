@@ -13,10 +13,10 @@ import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
+import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import "../components/modal-dialog.ts";
-import "../components/update-run-view.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
@@ -257,12 +257,7 @@ export async function confirmAndStartUpdateRuntime(
                 </div>
               </Show>
               <Show when={view().run}>
-                {(run) => (
-                  <openclaw-update-run-view
-                    prop:run={run()}
-                    prop:connected={!view().disconnected}
-                  />
-                )}
+                {(run) => <UpdateRunView run={run()} connected={!view().disconnected} />}
               </Show>
               <openclaw-modal-actions class="exec-approval-actions">
                 <Show

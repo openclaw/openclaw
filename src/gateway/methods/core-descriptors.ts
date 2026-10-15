@@ -4,6 +4,7 @@ import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./re
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
+const UNADVERTISED = { advertise: false } as const;
 const OBSERVATION = { lifetime: "observation" } as const;
 const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
 const PORTAL_SESSION_WRITE = {
@@ -173,6 +174,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agents.files.set", "agents", "operator.admin", "<=2026.7"],
   ["sessions.files.list", "sessions-files", "operator.read", "<=2026.7"],
   ["sessions.files.get", "sessions-files", "operator.read", "<=2026.7"],
+  ["sessions.files.download", "sessions-files", "operator.read", "2026.10"],
   // Workspace file writes require the same admin scope as agents.files.set.
   ["sessions.files.set", "sessions-files", "operator.admin", "<=2026.7"],
   ["sessions.files.reveal", "sessions-files", "operator.admin", "<=2026.7"],
@@ -281,27 +283,15 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["device.pair.rename", "devices", "operator.pairing", "2026.7"],
   ["device.token.rotate", "devices", "operator.pairing", "<=2026.7"],
   ["device.token.revoke", "devices", "operator.pairing", "<=2026.7"],
-  [
-    "device.pair.setupCode",
-    "device-pair-setup",
-    "operator.admin",
-    "<=2026.7",
-    { advertise: false },
-  ],
-  [
-    "device.pair.setupStatus",
-    "device-pair-setup",
-    "operator.admin",
-    "2026.8",
-    { advertise: false },
-  ],
+  ["device.pair.setupCode", "device-pair-setup", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["device.pair.setupStatus", "device-pair-setup", "operator.admin", "2026.8", UNADVERTISED],
   ["node.rename", "nodes", "operator.pairing", "<=2026.7"],
   ["node.list", "nodes", "operator.read", "<=2026.7"],
   ["node.describe", "nodes", "operator.read", "<=2026.7"],
   ["node.pluginSurface.refresh", "nodes", "node", "<=2026.7"],
   ["node.pluginTools.update", "nodes", "node", "<=2026.7"],
   ["node.skills.update", "nodes", "node", "<=2026.7"],
-  ["node.runnerInventory.update", "nodes", "node", "2026.8", { advertise: false }],
+  ["node.runnerInventory.update", "nodes", "node", "2026.8", UNADVERTISED],
   ["node.pending.drain", "nodes-pending", "node", "<=2026.7"],
   ["node.pending.enqueue", "nodes-pending", "operator.write", "<=2026.7"],
   // Params-aware: host-sensitive commands raise direct invocation from write to admin.
@@ -391,7 +381,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.list", "channel-pairing", "operator.pairing", "2026.7"],
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
-  ["assistant.media.get", null, "operator.read", "<=2026.7", { advertise: false }],
+  ["assistant.media.get", null, "operator.read", "<=2026.7", UNADVERTISED],
   [
     "sessions.get",
     "sessions-read",
@@ -399,11 +389,11 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "<=2026.7",
     { advertise: false, lifetime: "observation" },
   ],
-  ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
-  ["sessions.usage", "usage", "operator.read", "<=2026.7", { advertise: false }],
-  ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", { advertise: false }],
-  ["sessions.usage.logs", "usage", "operator.read", "<=2026.7", { advertise: false }],
-  ["poll", "send", "operator.write", "<=2026.7", { advertise: false }],
+  ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", UNADVERTISED],
+  ["sessions.usage", "usage", "operator.read", "<=2026.7", UNADVERTISED],
+  ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", UNADVERTISED],
+  ["sessions.usage.logs", "usage", "operator.read", "<=2026.7", UNADVERTISED],
+  ["poll", "send", "operator.write", "<=2026.7", UNADVERTISED],
   [
     "sessions.steer",
     "sessions-messaging",
@@ -415,21 +405,21 @@ export const CORE_GATEWAY_METHOD_SPECS = [
         "Deprecated alias for chat.send queueMode interrupt; removal per protocol deprecation policy.",
     },
   ],
-  ["push.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.test", "push", "operator.write", "<=2026.7", UNADVERTISED],
   ["attach.grant", "attach", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["attach.revoke", "attach", "operator.admin", "<=2026.7"],
-  ["push.web.vapidPublicKey", "push", "operator.write", "<=2026.7", { advertise: false }],
-  ["push.web.subscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
-  ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
-  ["push.web.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.web.vapidPublicKey", "push", "operator.write", "<=2026.7", UNADVERTISED],
+  ["push.web.subscribe", "push", "operator.write", "<=2026.7", UNADVERTISED],
+  ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", UNADVERTISED],
+  ["push.web.test", "push", "operator.write", "<=2026.7", UNADVERTISED],
   ["push.web.preferences.get", "push", "operator.read", "2026.8"],
   ["push.web.preferences.set", "push", "operator.write", "2026.8"],
-  ["config.openFile", "config", "operator.admin", "<=2026.7", { advertise: false }],
-  ["connect", "connect", "operator.admin", "<=2026.7", { advertise: false }],
-  ["chat.inject", "chat", "operator.admin", "<=2026.7", { advertise: false }],
-  ["nativeHook.invoke", "native-hook-relay", "operator.admin", "<=2026.7", { advertise: false }],
-  ["web.login.start", "web", "operator.admin", "<=2026.7", { advertise: false }],
-  ["web.login.wait", "web", "operator.admin", "<=2026.7", { advertise: false }],
+  ["config.openFile", "config", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["connect", "connect", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["chat.inject", "chat", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["nativeHook.invoke", "native-hook-relay", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["web.login.start", "web", "operator.admin", "<=2026.7", UNADVERTISED],
+  ["web.login.wait", "web", "operator.admin", "<=2026.7", UNADVERTISED],
   // Terminal detach/reattach surface. Kept together near the end so previously
   // advertised method indices stay stable for older clients; new methods append.
   ["terminal.attach", "terminal", "operator.admin", "2026.7"],
@@ -750,4 +740,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.10",
     { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
   ],
+  ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
+  ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
+  ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
+  ["sessions.github.action", "sessions-github", "operator.write", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

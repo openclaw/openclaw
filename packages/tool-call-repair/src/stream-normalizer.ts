@@ -295,24 +295,21 @@ function findCandidateCallSequences(
   return sequences;
 }
 
-/**
- * Last line start holding an unfinished call marker such as "<funct" or "<|channel|".
- * A later chunk can still complete it into a call, so the buffered suffix must stay
- * private while the text before it is already decided.
- */
+/** Finds an unfinished marker at a candidate boundary; its suffix stays private. */
 function findTrailingCallPrefix(
   candidate: StandalonePlainTextToolCallCandidate,
   matcher: PlainTextToolCallNameMatcher,
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
+  start = 0,
 ): { named: boolean; start: number } | undefined {
   const { text, boundaries, structuralLineBreaks } = createCandidateScanView(candidate);
   const protectedRanges = resolveProtectedRanges?.(text) ?? [];
   const boundarySet = new Set(boundaries);
   let tail: { named: boolean; start: number } | undefined;
-  let index = 0;
+  let index = start;
   while (index < text.length) {
     if (
-      index !== 0 &&
+      index !== start &&
       text[index - 1] !== "\n" &&
       text[index - 1] !== "\r" &&
       !boundarySet.has(index)
@@ -737,8 +734,9 @@ type PendingClassification =
   | {
       candidate: StandalonePlainTextToolCallCandidate;
       kind: "trim";
-      /** False-positive prefix that must stay user-visible when the trim reruns. */
+      /** Decided prefix, replayed at its original block and event offsets. */
       replayedText?: string;
+      removedRanges?: readonly TextRange[];
     };
 
 function sliceCandidateFrom(
@@ -798,22 +796,19 @@ function classifyPending(
     leading.activeStart === undefined &&
     skipWhitespace(candidate.text, leading.end) < candidate.text.length
   ) {
-    // A later chunk can still complete the trailing marker into a call ("<funct" plus
-    // "ion=read>"). Replaying it now would emit half a call as visible text and then
-    // leak the rest mid-buffer, so hold the whole buffer like the unsplit stream does.
-    const tailScan = scanPlainTextToolCall(
-      candidate.text,
-      skipWhitespace(candidate.text, leading.end),
-      {
-        matcher,
-        maxPayloadBytes: MAX_PAYLOAD_BYTES,
-        structuralLineBreaks: view.structuralLineBreaks,
-      },
-    );
-    if (!finalize && tailScan.kind === "prefix" && !scannedCall(tailScan)) {
-      return { kind: "pending" };
+    const activeStart =
+      sequences.at(-1)?.activeStart ??
+      findTrailingCallPrefix(candidate, matcher, resolveProtectedRanges, leading.end)?.start;
+    if (!finalize && activeStart !== undefined) {
+      // Retain only the undecided tail; completed calls and prose must not grow its buffer.
+      return {
+        candidate: sliceCandidateFrom(candidate, activeStart),
+        kind: "trim",
+        replayedText: candidate.text.slice(0, activeStart),
+        removedRanges: sequences,
+      };
     }
-    return { kind: "stripped", text: createRangeRemover([leading])(candidate.text) };
+    return { kind: "stripped", text: createRangeRemover(sequences)(candidate.text) };
   }
   if (leading && leading.activeStart === undefined) {
     return pending.sequenceOverCap || pending.bufferBytes > MAX_PAYLOAD_BYTES
@@ -1129,16 +1124,14 @@ export async function* normalizePlainTextToolCallStreamEvents(
     classification: Extract<PendingClassification, { kind: "trim" }>,
     projection?: PlainTextToolCallMessageProjection,
   ): Record<string, unknown>[] => {
-    // A trim either discards an over-cap prefix or re-surfaces a false-positive one; only
-    // the second kind is user-visible text, and a replayed trim must not repeat units the
-    // caller already streamed for its content block. Buffered auxiliary events stay in
-    // arrival order with the replayed text instead of being dropped by the queue reset.
+    // Replay decided prose without calls, preserving its order with auxiliary events.
     const trimmed = classification.candidate;
     const output: Record<string, unknown>[] = [];
     const replayChunks =
       classification.replayedText === undefined
         ? []
         : buildCandidateReplayChunks(state, classification.replayedText);
+    const removeRanges = createRangeRemover(classification.removedRanges ?? []);
     let replayIndex = 0;
     const flushReplayBefore = (limit: number) => {
       while (replayIndex < replayChunks.length) {
@@ -1147,12 +1140,16 @@ export async function* normalizePlainTextToolCallStreamEvents(
           return;
         }
         replayIndex += 1;
-        output.push(createSyntheticTextDelta(chunk.template, chunk.text));
+        const text = removeRanges(chunk.text, chunk.start);
+        if (!text) {
+          continue;
+        }
+        output.push(createSyntheticTextDelta(chunk.template, text));
         lineStarts.set(
           chunk.contentIndex,
-          nextAtLineStart(lineStarts.get(chunk.contentIndex) ?? true, chunk.text),
+          nextAtLineStart(lineStarts.get(chunk.contentIndex) ?? true, text),
         );
-        advanceProtectionContext(chunk.text);
+        advanceProtectionContext(text);
       }
     };
     for (const event of state.entries ?? []) {

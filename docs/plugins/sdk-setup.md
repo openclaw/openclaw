@@ -53,7 +53,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.3.34"
+        "typebox": "1.3.36"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"
@@ -490,8 +490,8 @@ For channel-specific config, use the channel config section instead:
 Use `buildChannelConfigSchema` to convert a Zod schema into the `ChannelConfigSchema` wrapper used by plugin-owned config artifacts:
 
 ```typescript
-import { z } from "zod";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
 
 const accountSchema = z.object({
   token: z.string().optional(),
@@ -506,8 +506,8 @@ const configSchema = buildChannelConfigSchema(accountSchema);
 If you already author the contract as JSON Schema or TypeBox, use the direct helper so OpenClaw can skip Zod-to-JSON-Schema conversion on metadata paths:
 
 ```typescript
-import { Type } from "typebox";
 import { buildJsonChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { Type } from "typebox";
 
 const configSchema = buildJsonChannelConfigSchema(
   Type.Object({

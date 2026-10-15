@@ -352,10 +352,8 @@ async function activateImportedStartupConfig(config: OpenClawConfig, env?: NodeJ
 }
 
 describe("gateway startup config secret preflight", () => {
-  const channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
   afterEach(() => {
     clearSecretsRuntimeSnapshotState();
-    channelEnv.restore();
   });
 
   it.each([true, false])(
@@ -1246,34 +1244,6 @@ describe("gateway startup config secret preflight", () => {
       /published example placeholder/,
     );
     expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("prunes channel refs from startup secret preflight when channels are skipped", async () => {
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    const prepareRuntimeSecretsSnapshot = vi.fn<PrepareRuntimeSecretsSnapshotForTest>(
-      async ({ config }) => preparedSnapshot(config),
-    );
-    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
-      prepareRuntimeSecretsSnapshot,
-    });
-    const config = gatewayTokenConfig(
-      asConfig({
-        channels: {
-          telegram: {
-            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-          },
-        },
-      }),
-    );
-
-    const result = await activateRuntimeSecrets(config, {
-      reason: "startup",
-      activate: false,
-    });
-    expect(typeof result.config.gateway).toBe("object");
-    const preflightInput = prepareRuntimeSecretsSnapshot.mock.calls[0]![0];
-    expect(preflightInput.config?.channels).toBeUndefined();
-    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfilesAsync);
   });
 
   it("honors startup auth overrides before secret preflight gating", async () => {

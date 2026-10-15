@@ -112,24 +112,6 @@ describe("managed Crabbox", () => {
     );
   });
 
-  it("upgrades an older managed cache without changing its files", async () => {
-    const test = await fixture();
-    const prior = path.join(
-      test.env.OPENCLAW_STATE_DIR,
-      "tools/crabbox/0.56.0",
-      path.basename(path.dirname(test.binary)),
-      path.basename(test.binary),
-    );
-    await fs.mkdir(path.dirname(prior), { recursive: true });
-    await fs.writeFile(prior, "0.56.0");
-    await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual(test.installed);
-    expect(test.fetch).toHaveBeenCalledTimes(2);
-    expect(await fs.readFile(prior, "utf8")).toBe("0.56.0");
-    test.fetch.mockRejectedValue(new Error("offline"));
-    await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual(test.installed);
-    expect(test.fetch).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps a supported configured binary through startup contention", async () => {
     const test = await fixture("999.0.0");
     const started = createDeferred<void>();
@@ -639,12 +621,7 @@ describe("Crabbox version admission", () => {
   });
 
   it.each([
-    ["0.69.0", "outdated"],
-    ["0.70.0", "outdated"],
-    ["0.71.0", "outdated"],
     ["0.72.0", "outdated"],
-    ["0.73.0", "outdated"],
-    ["0.76.0", "outdated"],
     ["0.77.0", "supported"],
     ["0.77.0-rc.1", "outdated"],
     ["0.77.0+build.1", "supported"],

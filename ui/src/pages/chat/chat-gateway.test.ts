@@ -476,29 +476,33 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunStartup).toBeNull();
   });
 
-  it("shows startup status until the first chat delta and ignores late status", () => {
+  it("keeps preparation, model wait, and answer status monotonic through an empty replacement", () => {
     const state = createState({ chatRunId: "run-1", chatStream: "" });
-    const status: ChatEventPayload = chatEvent("status", { phase: "preparing_context" });
-
-    handleChatGatewayEvent(state, status);
+    const label = () =>
+      chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
+    receive(state, "status", { phase: "preparing_context", seq: 1 });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "delta", {
+      runId: "run-other",
+      message: { role: "assistant", content: "Other" },
+    });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "status", { phase: "starting_model", seq: 2 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "status", { phase: "preparing_context", seq: 3 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "delta", { message: { role: "assistant", content: "Hello" } });
     expect(state.chatRunStartup).toEqual({
       state: "status",
+      phase: "answer",
       runId: "run-1",
-      phase: "preparing_context",
+      seq: 2,
     });
-
-    receive(state, "delta", { runId: "run-other", deltaText: "Other reply" });
-    expect(state.chatRunStartup).toEqual({
-      state: "status",
-      runId: "run-1",
-      phase: "preparing_context",
-    });
-
-    receive(state, "delta", { deltaText: "Hello" });
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
-
-    handleChatGatewayEvent(state, status);
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
+    receive(state, "delta", { replace: true, message: { role: "assistant", content: "" } });
+    receive(state, "status", { phase: "preparing_context", seq: 4 });
+    expect(state.chatRunStartup).toMatchObject({ phase: "answer" });
+    expect(label()).toBeUndefined();
+    expect(state.chatRunId).toBe("run-1");
   });
 
   it.each([true])(
@@ -1151,6 +1155,52 @@ describe("handleChatGatewayEvent", () => {
 });
 
 describe("authoritative terminal history identity", () => {
+  it.each([false, true])(
+    "keeps the live pairing QR through history refreshes (history first=%s)",
+    async (historyFirst) => {
+      const text =
+        "Scan this QR code with the OpenClaw iOS app:\n\n- Gateway: wss://pair.example.invalid\n- Auth: token\n- Security: single-use bootstrap token";
+      const saved = textMessage("assistant", text, { id: "pair-reply", seq: 2, runId: "run-1" });
+      const qr = {
+        type: "openclaw_pairing_qr",
+        image_url: "data:image/png;base64,c3ludGhldGljLXFy",
+        alt: "OpenClaw pairing QR code",
+        expiresAtMs: Date.now() + 600_000,
+        sensitive: true,
+      };
+      const live = { ...saved, content: [{ type: "text", text }, qr] };
+      const { state, request } = createResolvedHistoryState(
+        { messages: [saved], sessionId: "pair-session" },
+        { chatRunId: "run-1", currentSessionId: "pair-session" },
+      );
+      if (historyFirst) {
+        rememberAuthoritativeTerminal({
+          host: state,
+          event: { key: "main", runId: "run-1", hasActiveRun: false },
+          payload: { message: saved },
+          matchesChat: true,
+          runIdBeforeApply: "run-1",
+        });
+        await loadChatHistory(state);
+        expect(authoritativeHistoryAppliedForRun(state, "run-1")).toBe(true);
+      }
+      receive(state, "final", { message: live });
+      expect(state.chatMessages).toEqual([live]);
+      for (let refresh = 0; refresh < 2; refresh += 1) {
+        await loadChatHistory(state);
+        expect(state.chatMessages).toEqual([live]);
+      }
+      const revised = { ...saved, content: [{ type: "text", text: "Updated pairing details" }] };
+      applySessionMessagePayload(state, { message: revised }, false, { kind: "history-delta" });
+      expect(state.chatMessages).toEqual([{ ...revised, content: [...revised.content, qr] }]);
+      request.mockResolvedValue({ messages: [revised], sessionId: "pair-session" });
+      await loadChatHistory(state);
+      request.mockResolvedValue({ messages: [], sessionId: "pair-session" });
+      await loadChatHistory(state);
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
+
   it("does not retire a native terminal for user or imported identities with a colliding id", () => {
     const collisions = [
       textMessage("user", "Different native user", { id: "native-terminal" }),

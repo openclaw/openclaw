@@ -34,10 +34,7 @@ import {
   resolveRuntimeAuthProfileAgentDir,
 } from "./store.js";
 
-export {
-  AuthProfileAuthorizationError,
-  type AuthProfileAuthorization,
-} from "./authorization-contract.js";
+export type { AuthProfileAuthorization } from "./authorization-contract.js";
 
 /**
  * Capture a persisted credential lifetime through its canonical owner, without bearer material.

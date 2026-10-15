@@ -8,6 +8,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
@@ -40,12 +41,21 @@ import {
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
+  readonly navigationVisible: boolean;
+  readonly navigationView: "sessions" | "online" | "pages";
+  readonly contextualSidebar?: ContextualSidebar;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  shouldPublishSessionData(): boolean;
   readonly activeRouteId?: string;
+  readonly sessionCatalogRowsVisible: boolean;
+  samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
+  childSessionParents(): Set<string>;
   readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
@@ -61,6 +71,7 @@ export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
+  readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
@@ -264,7 +275,9 @@ export function applySessionCatalogHostEvent(
     return;
   }
   owner.sessionCatalogs = update.catalogs;
-  owner.requestSessionDataUpdate();
+  if (owner.sessionCatalogRowsVisible) {
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function applySessionCatalogContinuation(

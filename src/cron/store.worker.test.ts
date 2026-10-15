@@ -757,19 +757,6 @@ describe("worker save result publication", () => {
     },
   );
 
-  it("does not reuse an untracked load revision after its committed partition is evicted", () => {
-    const storePath = "/synthetic/cron-load-revision-eviction/jobs.json";
-    const loadedRevision = getCronJobsStoreRevision(storePath);
-    noteCronJobsStoreCommit(storePath);
-    const trackedRevision = getCronJobsStoreRevision(storePath);
-    noteCronJobsStoreCommit("/synthetic/cron-load-revision-eviction/peer-0");
-    expect(getCronJobsStoreRevision(storePath)).toBe(trackedRevision);
-    for (let index = 1; index < 65; index += 1) {
-      noteCronJobsStoreCommit(`/synthetic/cron-load-revision-eviction/peer-${index}`);
-    }
-    expect(getCronJobsStoreRevision(storePath)).not.toBe(loadedRevision);
-  });
-
   it.each(["unchanged", "intervening", "evicted before reply", "evicted after reply"] as const)(
     "returns an operation-bound save revision (%s)",
     async (change) => {

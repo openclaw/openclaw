@@ -44,19 +44,24 @@ target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
 
-Automatic canonical hybrid and RunsOn first-attempt preflight jobs use the
-Blacksmith 4-class, matching default Blacksmith preflight. The original 16-class
-placement addressed hosted assignment stalls, not a measured compute requirement.
+Ordinary upstream hybrid push and scheduled runs, and same-repository PRs, route
+`preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` to hosted
+`ubuntu-24.04`. Fork first attempts retain Blacksmith preflight and gate, with
+the reporter already hosted. Dispatch qualification/release overrides, runner
+groups, retries and other backends are unchanged. RunsOn and default Blacksmith
+preflight retain the 4-class. The earlier 16-class placement addressed hosted
+assignment stalls, not a measured compute requirement.
 On October 13, 610 existing 4-class preflights over 24 hours had no OOM events,
 113-second p95 duration, and 14.31% p95 peak memory. A representative job exposed
 two CPUs and 7.65 GiB RAM. Local full and changed manifest plans also fit two CPUs
 and 4 GiB without swap, with identical outputs to four CPUs. Keep the 20-minute
 deadline, planner profiles, cache trust, and hosted retry/manual/override routes.
-Monitor assignment latency after rollout; these observations do not establish
-matched-workload billing savings. Each eligible hybrid run admits one
-Blacksmith preflight and gate, plus security when optional hosted admission is
-closed, for at most three control registrations; default Blacksmith retains one.
-All three occur in the current non-Node union and reserved 5,110 envelope.
+These observations do not establish matched-workload billing savings. The
+ordinary same-repository hybrid control move removes three Blacksmith assignments
+per PR and two per main run. Security retains its existing optional hosted
+admission. The conservative registration reservation remains unchanged; the
+earlier control assignments were included in the reserved 5,110 envelope. See
+[queue exposure and estimated hosted cost](/ci/routing-costs#hosted-assignment-on-the-critical-path).
 The exposed live bucket still reported 10,000; its pooled reader's unused quota
 does not establish organization-wide free capacity. The remaining 890 allowance must cover
 adjacent repositories, releases, retries and carryover. This routing trial does
@@ -527,13 +532,21 @@ setup, preparation, dependency waits, and the final gate in workflow projections
 
 Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
-Precisely selected, source-only CLI and Gateway client jobs use the 16-class when
-every serial group belongs to either family, has at most two explicit files, and
-retains its two-worker fallback. Gateway client groups must pair the
-`agentic-gateway-core-2` owner with `vitest.gateway-client.config.ts`. Apply this
-capacity choice after packing; keep complete families, other owners, builds,
-memory floors, and explicit large-runner anchors at their planned capacity.
+Precisely selected, source-only CLI, Gateway client/server, and embedded-agent
+jobs use the 16-class when every serial group has one qualified config, one or
+two explicit files, and a two-worker pin or fallback. An explicit wider worker
+pin keeps the planned capacity. Apply this choice after packing; keep complete
+families, unqualified configs, builds, memory floors, and explicit large-runner
+anchors at their planned capacity. Resource-gated tooling tests remain outside
+this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
+The isolated `attempt.llm-boundary.cache-stability.test.ts` selection also uses
+the 16-class when it is the group's only file and the same guards hold. A complete
+replay at `33488188fcab` passed all 19 tests in 105 seconds through the production
+shard executor, using four CPUs, a 12-GiB memory limit, and no swap. Peak memory was
+4.23 GiB with no OOMs. This qualifies that file only; any unqualified isolated
+sibling keeps the whole job at its planned capacity. Native latency and billed
+savings for this selection still need post-merge observation.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan
@@ -943,7 +956,7 @@ not enable auto-merge. See
 
 ## Bounded hybrid hosted offload
 
-Automatic upstream hybrid first attempts count the complete selected hosted inventory before adding short jobs: control and cache jobs, every selected check or Node matrix row, docs and i18n, performance, and hosted native jobs. Preflight records `hybrid_hosted_base_rows`, `hybrid_hosted_total_rows`, and `hybrid_hosted_offload`; the workflow guard independently expands the actual job gates, matrices, and runner expressions to verify the count. Eligible preflight runs on Blacksmith and is excluded from hosted rows; the performance row uses its existing `run_control_ui_performance` owner.
+Automatic upstream hybrid first attempts count the complete selected hosted inventory before adding short jobs: control and cache jobs, every selected check or Node matrix row, docs and i18n, performance, and hosted native jobs. Preflight records `hybrid_hosted_base_rows`, `hybrid_hosted_total_rows`, and `hybrid_hosted_offload`; the workflow guard independently expands the actual job gates, matrices, and runner expressions to verify the count. The ordinary same-repository hybrid preflight and gate, plus the selected PR failure reporter, are mandatory base hosted rows; they consume room before optional offloads are admitted. Fork, qualification and RunsOn controls retain their own accounting and routes. The performance row uses its existing `run_control_ui_performance` owner; no 40/45-row limit, job, or concurrency increase is introduced.
 
 `HYBRID_HOSTED_BASE_ROW_LIMIT` is 40 and `HYBRID_HOSTED_ROW_LIMIT` is 45. At or below 40 base hosted rows, preflight may move `security-fast` and the browser-extension E2E row to hosted Ubuntu, adding at most two rows and never exceeding 45 through this admission. Above 40 base hosted rows, both retain their existing Blacksmith routes. The three `checks-ui` unit shards remain on the existing Blacksmith pool regardless of optional hosted admission; their tests, workers, and Blacksmith timeout are unchanged. An eligible base above 45 emits a warning with the row count and retains the complete base manifest. The 45-row budget bounds optional offload admission; it does not reject existing coverage or reshape noneligible fallback manifests: retries, manual and frozen targets, other repositories, and the `github` outage override retain their existing routing, including wholly hosted runs that can already exceed 45 rows.
 

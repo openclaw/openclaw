@@ -4,9 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createPrivateSqliteTempDirectorySync } from "../../infra/sqlite-private-directory.js";
 import {
@@ -14,6 +12,7 @@ import {
   transcriptRepairUserKey,
 } from "./legacy-transcript-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { equivalentLegacySessionHeaders, isIndexedSessionEntry } from "./session-entry-codec.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   scanSessionTranscriptNavigation,
@@ -191,13 +190,7 @@ export class SqliteSessionImportStage {
           continue;
         }
         if (entry.type === "session") {
-          if (
-            header &&
-            isDeepStrictEqual(
-              { ...header, timestamp: undefined },
-              { ...entry, timestamp: undefined },
-            )
-          ) {
+          if (header && equivalentLegacySessionHeaders(header, entry)) {
             repeatedRows.add(String(row.seq));
             changed = true;
             continue;

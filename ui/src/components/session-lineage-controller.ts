@@ -33,6 +33,7 @@ import {
 type LineageOwner = {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
+  readonly sessionLineageVisible: boolean;
   sessionsResult: SessionsListResult | null;
   activeSessionLineageRoot: GatewaySessionRow | null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null;
@@ -207,16 +208,11 @@ export class SessionLineageController {
   reset(preserveOperatorContext: boolean): void {
     // A list/filter generation does not retire a still-owned descriptor read.
     // The capability's ledger, route and connection decide that lease's lifetime.
-    if (
-      this.binding &&
-      this.bindingIsCurrent(this.binding) &&
-      (this.binding.target.key === "global" || preserveOperatorContext)
-    ) {
-      if (this.binding.target.key === "global") {
-        this.publish(this.binding, this.binding.observation?.row ?? null);
-      } else {
+    if (this.binding && this.bindingIsCurrent(this.binding)) {
+      if (this.binding.target.key !== "global") {
         this.retireWalk();
       }
+      this.publish(this.binding, this.binding.observation?.row ?? null);
       return;
     }
     this.retire();
@@ -275,6 +271,10 @@ export class SessionLineageController {
           if (reason === "runner-availability" && this.bindingIsCurrent(binding)) {
             binding.refreshRequested = true;
             this.loaded = null;
+            if (this.owner.sessionLineageVisible) {
+              // Join the event's shared descriptor before a later event retires its cache entry.
+              void this.load(binding.key);
+            }
             this.owner.requestSessionDataUpdate();
           }
         },
@@ -514,7 +514,6 @@ export class SessionLineageController {
     if (observation.row && !binding.refreshRequested) {
       return observation.row;
     }
-    const refresh = binding.refreshRequested;
     binding.refreshRequested = false;
     const reconcile = observation.captureReconcile();
     const described = await binding.sessions
@@ -523,7 +522,7 @@ export class SessionLineageController {
           key: binding.key,
           ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
         },
-        { client: binding.client, refresh },
+        { client: binding.client },
       )
       .catch((error: unknown) => {
         binding.refreshRequested = true;

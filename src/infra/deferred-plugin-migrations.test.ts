@@ -630,11 +630,6 @@ describe("deferred plugin migration repair guidance", () => {
     { markers: ["OPENCLAW_UPDATE_IN_PROGRESS"], command: pending.command, laterPass: true },
     // Post-core convergence is the final migration pass, even inside an update child.
     {
-      markers: ["OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
-      command: pending.command,
-      laterPass: false,
-    },
-    {
       markers: ["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
       command: pending.command,
       laterPass: false,

@@ -270,6 +270,13 @@ export function pruneSessionCostUsageRollupsInDatabase(
           ),
       );
     }
+  });
+}
+
+/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
+export function retireLegacySessionCostUsageCacheInDatabase(db: DatabaseSync): void {
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
     executeSqliteQuerySync(
       db,
       kysely

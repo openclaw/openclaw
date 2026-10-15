@@ -4085,6 +4085,7 @@ esac
   it.each(
     [
       "ci-check-focused-testbox.yml",
+      "ci-android-focused-testbox.yml",
       "ci-check-routine-testbox.yml",
       "ci-check-high-memory-testbox.yml",
     ].flatMap((workflow) =>

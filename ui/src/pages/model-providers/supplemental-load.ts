@@ -4,9 +4,9 @@ import {
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;

@@ -407,6 +407,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
         : undefined,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext: params.buildContext,
       interaction,
       channelContext,

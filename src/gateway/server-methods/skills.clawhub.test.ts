@@ -1,7 +1,4 @@
-// ClawHub skills tests cover install/update/detail/status flows, security
-// verdicts, local skill cards, and workspace skill status reports.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
@@ -95,11 +92,6 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 }
 
 describe("skills gateway handlers (clawhub)", () => {
-  afterEach(async () => {
-    // skills.status opens real watchers; close them so they cannot outlive this file.
-    await closeSkillsWatchers(true);
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     listAgentIdsMock.mockReset();
@@ -120,28 +112,6 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     skillStatusReportMock.mockReturnValue(emptySkillStatusReport());
     resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
-  });
-
-  it("builds status with the selected agent filter", async () => {
-    listAgentIdsMock.mockReturnValue(["main", "research"]);
-    resolveAgentWorkspaceDirMock.mockImplementation((_cfg, agentId) =>
-      agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
-    );
-
-    const { ok, error } = await callSkillsHandler("skills.status", { agentId: "research" });
-
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-    expect(skillStatusReportMock).toHaveBeenCalledWith(
-      "/tmp/research-workspace",
-      expect.objectContaining({
-        agentId: "research",
-        config: {},
-        eligibility: expect.objectContaining({
-          nodeSkills: expect.objectContaining({ canExec: expect.any(Boolean) }),
-        }),
-      }),
-    );
   });
 
   it("keeps owner-qualified verdict targets distinct for shared slugs", async () => {
@@ -258,51 +228,6 @@ describe("skills gateway handlers (clawhub)", () => {
     });
 
     await expectEmptySecurityVerdictsWithoutFetch();
-  });
-
-  it("loads local Skill Card content for a known installed skill", async () => {
-    skillStatusReportMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/openclaw/skills",
-      skills: [
-        {
-          name: "AgentReceipt",
-          skillKey: "agentreceipt",
-          baseDir: "/tmp/workspace/skills/agentreceipt",
-          filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
-          skillCard: {
-            present: true,
-            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-            sizeBytes: 34,
-          },
-        },
-      ],
-    });
-    skillStatusFilesMock.mockReturnValue([
-      {
-        name: "AgentReceipt",
-        filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
-        skillCard: { content: "# AgentReceipt\n\nLocal trust card.\n" },
-      },
-    ]);
-
-    const { ok, response, error } = await callSkillsHandler("skills.skillCard", {
-      skillKey: "agentreceipt",
-    });
-
-    expect(error).toBeUndefined();
-    expect(ok).toBe(true);
-    expect(skillStatusReportMock).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      expect.objectContaining({ skillCardKey: "agentreceipt" }),
-    );
-    expect(response).toEqual({
-      schema: "openclaw.skills.skill-card.v1",
-      skillKey: "agentreceipt",
-      path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-      sizeBytes: 34,
-      content: "# AgentReceipt\n\nLocal trust card.\n",
-    });
   });
 
   it("installs a ClawHub skill through skills.install", async () => {

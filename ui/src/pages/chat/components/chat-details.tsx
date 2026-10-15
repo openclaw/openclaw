@@ -267,7 +267,11 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
             <Show when={scope()} keyed>
               {(_scope) => (
                 <>
-                  <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
+                  <ChatDetailsSession
+                    props={props.props}
+                    presented={props.presented && opened()}
+                    dismissed={intent() === "closed"}
+                  />
                   <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
                     <ChatDetailsProgress
                       onHideProgress={() => {

@@ -336,7 +336,6 @@ export class NewSessionPageOwner extends ControllerHost {
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
-    this.browser.clearPopoverHiding();
     closeAgentPicker(this.host);
     this.browser.close();
     this.connectMachine.close();

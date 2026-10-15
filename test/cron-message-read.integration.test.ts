@@ -5,6 +5,7 @@ import { json as readJson } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import { AUTOMATIONS_TOOL_NAME } from "../src/agents/tools/automations-tool-name.js";
@@ -505,6 +506,9 @@ describe("scheduled message actions", () => {
         vi.stubEnv("OPENCLAW_SCHEDULED_READ_CLOCK_URL", `${providerOrigin}/scheduled-clock-gap`);
         const embedded = buildMockOpenAiResponsesProvider(`${providerOrigin}/v1`, embeddedModelId);
         const selectedModelRef = runtime === "openclaw" ? embedded.modelRef : modelRef;
+        const inferenceProvider = runtime === "openclaw" ? embedded.providerId : "anthropic";
+        const inferenceProfileId = `${inferenceProvider}:scheduled-message-read`;
+        const inferenceKey = runtime === "openclaw" ? modelToken : "synthetic-unused-model-key";
         const cfg: OpenClawConfig = {
           gateway: {
             mode: "local",
@@ -554,6 +558,10 @@ describe("scheduled message actions", () => {
                 ],
               },
             },
+          },
+          auth: {
+            profiles: { [inferenceProfileId]: { provider: inferenceProvider, mode: "api_key" } },
+            order: { [inferenceProvider]: [inferenceProfileId] },
           },
           tools: {
             // The scripted provider asserts the direct message schema and scheduled authority.
@@ -607,6 +615,15 @@ describe("scheduled message actions", () => {
         };
         await writeFile(configPath, JSON.stringify(cfg));
         setRuntimeConfigSnapshot(cfg, cfg);
+        // Seed both routes so CLI jobs prove they do not borrow a host inference account.
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: inferenceProfileId,
+              credential: { type: "api_key", provider: inferenceProvider, key: inferenceKey },
+            },
+          ],
+        });
         if (nativeCreator) {
           await replaceSessionEntry(
             { agentId: "main", sessionKey: creatorSessionKey },
@@ -772,6 +789,15 @@ describe("scheduled message actions", () => {
           (await loadCronStore(storePath)).jobs.find((entry) => entry.id === created.id),
           "persisted scheduled job",
         );
+        if (runtime === "openclaw") {
+          expect(job.inferenceBinding).toMatchObject({
+            version: 1,
+            provider: inferenceProvider,
+            profileId: inferenceProfileId,
+          });
+        } else {
+          expect(job.inferenceBinding).toBeUndefined();
+        }
         if (nativeCreator) {
           expect(job).toMatchObject({
             owner: { sessionKey: creatorSessionKey, accountId: creatorAccountId },

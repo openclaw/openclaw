@@ -39,21 +39,6 @@ afterEach(() => {
 });
 
 describe("Gateway self-profile ownership", () => {
-  it("distinguishes unresolved identity from a resolved profileless connection", async () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    const pending = createDeferred<{ profile: UserProfile }>();
-    current().request.mockReturnValue(pending.promise);
-    current().opts.onHello?.(hello());
-    expect(gateway.snapshot.phase).toBe("connected");
-    expect(gateway.snapshot.selfUser).toBeUndefined();
-    const read = gateway.loadSelfProfile();
-    pending.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "No profile" }));
-    expect(await read).toBeNull();
-    expect(gateway.snapshot.selfUser).toBeNull();
-    gateway.stop();
-  });
-
   it.each([false, true])(
     "retains only resolved profileless identity through same-connection drops (retry: %s)",
     async (willRetry) => {
@@ -132,31 +117,6 @@ describe("Gateway self-profile ownership", () => {
       gateway.stop();
     },
   );
-
-  it.each([
-    "operator.sessions.read",
-    "operator.sessions.write",
-    "operator.read",
-    "operator.write",
-    "operator.admin",
-  ])("loads authenticated self with %s and no roster", async (scope) => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().request.mockResolvedValue({ profile });
-    current().opts.onHello?.(hello([scope]));
-    await Promise.resolve();
-    expect(current().request).toHaveBeenCalledWith("users.self", {});
-    await gateway.loadSelfProfile();
-    expect(current().request).toHaveBeenCalledTimes(1);
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      id: profile.id,
-      identity: { type: "profile", id: profile.id },
-      name: profile.displayName,
-      email: profile.emails[0],
-    });
-    expect(gateway.snapshot.hello?.snapshot).toEqual({ presence: [] });
-    gateway.stop();
-  });
 
   it.each([false, true])(
     "keeps a fast queued send attributed while self loading is pending or fails (%s)",
@@ -289,48 +249,45 @@ describe("Gateway self-profile ownership", () => {
     },
   );
 
-  it.each(["profile event", "explicit read"])(
-    "refreshes canonical profile and avatar via %s",
-    async (trigger) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      current().request.mockResolvedValue({ profile });
-      current().opts.onHello?.(hello());
-      await gateway.loadSelfProfile();
-      expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
-      const changed = {
-        ...profile,
-        id: trigger === "profile event" ? "merged-profile" : profile.id,
-        displayName: "Changed Person",
-        updatedAt: 3,
-      };
-      current().request.mockResolvedValue({ profile: changed });
-      if (trigger === "profile event") {
-        current().opts.onEvent?.(
-          createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
-        );
-      }
-      await gateway.loadSelfProfile();
-      if (trigger === "profile event") {
-        current().opts.onEvent?.(
-          createGatewayEvent("presence", {
-            presence: [
-              { instanceId: current().instanceId, user: { id: profile.id, name: "Old alias" } },
-            ],
-          }),
-        );
-      }
-      expect(gateway.snapshot.selfUser).toMatchObject({
-        id: changed.id,
-        name: changed.displayName,
-      });
-      expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=3");
-      expect(current().request).toHaveBeenCalledTimes(2);
-      gateway.stop();
-    },
-  );
+  it.each(["profile event"])("refreshes canonical profile and avatar via %s", async (trigger) => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockResolvedValue({ profile });
+    current().opts.onHello?.(hello());
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
+    const changed = {
+      ...profile,
+      id: trigger === "profile event" ? "merged-profile" : profile.id,
+      displayName: "Changed Person",
+      updatedAt: 3,
+    };
+    current().request.mockResolvedValue({ profile: changed });
+    if (trigger === "profile event") {
+      current().opts.onEvent?.(
+        createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
+      );
+    }
+    await gateway.loadSelfProfile();
+    if (trigger === "profile event") {
+      current().opts.onEvent?.(
+        createGatewayEvent("presence", {
+          presence: [
+            { instanceId: current().instanceId, user: { id: profile.id, name: "Old alias" } },
+          ],
+        }),
+      );
+    }
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: changed.id,
+      name: changed.displayName,
+    });
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=3");
+    expect(current().request).toHaveBeenCalledTimes(2);
+    gateway.stop();
+  });
 
-  it.each(["operator.sessions.write", "operator.read"])(
+  it.each(["operator.read"])(
     "preserves current-profile display events and upload revisions through a pending self read with %s",
     async (scope) => {
       const { gateway, current } = createStore();

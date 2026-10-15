@@ -14,6 +14,7 @@ import {
 } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
+import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
@@ -83,8 +84,12 @@ export function createChatComposerContext(
   const sendingForCurrentSession =
     props.sending && (!hasSubmittedProgress || submittedProgress !== undefined);
   const runWorking = isChatRunWorking(props);
-  const composerRunStatus =
-    sendingForCurrentSession || runWorking ? { phase: "in-progress" as const } : props.runStatus;
+  const composerRunStatus = isSessionRunVisuallyActive(
+    sendingForCurrentSession || runWorking,
+    props.startupStatus?.phase,
+  )
+    ? { phase: "in-progress" as const }
+    : props.runStatus;
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScope !== null && state.composerDraftScope.key !== draftKey) {
     // A new draft owns a new input; late IME events from the retired node cannot commit into it.

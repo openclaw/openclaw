@@ -9,7 +9,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
 
-type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
+type DeepPartial<T> = T extends object ? { [P in keyof T]?: DeepPartial<T[P]> } : T;
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
   reasoning?: string;
@@ -572,14 +572,18 @@ describe("OpenAI-compatible completions params", () => {
     expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
-  it("keeps the relocatable marker out of the OpenRouter Anthropic cache-control payload", async () => {
+  it.each([
+    "anthropic/claude-sonnet-4.6",
+    "~anthropic/claude-haiku-latest",
+    "openrouter/~anthropic/claude-haiku-latest",
+  ])("preserves the stable cache breakpoint for OpenRouter model %s", async (id) => {
     // This route preserves the cache boundary for its breakpoint and relocates
     // nothing, so the relocatable marker must not survive into the payload.
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
-        id: "anthropic/claude-sonnet-4.6",
+        id,
         provider: "openrouter",
         baseUrl: "https://openrouter.ai/api/v1",
       },

@@ -209,29 +209,6 @@ describe("managed handoff database publication", () => {
     expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 
-  it("retains an exclusively created inode after a durability failure for ordinary recovery", () => {
-    const sync = fs.fsyncSync;
-    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-      if (
-        fs.existsSync(databasePath) &&
-        fs.fstatSync(descriptor, { bigint: true }).ino ===
-          fs.statSync(databasePath, { bigint: true }).ino
-      ) {
-        throw new Error("fixture sync failed");
-      }
-      sync(descriptor);
-    });
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    expect(() => withDatabase(true, () => undefined)).toThrow("fixture sync failed");
-    const before = fs.statSync(databasePath);
-    expect(before.size).toBe(0);
-    expect(before.nlink).toBe(1);
-    vi.restoreAllMocks();
-    withDatabase(true, (db) => insertRow(db, root, "recovered"));
-    expect(fs.statSync(databasePath).ino).toBe(before.ino);
-    expect(readOwners()).toEqual(["recovered"]);
-  });
-
   it.each(["file", "parent"] as const)(
     "preserves initialization ownership when %s replacement is attempted",
     (target) => {

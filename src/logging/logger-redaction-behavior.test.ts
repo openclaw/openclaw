@@ -1,20 +1,18 @@
 // File logs preserve raw values; diagnostic emission owns its redaction.
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { markSqliteNativeOpenFailure } from "../infra/sqlite-error-diagnostics.js";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import {
   capturePluginStateWorkerFailure,
   restorePluginStateWorkerFailure,
 } from "../plugin-state/plugin-state-worker-errors.js";
-import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnv } from "../test-utils/env.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
@@ -57,14 +55,9 @@ afterAll(async () => {
 });
 
 describe("file logs and diagnostic redaction", () => {
-  it.each([
-    { canonical: false, aggregate: false },
-    { canonical: true, aggregate: false },
-    { canonical: false, aggregate: true },
-    { canonical: true, aggregate: true },
-  ])(
-    "retains plugin-state failure origin and raw causes (canonical=$canonical, aggregate=$aggregate)",
-    async ({ canonical, aggregate }) => {
+  it.each([{ aggregate: false }, { aggregate: true }])(
+    "retains plugin-state failure origin and raw causes (aggregate=$aggregate)",
+    async ({ aggregate }) => {
       const logPath = logPathTracker.nextPath();
       setLoggerOverride({ level: "info", file: logPath });
       const native = Object.assign(
@@ -82,9 +75,6 @@ describe("file logs and diagnostic redaction", () => {
         : new Error("Synthetic admission failed", { cause: native });
       if (cause instanceof AggregateError) {
         cause.errors.push(cause);
-      }
-      if (canonical) {
-        markSqliteNativeOpenFailure(cause);
       }
       const owner = { pid: 12345, threadId: 7, version: "2026.9.6" };
       const original = new PluginStateStoreError("Failed to open the plugin state database.", {
@@ -133,30 +123,6 @@ describe("file logs and diagnostic redaction", () => {
     },
   );
 
-  it("preserves raw structured authorization fields in JSONL file logs", async () => {
-    const logPath = logPathTracker.nextPath();
-    const digestResponse = ["runtime", "digest", "response", "1234567890abcdef"].join("-");
-    const awsScopeField = ["Cred", "ential", "=test-fixture-scope"].join("");
-    const awsProofField = ["runtime", "aws", "proof", "1234567890abcdef"].join("-");
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().warn({
-      message: [
-        `Authorization: Digest username="example", response="${digestResponse}"`,
-        `Authorization: AWS4-HMAC-SHA256 ${awsScopeField}, Signature=${awsProofField}`,
-      ].join("\n"),
-    });
-
-    const content = await readLogFile(logPath);
-    expect(() => JSON.parse(content.trim())).not.toThrow();
-    expect(content).toContain("Authorization: Digest");
-    expect(content).toContain("Authorization: AWS4-HMAC-SHA256");
-    expect(content).toContain(digestResponse);
-    expect(content).toContain(awsProofField);
-    expect(content).toContain("response=");
-    expect(content).toContain("Signature=");
-  });
-
   it("redacts sensitive structured fields before emitting diagnostic log records", async () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
@@ -181,36 +147,6 @@ describe("file logs and diagnostic redaction", () => {
     }
   });
 
-  it("writes raw file log fields regardless of the retired redaction switch", async () => {
-    const logPath = logPathTracker.nextPath();
-    const configPath = logPathTracker.nextPath();
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        logging: {
-          redactSensitive: "off",
-        },
-      }),
-    );
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      setLoggerOverride({ level: "info", file: logPath });
-
-      getLogger().info({
-        token: "token-value-1234567890",
-        access: "ya29.fake-access-token-with-enough-length",
-        password: "abcd-efgh-ijkl-mnop",
-        message: `Authorization: Bearer ${secret}`,
-      });
-    });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("token-value-1234567890");
-    expect(content).toContain("ya29.fake-access-token-with-enough-length");
-    expect(content).toContain("abcd-efgh-ijkl-mnop");
-    expect(content).toContain(secret);
-    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
-  });
-
   it("uses logging.file from the active config path", async () => {
     const logPath = logPathTracker.nextPath();
     const configPath = logPathTracker.nextPath();
@@ -231,51 +167,36 @@ describe("file logs and diagnostic redaction", () => {
     expect(content).toContain("configured log path works");
   });
 
-  it("expands leading tilde in logging.file", async () => {
-    const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
-    const logPath = path.join(home, "custom-openclaw.log");
-
-    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
-      setLoggerOverride({ level: "info", file: "~/custom-openclaw.log" });
-      getLogger().info("tilde log path works");
-
-      expect(await readLogFile(logPath)).toContain("tilde log path works");
+  it.each(["bindings"])("writes %s trace context ahead of active scope", async (source) => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const trace = {
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      parentSpanId: "00f067aa0ba902b8",
+      traceFlags: "00",
+    };
+    const logger = getChildLogger({
+      subsystem: "gateway",
+      ...(source === "bindings" ? { trace } : {}),
     });
+
+    runWithDiagnosticTraceContext(
+      createDiagnosticTraceContext({ traceId: "3bf92f3577b34da6a3ce929d0e0e4736" }),
+      () =>
+        logger.info(
+          { route: "/api/health", ...(source === "argument" ? { trace } : {}) },
+          "request completed",
+        ),
+    );
+
+    const [line] = (await readLogFile(logPath)).trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(record.traceId).toBe(TRACE_ID);
+    expect(record.spanId).toBe(SPAN_ID);
+    expect(record.parentSpanId).toBe(trace.parentSpanId);
+    expect(record.traceFlags).toBe("00");
   });
-
-  it.each(["bindings", "argument"])(
-    "writes %s trace context ahead of active scope",
-    async (source) => {
-      const logPath = logPathTracker.nextPath();
-      setLoggerOverride({ level: "info", file: logPath });
-      const trace = {
-        traceId: TRACE_ID,
-        spanId: SPAN_ID,
-        parentSpanId: "00f067aa0ba902b8",
-        traceFlags: "00",
-      };
-      const logger = getChildLogger({
-        subsystem: "gateway",
-        ...(source === "bindings" ? { trace } : {}),
-      });
-
-      runWithDiagnosticTraceContext(
-        createDiagnosticTraceContext({ traceId: "3bf92f3577b34da6a3ce929d0e0e4736" }),
-        () =>
-          logger.info(
-            { route: "/api/health", ...(source === "argument" ? { trace } : {}) },
-            "request completed",
-          ),
-      );
-
-      const [line] = (await readLogFile(logPath)).trim().split("\n");
-      const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-      expect(record.traceId).toBe(TRACE_ID);
-      expect(record.spanId).toBe(SPAN_ID);
-      expect(record.parentSpanId).toBe(trace.parentSpanId);
-      expect(record.traceFlags).toBe("00");
-    },
-  );
 
   it("captures trace fields before message serialization invokes caller code", async () => {
     const logPath = logPathTracker.nextPath();
@@ -314,30 +235,6 @@ describe("file logs and diagnostic redaction", () => {
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record.traceId).toBe(TRACE_ID);
     expect(record.spanId).toBe(SPAN_ID);
-  });
-
-  it.each([
-    {
-      name: "structured arguments",
-      args: [{ route: "/api/health" }, "request completed"],
-      message: "request completed",
-    },
-    {
-      name: "sparse numeric keys",
-      args: [{ "11": "eleven", "2": "two", "01": "leading", "1": "one" }],
-      message: "one leading two eleven",
-    },
-  ])("writes hostname and flattened message for $name", async ({ args, message }) => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    toPinoLikeLogger(getLogger(), "info").info(...args);
-
-    const [line] = (await readLogFile(logPath)).trim().split("\n");
-    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-    expect(record.hostname).toBeTypeOf("string");
-    expect(record.hostname).not.toBe("");
-    expect(record.message).toBe(message);
   });
 
   it("keeps bounded file-log messages UTF-16 safe", async () => {

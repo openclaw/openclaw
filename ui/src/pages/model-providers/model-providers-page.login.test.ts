@@ -153,7 +153,11 @@ describe("Models provider login", () => {
     },
   );
 
-  it.each([false, true])("connects Muse Code (setup: %s)", async (setup) => {
+  it.each([
+    { setup: false, entry: "provider-access" },
+    { setup: false, entry: "readiness" },
+    { setup: true, entry: "readiness" },
+  ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
       capabilities: [
@@ -174,9 +178,21 @@ describe("Models provider login", () => {
         },
       ],
     });
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method, ...args) =>
+      method === "models.list" && !setup
+        ? {
+            models: [{ provider: "openai", id: "working", name: "Working model", available: true }],
+          }
+        : originalRequest(method, ...args),
+    );
     const page = appendPage(context);
-    if (setup) {
-      await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
+    if (entry === "readiness") {
+      await waitForSolid(() =>
+        expect(
+          page.querySelector("[data-model-readiness]")?.getAttribute("data-model-readiness"),
+        ).toBe(setup ? "model-required" : "ready"),
+      );
       page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
       await page.updateComplete;
     } else {

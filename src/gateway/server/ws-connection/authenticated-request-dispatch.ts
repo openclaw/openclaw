@@ -141,7 +141,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       req.method,
       getMethodRegistry,
       extraHandlers,
-      req.method === "models.list"
+      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
         ? {
             clientKind: client.connect.client.id,
             source: sendResponse === send ? "wire" : "internal",

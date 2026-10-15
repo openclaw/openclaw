@@ -174,17 +174,20 @@ function readActiveTranscriptEntryFacts(
     }
     const identity = actor.transcript.identities.get(params.entryId);
     const active = identity && actor.transcript.active.get(identity.seq);
-    return identity && active
-      ? {
-          seq: identity.seq,
-          parent_id: identity.parent_id,
-          message_idempotency_key: identity.message_idempotency_key,
-          message_position: active.message_position,
-          generation: actor.hot.transcript.version.generation,
-          latestSeq: actor.hot.transcript.version.rawSeq,
-          transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
-        }
-      : undefined;
+    if (identity && active) {
+      return {
+        seq: identity.seq,
+        parent_id: identity.parent_id,
+        message_idempotency_key: identity.message_idempotency_key,
+        message_position: active.message_position,
+        generation: actor.hot.transcript.version.generation,
+        latestSeq: actor.hot.transcript.version.rawSeq,
+        transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
+      };
+    }
+    if (actor.transcript.complete) {
+      return undefined;
+    }
   }
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,

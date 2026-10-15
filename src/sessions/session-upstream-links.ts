@@ -1,4 +1,5 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -12,6 +13,7 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
+  emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -178,7 +180,17 @@ export async function listWatchedSessionUpstreamLinks(
 ): Promise<Map<string, SessionUpstreamLink[]>> {
   const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
-    const links = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+    const context = captureOpenClawStateWorkerContext(options);
+    if (
+      getOrLoadSqliteDatabaseAdmissionForPath(
+        context.admission.databasePath,
+        emptyWatchedSessionUpstreamLinksAdmission,
+        () => undefined,
+      )
+    ) {
+      return grouped;
+    }
+    const links = await executeOpenClawStateWorker(context, {
       type: "sessionUpstream.listWatched",
       input: undefined,
     });

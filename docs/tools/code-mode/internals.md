@@ -127,14 +127,14 @@ statuses: `completed`, `waiting`, or `failed`.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode
-run is unavailable or expired.` or `code mode run belongs to a different
-session.`.
+  run is unavailable or expired.` or `code mode run belongs to a different
+  session.`.
 - A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-runs.`.
+  runs.`.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also

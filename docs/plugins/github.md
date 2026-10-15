@@ -1,16 +1,17 @@
 ---
-summary: "Read public GitHub issues, pull requests, commits, and comments beside chat"
+summary: "Find public GitHub issues and pull requests, and read items beside chat"
 title: "GitHub"
 doc-schema-version: 1
 read_when:
   - You want GitHub links to open beside your conversation
   - You need to enable or disable GitHub link previews and the reader
+  - You want an agent to search a chosen public GitHub repository
 ---
 
 # GitHub
 
 The bundled GitHub plugin adds public-repository link previews and a read-only
-reader to the [Control UI](/web/control-ui). It is separate from the
+reader to the [Control UI](/web/control-ui), plus the `github_read` and `github_search` agent tools. It is separate from the
 [GitHub Copilot model provider](/providers/github-copilot).
 
 ## Upgrading with an existing plugin allowlist
@@ -33,7 +34,10 @@ To intentionally keep it off and silence that notice, set
 The plugin is enabled by default. Connect to the Gateway, then click a public
 GitHub issue, pull request, or commit link in chat. The reader opens beside the
 conversation with a GitHub icon and an **Open on GitHub** link. Hover or focus
-an issue or pull request link to see its preview. Login, OAuth, profile,
+an issue or pull request link to see its preview. Issue and pull request chips
+show the full `owner/repo#number` reference, including shorthand references
+resolved from the session repository. Descriptive link labels stay unchanged.
+Login, OAuth, profile,
 repository, and other general GitHub pages remain ordinary links: neither
 native item previews nor the generic page-preview fallback fetches them.
 A PR or issue URL inside a login redirect query does not make the login link
@@ -74,6 +78,57 @@ cannot load retain a full-size external link. Each loaded document bounds concur
 cached image data; closing its tab or replacing the document retires that cache.
 Script and connection policies are unchanged; remote content cannot run scripts
 or app widgets.
+
+## Ask the agent to read an item
+
+Give the agent a public GitHub issue, pull request, or commit URL. The
+`github_read` tool reads it through the Gateway and returns the title, description,
+applicable discussion and review comments, file changes, and pull request checks.
+It accepts `url` and optional `refresh: true` to fetch current content.
+
+This tool works for permitted sandboxed agents without GitHub credentials or
+outbound network access inside the sandbox. The Gateway selects the invoking
+agent's managed identity, or uses the same service-token/anonymous fallback as
+the reader. The tool cannot select another agent or expose the credential.
+Current invocation, tool and identity authority remain required through delivery,
+including cached reads.
+
+`github_read` is included in the coding profile and default sandbox tool allowlist.
+Explicit tool allowlists and deny rules remain authoritative. If you maintain a
+custom sandbox allowlist, include `github_read` to permit it. Disabling `github`
+removes the tool as well as the UI reader. The tool reads known references; it
+does not search, post, edit or merge GitHub content.
+
+The same limits below apply. Inspect `partial`, `bodyTruncated`,
+`commentsTruncated`, `filesTruncated`, and individual comment/patch/check markers;
+a bounded result does not establish that the full discussion or diff was read.
+
+## Ask the agent to find issues or pull requests
+
+Use `github_search` with a chosen public `repository` such as `openclaw/openclaw`.
+Choose `kind: "issue"` or `kind: "pull"` for each call. Search each kind separately
+when you need both; GitHub App user tokens require a single kind per query.
+Optional `query` keywords match text, and `state` selects `all`, `open`, or `closed`.
+Omit the query to use just the filters. Query text is literal: GitHub qualifiers, quotes, backslashes and
+parentheses are not accepted, and Boolean words cannot widen the repository scope.
+The quoted keywords must fit GitHub's 256-character search limit; use fewer or
+shorter words if the tool rejects a long query.
+
+Each call returns up to 20 items, sorted by most recently updated first, with
+URLs that `github_read` can open. Start at `page: 1`, then repeat the same filters
+with the returned `nextPage`. A null `nextPage` ends the available pages.
+`incomplete: true` means GitHub did not finish the search; `limited: true` means
+more than its first 1,000 matches exist. Refine the query or filters instead of
+assuming either result is exhaustive. Results can move between pages as issues
+and pull requests change on GitHub.
+
+Search uses the same Gateway-held identity and current invocation authority as
+reading. The selected repository must be public before the search and before
+its results are delivered. The tool is included in the coding profile and
+default sandbox allowlist; add `github_search` to a custom allowlist if needed.
+Explicit deny rules and plugin disablement still apply. Rate-limit errors include
+GitHub's retry delay when available. Search does not discover repositories,
+search private content, post, edit, or merge.
 
 ## Enable or disable the plugin
 

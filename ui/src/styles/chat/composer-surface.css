@@ -691,7 +691,7 @@
 }
 
 .agent-chat__input-btn:disabled,
-.agent-chat__attach-menu > button:disabled {
+.agent-chat__attach-menu .agent-chat__input-btn--attach:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -703,7 +703,7 @@
   flex: 0 0 auto;
 }
 
-.agent-chat__attach-menu[open] > button {
+.agent-chat__attach-menu[open] .agent-chat__input-btn--attach {
   color: var(--text);
   background: var(--bg-hover);
 }

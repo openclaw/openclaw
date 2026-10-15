@@ -9,6 +9,7 @@ import type {
 import "./chat-ci-details.ts";
 import "./chat-ci-automation-control.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
@@ -122,6 +123,7 @@ function renderChecks(
     sessionKey?: string;
     sessionId?: string;
     presented?: PresentationValue;
+    dismissed?: boolean;
     compact?: boolean;
   },
 ) {
@@ -133,6 +135,7 @@ function renderChecks(
     showLabel: props.compact,
     checksState: checks?.state ?? "none",
     presented,
+    dismissed: props.dismissed,
     content: html`
       <div
         class="chat-pr__checks-menu"
@@ -303,6 +306,7 @@ export function renderChatPullRequests(props: {
   sessionKey?: string;
   sessionId?: string;
   presented?: PresentationValue;
+  dismissed?: boolean;
   branch?: ControlUiSessionBranch;
   /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
   branchDismissed?: boolean;
@@ -384,19 +388,20 @@ export function renderChatPullRequests(props: {
               target="_blank"
               rel="noopener noreferrer"
               aria-label=${t("chat.pullRequests.linkLabel", {
-                number: String(pullRequest.number),
+                reference: formatGitHubItemReference(pullRequest),
                 title: pullRequest.title,
               })}
             >
               <span class="chat-pr__icon" aria-hidden="true">
                 ${merged ? icons.gitMerge : icons.gitPullRequest}
               </span>
-              <span class="chat-pr__number">#${pullRequest.number}</span>
+              <span class="chat-pr__number">${formatGitHubItemReference(pullRequest)}</span>
               <span class="chat-pr__identity" title=${compactDescription ?? nothing}>
-                <span class="chat-pr__repo"
-                  >${props.compact ? pullRequest.title : pullRequest.repo}</span
-                >
-                ${props.compact ? nothing : html`<span class="chat-pr__branch">${pullRequest.branch}</span>`}
+                ${
+                  props.compact
+                    ? html`<span class="chat-pr__repo">${pullRequest.title}</span>`
+                    : html`<span class="chat-pr__branch">${pullRequest.branch}</span>`
+                }
               </span>
             </a>
             <span class="chat-pr__meta">
@@ -414,7 +419,7 @@ export function renderChatPullRequests(props: {
                 type="button"
                 ?disabled=${Boolean(published) && publication?.activity !== null}
                 aria-label=${t("chat.pullRequests.dismiss", {
-                  number: String(pullRequest.number),
+                  reference: formatGitHubItemReference(pullRequest),
                 })}
                 @click=${() => {
                   if (published) {

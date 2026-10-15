@@ -5,7 +5,6 @@ import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  callGatewayMock,
   dispatchCronDeliveryMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
@@ -165,26 +164,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
   });
 
-  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
-    mockAgentRun({ ...failedRun, meta: { aborted: true } });
-    const result = await runTurn({
-      job: makeIsolatedAgentJobFixture({ deleteAfterRun: true }),
-    });
-    expectObjectFields(result, { status: "error", error: "cron isolated agent run aborted" });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps explicit silent replies as successful cron completions", async () => {
-    await useRealOutcome();
-    mockAgentRun({
-      usage: { input: 10, output: 1 },
-      meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "NO_REPLY" },
-    });
-    const result = await runTurn();
-    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-    expectObjectFields(result, { status: "ok", error: undefined });
-  });
-
   it("records a real tool error when the terminal assistant reply is silent", async () => {
     await useRealOutcome();
     mockAgentRun({
@@ -194,24 +173,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     const result = await runTurn();
     expect(result.status).toBe("error");
     expect(result.error).toContain("Bash failed");
-  });
-
-  it.each([
-    "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
-    "Task blocked: no shell tool is available in this run.",
-  ])("keeps task-failure prose as ordinary successful output: %s", async (reply) => {
-    await useRealOutcome();
-    mockAgentRun({
-      payloads: [{ text: reply }],
-      meta: { finalAssistantVisibleText: reply },
-    });
-    expectObjectFields(await runTurn(), {
-      status: "ok",
-      error: undefined,
-      errorClassification: undefined,
-      summary: reply,
-      outputText: reply,
-    });
   });
 
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {

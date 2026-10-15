@@ -154,7 +154,9 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
   </Accordion>
 
   <Accordion title="Outbound mention aliases">
-    Use `mentionAliases` when agents need to mention known Discord users by handle. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
+    Use `mentionAliases` when agents need to mention known Discord users by handle. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside URLs, email addresses, or Markdown backtick code spans and fences are left unchanged.
+
+    Trailing punctuation (`.`, `,`, `!`, `?`, `:`, `;`, `)`) is preserved after known mentions, including dotted handles such as `@alice.dev.`. The longest known handle takes precedence over treating its trailing periods as punctuation.
 
 ```json5
 {

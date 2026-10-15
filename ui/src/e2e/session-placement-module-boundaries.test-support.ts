@@ -248,7 +248,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await thinkingSlider.press("End");
         await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
         await captureUiProof(suite, page, "01-cloud-thinking-level.png", {
-          surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+          surface: page.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
           content: [thinkingSlider],
         });
         await effortSelect.click();
@@ -669,7 +669,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           .getByRole("menuitem", { name: "Stop cloud worker…" });
         await stopWorker.waitFor();
         await captureUiProof(suite, page, "02-active-cloud-worker-stop.png", {
-          surface: page.locator('openclaw-session-menu wa-dropdown [part="menu"]'),
+          surface: page.locator("openclaw-session-menu .session-menu__panel"),
           content: [stopWorker],
         });
         expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);

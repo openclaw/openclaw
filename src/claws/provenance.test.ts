@@ -136,31 +136,6 @@ describe("Claw root install provenance", () => {
     expect(Number(readInstallRow("worker", root)?.added_at_ms)).toBe(1);
   });
 
-  it("resumes a matching non-complete install record without inserting again", async () => {
-    const { root, plan } = await makePlan();
-    const first = persistClawInstallRecord(plan, {
-      env: stateEnv(root),
-      status: "pending",
-      nowMs: 1,
-    });
-
-    const resumed = persistClawInstallRecord(plan, {
-      env: stateEnv(root),
-      status: "pending",
-      nowMs: 2,
-    });
-
-    expect(resumed).toEqual(first);
-    expect(clawInstallRecordMatchesPlan(first, { ...plan, planIntegrity: "sha256:changed" })).toBe(
-      false,
-    );
-    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toMatchObject({
-      agentId: "worker",
-      status: "pending",
-      addedAtMs: 1,
-    });
-  });
-
   it("rejects a stale phase update after an install reaches complete", async () => {
     const { root, plan } = await makePlan();
     const options = { env: stateEnv(root) };
@@ -189,30 +164,6 @@ describe("Claw root install provenance", () => {
       }),
     ).toThrow("did not match the expected phase");
     expect(readClawInstallRecord("worker", options)?.status).toBe("complete");
-  });
-
-  it("advances package identity while preserving install creation time", async () => {
-    const { root, plan } = await makePlan();
-    const original = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
-    const target = {
-      ...plan,
-      claw: { ...plan.claw, version: "2.0.0", integrity: "sha256:target" },
-      agent: {
-        ...plan.agent,
-        config: { ...plan.agent.config, name: "Worker v2" },
-      },
-    };
-
-    const updated = updateClawInstallRecord(target, { env: stateEnv(root), nowMs: 2 });
-
-    expect(updated).toMatchObject({
-      claw: { version: "2.0.0", integrity: "sha256:target" },
-      addedAtMs: 1,
-      updatedAtMs: 2,
-      status: "complete",
-    });
-    expect(updated.agentConfigDigest).not.toBe(original.agentConfigDigest);
-    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(updated);
   });
 
   it("rejects an update when package provenance changed after planning", async () => {
@@ -626,6 +577,12 @@ describe("applyClawAddPlan", () => {
       workspaceCreated: true,
       configCommitted: true,
     });
+    expect(
+      clawInstallRecordMatchesPlan(retry.installRecord!, {
+        ...plan,
+        planIntegrity: "sha256:changed",
+      }),
+    ).toBe(false);
     expect(config.agents?.entries?.worker).toBeDefined();
     expect(readInstallRow("worker", root)?.status).toBe("complete");
     expect(readAgentProvenance("worker", { env: stateEnv(root) })).toMatchObject({

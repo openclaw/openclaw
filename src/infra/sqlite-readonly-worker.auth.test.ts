@@ -191,6 +191,38 @@ function read(
   });
 }
 
+it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
+  const { source } = createAuthDatabase("original");
+  const replacement = createAuthDatabase("replacement");
+  const expectedIdentity = readDatabasePathIdentitySync(source).key;
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await read(source, "canonical");
+    const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
+    const replies: unknown[] = [];
+    child.on("message", (message: unknown) => replies.push(message));
+    fs.renameSync(source, `${source}.retired`);
+    fs.renameSync(replacement.source, source);
+    await expect(
+      runSqliteReadOnlyWorker(source, {
+        mode: "auth-profile-rows",
+        source: "canonical",
+        expectedIdentity,
+        env: { ...process.env },
+      }),
+    ).rejects.toThrow("identity changed");
+    expect(replies).toEqual([
+      {
+        id: expect.any(Number),
+        result: { ok: false, message: expect.stringContaining("identity changed") },
+      },
+    ]);
+    expect((await read(source, "canonical")).store).toEqual({
+      status: "readable",
+      raw: replacement.store,
+    });
+  });
+});
+
 it("observes agent initialization after a cold auth read in the same worker", async () => {
   const root = tempDirs.make("openclaw-auth-bootstrap-");
   const source = path.join(root, "openclaw-agent.sqlite");

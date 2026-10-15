@@ -1,16 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it, vi } from "vitest";
 import {
   pluginControlUiRevision,
   readPluginControlUiAssets,
 } from "../../../../src/plugins/control-ui-assets.ts";
 import { loadPluginManifest } from "../../../../src/plugins/manifest.ts";
+import { normalizeControlUiBuildInfo } from "../../build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   startBuiltControlUiE2eServer,
+  waitForConfirmModal,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
@@ -33,6 +36,9 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("loads entry, CSS and lazy Workboard chunks from the UI origin with an authenticated remote Gateway", async () => {
+    const buildInfo = normalizeControlUiBuildInfo(
+      JSON.parse(await fs.readFile(path.join(repoRoot, "dist/build-info.json"), "utf8")),
+    );
     const pluginRoot = path.join(repoRoot, "dist/extensions/workboard");
     const manifest = loadPluginManifest(pluginRoot, false);
     if (!manifest.ok || !manifest.manifest.controlUi) {
@@ -50,9 +56,34 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const errors: string[] = [];
       const requests: string[] = [];
+      const scripts = { requested: 0, completed: 0, failed: 0 };
+      const scriptStatuses = new Map<number, number>();
       page.on("pageerror", (error) => errors.push(error.message));
-      page.on("request", (request) => requests.push(request.url()));
+      page.on("request", (request) => {
+        requests.push(request.url());
+        if (request.resourceType() === "script") {
+          scripts.requested += 1;
+        }
+      });
+      page.on("requestfinished", (request) => {
+        if (request.resourceType() === "script") {
+          scripts.completed += 1;
+        }
+      });
+      page.on("requestfailed", (request) => {
+        if (request.resourceType() === "script") {
+          scripts.failed += 1;
+        }
+      });
+      page.on("response", (response) => {
+        if (response.request().resourceType() === "script") {
+          const status = response.status();
+          scriptStatuses.set(status, (scriptStatuses.get(status) ?? 0) + 1);
+        }
+      });
       const gateway = await installMockGateway(page, {
+        serverBuildId: buildInfo.buildId,
+        serverVersion: buildInfo.version ?? undefined,
         controlUiTabs: workboardUi.controlUiTabs,
         pluginAssetsRequireAuth: true,
         featureMethods: [
@@ -84,9 +115,39 @@ suite.define(() => {
       const url = new URL("workboard/ops", suite.server.baseUrl);
       url.hostname = "ui.example";
       url.hash = new URLSearchParams({ gatewayUrl }).toString();
-      await page.goto(url.href);
-      await page.getByRole("button", { name: "Switch to gateway.example", exact: true }).click();
-      await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
+      try {
+        const response = await page.goto(url.href);
+        expect(response?.status()).toBe(200);
+        expect(errors).toEqual([]);
+        const confirmation = await waitForConfirmModal(page);
+        await confirmation
+          .getByRole("button", { name: "Switch to gateway.example", exact: true })
+          .click();
+        await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
+      } catch (error) {
+        const startup = await withTimeout(
+          page.evaluate(() => {
+            const snapshot = window.openclawControlUi?.snapshot();
+            return {
+              documentReadyState: document.readyState,
+              applicationAvailable: Boolean(snapshot),
+              booted: snapshot?.booted ?? null,
+              routeStatus: snapshot?.route?.status ?? null,
+              routeReady: snapshot?.routeReady ?? null,
+              gatewayPhase: snapshot?.gatewayPhase ?? null,
+            };
+          }),
+          5_000,
+          "Workboard startup diagnostics",
+        ).catch(() => null);
+        // Public CI receives only fixed state, counts, and status codes, never URLs or errors.
+        console.error("[workboard-distribution] startup failure", {
+          startup,
+          pageErrorCount: errors.length,
+          scripts: { ...scripts, statuses: Object.fromEntries(scriptStatuses) },
+        });
+        throw error;
+      }
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect((await gateway.getSocketUrls()).at(-1)).toBe(gatewayUrl);
       expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({

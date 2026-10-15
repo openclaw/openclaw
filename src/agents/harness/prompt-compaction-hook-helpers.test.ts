@@ -280,6 +280,9 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions: true });
     expect(result).toMatchObject({
       toolsAllow,
+      threadDeveloperInstructions: "hook replacement",
+      turnDeveloperInstructions:
+        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
       developerInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
     });

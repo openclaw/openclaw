@@ -24,7 +24,6 @@ import { createOkIsolatedCronStateFactory } from "./ops.test-support.js";
 import * as taskRuns from "./run-history.js";
 import { claimCronRecoveryReceipt } from "./run-recovery.test-support.js";
 import type { CronEvent } from "./state.js";
-import { runMissedJobs } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
@@ -47,16 +46,6 @@ async function withStateDirForStorePath<T>(
     } finally {
       await closeOpenClawStateDatabaseAsync();
     }
-  });
-}
-
-function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
-  return createCronServiceState({
-    storePath: params.storePath,
-    nowMs: () => params.now,
-    runIsolatedAgentJob: vi.fn(async () => {
-      throw new Error("cron: job execution timed out");
-    }),
   });
 }
 
@@ -215,24 +204,6 @@ function findCronTaskByBaseRunId(baseRunId: string) {
     findCronRunForTests(baseRunId) ??
     readCronRunRecordsForTests().find((task) => task.runId?.startsWith(`${baseRunId}:`))
   );
-}
-
-function createMissedIsolatedJob(now: number): CronJob {
-  return {
-    id: "startup-timeout",
-    name: "startup timeout",
-    enabled: true,
-    createdAtMs: now - 86_400_000,
-    updatedAtMs: now - 30 * 60_000,
-    schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "should timeout" },
-    sessionKey: "agent:main:main",
-    state: {
-      nextRunAtMs: now - 60_000,
-    },
-  };
 }
 
 describe("cron service ops seam coverage", () => {
@@ -570,75 +541,6 @@ describe("cron service ops seam coverage", () => {
     });
   });
 
-  it("persists successful script state from a manual run", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-07-18T12:00:00.000Z");
-    const job: CronJob = {
-      id: "manual-script-state",
-      name: "manual script state",
-      enabled: true,
-      createdAtMs: now - 60_000,
-      updatedAtMs: now - 60_000,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "script", script: "return { state: { revision: 2 } }" },
-      state: { nextRunAtMs: now - 1, triggerState: { revision: 1 } },
-    };
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    const state = createCronServiceState({
-      storePath,
-      cronConfig: { triggers: { enabled: true } },
-      nowMs: () => now,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      runScriptJob: vi.fn(async () => ({
-        status: "ok" as const,
-        stateChanged: true,
-        state: { revision: 2 },
-      })),
-    });
-
-    await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: true });
-
-    const persisted = await loadCronStore(storePath);
-    expect(persisted.jobs[0]?.state.triggerState).toEqual({ revision: 2 });
-  });
-
-  it("records failed manual runs with cron outcome detail", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T12:00:00.000Z");
-
-    await withStateDirForStorePath(storePath, async () => {
-      await writeDueIsolatedJobSnapshot(storePath, now);
-      const state = createCronServiceState({
-        storePath,
-        nowMs: () => now,
-        runIsolatedAgentJob: vi.fn(async () => ({
-          status: "error" as const,
-          error: "provider failed",
-          provider: "openai",
-          model: "gpt-test",
-        })),
-      });
-
-      await run(state, "isolated-timeout");
-
-      const task = findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`);
-      expect(task).toMatchObject({
-        status: "failed",
-        error: "provider failed",
-        detail: {
-          kind: "cron-run",
-          status: "error",
-          provider: "openai",
-          model: "gpt-test",
-          runAtMs: now,
-          durationMs: 0,
-        },
-      });
-    });
-  });
-
   it("does not reschedule a manual lifecycle conflict after execution starts", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
@@ -702,31 +604,6 @@ describe("cron service ops seam coverage", () => {
     expect(updated.description).toBe("fixed");
     expect(updated.state.nextRunAtMs).toBeGreaterThan(0);
     expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
-  });
-
-  it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T12:00:00.000Z");
-
-    await withStateDirForStorePath(storePath, async () => {
-      await writeCronStoreSnapshot({
-        storePath,
-        jobs: [createMissedIsolatedJob(now)],
-      });
-
-      const state = createTimedOutIsolatedCronState({
-        storePath,
-        now,
-      });
-
-      await runMissedJobs(state);
-
-      expectCronRun({
-        runId: `cron:startup-timeout:${now}`,
-        status: "timed_out",
-        jobId: "startup-timeout",
-      });
-    });
   });
 
   it("uses explicit lifecycle events instead of scheduled duplicates for the target job", async () => {

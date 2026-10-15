@@ -145,6 +145,7 @@ const suite = createControlUiE2eSuite({
           agents: {
             ownership: "explicit",
             defaults: {
+              workspace: "${OPENCLAW_WORKSPACE_DIR}",
               model: "media-order-fixture/echo",
               utilityModel: "media-order-fixture/metadata",
               models: {
@@ -173,6 +174,7 @@ const suite = createControlUiE2eSuite({
           plugins: { allow: ["openai"] },
         },
       });
+      instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
       const mediaDir = instance.state.statePath("media", "ordering-fixture");
       await mkdir(mediaDir, { recursive: true });
       const first = path.join(mediaDir, "blue-card.png");
@@ -218,17 +220,20 @@ async function runCli(args: string[]) {
 
 async function capture(page: Page, bubble: Locator, name: string) {
   const body = (await page.locator("body").textContent()) ?? "";
-  for (const privateValue of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    process.cwd(),
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Distinguish rendered disclosure from hidden DOM text.
+  const renderedBody = await page.locator("body").innerText();
+  for (const [field, privateValue] of Object.entries({
+    gatewayToken: instance.gatewayToken,
+    hookToken: instance.hookToken,
+    stateDir: instance.stateDir,
+    homeDir: instance.homeDir,
+    workingDirectory: process.cwd(),
     fixtureKey,
-  ]) {
-    expect(body.includes(privateValue), "Capture must contain only synthetic public content").toBe(
-      false,
-    );
+  })) {
+    expect(
+      body.includes(privateValue),
+      `Capture must contain only synthetic public content (field: ${field}, rendered: ${renderedBody.includes(privateValue)})`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   const content = [
@@ -393,6 +398,7 @@ suite.define(() => {
                 await expect
                   .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
                   .toBe(2);
+                await expect.poll(() => bubble.locator("img.chat-message-image").count()).toBe(2);
                 try {
                   await bubble.locator("img.chat-message-image").evaluateAll(async (images) => {
                     await Promise.all(
@@ -413,18 +419,21 @@ suite.define(() => {
                   });
                   throw error;
                 }
-                expect(
-                  await bubble
-                    .locator("img.chat-message-image")
-                    .evaluateAll((images) =>
-                      images.map(
-                        (image) =>
-                          image instanceof HTMLImageElement &&
-                          image.complete &&
-                          image.naturalWidth > 0,
+                // History reconciliation can replace the nodes that just finished decoding.
+                await expect
+                  .poll(() =>
+                    bubble
+                      .locator("img.chat-message-image")
+                      .evaluateAll((images) =>
+                        images.map(
+                          (image) =>
+                            image instanceof HTMLImageElement &&
+                            image.complete &&
+                            image.naturalWidth > 0,
+                        ),
                       ),
-                    ),
-                ).toEqual([true, true]);
+                  )
+                  .toEqual([true, true]);
               };
               await assertDecoded();
               // Capture before the order assertion so an unfixed run retains the actual flattening.

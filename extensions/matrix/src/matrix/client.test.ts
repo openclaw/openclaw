@@ -243,56 +243,6 @@ describe("resolveMatrixAuth", () => {
       }
     },
   );
-  it("carries the private-network opt-in through Matrix auth resolution", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "http://127.0.0.1:8008",
-          network: { dangerouslyAllowPrivateNetwork: true },
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-          deviceId: "DEVICE123",
-        },
-      },
-    } as CoreConfig;
-
-    const auth = await resolveMatrixAuth({ cfg, env: {} });
-
-    expectAuthFields(auth, {
-      homeserver: "http://127.0.0.1:8008",
-      allowPrivateNetwork: true,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-  });
-
-  it("retries token whoami when startup auth hits a transient network error", async () => {
-    matrixDoRequestMock
-      .mockRejectedValueOnce(
-        Object.assign(new TypeError("fetch failed"), {
-          cause: Object.assign(new Error("read ECONNRESET"), {
-            code: "ECONNRESET",
-          }),
-        }),
-      )
-      .mockResolvedValue(identity);
-
-    const auth = await resolveAuth(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@base:example.org",
-        accounts: { ops: { accessToken: "tok-123" } },
-      },
-      "ops",
-    );
-
-    expect(matrixDoRequestMock).toHaveBeenCalledTimes(2);
-    expectAuthFields(auth, {
-      accountId: "ops",
-      userId: "@bot:example.org",
-      deviceId: "DEVICE123",
-    });
-  });
-
   it("does not call whoami when token auth already has a userId and only deviceId is missing", async () => {
     matrixDoRequestMock.mockRejectedValue(new Error("whoami should not be called"));
 

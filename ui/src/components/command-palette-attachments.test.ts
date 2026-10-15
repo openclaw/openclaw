@@ -344,7 +344,10 @@ describe("command palette paste-only images", () => {
         ),
       );
       expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-        outcome === "partial" ? 1 : 0,
+        outcome === "partial" ? 2 : 1,
+      );
+      expect(palette.querySelector(".chat-attachment-failures")?.textContent).toContain(
+        "oversized.gif",
       );
     }
     if (outcome === "ready" || delayedPolicy) {

@@ -12,7 +12,7 @@ import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/model-ref-parse";
 import {
   isProviderAuthError,
   resolveApiKeyForProvider,

@@ -2,10 +2,10 @@ import { createEffect, createSignal, For, onCleanup, Show, untrack, useContext }
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { renderToolIcon } from "./chat-tool-cards.ts";
+import { ChatToolIcon } from "./chat-tool-cards.solid.tsx";
 
 export type ChatActivityHeadlineProps = {
   scope: string;
@@ -105,11 +105,10 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       >
         <Show when={name()} fallback={<Icon name="listTree" />}>
           {(tool) => (
-            <LitContent
-              value={renderToolIcon(
-                shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool()),
-                { toolName: tool(), pluginToolIcons: props.pluginToolIcons },
-              )}
+            <ChatToolIcon
+              style={{ display: "contents" }}
+              name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
+              tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
             />
           )}
         </Show>

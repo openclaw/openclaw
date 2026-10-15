@@ -75,9 +75,10 @@ export function recordOperationTimingEvent(
     case "diagnostic.gc":
       store.histogram(
         "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds by collection kind and isolate role.",
+        "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.",
         {
           kind: evt.kind ?? "unknown",
+          reason: evt.reason ?? "other",
           thread: evt.thread ?? "main",
           ...(evt.workerSlot === undefined ? {} : { slot: String(evt.workerSlot) }),
         },
@@ -165,6 +166,34 @@ export function recordOperationTimingEvent(
               scope: catalog.scope,
               refresh: String(catalog.refresh),
               prepared_only: String(catalog.preparedOnly),
+            },
+          );
+        }
+        if (evt.method === "sessions.list" && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_requests_total",
+            "Session list requests by client kind and bounded request shape.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+            },
+          );
+        }
+        if (evt.method === "cron.list" && evt.cronList) {
+          const cron = evt.cronList;
+          store.counter(
+            "openclaw_cron_list_requests_total",
+            "Cron list requests by client kind and bounded request shape.",
+            {
+              client_kind: cron.clientKind,
+              source: cron.source,
+              scope: cron.scope,
+              compact: String(cron.compact),
+              page: cron.page,
             },
           );
         }

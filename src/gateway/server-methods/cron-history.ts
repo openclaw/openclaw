@@ -150,9 +150,10 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
         offset,
         maxBytes: MAX_CRON_HISTORY_BYTES - 16_384,
       },
-      respond: (ok, payload, error) => {
+      respond: (ok, payload) => {
         if (!ok) {
-          respond(false, undefined, error);
+          // Chat errors may name the internally selected session, which the caller cannot see.
+          fail();
           return;
         }
         const page = asOptionalRecord(payload);
