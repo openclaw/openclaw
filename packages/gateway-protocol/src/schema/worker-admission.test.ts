@@ -37,7 +37,7 @@ const bundleHash = "a".repeat(64);
 const handshake: WorkerAdmissionHandshake = {
   bundleHash,
   openclawVersion: "2026.7.11",
-  protocolFeatures: ["run-v1", "resume-v1"],
+  protocolFeatures: [],
 };
 const credential = ["worker", "credential", "fixture"].join("-");
 const connectParams = {
@@ -201,6 +201,16 @@ const liveResponse = (value: Record<string, unknown>) =>
   Value.Check(WorkerLiveEventResponseFrameSchema, { type: "res", id: "l", ...value });
 
 describe("worker admission handshake schema", () => {
+  it("accepts the bootstrap receipt and future unique feature names", () => {
+    expect(validateWorkerAdmissionHandshake(handshake)).toBe(true);
+    expect(
+      validateWorkerAdmissionHandshake({
+        ...handshake,
+        protocolFeatures: ["run-v1", "resume-v1"],
+      }),
+    ).toBe(true);
+  });
+
   it.each([{ ...handshake, bundleHash: "short" }])(
     "rejects malformed admission identity %#",
     (candidate) => {
@@ -540,6 +550,10 @@ describe("worker protocol schemas", () => {
   it.each([
     transcriptCommit({ sessionId: "other" }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }] }),
+    transcriptCommit({
+      messages: [{ ...transcriptMessages[0], sessionId: "foreign-session" }],
+    }),
   ])("rejects raw transcript identity or invalid batch fields %#", (candidate) => {
     expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
   });
