@@ -3,7 +3,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { buildSourceReplyPayloadState } from "../../agents/embedded-agent-runner/run/source-reply-payloads.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -72,6 +72,50 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
     setAgentRunReplies,
     writeSavedPng,
   } = fixture;
+  it.each([
+    { metadata: { assistantMessageIndex: 1 }, status: false },
+    { metadata: { assistantTranscriptOwned: true }, status: false },
+    { metadata: { assistantMessageIndex: 1 }, status: true },
+  ])(
+    "settles transcript-owned queued text without another answer ($metadata, status=$status)",
+    async ({ metadata, status }) => {
+      await withTranscriptFixtureState("openclaw-chat-send-queued-answer-", async () => {
+        const { scope } = fixture.session();
+        const text = "The queued request is complete.";
+        await appendTranscriptMessage(scope, {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        });
+        const before = loadTranscriptEventsSync(scope);
+        const canvas: Omit<ChatCanvasBlock, "type"> = {
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "result",
+            url: "/__openclaw__/canvas/documents/result/index.html",
+          },
+          rawText: null,
+        };
+        const broadcast = await fixture.sendLate({
+          runId: "queued-answer-run",
+          payloads: [
+            setReplyPayloadMetadata({ text }, metadata),
+            ...(status ? [{ text, isStatusNotice: true }] : []),
+          ],
+          canvas,
+          bufferCurrent: true,
+        });
+        expect(broadcast).toMatchObject({ state: "final", runId: "queued-answer-run" });
+        expect(getMessageContent(broadcast)).toEqual([
+          ...(status ? [{ type: "text", text, openclawStatusNotice: true }] : []),
+          { type: "canvas", ...canvas },
+        ]);
+        expect(loadTranscriptEventsSync(scope)).toEqual(before);
+        expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+      });
+    },
+  );
+
   it.each([
     { count: 1, delivery: "direct" },
     { count: 2, delivery: "direct" },
