@@ -2,18 +2,21 @@
 
 import { Buffer } from "node:buffer";
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -57,32 +60,40 @@ function unreadableMetadataResponse(status = 200): Response {
   );
 }
 
-function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
+function mountTranscriptPane(props: ChatThreadProps) {
   const transcript = createTestTranscript();
   const container = document.body.appendChild(document.createElement("div"));
-  let root!: ReturnType<typeof render>;
+  const [current, setCurrent] = createSignal(props, { ownedWrite: true });
+  const [presented, setPresented] = createSignal(true);
+  let root: ReturnType<typeof mountSolid> | undefined;
   const renderPane = () => {
-    root = render(
-      renderChatThread({ ...props, onRequestUpdate: renderPane }, transcript),
-      container,
-    );
+    setCurrent({ ...props, onRequestUpdate: renderPane });
     flush();
+    root ??= mountSolid(
+      () => (
+        <SolidContentPresentation value={presented}>
+          <ChatThread props={current()} transcript={transcript} />
+        </SolidContentPresentation>
+      ),
+      { container },
+    );
     transcript.hostUpdated();
     flush();
   };
   const setConnected = (connected: boolean) => {
     if (connected) {
-      root.setConnected(true);
+      setPresented(true);
+      flush();
       transcript.hostConnected();
       transcript.hostUpdated();
     } else {
       transcript.hostDisconnected();
-      root.setConnected(false);
+      setPresented(false);
     }
     flush();
   };
   onTestFinished(() => {
-    render(null, container);
+    root?.unmount();
     releaseChatMediaResourceSubscriber(renderPane);
     transcript.hostDisconnected();
   });

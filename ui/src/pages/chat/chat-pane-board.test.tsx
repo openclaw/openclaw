@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render, type nothing, type TemplateResult } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
@@ -15,8 +15,11 @@ import {
   type BoardProvider,
 } from "../../lib/board/provider.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createPaneTestHost } from "./chat-pane-runtime.test-support.ts";
@@ -32,7 +35,7 @@ import {
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
-// These shell tests isolate board data and presentation; board rendering has its own suite.
+// mock-isolation: isolate board data and presentation without registering the real board renderer.
 vi.mock("../../components/board/board-view.ts", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
@@ -84,10 +87,8 @@ type TestChatPane = HTMLElement & {
   showDashboard: (expanded: boolean) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
-  renderBoardPanel: (
-    board: ResolvedBoardView,
-    layout: ChatPageHost["sidebarLayout"],
-  ) => TemplateResult | typeof nothing;
+  renderBoardPanel: (board: ResolvedBoardView, layout: ChatPageHost["sidebarLayout"]) => unknown;
+  renderResetConfirmation: () => unknown;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
   requestUpdate: () => void;
@@ -605,6 +606,35 @@ describe("chat pane board shell", () => {
     }
   });
 
+  it.each(["confirm", "cancel", "dismiss"] as const)(
+    "settles board reset from the %s control",
+    async (action) => {
+      installDialogPolyfill();
+      const pane = createTestPane();
+      pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
+      const pending = pane.confirmConversationReset();
+      const mounted = mountSolid(() => <LitContent value={pane.renderResetConfirmation()} />);
+      flush();
+      try {
+        const modal = mounted.container.querySelector("openclaw-modal-dialog")!;
+        if (action === "dismiss") {
+          modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+        } else {
+          modal
+            .querySelector<HTMLButtonElement>(
+              action === "confirm" ? "button.primary" : "button:not(.primary)",
+            )!
+            .click();
+        }
+        await expect(pending).resolves.toBe(action === "confirm");
+        expect(pane.resetConfirmation).toBeUndefined();
+      } finally {
+        pane.settleResetConfirmation(false);
+        mounted.unmount();
+      }
+    },
+  );
+
   it("keeps chat-only reset confirmation disabled", async () => {
     const pane = createTestPane();
     pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
@@ -742,7 +772,12 @@ describe("chat pane board shell", () => {
     pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
     const container = document.body.appendChild(document.createElement("div"));
     const layout = openSlot({ columns: [] }, "dashboard");
-    const draw = () => render(pane.renderBoardPanel(pane.resolveBoardView(), layout), container);
+    const [content, setContent] = createSignal<unknown>(emptyLegacyContent);
+    const mounted = mountSolid(() => <LitContent value={content()} />, { container });
+    const draw = () => {
+      setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+      flush();
+    };
     try {
       pane.visuallyPresented = true;
       draw();
@@ -756,7 +791,7 @@ describe("chat pane board shell", () => {
         expect(board.active).toBe(visible);
       }
     } finally {
-      render(html``, container);
+      mounted.unmount();
       container.remove();
     }
   });
@@ -776,7 +811,12 @@ describe("chat pane board shell", () => {
       request.mockResolvedValue(snapshot);
       const container = document.createElement("div");
       const layout = openSlot({ columns: [] }, "dashboard");
-      const draw = () => render(pane.renderBoardPanel(pane.resolveBoardView(), layout), container);
+      const [content, setContent] = createSignal<unknown>(emptyLegacyContent);
+      const mounted = mountSolid(() => <LitContent value={content()} />, { container });
+      const draw = () => {
+        setContent(pane.renderBoardPanel(pane.resolveBoardView(), layout));
+        flush();
+      };
       const target = () =>
         (
           container.querySelector("openclaw-board-view") as
@@ -810,7 +850,7 @@ describe("chat pane board shell", () => {
           expect(target()).toEqual({ sessionKey: "replacement-notes", agentId: "work" });
         }
       } finally {
-        render(html``, container);
+        mounted.unmount();
         (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
       }
     },

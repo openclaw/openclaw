@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
@@ -29,55 +29,34 @@ export function ChatQuickActionItem(props: {
   slot?: string;
   layout?: boolean;
 }) {
-  const command = () => (props.action.kind === "status" ? null : props.action);
-  const label = () => (
-    <span class="session-menu__text">
-      {props.action.label}
-      <Show when={props.action.description}>
-        <span class="session-menu__description">{props.action.description}</span>
-      </Show>
-    </span>
+  const entry = createMemo(() =>
+    chatQuickActionEntry(props.action, props.value, props.layout, props.slot),
   );
+  const command = () => {
+    const current = entry();
+    return current.kind === "content" ? undefined : current;
+  };
+  const status = () => {
+    const current = entry();
+    return current.kind === "content" ? current.content : undefined;
+  };
   return (
-    <Show
-      when={command()}
-      fallback={
-        <div
-          slot={props.slot}
-          class="session-menu__status"
-          data-menu-status={props.action.id}
-          role="note"
-        >
-          <span class="session-menu__check" aria-hidden="true">
-            <LitContent value={props.action.icon} />
-          </span>
-          {label()}
-        </div>
-      }
-    >
-      {(action) => (
+    <Show when={command()} fallback={status()}>
+      {(item) => (
         <wa-dropdown-item
           slot={props.slot}
-          class={["session-menu__item", props.layout ? action().className : undefined]}
-          value={props.value}
-          aria-label={props.layout ? action().label : undefined}
-          type={action().active === undefined ? undefined : "checkbox"}
-          prop:checked={action().active ?? false}
-          prop:disabled={action().disabled}
-          variant={props.layout ? undefined : action().variant}
+          class={item().class}
+          value={item().id}
+          aria-label={props.layout ? item().label : undefined}
+          type={item().type === "checkbox" ? "checkbox" : undefined}
+          prop:checked={item().checked ?? false}
+          prop:disabled={item().disabled}
+          variant={item().variant}
         >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">
-            <LitContent value={action().icon} />
-          </span>
-          {label()}
-          <Show when={props.layout ? action().shortcut : undefined}>
-            {(shortcut) => (
-              <KeyboardShortcut
-                combo={shortcut()}
-                slot="details"
-                class="side-panel-type-option__shortcut"
-              />
-            )}
+          <span slot="icon">{item().icon}</span>
+          {item().content}
+          <Show when={item().details}>
+            <span slot="details">{item().details}</span>
           </Show>
         </wa-dropdown-item>
       )}
@@ -91,7 +70,7 @@ export function chatQuickActionEntry(
   id: string,
   layout = false,
   slot?: string,
-): MenuEntry {
+): Exclude<MenuEntry, { kind: "group" }> {
   const label = (
     <span class="session-menu__text">
       {action.label}

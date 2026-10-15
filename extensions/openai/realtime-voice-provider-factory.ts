@@ -363,7 +363,7 @@ async function createOpenAIRealtimeBrowserSession(
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
-    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
+    ...(clientSecret.expiresAt !== undefined ? { expiresAt: clientSecret.expiresAt } : {}),
   };
 }
 

@@ -15,10 +15,7 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
-import {
-  createApplicationContextProvider,
-  createApplicationGateway,
-} from "../../test-helpers/application-context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -333,8 +330,6 @@ export function createPage(options: PageOptions = {}) {
     navigate,
   };
   const baselineEventListeners = eventListeners.size;
-  const provider = createApplicationContextProvider(context);
-  document.body.append(provider);
   const solidProvider = createSolidApplicationContextProvider(context);
   const view = mountSolid(() => createComponent(AgentsHomePage, {}), {
     wrapper: solidProvider.wrapper,
@@ -348,7 +343,7 @@ export function createPage(options: PageOptions = {}) {
   });
   return {
     page,
-    provider,
+    wrapper: solidProvider.wrapper,
     context,
     rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,

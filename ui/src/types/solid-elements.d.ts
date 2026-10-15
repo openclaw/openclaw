@@ -19,9 +19,12 @@ export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
+type DockElementAttributes = JSX.HTMLAttributes<HTMLElement> & {
+  [key: `prop:${string}`]: unknown;
+};
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
-type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+export type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
     "prop:surface": Surface;
@@ -40,6 +43,9 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-terminal-panel": DockElementAttributes & { fullscreen?: boolean };
+      "openclaw-browser-panel": DockElementAttributes;
+      "openclaw-link-reader-panel": DockElementAttributes;
       "openclaw-appearance-background": HTMLAttributes<HTMLElement>;
       "openclaw-config-page": HTMLAttributes<HTMLElement>;
       "openclaw-meeting-capture-settings": HTMLAttributes<HTMLElement>;

@@ -255,9 +255,7 @@ export async function discoverBedrockModels(params: {
           continue;
         }
         if (providerFilter.length > 0) {
-          const providerName =
-            summary.providerName ??
-            (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
+          const providerName = summary.providerName ?? summary.modelId.split(".")[0];
           const provider = normalizeOptionalLowercaseString(providerName);
           if (!provider || !providerFilter.includes(provider)) {
             continue;

@@ -1189,8 +1189,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     --hide-duration: 0ms;
   }
 
-  .skeleton::after,
-  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+  .skeleton::after {
     animation: none !important;
   }
 
