@@ -610,8 +610,12 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Project recents and observed checkout requests consume the Gateway's prepared
-session-row metadata, including archived rows. The existing selection owner maintains
+Project recents consume profile-scoped, recency-ordered candidates from the Gateway's
+session-row projection, including archived rows, until eight distinct results are found.
+Committed receipts maintain the creator index; uncertain metadata uses the existing
+worker admission. Ordinary recents do not reconstruct a combined session store.
+Observed checkout requests still consume the broader prepared metadata selection.
+The existing selection owner maintains
 physical-store and sentinel precedence through committed row and topology publications;
 listings do not reread or rebuild the durable session stores. Recent-project ties retain
 physical-store and SQLite binary key order. Incognito entries remain with the
