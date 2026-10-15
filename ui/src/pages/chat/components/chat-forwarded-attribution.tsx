@@ -17,7 +17,6 @@ export type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvata
   basePath?: string;
   linkSource?: boolean;
   updateCount?: number;
-  showAvatar?: boolean;
 };
 
 type ForwardedGroup = Pick<MessageGroup, "senderSession"> & Partial<Pick<MessageGroup, "messages">>;
@@ -122,9 +121,7 @@ export function ForwardedAttribution(props: {
     source().sourceLabel ? "markdown-session-link--titled" : undefined,
   );
   const avatarAgentId = () =>
-    source().sourceIsOtherAgent &&
-    props.options.updateCount === undefined &&
-    props.options.showAvatar !== false
+    source().sourceIsOtherAgent && props.options.updateCount === undefined
       ? source().sourceParsed?.agentId
       : undefined;
   const avatar = createMemo(() => {

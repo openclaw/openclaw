@@ -46,6 +46,7 @@ declare module "@solidjs/web" {
         "prop:seed"?: string;
         "prop:phrases"?: readonly string[];
       };
+      "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
         "prop:request"?: NodePermissionRequest | null;
@@ -55,10 +56,7 @@ declare module "@solidjs/web" {
         HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
       > &
         ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-chat-run-failure-notice"],
-            "onRetry" | "onChangeModel"
-          >
+          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
         >;
       "openclaw-chat-retry-status": LegacyAttributes<
         HTMLElementTagNameMap["openclaw-chat-retry-status"]

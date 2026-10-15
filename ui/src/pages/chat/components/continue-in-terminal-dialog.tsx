@@ -22,11 +22,11 @@ export function ContinueInTerminalDialog(props: ContinueInTerminalDialogProps) {
         <p class="continue-in-terminal-dialog__note">
           {t("chat.sessionHeader.continueInTerminal.authNote")}
         </p>
-        <footer class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button type="button" class="btn primary" onClick={() => props.onClose()}>
             {t("common.close")}
           </button>
-        </footer>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );

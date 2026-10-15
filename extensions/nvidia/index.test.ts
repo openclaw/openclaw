@@ -127,7 +127,7 @@ describe("nvidia provider hooks", () => {
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "static:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
       "static:nvidia/nvidia/nemotron-3.5-lightning-30b-a3b",
-      "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "static:nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b",
       "static:nvidia/moonshotai/kimi-k2.6",
     ]);
 

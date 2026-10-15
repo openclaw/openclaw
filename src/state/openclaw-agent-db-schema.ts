@@ -443,6 +443,13 @@ function ensureAgentSchema(
             });
           }
         }
+        // Historical rebuilds also converge indexes. Later version steps own
+        // only their declared tables; additive index repair stays at admission.
+        if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
+          repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
+            verifyPhysicalIntegrity: false,
+          });
+        }
         finishAgentSchemaMigration(
           db,
           agentId,

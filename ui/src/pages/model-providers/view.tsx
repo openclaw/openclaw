@@ -426,7 +426,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             />
             {renderMutationMessage(props.messages.add)}
           </div>
-          <div class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
               {t("common.cancel")}
             </button>
@@ -437,7 +437,7 @@ function AddProvider(props: ModelProvidersViewProps) {
             >
               {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>

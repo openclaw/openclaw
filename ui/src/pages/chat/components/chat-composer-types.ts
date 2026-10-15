@@ -6,6 +6,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../../api/types.ts";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type { SessionProgressCardRefreshAction } from "../../../components/session-progress-card.ts";
@@ -112,6 +113,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  composerPredictions?: {
+    enabled: boolean;
+    active: boolean;
+    gateway: Pick<ApplicationGateway, "subscribeEvents">;
+  };
   mentions?: readonly HumanMention[];
   getMentions?: () => readonly HumanMention[];
   mentionDirectory?: HumanMentionDirectory;

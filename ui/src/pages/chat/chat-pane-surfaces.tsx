@@ -47,14 +47,14 @@ export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boole
             <div class="exec-approval-sub">{t("chat.board.resetDescription")}</div>
           </div>
         </div>
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
             {t("common.confirm")}
           </button>
           <button class="btn" type="button" autofocus onClick={() => props.onResolve(false)}>
             {t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

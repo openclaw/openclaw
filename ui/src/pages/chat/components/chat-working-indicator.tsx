@@ -76,6 +76,8 @@ function WorkingContent(props: WorkingProps) {
       : branding.read().workingIndicator);
   const continuation = () => options().presentation === "continuation";
   const working = () => !options().waitingApproval && !options().startupLabel;
+  const hasOutputTokens = () => options().outputTokens != null;
+  const statusLabelHidden = () => working() && !continuation() && indicator() !== "none";
   const runningSubagents = () => options().runningSubagents ?? 0;
   const runningLabel = () =>
     runningSubagents() === 1
@@ -120,7 +122,7 @@ function WorkingContent(props: WorkingProps) {
           </div>
         </Show>
         <span class="chat-working-indicator__status">
-          <span class={working() && !continuation() && indicator() !== "none" ? "sr-only" : ""}>
+          <span class={statusLabelHidden() ? "sr-only" : ""}>
             <Show
               when={!options().waitingApproval && options().retryAt !== undefined}
               fallback={statusLabel()}
@@ -128,8 +130,16 @@ function WorkingContent(props: WorkingProps) {
               <openclaw-chat-retry-status prop:retryAt={options().retryAt ?? null} />
             </Show>
           </span>
+          <Show when={hasOutputTokens()}>
+            <Show when={!statusLabelHidden()}>
+              <span aria-hidden="true">·</span>
+            </Show>
+            <span class="chat-working-indicator__tokens">
+              {outputTokensLabel(options().outputTokens!)}
+            </span>
+          </Show>
           <Show when={!options().waitingApproval}>
-            <Show when={options().startupLabel}>
+            <Show when={options().startupLabel || hasOutputTokens()}>
               <span aria-hidden="true">·</span>
             </Show>
             <openclaw-elapsed-time
@@ -137,23 +147,13 @@ function WorkingContent(props: WorkingProps) {
               prop:startMs={props.part.startedAt}
             />
           </Show>
-          <Show
-            when={options().outputTokens != null}
-            fallback={
-              <Show when={working()}>
-                <openclaw-working-phrase
-                  aria-hidden="true"
-                  prop:startMs={props.part.startedAt}
-                  prop:seed={props.part.key}
-                  prop:phrases={options().workingPhrases}
-                />
-              </Show>
-            }
-          >
-            <span aria-hidden="true">·</span>
-            <span class="chat-working-indicator__tokens">
-              {outputTokensLabel(options().outputTokens!)}
-            </span>
+          <Show when={!hasOutputTokens() && working()}>
+            <openclaw-working-phrase
+              aria-hidden="true"
+              prop:startMs={props.part.startedAt}
+              prop:seed={props.part.key}
+              prop:phrases={options().workingPhrases}
+            />
           </Show>
           <Show when={runningSubagents() > 0}>
             <span aria-hidden="true">·</span>
@@ -242,13 +242,13 @@ export function TurnRecapRow(props: {
           <WorkingBrandIcon branding={branding.read()} claw="claw" />
         </span>
       </Show>
-      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
       <Show when={tokens() !== null}>
+        <span>{tokens()}</span>
         <span class="chat-turn-recap__sep" aria-hidden="true">
           ·
         </span>
-        <span>{tokens()}</span>
       </Show>
+      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
     </div>
   );
 }
