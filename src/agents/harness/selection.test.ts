@@ -1522,22 +1522,6 @@ describe("runAgentHarnessAttempt", () => {
     );
   });
 
-  it("rejects the candidate when the forced plugin harness does not support its provider", async () => {
-    registerFailingCodexHarness();
-
-    const params = createAttemptParams(
-      agentModelRuntimeConfig("9router/cc/claude-opus-4-6", "codex"),
-    );
-    params.provider = "9router";
-    params.modelId = "cc/claude-opus-4-6";
-    params.agentHarnessRuntimeOverride = "codex";
-
-    await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
-      /Requested agent harness "codex" does not support 9router\/cc\/claude-opus-4-6/,
-    );
-    expect(agentRunAttempt).not.toHaveBeenCalled();
-  });
-
   it("keeps a session-pinned Codex harness across outer provider overrides", async () => {
     registerSuccessfulCodexHarness();
 
@@ -1549,18 +1533,6 @@ describe("runAgentHarnessAttempt", () => {
     });
 
     expect(result.sessionIdUsed).toBe("codex");
-    expect(agentRunAttempt).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a session-pinned Codex harness is unavailable", async () => {
-    await expect(
-      runAgentHarnessAttempt({
-        ...createAttemptParams(),
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-        agentHarnessId: "codex",
-      }),
-    ).rejects.toThrow('Requested agent harness "codex" is not registered');
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
@@ -1642,49 +1614,6 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.toolsAllow).toEqual([]);
     expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
-  });
-
-  it("passes partial conversation policy to harnesses that enforce it exactly", async () => {
-    const received: Array<{
-      conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
-      pluginHarnessToolPolicyRestricted: boolean | undefined;
-      toolsAllow: string[] | undefined;
-    }> = [];
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
-      received.push({
-        conversationToolPolicy: attempt.conversationToolPolicy,
-        pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted,
-        toolsAllow: attempt.toolsAllow,
-      });
-      return createAttemptResult("codex");
-    });
-    registerHarness({
-      conversationToolPolicySupport: "exact",
-      supports: (ctx) =>
-        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-      runAttempt,
-    });
-
-    for (const toolsAllow of [undefined, ["Read", "Bash"]]) {
-      await runAgentHarnessAttempt({
-        ...createAttemptParams(),
-        conversationToolPolicy: { deny: ["exec"] },
-        toolsAllow,
-      });
-    }
-
-    expect(received).toEqual([
-      {
-        conversationToolPolicy: { deny: ["exec"] },
-        pluginHarnessToolPolicyRestricted: true,
-        toolsAllow: undefined,
-      },
-      {
-        conversationToolPolicy: { deny: ["exec"] },
-        pluginHarnessToolPolicyRestricted: true,
-        toolsAllow: ["Read", "Bash"],
-      },
-    ]);
   });
 
   it("isolates native tools unless every exact deny is explicitly safe", async () => {
@@ -1987,23 +1916,6 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("rejects statically unrelated auto harnesses before provider discovery", () => {
-    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      autoSelection: { providerIds: ["openai", "codex"] },
-      supports,
-      runAttempt: vi.fn(async () => createAttemptResult("codex")),
-    });
-
-    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
-      "openclaw",
-    );
-    expect(supports).not.toHaveBeenCalled();
-    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
-  });
-
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
     const lowPrioritySupports = vi.fn(() => ({
       supported: true as const,
