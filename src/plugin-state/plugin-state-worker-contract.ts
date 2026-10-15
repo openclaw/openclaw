@@ -12,11 +12,11 @@ import type {
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
-import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateObservation,
   PluginStateStoreErrorCode,
   PluginStateStoreOperation,

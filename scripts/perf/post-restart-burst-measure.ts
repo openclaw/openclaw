@@ -690,9 +690,17 @@ try {
   });
   const initial = launch("gateway-before-crash");
   await ready(initial);
-  const initialClients = await Promise.all(
-    Array.from({ length: clientCount }, (_, index) => connect(index)),
-  );
+  const initialClients: Awaited<ReturnType<typeof connect>>[] = [];
+  // Pair devices before the measured restart without exhausting the per-IP preauth budget.
+  for (let offset = 0; offset < clientCount; offset += 32) {
+    initialClients.push(
+      ...(await Promise.all(
+        Array.from({ length: Math.min(32, clientCount - offset) }, (_, index) =>
+          connect(offset + index),
+        ),
+      )),
+    );
+  }
   const sender = initialClients[0];
   if (!sender) {
     throw new Error("No synthetic sender connected");

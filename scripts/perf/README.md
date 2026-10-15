@@ -175,7 +175,9 @@ without a model replay. Utility calls never count as primary arrivals.
 The Gateway uses a fake fixture token. Clients use a non-ephemeral UI connection
 mode and sign the normal Gateway device challenge with generated Ed25519 keys.
 All clients pair through the normal loopback/shared-token admission before the
-crash and reconnect with the same device keys after restart. Connect verifies
+crash in batches of 32, avoiding the per-IP preauth limit during setup. They
+reconnect concurrently with the same device keys after restart; admission refusals
+and retries remain part of the measurement. Connect verifies
 token authentication, retained read/admin scopes, and a durable owner profile through
 `users.self`, so `projects.list` exercises the signed-in session/recents phase.
 A generated catalog plugin consumes the real Gateway session metadata snapshot

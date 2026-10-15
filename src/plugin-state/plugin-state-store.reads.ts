@@ -30,7 +30,7 @@ import {
 import {
   PluginStateStoreError,
   type PluginStateEntry,
-  type PluginStateKeyRange,
+  type PluginStateKeyRangeParams,
 } from "./plugin-state-store.types.js";
 import {
   pluginStateWorkerOperations,
@@ -165,11 +165,6 @@ export function listPluginStateEntries(
   }
   return entries;
 }
-
-export type PluginStateKeyRangeParams = {
-  pluginId: string;
-  namespace: string;
-} & PluginStateKeyRange;
 
 export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): void {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {

@@ -22,10 +22,7 @@ import {
   bindPluginStateNativeBindingStore,
   type PluginStateOperationModuleSource,
 } from "./plugin-state-store.native-binding.js";
-import {
-  validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
-} from "./plugin-state-store.reads.js";
+import { validatePluginStateKeyRange } from "./plugin-state-store.reads.js";
 import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
@@ -36,6 +33,7 @@ import type {
   PluginStateActionAuthority,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateKeyedStore,
   PluginStateObservation,
   PluginStateStoreError,
