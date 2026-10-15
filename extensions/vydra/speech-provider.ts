@@ -22,32 +22,31 @@ const VYDRA_SPEECH_VOICES = [
 function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.vydra) ?? asOptionalRecord(rawConfig.vydra);
+  const apiKey = normalizeResolvedSecretInputString({
+    value: raw?.apiKey,
+    path: "tts.providers.vydra.apiKey",
+  });
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "tts.providers.vydra.apiKey",
-    }),
-    baseUrl: normalizeVydraBaseUrl(
-      normalizeOptionalString(raw?.baseUrl) ?? normalizeOptionalString(process.env.VYDRA_BASE_URL),
-    ),
-    model:
-      normalizeOptionalString(raw?.model) ??
-      normalizeOptionalString(process.env.VYDRA_TTS_MODEL) ??
-      DEFAULT_VYDRA_SPEECH_MODEL,
-    voiceId:
-      normalizeOptionalString(raw?.voiceId) ??
-      normalizeOptionalString(process.env.VYDRA_TTS_VOICE_ID) ??
-      DEFAULT_VYDRA_VOICE_ID,
+    ...readVydraSpeechConfig(raw ?? {}),
+    apiKey,
   };
 }
 
 function readVydraSpeechConfig(config: SpeechProviderConfig) {
-  const normalized = normalizeVydraSpeechConfig({});
   return {
-    apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
-    baseUrl: normalizeVydraBaseUrl(normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl),
-    model: normalizeOptionalString(config.model) ?? normalized.model,
-    voiceId: normalizeOptionalString(config.voiceId) ?? normalized.voiceId,
+    apiKey: normalizeOptionalString(config.apiKey),
+    baseUrl: normalizeVydraBaseUrl(
+      normalizeOptionalString(config.baseUrl) ??
+        normalizeOptionalString(process.env.VYDRA_BASE_URL),
+    ),
+    model:
+      normalizeOptionalString(config.model) ??
+      normalizeOptionalString(process.env.VYDRA_TTS_MODEL) ??
+      DEFAULT_VYDRA_SPEECH_MODEL,
+    voiceId:
+      normalizeOptionalString(config.voiceId) ??
+      normalizeOptionalString(process.env.VYDRA_TTS_VOICE_ID) ??
+      DEFAULT_VYDRA_VOICE_ID,
   };
 }
 

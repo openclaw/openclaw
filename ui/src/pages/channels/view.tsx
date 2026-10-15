@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
-import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -14,7 +14,6 @@ import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
 import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
@@ -245,12 +244,11 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       class="settings-row settings-row--nav channels-item"
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
-      <LitContent
-        render={() =>
-          renderChannelIcon(params.channelId, label(), "tile", {
-            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-          })
-        }
+      <ChannelIcon
+        channelId={params.channelId}
+        label={label()}
+        variant="tile"
+        pluginIconUrl={params.props.presentation.pluginIconUrls[params.channelId]}
       />
       <div class="settings-row__text">
         <span class="settings-row__title">{label()}</span>
@@ -283,12 +281,11 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         title={t("channels.hub.openDetails")}
         onClick={() => params.props.onShowDetail(params.channelId)}
       >
-        <LitContent
-          render={() =>
-            renderChannelIcon(params.channelId, label(), "tile", {
-              pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-            })
-          }
+        <ChannelIcon
+          channelId={params.channelId}
+          label={label()}
+          variant="tile"
+          pluginIconUrl={params.props.presentation.pluginIconUrls[params.channelId]}
         />
         <span class="settings-row__text">
           <span class="settings-row__title">{label()}</span>

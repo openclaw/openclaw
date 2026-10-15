@@ -8,6 +8,7 @@ export {
   resolveSpeechProviderApiKey,
 } from "../tts/tts-provider-helpers.js";
 export { parseSpeechDirectiveNumberOverride } from "../tts/directive-number.js";
+export { createSpeechDirectiveParser } from "../tts/directive-parser.js";
 export {
   createOpenAiCompatibleSpeechProvider,
   type OpenAiCompatibleSpeechProviderBaseUrlPolicy,
