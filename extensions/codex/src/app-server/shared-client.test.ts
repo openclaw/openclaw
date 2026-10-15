@@ -1045,10 +1045,16 @@ describe("shared Codex app-server client", () => {
       } else if (persisted) {
         mocks.applyCodexAppServerAuthProfile.mockResolvedValueOnce(authHandoff);
       }
-      const pending = createIsolatedCodexAppServerClient({
-        timeoutMs: 1000,
-        ...(persisted ? { authProfileId, agentDir } : { authProfileStore: suppliedStore }),
-      });
+      const pending =
+        selection === "prepared store"
+          ? getSharedCodexAppServerClient({
+              timeoutMs: 1000,
+              preparedAuth: { kind: "profile", profileId: authProfileId, store: authProfileStore },
+            })
+          : createIsolatedCodexAppServerClient({
+              timeoutMs: 1000,
+              ...(persisted ? { authProfileId, agentDir } : { authProfileStore: suppliedStore }),
+            });
       await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
       await expect(pending).resolves.toBe(harness.client);
       if (selection === "selected store") {
@@ -1061,6 +1067,23 @@ describe("shared Codex app-server client", () => {
         expect(resolveAuthProfileCall().authProfileStore).toBe(authProfileStore);
         expect(bridgeStartOptionsCall().authProfileStore).toBe(authProfileStore);
         expect(applyAuthProfileCall().authProfileStore).toBe(authProfileStore);
+      } else if (selection === "prepared store") {
+        expect(mocks.resolveCodexAppServerAuthProfileStore).not.toHaveBeenCalled();
+        expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
+        expect(mocks.resolveCodexAppServerPreparedAuthProfileSnapshot).toHaveBeenCalledOnce();
+        expect(bridgeStartOptionsCall()).toMatchObject({
+          authProfileId,
+          authProfileStore,
+          preparedAuth: { kind: "profile", profileId: authProfileId },
+        });
+        expect(applyAuthProfileCall()).toMatchObject({
+          authProfileId,
+          authProfileStore,
+          preparedAuth: {
+            kind: "profile",
+            snapshot: { loginParams: { type: "chatgptAuthTokens", accessToken: "prepared-token" } },
+          },
+        });
       }
       const account = persisted ? "persisted-account" : "scoped-account";
       const response = {
