@@ -18,7 +18,7 @@ export type TelegramNativeCommandDeps = Pick<
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
-  runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
+  runModelsAuthLoginFlow: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
   sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 };
 

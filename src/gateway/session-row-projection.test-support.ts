@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,10 +12,12 @@ import {
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
+  selectionRow,
   sort as sortSessionRows,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
@@ -317,6 +319,19 @@ export function createSessionRowProjectionFixture(params: {
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
     selectEntries,
+    async projectRecentCandidates(profileIds) {
+      const selection = createSessionRowSelection(
+        cfg,
+        projection.state.scope({}),
+        false,
+        () => rowContext,
+        true,
+      );
+      for (const row of rows.values()) {
+        selection.add(selectionRow(row)!);
+      }
+      return selection.createdEntries(profileIds);
+    },
     listCreatedActors: () =>
       selectEntries({ sortBy: null }).flatMap((row) =>
         row.entry.createdActor ? [row.entry.createdActor] : [],

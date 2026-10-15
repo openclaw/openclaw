@@ -33,6 +33,12 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 - Accepted local creates refresh observed list membership independently of primary reads/bootstrap. Create events skip coordinator collection/backoff but retain visibility, bootstrap admission, and queued navigation ownership; the Gateway still owns owner/involvement/search filtering. Other event invalidations retain coordinator pacing.
 - Explicit refresh, filter/agent changes, reconnects, foreground replacement bypass backoff + absorb pending invalidation. Recheck visibility/current intent after background admission; hidden pages retain one catch-up until visible.
 
+## Reload Performance
+
+- Reload cost is main-thread render/reconcile triggered per Gateway message; JSON parse and transport are negligible. Measured no win or regressions (2026-10-15, Team-scale bench, quiet AWS, ≥7 interleaved pairs): socket worker/SharedWorker, delivery scheduling/chunking, batched boot RPC, V8 compile hints/chunk sizing, cached DOM shell replay, WebSocket permessage-deflate (server keeps it off). Retry only with new evidence.
+- Cut work at its owner: memoize values read per item (`createMemo`), render reused UI as components rather than helper calls, keep row identity through placement/history/live updates, check cheap state before reading layout.
+- Measure with `scripts/bench-control-ui-cold-load.ts` (long-task and render-pass probes) over several untraced runs; single DevTools traces inflate timing.
+
 ## i18n Rules
 
 - Foreign `src/i18n/locales/*.ts` = stable source-owned lazy adapters; translations from canonical grouped `src/i18n/.i18n/*.tm.jsonl`. Never hand-edit translation memory, locale/fallback metadata unless targeted generated-output fix requested.
@@ -45,7 +51,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## CSS / Template Linting
 
-- `pnpm lint`: Solid 2 oxlint rules on `ui/**/*.tsx`; split effects + [Solid skill](../.agents/skills/solid/SKILL.md#traps-that-compile-but-break). `tools/solid-lint` isolates plugin tooling dependencies; corpus: `test/scripts/oxlint-solid.test.ts`.
+- `pnpm lint`: Solid 2 oxlint rules on `ui/**/*.tsx` and TypeScript helpers in `src/lib/reactive/`, `src/components/solid/`, and `src/test-helpers/`; plain domain owners keep their own contracts. Follow the [Solid idioms](../.agents/skills/solid/references/idioms.md) for split effects, tracking, and lifecycle. `tools/solid-lint` isolates plugin tooling dependencies; corpus: `test/scripts/oxlint-solid.test.ts`.
 - `pnpm lint:ui:styles` (included in lint): `ui/src` stylesheets + Lit CSS templates via `config/stylelint.config.mjs`/postcss-lit. Stylelint owns error rules; oxfmt owns formatting.
 - Shared 24×24 Lucide icons: `strokeIcon()` in `src/components/icons-tools.ts` for inline stroke attributes inside shadow roots. Bodies must be `svg` template fragments, never `html` (wrong namespace).
 - `pnpm lint:ui:lit` = slow opt-in template diagnostic with existing findings, not CI gate.
@@ -86,4 +92,4 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 ## Visual Proof
 
 - Substantial UI design changes: follow [Control UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test); inspect states in HTML gallery + collect per-example feedback.
-- Never capture Discord invitation card. Mock/E2E harnesses seed canonical browser dismissal; invitation tests may use `communityInviteDismissed: false` without screenshots/videos.
+- Never capture the retired Discord invitation artwork. Mock/E2E harnesses default to `communityInvite: false`; compact Community entry scenarios opt in with `communityInvite: true`. Capture only the current entry and on-demand sheet, with synthetic content.

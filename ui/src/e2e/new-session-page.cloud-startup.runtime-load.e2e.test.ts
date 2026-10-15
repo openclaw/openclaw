@@ -11,7 +11,10 @@ import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProofEnabled,
@@ -131,7 +134,6 @@ suite.define(() => {
           ({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)),
           { key: storageKey, record: recovery },
         );
-        let moduleRequests = 0;
         let documentProbes = 0;
         // Automatic recovery outlives the first failed probe. Keep the outage
         // until the scenario has established the owner that must block reloads.
@@ -146,22 +148,15 @@ suite.define(() => {
           }
           await route.fallback();
         });
-        await page.route(
+        const failure = await failControlUiModuleForDocuments(
+          page,
           controlUiE2eBuiltModuleRequest(
             "ui/src/app/session-placement-startup.runtime.ts",
             buildRoot,
           ),
-          async (route) => {
-            moduleRequests += 1;
-            if (moduleRequests === 1) {
-              await route.abort("failed");
-            } else {
-              await route.continue();
-            }
-          },
         );
         await page.reload();
-        await expect.poll(() => moduleRequests).toBe(1);
+        await expect.poll(failure.documentCount).toBe(1);
         await expect.poll(() => documentProbes).toBeGreaterThan(0);
         const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
         try {
@@ -411,7 +406,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        expect(moduleRequests).toBe(2);
+        expect(failure.documentCount()).toBe(2);
         if (incognito) {
           expect(
             await evaluateControlUiContext(

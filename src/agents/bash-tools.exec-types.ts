@@ -92,6 +92,8 @@ export type ExecToolDefaults = {
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
+  /** Credential owner when execution borrows another agent's tool policy. */
+  executionAgentId?: string;
   backgroundMs?: number;
   cleanupMs?: number;
   timeoutSec?: number;

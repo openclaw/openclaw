@@ -29,6 +29,8 @@ it.each([false, true])(
       () => (
         <SidebarSessionFilterPopover
           anchor={anchor}
+          label="Filter sessions"
+          onClose={() => {}}
           content={
             <>
               <div id="sidebar-sessions-status">

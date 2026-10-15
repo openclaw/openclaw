@@ -20,6 +20,7 @@ import {
   settleTooltip,
   type TooltipElement,
 } from "./tooltip.test-support.ts";
+import { focusWithoutTooltip } from "./tooltip.ts";
 
 // Keep renderer-specific readiness and content lookup at the fixture boundary.
 function commitTooltip(tooltip: TooltipElement) {
@@ -70,6 +71,22 @@ describe("openclaw-tooltip", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each([true, false])(
+    "preserves focus options without opening a tooltip (wrapped=%s)",
+    async (wrapped) => {
+      const { tooltip, trigger } = createTooltip("Navigation action");
+      document.body.append(wrapped ? tooltip : trigger);
+      if (wrapped) {
+        await commitTooltip(tooltip);
+      }
+      const focus = vi.spyOn(trigger, "focus");
+      focusWithoutTooltip(trigger, { preventScroll: true });
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      expect(document.activeElement).toBe(trigger);
+      await expectOpenCount(0);
+    },
+  );
 
   it.each([
     [undefined, "right-start"],

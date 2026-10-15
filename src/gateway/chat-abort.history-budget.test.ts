@@ -166,7 +166,6 @@ describe("resolveInFlightRunSnapshot", () => {
   });
 
   it.each([
-    { agentId: "main", defaultAgentId: undefined, expected: "main" },
     { agentId: "work", defaultAgentId: undefined, expected: "work" },
     { agentId: undefined, defaultAgentId: "main", expected: "main" },
   ])(

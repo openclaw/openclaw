@@ -22,16 +22,19 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
-function WorktreesContent() {
+export function WorktreesPage() {
   const context = useApplication();
-  return <WorktreesView model={new WorktreesModel(() => context)} />;
+  return (
+    <openclaw-worktrees-page>
+      <WorktreesView model={new WorktreesModel(() => context)} />
+    </openclaw-worktrees-page>
+  );
 }
 
 export function WorktreesView(props: { model: WorktreesModel }) {
@@ -305,7 +308,3 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     </>
   );
 }
-
-export const WorktreesPage = defineSolidBridge("openclaw-worktrees-page", WorktreesContent, {
-  properties: {},
-});

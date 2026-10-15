@@ -15,8 +15,6 @@ import {
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -29,8 +27,8 @@ import {
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
 import {
-  captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
+  sendReplyWithTranscriptMirror,
 } from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
@@ -135,22 +133,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       } else {
         state.markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        const captureToken = {};
-        const delivered = captureDeliveredTranscriptMirror({
+        const sent = sendReplyWithTranscriptMirror({
           dispatcher,
+          cfg,
           metadata,
-          captureToken,
+          payload: fast.payload,
+          send: (payload) => turnLedger.sendQueued("final", payload),
         });
-        setReplyPayloadMetadata(fast.payload, { finalDeliveryCapture: captureToken });
-        const sent = turnLedger.sendQueued("final", fast.payload);
         queuedFinal = sent.queued;
-        if (sent.queued && sent.outcome) {
-          registerReplyDispatcherSettledTask(dispatcher, async () => {
-            if ((await sent.outcome) === "delivered") {
-              await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
-            }
-          });
-        }
       }
     } else if (suppressDelivery) {
       logVerbose(

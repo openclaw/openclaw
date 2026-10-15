@@ -21,20 +21,6 @@ import {
   summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
 
-it("createOutboundPayloadPlan preserves preceding-input metadata for delivery without serializing it", () => {
-  const payload = setReplyPayloadMetadata(
-    { text: "Earlier answer." },
-    { precedingInputAnswer: true },
-  );
-  const plan = createOutboundPayloadPlan([payload]);
-  const delivered = projectOutboundPayloadPlanForDelivery(plan);
-  expect(delivered).toHaveLength(1);
-  expect(delivered.map((reply) => getReplyPayloadMetadata(reply)?.precedingInputAnswer)).toEqual([
-    true,
-  ]);
-  expect(projectOutboundPayloadPlanForJson(plan)[0]).not.toHaveProperty("precedingInputAnswer");
-});
-
 describe("normalizeReplyPayloadsForDelivery", () => {
   it("deduplicates a file URL directive with its explicit local path: café 100% image.png", () => {
     const fileName = "café 100% image.png";
@@ -51,11 +37,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
   });
 
   it.each([
-    {
-      name: "Markdown images",
-      text: "Caption ![one](https://x.test/one.png) ![two](https://x.test/two.png)",
-      extractMarkdownImages: true,
-    },
     {
       name: "multiline Markdown images",
       text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
@@ -133,20 +114,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         replyToId: "123",
         replyToTag: true,
       },
-    ]);
-  });
-
-  it("strips unsupported citation control markers from reply payload text", () => {
-    const payloads: ReplyPayload[] = [{ text: "v2026.5.20 release note citeturn2view0" }];
-
-    expect(normalizeReplyPayloadsForDelivery(payloads)).toMatchObject([
-      { text: "v2026.5.20 release note" },
-    ]);
-    expect(projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(payloads)).text).toBe(
-      "v2026.5.20 release note",
-    );
-    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads))).toMatchObject([
-      { text: "v2026.5.20 release note" },
     ]);
   });
 

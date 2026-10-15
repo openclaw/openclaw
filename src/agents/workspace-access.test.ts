@@ -146,7 +146,7 @@ describe("host-owned workspace access", () => {
     );
   });
 
-  it("leaves unconfigured workspaces local and declared workspaces unavailable until start", () => {
+  it("leaves unconfigured workspaces local and declared workspaces unavailable until start", async () => {
     const root = workspace();
     expect(getAgentWorkspaceAccess(root)).toBeUndefined();
     declareAgentWorkspaceAccess(root);
@@ -165,6 +165,13 @@ describe("host-owned workspace access", () => {
     expect(() => getAgentWorkspaceAccess(root)).toThrow(WorkspaceAccessUnavailableError);
     expect(getAgentWorkspaceAccess(root, "memoryFiles")).toBeUndefined();
     expect(getAgentWorkspaceAccess(root, "loadSkills")).toBeUndefined();
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        turn: { timeoutMs: 1_000, media: [{ path: "media://inbound/report.pdf" }] },
+        assertCurrent() {},
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects duplicate ownership and revokes retained methods without affecting a replacement", async () => {
@@ -416,67 +423,32 @@ describe("workspace attachment preparation", () => {
     },
   );
 
-  it("preserves bridge-only input handling after stop", async () => {
-    const root = workspace();
-    const release = bindWorkspace(root, provider());
-    release();
-    for (const media of [undefined, [], [{ kind: "image" as const }]]) {
+  it.each(["absent", "bridge-only", "empty-note", "blank-note"])(
+    "rejects required attachments with provider state %s",
+    async (host) => {
+      const root = workspace();
+      if (host !== "absent") {
+        bindWorkspace(root, {
+          ...provider(),
+          ...(host === "empty-note" || host === "blank-note"
+            ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
+            : {}),
+        });
+      }
       await expect(
         prepareAgentWorkspaceAttachments({
           workspaceDir: root,
-          turn: { timeoutMs: 1_000, media },
+          turn,
           assertCurrent: () => {},
+          requirePreparation: true,
         }),
-      ).resolves.toBeUndefined();
-    }
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: root,
-        turn,
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    { input: "declared", host: "absent" },
-    { input: "deferred", host: "absent" },
-    { input: "declared", host: "bridge-only" },
-    { input: "declared", host: "empty-note" },
-    { input: "declared", host: "blank-note" },
-  ])("rejects required $input attachments with provider state $host", async ({ input, host }) => {
-    const root = workspace();
-    if (host !== "absent") {
-      bindWorkspace(root, {
-        ...provider(),
-        ...(host === "empty-note" || host === "blank-note"
-          ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
-          : {}),
-      });
-    }
-    const attachmentTurn =
-      input === "deferred"
-        ? {
-            timeoutMs: turn.timeoutMs,
-            userTurnTranscriptRecorder: createDeferredRecorder({
-              text: "Read the attachment",
-              media: turn.media,
-            }),
-          }
-        : turn;
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: root,
-        turn: attachmentTurn,
-        assertCurrent: () => {},
-        requirePreparation: true,
-      }),
-    ).rejects.toThrow(
-      host === "empty-note" || host === "blank-note"
-        ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
-        : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
-    );
-  });
+      ).rejects.toThrow(
+        host === "empty-note" || host === "blank-note"
+          ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
+          : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+      );
+    },
+  );
 
   it.each([false, true])(
     "preserves deferred attachment notes with required preparation %s",

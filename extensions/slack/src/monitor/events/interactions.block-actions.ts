@@ -600,7 +600,7 @@ async function resolveSlackBlockActionCommandAuthorized(
       defaultRequireMention: params.ctx.defaultRequireMention,
       allowNameMatching: params.ctx.allowNameMatching,
     });
-    channelUsers = Array.isArray(channelConfig?.users) ? channelConfig.users : [];
+    channelUsers = channelConfig?.users ?? [];
   }
 
   const commandIngress = await resolveSlackCommandIngress({
@@ -733,9 +733,6 @@ export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }): void {
-  if (typeof params.ctx.app.action !== "function") {
-    return;
-  }
   params.ctx.app.action(/.+/, async (args: SlackBlockActionHandlerArgs) => {
     const { ack, body, action, respond } = args;
     await ack();

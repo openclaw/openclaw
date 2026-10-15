@@ -298,6 +298,7 @@ async function sendSubagentAnnounceDirectlyBound(
       deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
+        requesterSessionId,
         requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,

@@ -333,6 +333,20 @@ const USAGE_FIELDS = [
   "total_tokens",
 ] as const;
 
+/** Counters can cover a whole multi-call turn; clients size context from an available marker. */
+function projectContextUsage(raw: unknown): Record<string, unknown> | undefined {
+  const record = readObjectRecord(raw);
+  const promptTokens = asFiniteNumber(record?.promptTokens);
+  const totalTokens = asFiniteNumber(record?.totalTokens);
+  return record?.state === "available" &&
+    promptTokens !== undefined &&
+    totalTokens !== undefined &&
+    promptTokens >= 0 &&
+    totalTokens >= promptTokens
+    ? { state: "available", promptTokens, totalTokens }
+    : undefined;
+}
+
 function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
@@ -356,6 +370,12 @@ function sanitizeNumericMetadata(
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {
       projected.cost = cost;
+    }
+  }
+  if (fields === USAGE_FIELDS) {
+    const contextUsage = projectContextUsage(record.contextUsage);
+    if (contextUsage) {
+      projected.contextUsage = contextUsage;
     }
   }
   return Object.keys(projected).length > 0 ? projected : undefined;
@@ -413,6 +433,7 @@ export function sanitizeChatHistoryMessage(
   if (
     openClawMeta &&
     ("upstreamUserText" in openClawMeta ||
+      "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
       "media" in openClawMeta)
   ) {
@@ -420,6 +441,8 @@ export function sanitizeChatHistoryMessage(
     // It is not display data and can otherwise evict the visible row from history.
     const projectedMeta = { ...openClawMeta };
     delete projectedMeta.upstreamUserText;
+    // Captured model input is private replay state, not part of the display transcript.
+    delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
     if ("media" in projectedMeta) {

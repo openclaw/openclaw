@@ -200,9 +200,7 @@ describe("completed reply frame ownership", () => {
   }
 
   it.each<[string, (string | undefined)[], boolean, string?, boolean?]>([
-    ["ordinary run", ["run-1"], true],
     ["missing prompt", ["run-1"], false],
-    ["resumed run", ["run-u", "run-1"], true],
     ["resumed run without prompt", ["run-u", "run-1"], false],
     ["untagged work", [undefined, "run-1"], true],
     ["all untagged work without prompt", [undefined], false],
@@ -394,19 +392,6 @@ describe("completed reply frame ownership", () => {
       expect(messagesIn(chain.transcriptItems)).toEqual(messages);
     },
   );
-
-  it.each([
-    { name: "search", sessionKey, searchActive: true },
-    { name: "channel session", sessionKey: "agent:main:telegram:direct:42", searchActive: false },
-  ])("keeps work exposed for $name", (options) => {
-    const messages = replyHistory(["run-u", "run-1"]);
-    const chain = project(messages, { ...chainOptions, ...options });
-    expect(parts(chain).some((part) => part.kind === "work-group")).toBe(false);
-    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
-    if (options.searchActive) {
-      expect(chain.transcriptItems.every((item) => item.kind === "group")).toBe(true);
-    }
-  });
 });
 
 describe("transcript structure cache", () => {

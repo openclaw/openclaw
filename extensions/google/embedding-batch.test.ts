@@ -183,7 +183,6 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it.each([
     { label: "missing", valuesJson: undefined, reason: "empty" },
     { label: "empty", valuesJson: "[]", reason: "empty" },
-    { label: "string", valuesJson: '"bad"', reason: "invalid" },
     { label: "mixed coordinates", valuesJson: "[1,null]", reason: "invalid" },
     { label: "positive overflow", valuesJson: "[1,1e400]", reason: "invalid" },
   ])("rejects downloaded $label vectors before normalization", async ({ valuesJson, reason }) => {

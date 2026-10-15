@@ -7,75 +7,21 @@ import {
 } from "../command-execution-startup.js";
 import { tryRouteCli } from "../route.js";
 
-const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
-const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
-const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
-const runGatewayHealthJsonRouteMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const runPluginsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
-const pluginsCliLoadedMock = vi.hoisted(() => vi.fn());
-
-// mock-isolation: This suite owns route dispatch; process tests cover ownership admission.
-vi.mock("../local-state-owner.js", () => ({
-  runWithLocalStateOwner: ({ runLocal }: { runLocal: () => Promise<void> }) => runLocal(),
-}));
 
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
 }));
 
-vi.mock("../config-cli.js", () => ({
-  runConfigGet: runConfigGetMock,
-  runConfigUnset: runConfigUnsetMock,
-}));
-
-vi.mock("../../commands/models/list.list-command.js", () => ({
-  modelsListCommand: modelsListCommandMock,
-}));
 vi.mock("../../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: modelsStatusCommandMock,
-}));
-
-vi.mock("../daemon-cli/status.js", () => ({
-  runDaemonStatus: runDaemonStatusMock,
-}));
-
-vi.mock("../gateway-cli/health-route.js", () => ({
-  runGatewayHealthJsonRoute: runGatewayHealthJsonRouteMock,
 }));
 
 vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
 }));
-
-vi.mock("../../commands/channels/list.js", () => ({
-  channelsListCommand: channelsListCommandMock,
-}));
-
-vi.mock("../../commands/channels/status.js", () => ({
-  channelsStatusCommand: channelsStatusCommandMock,
-}));
-
-vi.mock("../../commands/agents.commands.list.js", () => ({
-  agentsListCommand: agentsListCommandMock,
-}));
-
-vi.mock("../plugins-list-command.js", () => ({
-  runPluginsListCommand: runPluginsListCommandMock,
-}));
-
-vi.mock("../plugins-cli.js", () => {
-  pluginsCliLoadedMock();
-  return {
-    registerPluginsCli: vi.fn(),
-  };
-});
 
 function routeArgv(args = ""): string[] {
   return ["node", "openclaw", ...(args ? args.split(" ") : [])];
@@ -90,125 +36,16 @@ describe("program routes", () => {
 
   async function expectRunFalse(argv: string[]) {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
+    expect(applyCliExecutionStartupPresentation).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrap).not.toHaveBeenCalled();
   }
-
-  it("passes parsed agents list flags through", async () => {
-    await expect(tryRouteCli(routeArgv("agents"))).resolves.toBe(true);
-    expect(agentsListCommandMock).toHaveBeenCalledWith(
-      { json: false, bindings: false, tree: false },
-      defaultRuntime,
-    );
-
-    await expect(tryRouteCli(routeArgv("agents list --json --bindings --tree"))).resolves.toBe(
-      true,
-    );
-    expect(agentsListCommandMock).toHaveBeenLastCalledWith(
-      { json: true, bindings: true, tree: true },
-      defaultRuntime,
-    );
-  });
-
-  it("passes parsed channel read-only route flags through", async () => {
-    await expect(tryRouteCli(routeArgv("channels list --json"))).resolves.toBe(true);
-    expect(channelsListCommandMock).toHaveBeenCalledWith(
-      { json: true, all: false },
-      defaultRuntime,
-    );
-
-    await expect(
-      tryRouteCli(routeArgv("channels status --json --probe --channel imsg --timeout 5000")),
-    ).resolves.toBe(true);
-    expect(channelsStatusCommandMock).toHaveBeenCalledWith(
-      { channel: "imsg", json: true, probe: true, timeout: "5000" },
-      defaultRuntime,
-    );
-  });
-
-  it.each([
-    {
-      label: "verbose",
-      flags: ["--verbose"],
-      options: { json: false, enabled: false, verbose: true },
-    },
-  ])(
-    "routes plugins list $label without importing the full plugins CLI",
-    async ({ flags, options }) => {
-      await expect(tryRouteCli([...routeArgv("plugins list"), ...flags])).resolves.toBe(true);
-
-      expect(runPluginsListCommandMock).toHaveBeenCalledWith(options, defaultRuntime);
-      expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("returns false for plugins list route with unsupported arguments", async () => {
     await expectRunFalse(routeArgv("plugins list --wat"));
   });
 
-  it("routes machine-readable gateway health without plugin preload", async () => {
-    await expect(tryRouteCli(routeArgv("gateway health --json --timeout 5000"))).resolves.toBe(
-      true,
-    );
-    expect(runGatewayHealthJsonRouteMock).toHaveBeenCalledWith(
-      {
-        rpc: {
-          url: undefined,
-          token: undefined,
-          password: undefined,
-          timeout: "5000",
-          expectFinal: false,
-          json: true,
-        },
-        localPortOverride: undefined,
-      },
-      defaultRuntime,
-    );
-  });
-
-  it("returns false for gateway status route when probe-only flags are present", async () => {
-    await expectRunFalse(routeArgv("gateway status --ssh user@host"));
+  it("defers gateway status SSH identity resolution to Commander", async () => {
     await expectRunFalse(routeArgv("gateway status --ssh-identity ~/.ssh/id_test"));
-    await expectRunFalse(routeArgv("gateway status --ssh-auto"));
-  });
-
-  it("passes parsed gateway status flags through to daemon status", async () => {
-    await expect(
-      tryRouteCli(
-        routeArgv(
-          "--profile work gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
-        ),
-      ),
-    ).resolves.toBe(true);
-    expect(runDaemonStatusMock).toHaveBeenCalledWith({
-      rpc: {
-        url: "ws://127.0.0.1:18789",
-        token: "abc",
-        password: "def",
-        timeout: "5000",
-      },
-      probe: true,
-      requireRpc: true,
-      deep: true,
-      json: true,
-    });
-  });
-
-  it.each([
-    { path: ["health"], argv: routeArgv("health --wat") },
-    {
-      path: ["config", "unset"],
-      argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
-    },
-    {
-      path: ["agents", "list"],
-      argv: ["node", "openclaw", "agents", "list", ""],
-    },
-  ])("defers unsupported routed arguments before startup for $path", async ({ argv }) => {
-    await expectRunFalse(argv);
-    expect(applyCliExecutionStartupPresentation).not.toHaveBeenCalled();
-    expect(ensureCliExecutionBootstrap).not.toHaveBeenCalled();
-    expect(runConfigGetMock).not.toHaveBeenCalled();
-    expect(runConfigUnsetMock).not.toHaveBeenCalled();
-    expect(agentsListCommandMock).not.toHaveBeenCalled();
   });
 
   it("routes status --json through the lean JSON command", async () => {
@@ -225,43 +62,6 @@ describe("program routes", () => {
     "falls back to Commander for a sessions --store $0",
     async (_name, argv) => {
       await expectRunFalse(argv);
-    },
-  );
-
-  it("passes config get path correctly when root option values precede command", async () => {
-    await expect(
-      tryRouteCli(routeArgv("--log-level debug config get update.channel --json")),
-    ).resolves.toBe(true);
-    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true });
-  });
-
-  it("passes config unset path correctly when root option values precede command", async () => {
-    await expect(
-      tryRouteCli(routeArgv("--profile work config unset update.channel")),
-    ).resolves.toBe(true);
-    expect(runConfigUnsetMock).toHaveBeenCalledWith({
-      path: "update.channel",
-      cliOptions: {
-        dryRun: false,
-        allowExec: false,
-        json: false,
-      },
-    });
-  });
-
-  it.each([
-    [
-      "agent after alias",
-      ["models", "--status-json", "--agent=main"],
-      { json: true, plain: false, agent: "main" },
-    ],
-  ] as const)(
-    "routes models $name through the canonical status owner",
-    async (_name, args, expected) => {
-      const argv = ["node", "openclaw", ...args];
-
-      await expect(tryRouteCli(argv)).resolves.toBe(true);
-      expect(modelsStatusCommandMock).toHaveBeenCalledWith(expected, defaultRuntime);
     },
   );
 

@@ -41,21 +41,50 @@ export const agentListHandler: GatewayRequestHandler = async ({
           ),
         ),
       );
-  const result = await listAgentsForGateway(cfg, {
+  const projectionOptions = {
     modelCatalogByAgentId,
     includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     httpAvatarBasePath:
       client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
         ? (cfg.gateway?.controlUi?.basePath ?? "")
         : undefined,
+  };
+  const initialAllowedAgents = resolveOperatorRolePolicy(
+    client,
+    context.getRuntimeConfig(),
+  )?.agents;
+  const selectedAgentIds =
+    initialAllowedAgents && initialAllowedAgents !== "*"
+      ? new Set(initialAllowedAgents)
+      : undefined;
+  let result = await listAgentsForGateway(cfg, {
+    ...projectionOptions,
+    agentIds: selectedAgentIds,
   });
-  const currentConfig = context.getRuntimeConfig();
+  let currentConfig = context.getRuntimeConfig();
   const roleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
   if (roleError) {
     respond(false, undefined, roleError);
     return;
   }
-  const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
+  let allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
+  if (
+    selectedAgentIds &&
+    (!allowedAgents ||
+      allowedAgents === "*" ||
+      allowedAgents.some((id) => !selectedAgentIds.has(id)))
+  ) {
+    // A grant while enrichment is pending can expose previously omitted rows.
+    // Prepare the full roster once so later changes need only the final policy filter.
+    result = await listAgentsForGateway(cfg, projectionOptions);
+    currentConfig = context.getRuntimeConfig();
+    const refreshedRoleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
+    if (refreshedRoleError) {
+      respond(false, undefined, refreshedRoleError);
+      return;
+    }
+    allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
+  }
   const agents =
     allowedAgents && allowedAgents !== "*"
       ? result.agents.filter((agent) => allowedAgents.includes(agent.id))

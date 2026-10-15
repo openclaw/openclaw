@@ -391,6 +391,15 @@ function captureSyncError(action: () => void): Error {
   throw new Error("expected action to throw");
 }
 
+function useGatewayLogFixture() {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  return (text: string) => {
+    const logPath = path.join(tempDirs.make("openclaw-kitchen-rpc-log-"), "gateway.log");
+    writeFileSync(logPath, text);
+    return logPath;
+  };
+}
+
 describe("kitchen-sink RPC isolated state", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -468,42 +477,40 @@ process.exit(17);
     expect(isProcessAlive(receipt.pid)).toBe(false);
   });
 
-  it("prints help before malformed guardrails without creating temp state", async () => {
-    const result = await runCommand(
+  it.each([
+    { argument: "--help", help: true },
+    { argument: "--wat", help: false },
+  ])("handles $argument before creating temp state", async ({ argument, help }) => {
+    if (!help) {
+      expect(() => validateCliArgs([argument])).toThrow("Unknown argument: --wat");
+    }
+    const result = runCommand(
       process.execPath,
-      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
-      { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } },
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", argument],
+      help ? { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } } : undefined,
     );
-
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
-    );
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_PORT");
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS");
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES");
-    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
-    expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
-    expect(result.stdout).not.toContain("temp root preserved");
-  });
-
-  it("detects short and long help flags", () => {
-    expect(shouldPrintHelp(["--help"])).toBe(true);
-    expect(shouldPrintHelp(["-h"])).toBe(true);
-    expect(shouldPrintHelp([])).toBe(false);
-  });
-
-  it("rejects unknown CLI args before creating temp state", async () => {
-    expect(() => validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
-
-    const error = await runCommand(process.execPath, [
-      "--import",
-      "tsx",
-      "scripts/e2e/kitchen-sink-rpc-walk.mts",
-      "--wat",
-    ]).then(
+    if (help) {
+      expect(shouldPrintHelp(["--help"])).toBe(true);
+      expect(shouldPrintHelp(["-h"])).toBe(true);
+      expect(shouldPrintHelp([])).toBe(false);
+      const output = await result;
+      expect(output.stderr).toBe("");
+      for (const text of [
+        "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
+        "OPENCLAW_KITCHEN_SINK_NPM_SPEC",
+        "OPENCLAW_KITCHEN_SINK_PERSONALITY",
+        "OPENCLAW_KITCHEN_SINK_RPC_PORT",
+        "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
+        "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
+        "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
+      ]) {
+        expect(output.stdout).toContain(text);
+      }
+      expect(output.stdout).not.toContain("Kitchen Sink RPC walk using");
+      expect(output.stdout).not.toContain("temp root preserved");
+      return;
+    }
+    const error = await result.then(
       () => undefined,
       (caught: unknown) => caught as Error & { stderr?: string; stdout?: string },
     );
@@ -639,11 +646,7 @@ process.exit(17);
 });
 
 describe("kitchen-sink RPC gateway teardown", () => {
-  it("treats signaled gateway children as exited", () => {
-    expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
+  const createLog = useGatewayLogFixture();
 
   it("releases gateway handles when the process ignores teardown signals", async () => {
     const child = new EventEmitter() as EventEmitter & {
@@ -754,146 +757,123 @@ describe("kitchen-sink RPC gateway teardown", () => {
     },
   );
 
-  it("fails readiness waits before polling after signaled gateway exits", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-signal-ready-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "gateway died\n");
-      const fetchImpl = vi.fn(() => {
-        throw new Error("fetch should not run after process exit");
-      });
+  it.each([
+    { exitCode: null, signalCode: "SIGTERM" },
+    { exitCode: 0, signalCode: null },
+  ] as const)("rejects exited gateway before polling: %j", async (child) => {
+    const logPath = createLog("gateway died\n");
+    expect(hasChildExited(child)).toBe(true);
+    const fetchImpl = vi.fn(() => {
+      throw new Error("fetch should not run after process exit");
+    });
 
-      await expect(
-        waitForGatewayReady({ exitCode: null, signalCode: "SIGTERM" }, 9, logPath, {
-          fetchImpl,
-          pollDelayMs: 1,
-          timeoutMs: 1,
-        }),
-      ).rejects.toThrow("gateway exited before ready");
-      expect(fetchImpl).not.toHaveBeenCalled();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    await expect(
+      waitForGatewayReady(child, 9, logPath, {
+        fetchImpl,
+        pollDelayMs: 1,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("aborts stalled readiness probes when the gateway exits mid-probe", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-exit-during-ready-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "gateway died during readiness\n");
-      const child = Object.assign(new EventEmitter(), {
-        exitCode: null,
-        signalCode: null as NodeJS.Signals | null,
+    const logPath = createLog("gateway died during readiness\n");
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("fetch aborted"));
+          },
+          { once: true },
+        );
       });
-      const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
-        return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              const reason = init.signal?.reason;
-              reject(reason instanceof Error ? reason : new Error("fetch aborted"));
-            },
-            { once: true },
-          );
-        });
-      });
-      const startedAt = Date.now();
-      setTimeout(() => {
-        child.signalCode = "SIGTERM";
-        child.emit("exit", null, "SIGTERM");
-      }, 25);
+    });
+    const startedAt = Date.now();
+    setTimeout(() => {
+      child.signalCode = "SIGTERM";
+      child.emit("exit", null, "SIGTERM");
+    }, 25);
 
-      await expect(
-        waitForGatewayReady(child, 9, logPath, {
-          fetchImpl,
-          pollDelayMs: 5_000,
-          timeoutMs: 2_000,
-        }),
-      ).rejects.toThrow("gateway exited before ready");
+    await expect(
+      waitForGatewayReady(child, 9, logPath, {
+        fetchImpl,
+        pollDelayMs: 5_000,
+        timeoutMs: 2_000,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
 
-      expect(fetchImpl).toHaveBeenCalledOnce();
-      expect(Date.now() - startedAt).toBeLessThan(500);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
   it("keeps stalled readiness probes inside the caller deadline", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-stalled-ready-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "booting\n");
-      let calls = 0;
-      const startedAt = Date.now();
+    const logPath = createLog("booting\n");
+    expect(hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
+    let calls = 0;
+    const startedAt = Date.now();
 
-      await expect(
-        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
-          fetchImpl: () => {
-            calls += 1;
-            return new Promise(() => {});
-          },
-          pollDelayMs: 1,
-          timeoutMs: 25,
-        }),
-      ).rejects.toThrow("gateway did not become ready");
+    await expect(
+      waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+        fetchImpl: () => {
+          calls += 1;
+          return new Promise(() => {});
+        },
+        pollDelayMs: 1,
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow("gateway did not become ready");
 
-      expect(calls).toBe(1);
-      expect(Date.now() - startedAt).toBeLessThan(500);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(calls).toBe(1);
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
   it("requires /readyz body.ready before accepting gateway readiness", async () => {
     vi.useFakeTimers();
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-ready-body-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "[gateway] ready\n");
-      const fetchImpl = vi
-        .fn()
-        .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
-        .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
+    const logPath = createLog("[gateway] ready\n");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
 
-      const readiness = expect(
-        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
-          fetchImpl,
-          pollDelayMs: 1,
-          timeoutMs: 100,
-        }),
-      ).resolves.toBeUndefined();
-      await vi.advanceTimersByTimeAsync(1);
-      await readiness;
+    const readiness = expect(
+      waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+        fetchImpl,
+        pollDelayMs: 1,
+        timeoutMs: 100,
+      }),
+    ).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await readiness;
 
-      expect(fetchImpl).toHaveBeenCalledTimes(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("kitchen-sink RPC gateway readiness logs", () => {
+  const createLog = useGatewayLogFixture();
+
   it.each(["append", "rotate"])("finds readiness across %s updates", (mode) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-scan-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, "booting\n".repeat(1000));
-      const scanner = createGatewayReadyLogScanner(logPath, "[gateway] ready");
+    const logPath = createLog("booting\n".repeat(1000));
+    const scanner = createGatewayReadyLogScanner(logPath, "[gateway] ready");
 
+    expect(scanner()).toBe(false);
+
+    if (mode === "append") {
+      writeFileSync(logPath, "[gateway] rea", { flag: "a" });
       expect(scanner()).toBe(false);
-
-      if (mode === "append") {
-        writeFileSync(logPath, "[gateway] rea", { flag: "a" });
-        expect(scanner()).toBe(false);
-        writeFileSync(logPath, "dy\n", { flag: "a" });
-      } else {
-        writeFileSync(logPath, "[gateway] ready\n");
-      }
-      expect(scanner()).toBe(true);
-      expect(scanner()).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+      writeFileSync(logPath, "dy\n", { flag: "a" });
+    } else {
+      writeFileSync(logPath, "[gateway] ready\n");
     }
+    expect(scanner()).toBe(true);
+    expect(scanner()).toBe(true);
   });
 
   it.each([
@@ -919,21 +899,15 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
       truncated: true,
     },
   ])("retains error findings for $name", ({ text, line, lineNumber, truncated }) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-errors-"));
-    try {
-      const logPath = path.join(root, "gateway.log");
-      writeFileSync(logPath, text);
-      const findings = findErrorLogFindings(logPath);
-      if (truncated) {
-        expect(findings).toHaveLength(1);
-        expect(findings[0]?.lineNumber).toBe(lineNumber);
-        expect(findings[0]?.line).toContain(line);
-        expect(findings[0]?.line.length).toBeLessThan(20_000);
-      } else {
-        expect(findings).toEqual([{ line, lineNumber }]);
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const logPath = createLog(text);
+    const findings = findErrorLogFindings(logPath);
+    if (truncated) {
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.lineNumber).toBe(lineNumber);
+      expect(findings[0]?.line).toContain(line);
+      expect(findings[0]?.line.length).toBeLessThan(20_000);
+    } else {
+      expect(findings).toEqual([{ line, lineNumber }]);
     }
   });
 });

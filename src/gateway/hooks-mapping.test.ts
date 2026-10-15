@@ -163,37 +163,6 @@ describe("hooks mapping", () => {
     }
   }
 
-  it("defaults agent mappings to isolated sessions and accepts persistent overrides", async () => {
-    const isolated = await applyGmailMappings({
-      mappings: [
-        createGmailAgentMapping({
-          id: "isolated",
-          messageTemplate: "Subject: {{messages[0].subject}}",
-        }),
-      ],
-    });
-    expect(isolated?.ok).toBe(true);
-    if (isolated?.ok && isolated.action?.kind === "agent") {
-      expect(isolated.action.sessionMode).toBe("isolated");
-    }
-
-    const persistent = await applyGmailMappings({
-      mappings: [
-        {
-          ...createGmailAgentMapping({
-            id: "persistent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-          }),
-          sessionMode: "persistent",
-        },
-      ],
-    });
-    expect(persistent?.ok).toBe(true);
-    if (persistent?.ok && persistent.action?.kind === "agent") {
-      expect(persistent.action.sessionMode).toBe("persistent");
-    }
-  });
-
   it("validates sessionMode returned by hook transforms", async () => {
     const configDir = makeTempDir(hooksTempDirs, "openclaw-hook-session-mode-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
@@ -768,6 +737,7 @@ describe("hook mapping fan-out", () => {
     expect(result.dropped).toBe(0);
     expect(result.actions).toHaveLength(2);
     const agentActions = result.actions.filter((action) => action.kind === "agent");
+    expect(agentActions.map((action) => action.sessionMode)).toEqual(["isolated", "isolated"]);
     expect(agentActions.map((action) => action.sessionKey)).toEqual([
       "hook:gmail:m1",
       "hook:gmail:m2",

@@ -1,7 +1,9 @@
-import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages.js";
+import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -13,34 +15,22 @@ import {
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   supportsClaudeAdaptiveThinking,
-  usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
 import { redactDiagnosticText } from "../utils/credential-redaction.js";
-import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
-import {
-  isAnthropicReplayRejection,
-  suppressAnthropicCompaction,
-  type AnthropicCompactionBlock,
-} from "./anthropic-compaction-replay.js";
-import { buildAnthropicRequest, prepareAnthropicRequest } from "./anthropic-messages.js";
 import {
   isDirectAnthropicModel,
   supportsAnthropicServerSideFallback,
 } from "./anthropic-payload-policy.js";
-import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
+import { runAnthropicStreamLifecycle } from "./anthropic-stream-lifecycle.js";
 import {
   resolveAnthropicTransportOptions,
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
-import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
-  failTransportStream,
-  finalizeTransportStream,
   mergeTransportHeaders,
-  notifyProviderHttpResponse,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -111,42 +101,14 @@ function readAnthropicSseChunk(
     return reader.read();
   }
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      reject(createAbortError(signal));
-    };
-
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-
-    signal.addEventListener("abort", onAbort, { once: true });
-    reader.read().then(
-      (result) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve(result);
-      },
-      (error: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      reader.read().catch((error: unknown) => {
+        throw toErrorObject(error, "Non-Error rejection");
+      }),
+    signal,
+    createAbortError,
+  );
 }
 
 function parseAnthropicSseEventData(data: string): Record<string, unknown> {
@@ -329,7 +291,7 @@ function createAnthropicTransportClient(params: {
     directApiKeyBetaHeader,
     async request(
       this: void,
-      body: Record<string, unknown>,
+      body: MessageCreateParamsStreaming,
       requestOptions?: { signal?: AbortSignal; headers?: Record<string, string> },
     ) {
       const headers = new Headers(
@@ -367,15 +329,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     const model = withEffectiveAnthropicBaseUrl(rawModel as AnthropicTransportModel);
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
-    void (async () => {
-      const output = createAssistantOutput(model, "anthropic-messages");
-      // Classifier refusals can invalidate partial output, so no event is safe
-      // to expose until the terminal stop reason is known.
-      const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
-        : undefined;
-      let replayedCompaction: AnthropicCompactionBlock | undefined;
-      try {
+    void runAnthropicStreamLifecycle({
+      model,
+      stream,
+      options,
+      profile: "transport",
+      prepare: () => {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
           throw new Error(`No API key for provider: ${model.provider}`);
@@ -389,70 +348,33 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             apiKey,
             options: transportOptions,
           });
-        const builtParams = await buildAnthropicRequest(
-          model,
-          requestContext,
-          transportOptions,
-          "transport",
-          isOAuthToken,
-          !isOAuthToken && supportsAnthropicServerSideFallback(model),
-          claudeCodeVersion,
-        );
-        replayedCompaction = builtParams.replayedCompaction;
-        const { params, headers } = await prepareAnthropicRequest(
-          builtParams.params,
-          model,
-          transportOptions,
-          directApiKeyBetaHeader,
-        );
-        const { response, stream: anthropicStream } = await request(
-          { ...params, stream: true },
-          { signal: transportOptions.signal, headers },
-        );
-        await notifyProviderHttpResponse({ options: transportOptions, response, model });
-        if (!response.ok) {
-          const errorBody = await readAnthropicMessagesErrorBody(response);
-          throw Object.assign(new Error(`${response.status} status code (no body)`), {
-            status: response.status,
-            headers: response.headers,
-            errorBody,
-          });
-        }
-        await consumeAnthropicStream({
-          events: anthropicStream,
-          model,
+        return {
+          context: requestContext,
           options: transportOptions,
-          output,
-          stream,
-          refusalBuffer,
           isOAuthToken,
-          toolProjection: builtParams.toolProjection,
-          profile: "transport",
-        });
-        finalizeTransportStream({ stream, output });
-      } catch (error) {
-        failTransportStream({
-          stream,
-          output,
-          signal: options?.signal,
-          error,
-          cleanup: () => {
-            if (refusalBuffer) {
-              refusalBuffer.discard();
-              output.content = [];
-            } else {
-              output.content = output.content.filter((block) => block.type !== "toolCall");
-            }
-            if (replayedCompaction && isAnthropicReplayRejection(output)) {
-              suppressAnthropicCompaction(output, model, options, replayedCompaction);
-            }
-            for (const block of output.content) {
-              delete (block as AnthropicStreamBlock).index;
+          serverSideFallback: !isOAuthToken && supportsAnthropicServerSideFallback(model),
+          claudeCodeVersion,
+          directApiKeyBetaHeader,
+          request: async (body, headers) => {
+            const { response, stream: events } = await request(body, {
+              signal: transportOptions.signal,
+              headers,
+            });
+            return { response, events };
+          },
+          checkResponse: async (response) => {
+            if (!response.ok) {
+              const errorBody = await readAnthropicMessagesErrorBody(response);
+              throw Object.assign(new Error(`${response.status} status code (no body)`), {
+                status: response.status,
+                headers: response.headers,
+                errorBody,
+              });
             }
           },
-        });
-      }
-    })();
+        };
+      },
+    });
     return eventStream;
   };
 }

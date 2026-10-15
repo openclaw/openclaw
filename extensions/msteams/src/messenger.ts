@@ -35,7 +35,6 @@ import {
 } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
@@ -361,76 +360,39 @@ export async function sendMSTeamsMessages(
     return messageId;
   };
 
-  const sendProactively = async (
-    batch: MSTeamsRenderedMessage[],
-    startIndex: number,
-    threadActivityId?: string,
-  ): Promise<string[]> => {
+  let sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>;
+  const ctx = params.replyStyle === "thread" ? params.context : undefined;
+  if (ctx) {
+    sendFn = (activity) => withMSTeamsConnectorHandoff(params, () => ctx.sendActivity(activity));
+  } else {
     let baseRef: ReturnType<typeof buildConversationReference>;
     try {
       baseRef = buildConversationReference(params.conversationRef);
     } catch (error) {
-      if (providerDispatchStarted) {
-        throw error;
-      }
       throw new PlatformMessageNotDispatchedError(
         error instanceof Error ? error.message : "Teams conversation preparation failed",
         { cause: error },
       );
     }
     const isChannel = params.conversationRef.conversation?.conversationType === "channel";
-    const sendFn = (activity: MSTeamsActivityLike) =>
+    // `threadId` is canonical; older stored references only carry `activityId`.
+    // Top-level replies deliberately omit the stored thread root.
+    const threadActivityId =
+      params.replyStyle === "thread" && isChannel
+        ? (params.conversationRef.threadId ?? params.conversationRef.activityId)
+        : undefined;
+    sendFn = (activity) =>
       sendMSTeamsActivityWithReference(params.app, baseRef, activity, {
         accountId: params.accountId,
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         onPlatformSendDispatch: params.onPlatformSendDispatch,
-        threadActivityId: isChannel ? threadActivityId : undefined,
+        threadActivityId,
         serviceUrlBoundary: params.serviceUrlBoundary,
       });
-    const messageIds: string[] = [];
-    for (const [idx, message] of batch.entries()) {
-      messageIds.push(await sendMessageInContext(sendFn, message, startIndex + idx));
-    }
-    return messageIds;
-  };
-
-  // Resolve the thread root message ID for channel thread routing.
-  // `threadId` is the canonical thread root (set on inbound for channel threads);
-  // fall back to `activityId` for backward compatibility with older stored refs.
-  const resolvedThreadId = params.conversationRef.threadId ?? params.conversationRef.activityId;
-
-  if (params.replyStyle === "thread") {
-    const ctx = params.context;
-    if (!ctx) {
-      return await sendProactively(messages, 0, resolvedThreadId);
-    }
-    const sendFn = (activity: MSTeamsActivityLike) =>
-      withMSTeamsConnectorHandoff(params, () => ctx.sendActivity(activity));
-    const messageIds: string[] = [];
-    for (const [idx, message] of messages.entries()) {
-      const result = await withRevokedProxyFallback({
-        run: async () => ({
-          ids: [await sendMessageInContext(sendFn, message, idx)],
-          fellBack: false,
-        }),
-        onRevoked: async () => {
-          // When the live turn context is revoked (e.g. debounced messages),
-          // reconstruct the threaded conversation ID so the proactive
-          // fallback delivers the reply into the correct channel thread.
-          return {
-            ids: await sendProactively(messages.slice(idx), idx, resolvedThreadId),
-            fellBack: true,
-          };
-        },
-      });
-      messageIds.push(...result.ids);
-      if (result.fellBack) {
-        return messageIds;
-      }
-    }
-    return messageIds;
   }
-
-  // Top-level replies deliberately omit the stored thread root.
-  return await sendProactively(messages, 0);
+  const messageIds: string[] = [];
+  for (const [idx, message] of messages.entries()) {
+    messageIds.push(await sendMessageInContext(sendFn, message, idx));
+  }
+  return messageIds;
 }

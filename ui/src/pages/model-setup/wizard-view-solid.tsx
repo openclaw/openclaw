@@ -2,12 +2,12 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
-import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 registerModelSetupEnglish();
 
@@ -141,6 +141,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       </div>
                     </Show>
                     <WizardStepControls
+                      presentation="model-setup"
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
                       value={props.value}

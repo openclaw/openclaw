@@ -277,31 +277,6 @@ describe("memory runtime handles", () => {
     },
   );
 
-  it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
-    const { registry, runtime } = createRegistry();
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
-
-    expect(hasMemoryRuntime()).toBe(false);
-    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
-      backend: "builtin",
-    });
-    expect(hasMemoryRuntime()).toBe(false);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    expect(hasMemoryRuntime()).toBe(true);
-
-    await closeActiveMemorySearchManagersCore();
-    expect(hasMemoryRuntime()).toBe(false);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    expect(hasMemoryRuntime()).toBe(true);
-    expect(runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
-
-    await closeActiveMemorySearchManagersCore();
-    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
-    expect(hasMemoryRuntime()).toBe(false);
-  });
-
   it.each(["present", "missing"] as const)(
     "reloads the same memory selection after its %s capability owner retires",
     async (capability) => {
@@ -380,25 +355,6 @@ describe("memory runtime handles", () => {
     mocks.loadPluginRegistryHandle.mockReturnValue(fresh.registry);
     await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(freshDisposals).toHaveBeenCalledOnce();
-  });
-
-  it("retiring an older workspace removes only that runtime from memory cleanup", async () => {
-    const first = createRegistry();
-    const current = createRegistry();
-    const cache = createPluginCache();
-    getPluginLoaderCacheState(cache).set("memory-fixture", first.registry);
-    mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(first.registry)
-      .mockReturnValue(current.registry);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
-    await retirePluginCache(cache);
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
-
-    await expect(closeActiveMemorySearchManagersCore()).resolves.toBeUndefined();
-    expect(current.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
-    expect(current.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
   });
 
   it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {

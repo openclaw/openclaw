@@ -204,7 +204,7 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       await expect.poll(distance).toBe(0);
       if (acquisition === "native observation") {
         await settleFrames();
-        expect(host.transcript.isProgrammaticScroll).toBe(false);
+        await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
       }
     }
 

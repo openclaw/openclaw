@@ -3,8 +3,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as deviceIdentity from "../../lib/nodes/index.ts";
+import type {
+  SolidControllerHost as ControllerHost,
+  SolidController as PageLifecycle,
+} from "../../lit/solid-controller-host.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { ControllerHost, PageLifecycle } from "../model-providers/page-controller.ts";
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 
 type RequestFrame = { id: string; method: string; params?: unknown };

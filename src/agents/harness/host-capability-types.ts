@@ -22,6 +22,8 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
+  /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
+  hostExecutionRequired?: true;
 }>;
 
 type AgentHarnessToolSurfaceOptions = Omit<

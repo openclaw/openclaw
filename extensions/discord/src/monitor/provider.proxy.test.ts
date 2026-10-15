@@ -16,11 +16,13 @@ const mocks = vi.hoisted(() => ({
   httpsAgent: vi.fn(),
   proxyAgent: vi.fn(),
 }));
-const { GatewayPlugin, HttpsAgent, HttpsProxyAgent, MockWebSocket, guardedFetch } = vi.hoisted(
-  () => {
+const { GatewayPlugin, HttpsAgent, HttpsProxyAgent, MockWebSocket, guardedFetch } =
+  await vi.hoisted(async () => {
+    const { EventEmitter } = await import("node:events");
     class GatewayBase {
       protected gatewayInfo?: APIGatewayBotInfo;
       protected client: unknown;
+      emitter = new EventEmitter();
       ws: unknown;
       isConnecting = false;
       async registerClient(client: unknown) {
@@ -59,8 +61,11 @@ const { GatewayPlugin, HttpsAgent, HttpsProxyAgent, MockWebSocket, guardedFetch 
         mocks.proxyAgent(proxyUrl);
       }
     }
-    function Socket(url: string, options?: unknown) {
-      mocks.socket(url, options);
+    class Socket extends EventEmitter {
+      constructor(url: string, options?: unknown) {
+        super();
+        mocks.socket(url, options);
+      }
     }
     const guarded = vi.fn(
       async (
@@ -84,8 +89,7 @@ const { GatewayPlugin, HttpsAgent, HttpsProxyAgent, MockWebSocket, guardedFetch 
       MockWebSocket: Socket,
       guardedFetch: guarded,
     };
-  },
-);
+  });
 
 vi.mock("../internal/gateway.js", () => ({
   DISCORD_GATEWAY_WS_CLIENT_OPTIONS: { maxPayload: 16 * 1024 * 1024, handshakeTimeout: 30_000 },
@@ -183,9 +187,7 @@ describe("createDiscordGatewayPlugin", () => {
     return {
       createProxyAgent: (proxyUrl: string) =>
         new HttpsProxyAgent(proxyUrl) as unknown as import("node:http").Agent,
-      webSocketCtor: function WebSocketCtor(url: string, options?: unknown) {
-        mocks.socket(url, options);
-      } as unknown as NonNullable<
+      webSocketCtor: MockWebSocket as unknown as NonNullable<
         Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
       >["webSocketCtor"],
       registerClient: async (_plugin: unknown, client: unknown) => {

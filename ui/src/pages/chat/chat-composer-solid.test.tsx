@@ -1,5 +1,4 @@
-import { html, render, nothing } from "lit";
-import { createSignal } from "solid-js";
+import { createSignal, merge } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
@@ -9,23 +8,23 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
+  disposeComposer,
+  renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
-import { LitContent } from "./components/chat-composer-interop.tsx";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
 
-function mountComposer(initial: Parameters<typeof renderChatComposer>[0]) {
+function mountComposer(initial: ChatComposerProps) {
   const container = document.body.appendChild(createComposerContainer());
   let props = initial;
-  const paint = () => render(renderChatComposer(props), container);
+  const paint = () => renderComposerInto(container, props);
   onTestFinished(() => {
-    render(nothing, container);
+    disposeComposer(container);
   });
   paint();
   return {
@@ -116,25 +115,6 @@ it("updates an existing private draft recovery error when the locale changes", a
   expect(document.querySelector('[role="alert"]')).toBe(error);
   expect(error.textContent).toBe(
     "Dieser Anhang kann nicht mehr heruntergeladen werden. Lassen Sie den Entwurf geöffnet und stellen Sie die Originaldatei wieder her, bevor Sie ihn verwerfen.",
-  );
-});
-
-it("mounts nested Solid content when opaque Lit content changes after mount", async () => {
-  const Label = (props: { text: string }) => <b class="nested-label">{props.text}</b>;
-  const [value, setValue] = createSignal<unknown>(html`<i>initial</i>`);
-  const view = mountSolid(() => <LitContent value={value()} />);
-
-  // Composer updates reach LitContent from its render effect, where nested
-  // directives must not create roots without an owner.
-  setValue(html`${solidTemplate(Label, { text: "attached" })}`);
-  flush();
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".nested-label")?.textContent).toBe("attached"),
-  );
-
-  setValue(html`${solidTemplate(Label, { text: "still reactive" })}`);
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".nested-label")?.textContent).toBe("still reactive"),
   );
 });
 
@@ -261,30 +241,22 @@ it("keeps a pending dictation send bound to the action that started it", async (
   );
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const view = mountSolid(() => <section />);
-  const outlet = view.container.querySelector("section")!;
+  const [props, setProps] = createSignal({
+    readDictation: () => controller,
+    onSend: firstSend,
+  });
+  const actionProps = merge(props);
+  const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
   try {
-    render(
-      solidTemplate(ComposerDictationSendAction, {
-        readDictation: () => controller,
-        onSend: firstSend,
-      }),
-      outlet,
-    );
-    outlet.querySelector<HTMLButtonElement>("button")!.click();
-    render(
-      solidTemplate(ComposerDictationSendAction, {
-        readDictation: () => controller,
-        onSend: laterSend,
-      }),
-      outlet,
-    );
+    view.container.querySelector<HTMLButtonElement>("button")!.click();
+    setProps({ readDictation: () => controller, onSend: laterSend });
+    flush();
     finish(true);
     await Promise.resolve();
     expect(firstSend).toHaveBeenCalledOnce();
     expect(laterSend).not.toHaveBeenCalled();
   } finally {
-    render(nothing, outlet);
+    view.unmount();
     controller.dispose();
   }
 });

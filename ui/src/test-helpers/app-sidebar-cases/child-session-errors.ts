@@ -45,7 +45,9 @@ describe("AppSidebar child-session load errors", () => {
       const { sidebar } = await mountSidebar(gateway, harness.sessions);
       harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
       await settleLitElement(sidebar);
-      sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+      expect(
+        sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
+      ).toBe("true");
 
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);

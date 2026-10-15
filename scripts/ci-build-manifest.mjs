@@ -953,6 +953,13 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "src/gateway/server*.ts",
+  "src/cli/gateway-cli/run.ts",
+  "src/commands/*preflight*.ts",
+  "src/state/*worker*.ts",
+  "src/state/openclaw-state-ownership.ts",
+  "src/state/openclaw-agent-db-registry-listing.ts",
+  "src/infra/sqlite-worker-*.ts",
   "src/state/openclaw-state-db*",
   "src/state/openclaw-state-feature-schema-ensure.ts",
   "src/state/user-profiles-schema.ts",
@@ -1192,6 +1199,7 @@ const shardRequiresTests = (shard, tests, fallback) =>
       : fallback(plan);
   });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
+const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1293,8 +1301,51 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    if (packedGroups) {
+      packedNodeTestRows.push({ row, groups });
+    }
     return row;
   });
+const nodeTestGroupPools = {};
+if (
+  typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
+  packedNodeTestRows.reduce((size, { row }) => size + row.groups_gzip_base64.length, 0) > 128_000
+) {
+  // Compress repeated paths across rows, without changing the runner's per-row contract.
+  // Each pool stays below Linux's per-environment-string limit, including base64 overhead.
+  let pool = [];
+  let rows = [];
+  const flush = () => {
+    const poolKey = `pool-${Object.keys(nodeTestGroupPools).length + 1}`;
+    nodeTestGroupPools[poolKey] = encodeNodeTestGroups(pool);
+    rows.forEach((row, index) => {
+      row.groups_pool = poolKey;
+      row.groups_index = index;
+      delete row.groups_gzip_base64;
+    });
+    pool = [];
+    rows = [];
+  };
+  for (const { row, groups } of packedNodeTestRows) {
+    // Oversized individual descriptors retain their existing standalone transport.
+    if (row.groups_gzip_base64.length > 60_000) {
+      continue;
+    }
+    if (encodeNodeTestGroups([...pool, groups]).length > 60_000) {
+      if (pool.length) {
+        flush();
+      }
+      if (encodeNodeTestGroups([groups]).length > 60_000) {
+        continue;
+      }
+    }
+    pool.push(groups);
+    rows.push(row);
+  }
+  if (pool.length) {
+    flush();
+  }
+}
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
@@ -1522,6 +1573,7 @@ const manifest = {
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
+  node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
   // Older scope owners retain these guards rather than silently dropping coverage.
@@ -1721,16 +1773,26 @@ if (hybridHostedEligible) {
     hostedPlanner ||
     (workflowEventName === "pull_request" &&
       process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
+  const hostedHybridControls =
+    process.env.OPENCLAW_CI_RUNNER_BACKEND === "hybrid" &&
+    workflowEventName !== "workflow_dispatch" &&
+    (workflowEventName !== "pull_request" ||
+      process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY);
   // Include control jobs, every emitted matrix row and native hosted jobs.
   // Narrow PRs reserve full lint/type templates; only hybrid moves critical controls.
   // The guard independently expands the workflow to catch inventory drift.
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
-    preflight: count(ciQualification),
-    "check-plan": count(hostedPlanner && runCheckPlan),
+    preflight: count(ciQualification || hostedHybridControls),
+    "ci-gate": count(hostedHybridControls),
+    "check-plan": count(
+      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
+        runCheckPlan,
+    ),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
+        (hostedHybridControls ||
+          process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),

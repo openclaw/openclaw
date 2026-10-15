@@ -11,6 +11,7 @@ const FISH_AUDIO_VOICE_PAGE_SIZE = 100;
 const FISH_AUDIO_MAX_OWN_VOICE_PAGES = 20;
 
 export const FISH_AUDIO_MODELS = [
+  "drama-3",
   "drama-3-preview",
   "s2.1-pro-free",
   "s2.1-pro",

@@ -304,8 +304,8 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { backupDoctorMigrationDatabases } =
-          await import("../commands/doctor-migration-backup.js");
+        const { prepareDoctorDatabaseMigrations } =
+          await import("../commands/doctor-schema-migrations.js");
         const { createOpenClawAgentDatabasePathMatcher } =
           await import("../state/openclaw-agent-db.paths.js");
         const { normalizeAgentId } = await import("../routing/session-key.js");
@@ -325,7 +325,7 @@ async function runDoctorHealthFlowWithResult(
                   discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
             ),
         );
-        const backups = await backupDoctorMigrationDatabases({
+        const backups = await prepareDoctorDatabaseMigrations({
           env: process.env,
           databasePaths: databaseTargets?.map((database) => database.path) ?? [],
           agentDatabaseTargets: databaseTargets,
@@ -335,6 +335,9 @@ async function runDoctorHealthFlowWithResult(
         });
         for (const message of [...backups.changes, ...backups.warnings]) {
           effectiveRuntime.log(message);
+        }
+        if (schemas.agentDatabaseMigrationDiscovery && backups.versionMigrations) {
+          schemas.agentDatabaseMigrationDiscovery.versionMigrations = backups.versionMigrations;
         }
       }
 

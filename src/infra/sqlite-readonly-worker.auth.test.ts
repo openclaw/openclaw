@@ -53,6 +53,8 @@ const skipBroker = process.platform === "win32";
 it.skipIf(skipBroker)(
   "reuses the Gateway reader through detached observations and retained-state restart",
   async () => {
+    // The macOS directory watch host bypasses fs.watch; keep the unavailable watcher in-process.
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(fs, "watch").mockImplementation(() => {
       throw new Error("synthetic unavailable watcher");
     });

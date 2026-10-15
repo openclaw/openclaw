@@ -96,9 +96,9 @@ function sqliteBytes(databasePath: string) {
   );
 }
 
-it.each(["maintenance", "ordinary"] as const)(
+it.each(["maintenance"] as const)(
   "suspends shared-worker ticks only while maintenance clients retain the actor (%s opener)",
-  async (firstOwner) => {
+  async () => {
     const root = tempDirs.make("state-worker-wal-tick-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");
     const context = { environment: { ...process.env, OPENCLAW_STATE_DIR: root } };
@@ -123,10 +123,8 @@ it.each(["maintenance", "ordinary"] as const)(
       return store;
     };
     try {
-      const first = await open(firstOwner === "maintenance" ? firstMaintenance : undefined);
-      const second = await open(firstOwner === "maintenance" ? undefined : firstMaintenance);
-      const ordinary = firstOwner === "ordinary" ? first : second;
-      const maintained = firstOwner === "maintenance" ? first : second;
+      const maintained = await open(firstMaintenance);
+      const ordinary = await open();
       const overlapping = await open(secondMaintenance);
       const actor = broker.getActorIdentity(ordinary);
       expect(broker.getActorIdentity(maintained)).toBe(actor);

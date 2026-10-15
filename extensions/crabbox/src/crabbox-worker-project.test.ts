@@ -611,29 +611,6 @@ exec "$CRABBOX_TEST_NODE" "$@"
     },
   );
 
-  it.each(["runtime-install", "enrollment-install"])(
-    "completes internal %s without another provider readiness request",
-    async (phase) => {
-      const events: string[] = [];
-      const { options, observe } = projectOptions(events);
-      const { provider, calls } = createWarmProvider((call) => {
-        observe(call);
-        if ((call.argv[1] === "inspect" || call.argv[1] === "status") && events.at(-1) === phase) {
-          return commandResult({ termination: "timeout", code: null, killed: true });
-        }
-        return undefined;
-      });
-
-      await expect(
-        provider.provision(PROFILE, `internal-${phase}`, options),
-      ).resolves.toMatchObject({
-        node: { deviceId: "project-node" },
-      });
-      expect(events).toContain(phase);
-      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
-    },
-  );
-
   it.each([
     { backend: "aws", desktop: true },
     { backend: "daytona", desktop: false },
@@ -949,21 +926,6 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
     },
   );
-
-  it("preserves the lease when enrollment's owning operation has closed", async () => {
-    const { provider, calls } = createWarmProvider();
-    const beginNodeEnrollment = vi.fn(async () => {
-      throw new DOMException("Worker provisioning operation is closed", "AbortError");
-    });
-    await expect(
-      provider.provision({ ...PROFILE, warmImage: false }, "closed-enrollment", {
-        assertCurrent: () => {},
-        beginNodeEnrollment,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(beginNodeEnrollment).toHaveBeenCalledOnce();
-    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
-  });
 
   it("prepares runtime without project capture for an opted-out profile", async () => {
     const profile = { ...PROFILE, warmImage: false };

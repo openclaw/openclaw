@@ -291,7 +291,7 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
-  /** Visual activity excludes answer settlement; run control still uses the registry state. */
+  /** Roster activity lasts until the shared run owner settles, including final output delivery. */
   isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;

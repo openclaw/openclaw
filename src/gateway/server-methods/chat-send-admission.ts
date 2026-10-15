@@ -188,10 +188,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       abortPendingChatSend("restart");
       return false;
     }
-    if (
-      !currentReservation ||
-      !isFutureDateTimestampMs(currentReservation.payload.expiresAtMs, { nowMs: Date.now() })
-    ) {
+    if (!isFutureDateTimestampMs(currentReservation?.payload.expiresAtMs, { nowMs: Date.now() })) {
       abortPendingChatSend("timeout");
       return false;
     }
@@ -442,7 +439,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       onInterrupt: (reason) => {
         const stopReason = isAgentRunRestartAbortReason(reason) ? "restart" : "rpc";
         if (!admittedRunAbort) {
-          if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+          // Unstarted input remains with the client; a restart is not a terminal Stop receipt.
+          if (stopReason !== "restart" && !context.chatRunState.hasAbortMarker(clientRunId)) {
             abortPendingChatSend(stopReason);
           }
         } else if (!admittedRunAbort.controller.signal.aborted) {

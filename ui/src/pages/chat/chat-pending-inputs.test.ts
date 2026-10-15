@@ -82,6 +82,7 @@ afterEach(() => {
 
 describe("server-owned pending input display", () => {
   it.each([
+    ["queued", undefined],
     ["interrupted", "Delivery interrupted. This saved agent update is not scheduled to retry."],
   ] as const)("describes a %s agent update without asking the user to resend it", (state, text) => {
     const items = buildPendingInputItems([
@@ -95,7 +96,10 @@ describe("server-owned pending input display", () => {
         },
       },
     ]);
-    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([text]);
+    expect(items.some((item) => item.kind === "message")).toBe(true);
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+      text ? [text] : [],
+    );
   });
 
   it.each(["held", "failed", "waiting-reconnect"] as const)(

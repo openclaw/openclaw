@@ -80,9 +80,10 @@ import type {
 import { createCodexNativeSubagentNotificationRouter } from "./native-subagent-notification-routing.js";
 import {
   NATIVE_SUBAGENT_NOTIFICATION_METHODS,
-  codexNativeSubagentNotifications as nativeSubagentNotifications,
+  readCodexNativeSubagentNotification,
   isNoFinalCompletion,
   type CodexNativeSubagentCompletion,
+  type CodexNativeSubagentNotification,
 } from "./native-subagent-notification.js";
 import {
   canNativeParentConsumeCompletion,
@@ -187,6 +188,8 @@ class Monitor {
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
       unregisterChild: (child) => this.unregisterChild(child),
+      abandon: (state, child, assertCurrent) =>
+        this.assignments.abandon(state, child, assertCurrent),
       releaseClientRetentionIfIdle: () => this.releaseClientRetentionIfIdle(),
     });
     this.turnObservation = new CodexNativeSubagentTurnObservation({
@@ -315,7 +318,17 @@ class Monitor {
           },
         ),
       restore: async (state, assignment, recovery, custody) => {
-        const existing = this.childStates.get(assignment.runId);
+        const existing =
+          this.childStates.get(assignment.runId) ??
+          [...this.childStates.values()].find(
+            (child) =>
+              assignment.nativeTurnId !== undefined &&
+              child.childThreadId === assignment.childThreadId &&
+              child.nativeTurnId === assignment.nativeTurnId &&
+              child.nativeParentThreadId === assignment.nativeParentThreadId &&
+              child.historyOwner !== undefined &&
+              matchesNativeAssignmentLifecycle(child.historyOwner, assignment.owner),
+          );
         if (existing) {
           const original = this.parentStates.get(existing.parentThreadId);
           if (
@@ -1128,10 +1141,11 @@ class Monitor {
       return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
+    const nativeNotification = readCodexNativeSubagentNotification(notification);
     if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
-        notification,
+        receipts: nativeNotification.receipts,
         knownChildren: this.knownChildren.values(),
         applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
       });
@@ -1177,7 +1191,7 @@ class Monitor {
           });
       }
     }
-    await this.handleCompletionNotification(notification);
+    await this.handleCompletionNotification(nativeNotification);
   }
 
   private resumeChild(childState: ChildState, options: { scheduleRecovery?: boolean } = {}): void {
@@ -1310,14 +1324,12 @@ class Monitor {
     return childState ? this.recovery.reconcileRegisteredChild(childState) : false;
   }
 
-  private async handleCompletionNotification(notification: CodexServerNotification): Promise<void> {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    const parentThreadId = params ? readString(params, "threadId")?.trim() : undefined;
-    const state = parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
+  private async handleCompletionNotification(parsed: CodexNativeSubagentNotification) {
+    const state = parsed.threadId ? this.parentStates.get(parsed.threadId) : undefined;
     if (!state) {
       return;
     }
-    for (const nativeCompletion of nativeSubagentNotifications.fromNotification(notification)) {
+    for (const nativeCompletion of parsed.completions) {
       const childThreadId = this.childThreadIdsByAgentPath.get(
         buildParentAgentPathKey(state.parentThreadId, nativeCompletion.agentPath),
       );

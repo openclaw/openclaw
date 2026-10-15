@@ -394,9 +394,11 @@ export function createRuntimeLlm(
           completeWithPreparedSimpleCompletionModel,
           resolveSimpleCompletionSelectionForAgent,
         },
+        { completeWithAuthProfileFailover },
         cfg,
       ] = await Promise.all([
         import("../../agents/simple-completion-runtime.js"),
+        import("../../agents/simple-completion-profile-failover.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
       const pluginPolicyId =
@@ -539,6 +541,7 @@ export function createRuntimeLlm(
           agentId,
           modelRef: params.model,
           preferredProfile,
+          profileFailover: true,
           ...(requestedModelProfile ? { bindAuthOwner: true } : {}),
           allowBundledStaticCatalogFallback: true,
           allowMissingApiKeyModes: ["aws-sdk"],
@@ -563,67 +566,81 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
-        const modelExecution = source.bindModelExecution(
-          preparedLogicalModel ?? {
-            provider: prepared.selection.provider,
-            model: prepared.selection.modelId,
-          },
-        );
-        const modelSignal = modelExecution
-          ? requestSignal
-            ? AbortSignal.any([requestSignal, modelExecution.signal])
-            : modelExecution.signal
-          : requestSignal;
-        const assertPreparedCurrent = () => {
-          assertCurrent();
-          modelExecution?.assertCurrent();
-        };
-        assertPreparedCurrent();
+        let assertPreparedCurrent = assertCurrent;
 
         const work = new AsyncWorkScope();
         try {
           callerResult.resolve(
             await work.track(async () => {
-              if (params.requiredAuthMode && prepared.auth.mode !== params.requiredAuthMode) {
-                throw completionError(
-                  "LLM_COMPLETION_NOT_AUTHORIZED",
-                  "Plugin LLM completion selected a credential with the wrong authentication mode.",
-                );
-              }
-              if (requestedModelProfile && prepared.auth.profileId !== requestedModelProfile) {
-                throw completionError(
-                  "LLM_COMPLETION_NOT_AUTHORIZED",
-                  "Plugin LLM completion selected a different authentication profile.",
-                );
-              }
-
-              const context = {
-                systemPrompt: buildSystemPrompt(params),
-                messages: buildMessages({
-                  request: params,
-                  provider: prepared.model.provider,
-                  model: prepared.model.id,
-                  api: prepared.model.api,
-                }),
-              };
-
-              const result = await completeWithPreparedSimpleCompletionModel({
-                assertCurrent: assertPreparedCurrent,
-                model: prepared.model,
-                auth: prepared.auth,
+              const result = await completeWithAuthProfileFailover({
+                prepared,
                 cfg,
-                context,
-                options: {
-                  maxTokens: asFiniteNumber(params.maxTokens),
-                  temperature: asFiniteNumber(params.temperature),
-                  ...(params.responseFormat !== undefined
-                    ? { responseFormat: params.responseFormat }
-                    : {}),
-                  ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-                  signal: modelSignal,
+                agentDir: prepared.selection.agentDir,
+                signal: requestSignal,
+                assertCurrent: () => assertPreparedCurrent(),
+                warn: (message) => logger.warn(message),
+                complete: async (current) => {
+                  const modelExecution = source.bindModelExecution(
+                    preparedLogicalModel ?? {
+                      provider: prepared.selection.provider,
+                      model: prepared.selection.modelId,
+                    },
+                  );
+                  const modelSignal = modelExecution
+                    ? requestSignal
+                      ? AbortSignal.any([requestSignal, modelExecution.signal])
+                      : modelExecution.signal
+                    : requestSignal;
+                  assertPreparedCurrent = () => {
+                    assertCurrent();
+                    modelExecution?.assertCurrent();
+                  };
+                  assertPreparedCurrent();
+
+                  if (params.requiredAuthMode && current.auth.mode !== params.requiredAuthMode) {
+                    throw completionError(
+                      "LLM_COMPLETION_NOT_AUTHORIZED",
+                      "Plugin LLM completion selected a credential with the wrong authentication mode.",
+                    );
+                  }
+                  if (requestedModelProfile && current.auth.profileId !== requestedModelProfile) {
+                    throw completionError(
+                      "LLM_COMPLETION_NOT_AUTHORIZED",
+                      "Plugin LLM completion selected a different authentication profile.",
+                    );
+                  }
+
+                  const context = {
+                    systemPrompt: buildSystemPrompt(params),
+                    messages: buildMessages({
+                      request: params,
+                      provider: current.model.provider,
+                      model: current.model.id,
+                      api: current.model.api,
+                    }),
+                  };
+
+                  const completion = await completeWithPreparedSimpleCompletionModel({
+                    assertCurrent: assertPreparedCurrent,
+                    model: current.model,
+                    auth: current.auth,
+                    cfg,
+                    context,
+                    options: {
+                      maxTokens: asFiniteNumber(params.maxTokens),
+                      temperature: asFiniteNumber(params.temperature),
+                      ...(params.responseFormat !== undefined
+                        ? { responseFormat: params.responseFormat }
+                        : {}),
+                      ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+                      signal: modelSignal,
+                    },
+                  });
+                  assertPreparedCurrent();
+
+                  return completion;
                 },
               });
-              assertPreparedCurrent();
 
               const text = result.content
                 .filter((c): c is { type: "text"; text: string } => c.type === "text")

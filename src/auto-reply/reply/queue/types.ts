@@ -63,7 +63,9 @@ export type EnqueueFollowupRunOptions = {
   steerCandidate?: boolean;
 };
 
-export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+type FollowupQueueDisposition = Parameters<
+  NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
+>[0];
 
 export type QueuedFollowupReplyBatch = {
   kind: "queued-followup";

@@ -11,6 +11,7 @@ import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   getSandboxBackendFactory,
@@ -142,7 +143,10 @@ describe("OpenShell plugin registration lifecycle", () => {
       expect(readBackend().resolveWorkdir?.(workdirParams)).toBe("/sandbox/unstarted");
       setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect.poll(readBackend).toEqual(originalBackend);
+      await expect(waitForPluginRegistryRetirement(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
+      expect(readBackend()).toEqual(originalBackend);
     } finally {
       await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
         failures: [],

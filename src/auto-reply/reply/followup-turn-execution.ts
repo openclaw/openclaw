@@ -225,9 +225,11 @@ export async function executeFollowupTurn(params: {
     onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
       sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
       (item) =>
-        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
-        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
-        shouldEmitStructuredProgress(),
+        // Model waits bypass verbosity; preambles still need their explicit draft owner.
+        item.kind === "model-wait"
+          ? progressAllowed()
+          : (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+            shouldEmitStructuredProgress(),
     ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),

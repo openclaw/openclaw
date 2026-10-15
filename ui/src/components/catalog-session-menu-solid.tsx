@@ -2,6 +2,7 @@ import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
 export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
@@ -93,19 +94,16 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
             props.onClose();
           }
         }}
-        triggerAttributes={{
-          tabindex: -1,
-          "aria-hidden": "true",
-          style: {
-            position: "fixed",
-            left: `${Math.max(8, Math.min(props.x, window.innerWidth - 248))}px`,
-            top: `${Math.max(8, Math.min(props.y, window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0)))}px`,
-            width: "1px",
-            height: "1px",
-            opacity: "0",
-            "pointer-events": "none",
-          },
-        }}
+        triggerAttributes={pointMenuTriggerAttributes({
+          x: Math.max(8, Math.min(props.x, window.innerWidth - 248)),
+          y: Math.max(
+            8,
+            Math.min(
+              props.y,
+              window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0),
+            ),
+          ),
+        })}
       >
         <Show when={props.lastActive}>
           <div class="session-menu__info">
