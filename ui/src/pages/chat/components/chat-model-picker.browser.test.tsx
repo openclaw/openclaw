@@ -123,6 +123,21 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
 });
 
+it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
+  const { search, toggle, params, update } = mountPicker();
+  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  await userEvent.keyboard("beta");
+  const highlighted = container.querySelector<HTMLElement>("[data-chat-model-highlighted]")!;
+  expect(highlighted.textContent).toContain("Beta");
+  expect(search.getAttribute("aria-activedescendant")).toBe(highlighted.id);
+  params.modelOptions = params.modelOptions.filter((option) => option.value !== "example/beta");
+  update();
+  await Promise.resolve();
+  expect(search.value).toBe("beta");
+  expect(search.hasAttribute("aria-activedescendant")).toBe(false);
+  expect(container.querySelector("[data-chat-model-highlighted]")).toBeNull();
+});
+
 it("keeps a disabled picker closed on keyboard activation", async () => {
   const { picker, trigger, params, update } = mountPicker();
   params.disabled = true;
