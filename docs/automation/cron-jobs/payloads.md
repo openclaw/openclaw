@@ -181,6 +181,14 @@ from current defaults. Environment-only and provider-config API keys have no dur
 account ownership, so new host-managed jobs reject them at creation. Store the key
 in an auth profile and select that profile instead. Credentialless models remain
 usable without an account.
+
+CLI-runtime automations use the CLI's own login and do not require an inference
+binding. OpenClaw does not forward a stored inference profile on that path.
+Known provider-auth environment variables are removed from the CLI child environment,
+including keys for other providers.
+The backend's environment exclusions still apply: configured backend overrides
+and the live-test preserve-env option cannot restore excluded host credentials.
+
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.

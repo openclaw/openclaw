@@ -3,7 +3,6 @@ import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import {
   getInstallationTarget,
   installationTargetEnv,
@@ -35,16 +34,9 @@ import {
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
+import { buildCliExecutionEnv } from "./execute-env.js";
 import { createCliEventHandlers } from "./execute-events.js";
-import {
-  buildCliExecLogLine,
-  CLAUDE_SELECTED_AUTH_ENV_KEYS,
-  CLI_BACKEND_PRESERVE_ENV,
-  logCliInvocation,
-  NODE_CLAUDE_FORWARD_ENV_KEYS,
-  parseCliBackendPreserveEnv,
-  resolveNodeClaudeAuthEnv,
-} from "./execute-logging.js";
+import { buildCliExecLogLine, logCliInvocation } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
@@ -350,53 +342,11 @@ export async function executePreparedCliRun(
             captureKey: initialGatewayCaptureKey,
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
-      const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const hasSelectedClaudeAuth =
-        Boolean(context.preparedBackend.secretInput) ||
-        [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
-      const selectedClaudeClearEnv = hasSelectedClaudeAuth
-        ? new Set(backend.clearEnv ?? [])
-        : undefined;
-      const configuredBackendEnv = Object.fromEntries(
-        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
-      );
-      const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
-      const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
-        NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
-      );
-      const nodeEnv = nodePlacement
-        ? {
-            ...Object.fromEntries(nodeEnvEntries),
-            ...resolveNodeClaudeAuthEnv(context),
-          }
-        : undefined;
-      const nodeRuntimeClearEnv = nodePlacement
-        ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
-        : [];
-      const nodeClearEnv = [
-        ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
-      ];
-      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
-      for (const key of backend.clearEnv ?? []) {
-        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
-          delete env[key];
-        }
-      }
-      if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          sanitizeHostExecEnv({
-            baseEnv: {},
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
-        );
-      }
-      Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
-      // Never mark Claude CLI as host-managed. That marker routes runs into
-      // Anthropic's separate host-managed usage tier instead of normal CLI use.
-      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      const { env, nodeEnv, nodeClearEnv } = buildCliExecutionEnv({
+        context,
+        captureEnv: mcpCaptureAttempt.env,
+        installationEnv: localProcessEnv,
+      });
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
