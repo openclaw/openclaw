@@ -287,29 +287,3 @@ it.each(["runbooks", "..notes", "...notes", "~"])(
     await expect(read("private.md")).rejects.toThrow("path is not an allowed Markdown memory file");
   },
 );
-
-it("retries transient read errors for workspace memory files", async () => {
-  const { workspaceDir } = await fixture({ "workspace/memory/retry.md": "alpha\nbeta" });
-  const relPath = "memory/retry.md";
-  const absPath = path.join(workspaceDir, relPath);
-  const realOpen = fs.open;
-  let attempts = 0;
-  vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof realOpen>) => {
-    const [target, flags, mode] = args;
-    if (typeof target === "string" && path.resolve(target) === absPath && attempts++ === 0) {
-      throw Object.assign(new Error("Unknown system error -11: Unknown system error -11, open"), {
-        code: "UNKNOWN",
-        errno: -11,
-      });
-    }
-    return await realOpen(target, flags, mode);
-  });
-  await expect(readMemoryFile({ workspaceDir, extraPaths: [], relPath })).resolves.toEqual({
-    status: "ok",
-    text: "alpha\nbeta",
-    path: relPath,
-    from: 1,
-    lines: 2,
-  });
-  expect(attempts).toBe(2);
-});

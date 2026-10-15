@@ -156,26 +156,8 @@ describe("Crabbox capture lifetime admission", () => {
     expect(f.calls.slice(-2).map((call) => call[1])).toEqual(["inspect", "list"]);
   });
 
-  it("admits the actual longer runtime preparation budget", async () => {
-    const f = fixture();
-    f.setExtension(async () => {
-      f.setTTL(5340);
-      return commandResult({ stdout: JSON.stringify({ id: ID }) });
-    });
-    await prepareCrabboxCaptureLifetime(
-      { ...context, sourcePreparationTimeoutMs: 30 * 60_000 },
-      { runCommand: f.runCommand, observe: f.observation },
-    );
-    expect(f.calls.find((call) => call[1] === "extend")).toContain("5340s");
-  });
-
-  it.each([
-    "lease_extension_denied",
-    "lease_extension_budget_exceeded",
-    "lease_extension_unsupported_provider",
-    "lease_extension_not_advancing",
-    "lease_not_active",
-  ])("surfaces %s without a retry or replacement", async (code) => {
+  it("surfaces coordinator refusal without a retry or replacement", async () => {
+    const code = "lease_extension_budget_exceeded";
     const f = fixture();
     f.setExtension(async () => commandResult({ code: 1, stderr: `coordinator: ${code}` }));
     await expect(

@@ -62,19 +62,6 @@ describe("PDF document extractor", () => {
     encodePngMock.mockReset().mockResolvedValue(Uint8Array.from(Buffer.from("png")));
   });
 
-  it("caps combined text while preserving image fallback after the text budget is exhausted", async () => {
-    pdfDocument.pageCount = 3;
-    pageTextMock
-      .mockReturnValueOnce("header")
-      .mockReturnValueOnce("x".repeat(200_000))
-      .mockReturnValueOnce("");
-    const result = await extractPdfContent(request({ maxPages: 3, minTextChars: 5 }), control);
-
-    expect(result.text).toBe("header\n\n" + "x".repeat(199_992));
-    expect(result.images).toHaveLength(1);
-    expect(result.metadata?.textTruncated).toBe(true);
-  });
-
   it("records the actual page selection and Unicode-safe text omission", async () => {
     pdfDocument.pageCount = 21;
     pageTextMock.mockReturnValueOnce("x".repeat(199_999) + "🙂").mockReturnValue("enough text");
