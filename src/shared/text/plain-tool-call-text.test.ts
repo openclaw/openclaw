@@ -22,6 +22,7 @@ const samples = [
   "<FUNCTION=read></FUNCTION>\nDone.",
   'analysis to=read code {"path":"a.ts"}\nDone.',
   'Adjacent.\n[read]\n{"path": "a.ts"}\n[/read]\n[exec]\n{"command": "ls"}\n[/exec]\nEnd.\n',
+  'Here is the block:\n\n```json\n{ "name": "openclaw", "deps": { "left-pad": "1.0.0" } }\n```\n\n[tool:read] {"path":"a.ts"}\n',
 ];
 
 describe("plainToolCallTextFilter streamed projection", () => {
@@ -61,6 +62,38 @@ describe("plainToolCallTextFilter streamed projection", () => {
         projection.append(source.slice(offset, offset + chunkSize));
         expect(projection.text).toBe(reference(accumulated));
       }
+    }
+  });
+
+  it("bounds plain-tool-call parse work when a code block only quotes a call", () => {
+    const source = [
+      "Here is the block:",
+      "",
+      "```json",
+      '{ "name": "openclaw", "version": "2026.10.3", "deps": { "left-pad": "1.0.0" } }',
+      "```",
+      ...Array.from(
+        { length: 400 },
+        (_value, index) => `Sentence number ${index} carries several ordinary words.`,
+      ),
+      "",
+    ].join("\n");
+    const strip = vi.spyOn(toolCallRepair, "stripPlainTextToolCallBlocks");
+    try {
+      const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
+      for (let offset = 0; offset < source.length; offset += 4) {
+        projection.append(source.slice(offset, offset + 4));
+      }
+      expect(projection.text).toBe(source.trimEnd());
+      // A quoted call inside a fenced block is protected text, so the streaming
+      // probe must not latch the canonical parser onto the whole reply.
+      const parsedCharacters = strip.mock.calls.reduce(
+        (total, [parsed]) => total + parsed.length,
+        0,
+      );
+      expect(parsedCharacters).toBe(0);
+    } finally {
+      strip.mockRestore();
     }
   });
 });

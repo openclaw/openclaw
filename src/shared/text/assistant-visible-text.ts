@@ -6,6 +6,7 @@ import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
+  createActivatedProjector,
   createConditionalTextProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
@@ -295,10 +296,39 @@ export const assistantTraceTextFilter: TextFilter = {
   activationTokens: ["tool", "function", "📊", "🛠", "📖", "📝", "🔍", "🔎", "⚙"],
 };
 
+const PLAIN_TOOL_CALL_ACTIVATION_TOKENS = ["{", "<parameter=", "<function=", "to="] as const;
+
+const stripPlainToolCallBlocks = (text: string) =>
+  stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
+
+// A payload marker quoted in a fenced or indented code block never starts a plain-text tool
+// call, so the streaming probe must not latch the canonical parser onto the whole reply for
+// the rest of the stream. The canonical parse still owns protection once a marker is eligible.
+// A reply that really does carry a strippable call still re-parses per delta, as before.
+function createPlainToolCallActivationProbe(): (text: string, offset: number) => boolean {
+  let protectedUntil = 0;
+  return (text, offset) => {
+    if (offset < protectedUntil) {
+      return false;
+    }
+    const region = findCodeRegions(text).find(
+      (candidate) => offset >= candidate.start && offset < candidate.end,
+    );
+    if (!region) {
+      return true;
+    }
+    protectedUntil = region.end;
+    return false;
+  };
+}
+
 export const plainToolCallTextFilter: TextFilter = {
-  transform: (text) =>
-    stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  activationTokens: ["{", "<parameter=", "<function=", "to="],
+  transform: stripPlainToolCallBlocks,
+  create: () =>
+    createActivatedProjector(
+      { transform: stripPlainToolCallBlocks, activationTokens: PLAIN_TOOL_CALL_ACTIVATION_TOKENS },
+      createPlainToolCallActivationProbe(),
+    ),
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(

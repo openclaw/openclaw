@@ -39,6 +39,7 @@ export function createConditionalTextProjector(
 
 export function createActivatedProjector(
   filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
+  isActivatingMatch?: (text: string, offset: number) => boolean,
 ): TextProjector {
   const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
@@ -47,7 +48,12 @@ export function createActivatedProjector(
   return createConditionalTextProjector(filter.transform, (input) => {
     if (!active) {
       const appended = tail + (input.delta ?? input.text);
-      active = activation.test(appended);
+      const match = activation.exec(appended);
+      // A rejected marker stays in the overlap window so a later delta can prove it eligible.
+      active =
+        match !== null &&
+        (!isActivatingMatch ||
+          isActivatingMatch(input.text, input.text.length - appended.length + match.index));
       tail = !active && overlap ? appended.slice(-overlap) : "";
     }
     return active;
