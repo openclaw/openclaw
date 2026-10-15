@@ -98,6 +98,10 @@ outside the transaction can refresh those facts through the existing owner.
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
+On first Gateway startup, a version-zero database containing only recognized
+native bootstrap tables is completed before runtime history is read. This uses
+the existing schema owner and preserves the native rows; it does not repair
+historical installations during ordinary startup.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format and each target's decision are loaded once
 per physical store. Record and clear operations publish the committed decision
