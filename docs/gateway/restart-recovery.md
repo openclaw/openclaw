@@ -83,7 +83,8 @@ Each attempt checks the original source and destination sessions and current
 communication permission again. Reset, replaced, archived, or permission-denied
 sessions stop automatic delivery. Unknown failures and exhausted retries leave the
 input saved, with a fixed failure-reason code and attempt count recorded in the
-recovery notice. Detailed diagnostics stay in operator logs. Recovery never
+recovery notice details. The notice explains the failure and directs you to resend
+the update or ask the sender to retry. Detailed diagnostics stay in operator logs. Recovery never
 reruns the sender task or restores old approvals.
 
 When an update replaces the bundled Control UI, an open tab reloads after the

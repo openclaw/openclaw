@@ -269,15 +269,22 @@ export async function recoverSessionSendDeliveries(
         const content =
           "Agent updates not delivered after restart:\n" +
           displayed
-            .map(
-              ({ sourceSessionKey, reason, attempts }) =>
-                `- From ${sourceSessionKey}: ${reason} (${attempts} recovery attempt${attempts === 1 ? "" : "s"}).`,
-            )
+            .map(({ sourceSessionKey, reason, attempts }) => {
+              const description = {
+                "endpoint-replaced":
+                  "the source or destination session was reset, archived, or replaced",
+                "permission-denied": "current session permissions do not allow automatic delivery",
+                "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
+                "store-unavailable": "session storage was unavailable",
+                unknown: "delivery failed",
+              }[reason];
+              return `- From ${sourceSessionKey}: ${description}.`;
+            })
             .join("\n") +
           (blocked.length > displayed.length
             ? `\n${blocked.length - displayed.length} more updates were not delivered.`
             : "") +
-          "\nThe updates remain saved; no sender task was rerun.";
+          "\nThe updates remain saved; no sender task was rerun. Resend the update or ask the sender to retry.";
         const result = await retry(() =>
           withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
             appendSessionTranscriptReport(scope, {

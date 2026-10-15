@@ -251,7 +251,9 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
     ) {
       const notice = io.report.mock.calls[0]![1].selectReport(undefined);
       expect(notice.content).toContain(
-        change === "permission" ? "permission-denied" : "endpoint-replaced",
+        change === "permission"
+          ? "current session permissions do not allow automatic delivery"
+          : "the source or destination session was reset, archived, or replaced",
       );
       expect(notice.content).not.toContain("Reader capacity exhausted");
     }
@@ -268,6 +270,7 @@ it.each([
     error: new WorkerTaskError(privateDiagnostic, "overloaded"),
     reason: "transient-admission",
     attempts: 3,
+    description: "the Gateway was still unavailable after 3 automatic attempts",
   },
   {
     name: "pending inspection",
@@ -280,6 +283,7 @@ it.each([
     }),
     reason: "transient-admission",
     attempts: 3,
+    description: "the Gateway was still unavailable after 3 automatic attempts",
   },
   {
     name: "failed inspection",
@@ -292,11 +296,18 @@ it.each([
     }),
     reason: "store-unavailable",
     attempts: 1,
+    description: "session storage was unavailable",
   },
-  { name: "unknown", error: new Error(privateDiagnostic), reason: "unknown", attempts: 1 },
+  {
+    name: "unknown",
+    error: new Error(privateDiagnostic),
+    reason: "unknown",
+    attempts: 1,
+    description: "delivery failed",
+  },
 ])(
   "keeps path-bearing $name diagnostics out of saved recovery notices",
-  async ({ error, reason, attempts }) => {
+  async ({ error, reason, attempts, description }) => {
     io.load.mockRejectedValue(error);
     const recovery = recoverSessionSendDeliveries(context, controller().signal);
     await Promise.all([recovery, vi.runAllTimersAsync()]);
@@ -308,7 +319,11 @@ it.each([
       reason,
       attempts,
     });
-    expect(report.content).toContain(reason);
+    expect(report.content).toBe(
+      "Agent updates not delivered after restart:\n" +
+        `- From ${delivery.source.sessionKey}: ${description}.\n` +
+        "The updates remain saved; no sender task was rerun. Resend the update or ask the sender to retry.",
+    );
     expect(JSON.stringify(report)).not.toContain(privateDatabasePath);
     expect(JSON.stringify(report)).not.toContain(quarantineCommand);
     const logs = warn.mock.calls.map(([line]) => line).join("\n");
