@@ -1,7 +1,6 @@
 // Runtime plan tool tests cover schema normalization and diagnostics when the
 // runtime plan owns tool policy, with legacy provider fallback still available.
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -161,16 +160,28 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       const api = builder.createApi(record, { config: {} });
       const instance = getPluginInstance(record)!;
       const catalogRef = createToolSearchCatalogRef();
+      const metadataWrites: PropertyKey[] = [];
+      const observeMetadataWrites = (definition: AgentTool): AgentTool =>
+        new Proxy(definition, {
+          set(target, key, value, receiver) {
+            if (key === "outputSchema" || key === "hideFromChannelProgress") {
+              metadataWrites.push(key);
+            }
+            return Reflect.set(target, key, value, receiver);
+          },
+        });
       try {
         const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
-        const tool = wrapToolWithBeforeToolCallHook({
-          ...createParameterFreeTool("fixture__lookup_note"),
-          label: "Fixture lookup",
-          parameters: Type.Object({}),
-          outputSchema: Type.Object({}),
-          hideFromChannelProgress: true,
-          execute: vi.fn(async () => output),
-        });
+        const tool = observeMetadataWrites(
+          wrapToolWithBeforeToolCallHook({
+            ...createParameterFreeTool("fixture__lookup_note"),
+            label: "Fixture lookup",
+            parameters: Type.Object({}),
+            outputSchema: Type.Object({}),
+            hideFromChannelProgress: true,
+            execute: vi.fn(async () => output),
+          }),
+        );
         const metadata: Parameters<typeof setPluginToolMeta>[1] = {
           pluginId: "bundle-mcp",
           optional: false,
@@ -187,7 +198,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           label: "Normalizer fixture",
           auth: [],
           normalizeToolSchemas: ({ tools }) =>
-            mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
+            mode === "cloned" ? tools.map((entry) => observeMetadataWrites({ ...entry })) : tools,
         });
         const provider = expectDefined(
           builder.registry.providers[0],
@@ -200,19 +211,12 @@ describe("AgentRuntimePlan tool policy helpers", () => {
           route === "plan"
             ? ({ tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan)
             : undefined;
-        const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
-        let normalized: AgentTool[];
-        try {
-          normalized = normalizeAgentRuntimeTools({
-            runtimePlan,
-            tools: [tool],
-            provider: "openai",
-          });
-          // Provider binding/call and guarded source attachment retain admission.
-          expect(frames).toHaveBeenCalledTimes(3);
-        } finally {
-          frames.mockRestore();
-        }
+        const normalized = normalizeAgentRuntimeTools({
+          runtimePlan,
+          tools: [tool],
+          provider: "openai",
+        });
+        expect(metadataWrites).toEqual([]);
         const normalizedTool = expectDefined(normalized[0], "normalized tool");
         const wrapped = normalized
           .map((entry) => wrapToolWithBeforeToolCallHook(entry))

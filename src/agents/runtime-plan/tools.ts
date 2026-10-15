@@ -12,7 +12,7 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
-import type { AnyAgentTool } from "../tools/common.js";
+import type { AgentToolWithMeta } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -51,16 +51,19 @@ function runtimePlanToolContext(params: {
 
 // Normalizers may return cloned tool definitions. Preserve owner and private
 // execution metadata so downstream dispatch keeps the same policy and result contract.
-function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
+function copyRuntimeToolMetadata(
+  source: AgentToolWithMeta<TSchema, unknown>,
+  target: AgentToolWithMeta<TSchema, unknown>,
+): void {
   if (source === target) {
     return;
   }
-  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source;
   if (
     catalogMode &&
     Object.getOwnPropertyDescriptor(target, "catalogMode")?.value !== catalogMode
   ) {
-    (target as AnyAgentTool).catalogMode = catalogMode;
+    target.catalogMode = catalogMode;
   }
   if (
     outputSchema !== undefined &&
