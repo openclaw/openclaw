@@ -101,6 +101,7 @@ it.each([
   "(await import('./state/user-model-accounts.js'))['SELECT']();",
   "const [{ SELECT: selected }] = await Promise.all([import('./state/user-model-accounts.js')]); selected();",
   "import('./state/user-model-accounts.js').then(({ SELECT: selected }) => selected());",
+  "import('./state/user-model-accounts.js').then(({ SELECT: selected }: { SELECT: () => void }) => selected());",
   "Promise.all([import('./state/user-model-accounts.js')]).then(([accounts]) => accounts.SELECT());",
 ])("checks a selected dynamic import without charging unused sibling exports: %s", (consumer) => {
   const source = `${owner}\nexport function listUserProfileAuthLinksAsync() {}`;
@@ -491,15 +492,19 @@ it("requires the host publication adapter for direct and aliased machine-state c
       "machineState.write credential writes require the host publication adapter",
     ),
   ]);
-  expect(
-    inspect({
-      "src/new-writer.ts": source.replace("type: command", "type: 'machineState.write'"),
-    }),
-  ).toEqual([
-    expect.stringContaining(
-      "machineState.write credential writes require the host publication adapter",
-    ),
-  ]);
+  for (const command of [
+    "'machineState.write'",
+    "`machineState.write`",
+    "'machineState\\u002ewrite'",
+  ]) {
+    const direct = source.replace("type: command", `type: ${command}`);
+    expect(inspect({ "src/state/config-machine-state-async.ts": direct })).toEqual([]);
+    expect(inspect({ "src/new-writer.ts": direct })).toEqual([
+      expect.stringContaining(
+        "machineState.write credential writes require the host publication adapter",
+      ),
+    ]);
+  }
 });
 
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
@@ -920,4 +925,27 @@ it("keeps session membership writes with the worker and canonical entry owners",
     expect.stringContaining("unreviewed session membership writer reference"),
     expect.stringContaining("raw authority-table write"),
   ]);
+});
+
+it.each([
+  "import selected from './state/user-model-accounts.js'; selected();",
+  "import { default as selected } from './state/user-model-accounts.js'; selected();",
+  "export { default as selected } from './state/user-model-accounts.js';",
+  "import * as accounts from './state/user-model-accounts.js'; accounts.default();",
+])("checks default writer bindings without charging unrelated exports: %s", (consumer) => {
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      `${owner}\nexport default function listUserProfileAuthLinksAsync() {}`,
+    ),
+  ).toEqual([]);
+  expect(
+    inspect(
+      { "src/consumer.ts": consumer },
+      owner.replace(
+        "export function connectUserModelAccount",
+        "export default function connectUserModelAccount",
+      ),
+    ),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });

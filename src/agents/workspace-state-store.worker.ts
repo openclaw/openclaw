@@ -90,7 +90,7 @@ function deleteWorkspace(
   return { kind: "workspace-deleted", workspacePath: identity.workspacePath };
 }
 
-function mergeSetup(
+export function mergeWorkspaceSetupStateInDatabase(
   database: WorkspaceStateDatabaseHandle,
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
@@ -258,7 +258,7 @@ export function executeWorkspaceStateCommand(
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result =
           command.type === "workspace.mergeSetup"
-            ? mergeSetup(
+            ? mergeWorkspaceSetupStateInDatabase(
                 writer,
                 command.input.workspaceDir,
                 command.input.next,

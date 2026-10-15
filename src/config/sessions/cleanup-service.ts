@@ -49,9 +49,6 @@ export {
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
   type SessionCleanupSummary,
-  type SessionsCleanupFailure,
-  type SessionsCleanupPartialErrorDetail,
-  type SessionsCleanupPartialResult,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";

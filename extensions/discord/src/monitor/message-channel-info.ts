@@ -13,11 +13,6 @@ export type DiscordChannelInfoClient = {
   fetchChannel(channelId: string): Promise<unknown>;
 };
 
-type DiscordMessageWithChannelId = Message & {
-  channel_id?: unknown;
-  rawData?: { channel_id?: unknown };
-};
-
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
@@ -39,11 +34,8 @@ export function resolveDiscordMessageChannelId(params: {
   message: Message;
   eventChannelId?: string | number | null;
 }): string {
-  const message = params.message as DiscordMessageWithChannelId;
   return (
-    normalizeDiscordChannelId(message.channelId) ||
-    normalizeDiscordChannelId(message.channel_id) ||
-    normalizeDiscordChannelId(message.rawData?.channel_id) ||
+    normalizeDiscordChannelId(params.message.channelId) ||
     normalizeDiscordChannelId(params.eventChannelId)
   );
 }
