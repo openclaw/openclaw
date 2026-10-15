@@ -1,7 +1,6 @@
 .context-usage__popover,
 .chat-controls__inline-select-menu,
-.agent-chat__attach-menu::part(menu),
-.agent-chat__capability-menu::part(menu),
+.agent-chat__capability-menu-panel,
 .chat-controls__permission-menu,
 .chat-talk-input-picker::part(menu) {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
@@ -288,7 +287,7 @@
   font-size: 12px;
 }
 
-.agent-chat__attach-menu-option [slot="icon"] {
+.agent-chat__attach-menu-option > .oc-menu-item__icon {
   color: var(--muted);
 }
 
@@ -304,10 +303,8 @@
   stroke-width: 1.5px;
 }
 
-.agent-chat__capability-menu::part(menu) {
-  /* Web Awesome owns this menu's important max-height rule. Keep capability
-     views compact while respecting the composer's live viewport budget. */
-  --auto-size-available-height: min(
+.agent-chat__capability-menu-panel {
+  --oc-overlay-max-height: min(
     420px,
     50dvh,
     var(--chat-composer-popover-max-height, calc(100dvh - 116px))
@@ -321,7 +318,7 @@
   scrollbar-gutter: stable;
 }
 
-.agent-chat__capability-menu[data-view="root"]::part(menu) {
+.agent-chat__capability-menu[data-view="root"] .agent-chat__capability-menu-panel {
   /* Wide enough that "Web search" plus its trailing switch stays one line. */
   width: 208px;
   min-width: 208px;
@@ -330,7 +327,7 @@
   scrollbar-gutter: auto;
 }
 
-.agent-chat__capability-menu-item[value="back"] {
+.agent-chat__capability-menu-item[data-value="back"] {
   position: sticky;
   top: calc(-1 * var(--menu-padding));
   z-index: 1;
@@ -338,8 +335,6 @@
 }
 
 .agent-chat__capability-menu-item {
-  --wa-color-text-normal: var(--text);
-
   flex-shrink: 0;
 }
 
@@ -388,17 +383,14 @@
   color: var(--muted);
 }
 
-/* Row voice shared with the permission picker: 13/600 strong titles, muted 11px
-   notes, and a 16px icon part so the icon→label distance is the row gap alone
-   (wa-dropdown-item's default icon part is 24px wide, which read as a wider,
-   misaligned gap next to the custom-markup pickers). */
-.agent-chat__attach-menu-option::part(icon),
-.agent-chat__capability-menu-item::part(icon) {
+/* Keep native menu rows aligned with the permission picker. */
+:is(.agent-chat__attach-menu-option, .agent-chat__capability-menu-item) > .oc-menu-item__icon {
   width: var(--chat-composer-menu-icon);
+  margin-inline-end: 0;
 }
 
-.agent-chat__attach-menu-option::part(label),
-.agent-chat__capability-menu-item::part(label) {
+.agent-chat__attach-menu-option > .oc-menu-item__label,
+.agent-chat__capability-menu-item > .oc-menu-item__label {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 600;
@@ -423,7 +415,7 @@
   line-height: 1.25;
 }
 
-.agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span,
+.agent-chat__capability-menu-item[data-value^="library-"] .agent-chat__capability-menu-label > span,
 .chat-browser-annotation-card__meta > span,
 .chat-controls__model-option-title,
 .chat-controls__model-option-meta,
@@ -443,7 +435,7 @@
   pointer-events: none;
 }
 
-.agent-chat__capability-menu-toggle[type="checkbox"]::part(checkmark) {
+.agent-chat__capability-menu-toggle--switch > .oc-menu-item__check {
   display: none;
 }
 
