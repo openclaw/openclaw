@@ -364,6 +364,34 @@ export function prepareProjectedSessionPresentation(
         ? "send blocked by session policy"
         : null),
   });
+  const projectModels = (
+    row: GatewaySessionRow,
+    views: Map<string, Readonly<GatewaySessionRow>> | undefined,
+    signature: string | undefined,
+  ) => {
+    const projected = models?.session(row) ?? row;
+    if (projected === row || !views || signature === undefined) {
+      return projected;
+    }
+    const modelSignature =
+      signature +
+      JSON.stringify([
+        projected.modelProvider,
+        projected.model,
+        projected.activeModelProvider,
+        projected.activeModel,
+        projected.contextBudgetStatus,
+      ]);
+    const existing = views.get(modelSignature);
+    if (existing) {
+      return existing;
+    }
+    const snapshot = Object.freeze(projected);
+    views.set(modelSignature, snapshot);
+    return snapshot;
+  };
+  // One synchronous presenter compares many rows; only changed facts become retained snapshots.
+  let facts: unknown[] = [];
   const present = (
     record: records.MaterializedRow,
     options: PresentationOptions = {},
@@ -407,7 +435,6 @@ export function prepareProjectedSessionPresentation(
     }
     // Keep invariant row facts out of each recipient's encoded signature. The publication
     // owns these views; in-place preview/profile/lineage updates retire the whole row's views.
-    // The materialization owns these views; the resident row survives its replacement.
     let published = publicationRows?.get(record.materialized);
     if (publicationRows) {
       const liveModel = resolveProjectedAgentRunModel({
@@ -416,7 +443,8 @@ export function prepareProjectedSessionPresentation(
         index: rowContext.projectedAgentRuns,
       });
       const temporal = runState(record.key, record.materialized.source);
-      const facts = [
+      facts.length = 0;
+      facts.push(
         record.profileRevision,
         record.lastMessagePreview,
         record.fallbackModel,
@@ -447,7 +475,7 @@ export function prepareProjectedSessionPresentation(
           ? now
           : undefined,
         record.materialized.source.childLinks?.length,
-      ];
+      );
       for (const child of record.materialized.source.childLinks ?? []) {
         const { key, entry, parsedKey } = child;
         const childActive = runState(key, child).fields.hasActiveSubagentRun;
@@ -465,9 +493,14 @@ export function prepareProjectedSessionPresentation(
         );
       }
       const previous = published?.facts;
-      if (!previous || !facts.every((fact, index) => fact === previous[index])) {
+      let changed = !previous || previous.length !== facts.length;
+      for (let index = 0; !changed && index < facts.length; index++) {
+        changed = facts[index] !== previous![index];
+      }
+      if (changed) {
         published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
         publicationRows.set(record.materialized, published);
+        facts = [];
       }
     }
     const views = published?.views;
@@ -497,30 +530,8 @@ export function prepareProjectedSessionPresentation(
         canEnsure,
       ]);
     const cached = signature === undefined ? undefined : views?.get(signature);
-    const projectModels = (row: GatewaySessionRow) => {
-      const projected = models?.session(row) ?? row;
-      if (projected === row || !views || signature === undefined) {
-        return projected;
-      }
-      const modelSignature =
-        signature +
-        JSON.stringify([
-          projected.modelProvider,
-          projected.model,
-          projected.activeModelProvider,
-          projected.activeModel,
-          projected.contextBudgetStatus,
-        ]);
-      const existing = views.get(modelSignature);
-      if (existing) {
-        return existing;
-      }
-      const snapshot = Object.freeze(projected);
-      views.set(modelSignature, snapshot);
-      return snapshot;
-    };
     if (cached) {
-      return projectModels(cached);
+      return projectModels(cached, views, signature);
     }
     const row = projection.present(record, {
       ...options,
@@ -598,9 +609,9 @@ export function prepareProjectedSessionPresentation(
       const snapshot = freezeJsonSnapshot(row);
       encodings.set(snapshot, encoded);
       views?.set(signature, snapshot);
-      return projectModels(snapshot);
+      return projectModels(snapshot, views, signature);
     }
-    return projectModels(row);
+    return projectModels(row, views, signature);
   };
   return {
     get audienceKey() {
