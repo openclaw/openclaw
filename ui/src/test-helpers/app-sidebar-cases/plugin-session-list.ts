@@ -125,11 +125,7 @@ describe("AppSidebar session-list replacement", () => {
         replacement = createReplacement("other-sessions");
         pluginListeners.forEach((notify) => notify());
         await settleRoster(sidebar);
-        await vi.waitFor(() =>
-          expect(
-            sidebar.querySelector('[data-plugin-replacement="other-sessions"]'),
-          ).not.toBeNull(),
-        );
+        expect(sidebar.querySelector('[data-plugin-replacement="other-sessions"]')).not.toBeNull();
         await settleRoster(sidebar);
         expect(firstReplacement?.isConnected).toBe(false);
         expect(keys()).toEqual(["agent:main:main", "agent:main:first"]);
