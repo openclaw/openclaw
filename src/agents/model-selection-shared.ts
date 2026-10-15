@@ -1,3 +1,4 @@
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
  */
@@ -585,6 +586,53 @@ export function resolveModelRefFromString(
     raw: model,
   });
   return parsed ? { ref: parsed } : null;
+}
+
+/**
+ * Resolve the canonical route label for a configured model reference.
+ *
+ * Setup discovery and activation must agree on the identity of a configured
+ * model. A qualified alias (`openai/Fast`) must label the concrete model, while
+ * a literal catalog namespace (`openrouter/openrouter/fusion`) must keep its
+ * authored spelling. The completion resolver strips a self-provider prefix from
+ * the model id, so callers cannot rebuild the label from the resolved selection
+ * alone — they must consult the configured reference.
+ */
+export function resolveConfiguredRouteModelLabel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  /** The authored primary/utility ref, or undefined when none is configured. */
+  configuredRef: string | undefined;
+  /** The resolved selection for the same config (provider + model id). */
+  resolved: ModelRef;
+  /**
+   * The auth profile the selection already separated. Only a suffix matching
+   * this exact profile is dropped, so a literal catalog `@` suffix (e.g.
+   * `local-utility/tiny@experimental`) is preserved.
+   */
+  profileId?: string;
+  manifestPlugins?: ModelManifestPlugins;
+}): string {
+  const configuredRef = params.configuredRef?.trim();
+  const configuredModel =
+    configuredRef && params.profileId && configuredRef.endsWith(`@${params.profileId}`)
+      ? configuredRef.slice(0, configuredRef.length - params.profileId.length - 1)
+      : (configuredRef ?? "");
+  // The completion resolver strips a self-provider prefix from the model id, so
+  // a literal catalog namespace (`openrouter/openrouter/fusion`) would be lost
+  // if we rebuilt the label from the resolved selection. Preserve the authored
+  // ref only when it is exactly the resolved model plus one self-provider
+  // prefix; otherwise (bare alias, qualified alias, or a resolved model that
+  // carries an extra literal suffix) the resolved selection is authoritative.
+  const strippedConfiguredModel = stripSelfProviderModelPrefix(
+    params.resolved.provider,
+    configuredModel,
+  );
+  const model =
+    configuredModel && strippedConfiguredModel === params.resolved.model
+      ? configuredModel
+      : params.resolved.model;
+  return modelKey(params.resolved.provider, model);
 }
 
 /** Prepare implicit provider selection without promoting the agent's utility route. */
