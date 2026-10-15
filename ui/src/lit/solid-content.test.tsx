@@ -206,6 +206,34 @@ describe("Lit and Solid content boundaries", () => {
     }
   });
 
+  it("publishes nested mutations and stable getters without replacing the view", () => {
+    const state = { text: "First" };
+    const props = { state, read: () => state.text };
+    function Content(current: typeof props) {
+      return (
+        <section>
+          <p>{current.state.text}</p>
+          <output>{current.read()}</output>
+        </section>
+      );
+    }
+    const view = mountSolid(() => <div />);
+    const container = view.container.querySelector("div")!;
+    const paint = () => render(solidContent(Content, props), container);
+    try {
+      paint();
+      const section = container.querySelector("section");
+      expect(section?.textContent).toBe("FirstFirst");
+      state.text = "Updated";
+      paint();
+      expect(container.querySelector("section")).toBe(section);
+      expect(section?.textContent).toBe("UpdatedUpdated");
+    } finally {
+      render(nothing, container);
+      view.unmount();
+    }
+  });
+
   it("preserves an uncommitted input through mutable prop updates and parking", async () => {
     const mounted = vi.fn();
     const disposed = vi.fn();

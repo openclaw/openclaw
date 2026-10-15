@@ -242,7 +242,12 @@ class SolidContent extends AsyncDirective {
         let projection = values.get(key);
         if (!projection) {
           projection = runWithOwner(projectionOwner, () =>
-            createMemo(() => Reflect.get(props(), key)),
+            createMemo(() => Reflect.get(props(), key), {
+              // Legacy callers mutate nested objects and getter closures in place.
+              equals: (previous, next) =>
+                (next === null || (typeof next !== "object" && typeof next !== "function")) &&
+                Object.is(previous, next),
+            }),
           );
           values.set(key, projection);
         }
