@@ -9,6 +9,7 @@ who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.10.5 (draft checkpoint)](/releases/2026.10.5)
 - [v2026.10.3](/releases/2026.10.3)
 - [v2026.10.2](/releases/2026.10.2)
 - [v2026.10.1](/releases/2026.10.1)
