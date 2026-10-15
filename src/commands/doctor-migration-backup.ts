@@ -154,7 +154,13 @@ export async function backupDoctorMigrationDatabases(params: {
   }
   return {
     ...result,
-    ...(migrationTables.size > 0 ? { versionMigrations: params.pendingMigrations } : {}),
+    ...(migrationTables.size > 0
+      ? {
+          versionMigrations: params.pendingMigrations?.filter((migration) =>
+            params.agentDatabaseTargets?.some((target) => target.path === migration.path),
+          ),
+        }
+      : {}),
   };
 }
 

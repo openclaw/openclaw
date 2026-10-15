@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
+import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -12,6 +13,72 @@ import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-s
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
+
+it("excludes an older database that is both pending and indeterminate from version receipts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const targets = ["indeterminate"].map((agentId) => ({
+      agentId,
+      path: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
+    }));
+    const schema = fs.readFileSync(
+      new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+      "utf8",
+    );
+    for (const target of targets) {
+      fs.mkdirSync(path.dirname(target.path), { recursive: true });
+      using database = new DatabaseSync(target.path);
+      database.exec(schema);
+      database.exec("PRAGMA user_version = 26");
+      database
+        .prepare(
+          `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+           VALUES ('primary', 'agent', 26, ?, 1, 1)`,
+        )
+        .run(target.agentId);
+    }
+    const preflight = await preflightOpenClawDatabaseSchemas({
+      env: state.env,
+      configuredAgentDatabaseTargets: targets,
+      verifyCurrentSchemaShape: true,
+    });
+    expect(preflight.pendingMigrations).toEqual([
+      expect.objectContaining({ path: targets[0]!.path, foundVersion: 26 }),
+    ]);
+    expect(preflight.indeterminate).toEqual([
+      expect.objectContaining({ kind: "agent", path: targets[0]!.path }),
+    ]);
+    const admitted = targets.filter(
+      (target) => !preflight.indeterminate.some((failure) => failure.path === target.path),
+    );
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      const result = await maintenance.run(() =>
+        prepareDoctorDatabaseMigrations({
+          env: state.env,
+          pendingDatabasePaths: preflight.pendingMigrations!.map((entry) => entry.path),
+          pendingMigrations: preflight.pendingMigrations,
+          databasePaths: admitted.map((target) => target.path),
+          agentDatabaseTargets: admitted.map((target) => ({
+            ...target,
+            realPath: target.path,
+            source: "configured" as const,
+          })),
+        }),
+      );
+      expect(result.versionMigrations).toEqual([]);
+    } finally {
+      await maintenance.close();
+    }
+    for (const target of targets) {
+      using database = new DatabaseSync(target.path, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
+    }
+  });
+});
 
 it("bounds the version phase and restores a committed member when a later migration fails", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
