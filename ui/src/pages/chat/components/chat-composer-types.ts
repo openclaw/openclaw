@@ -26,9 +26,9 @@ import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summ
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
 import type {
+  LegacyDirectiveResult,
   LegacyTemplateResult,
   emptyLegacyContent,
-  solidContent,
 } from "../../../lit/solid-content.tsx";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
@@ -161,11 +161,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
-  composerControls?:
-    | LegacyTemplateResult
-    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
-    | ReturnType<typeof solidContent>
-    | typeof emptyLegacyContent;
+  composerControls?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   footerContent?: JSX.Element;
   composerRecovery?: LegacyTemplateResult | typeof emptyLegacyContent;
   notices?: JSX.Element;

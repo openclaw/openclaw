@@ -1,7 +1,7 @@
 import type {
   emptyLegacyContent,
+  LegacyDirectiveResult,
   LegacyTemplateResult,
-  solidContent,
 } from "../lit/solid-content.tsx";
 
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
@@ -28,11 +28,7 @@ export type PanelHostedTab = {
   url?: string;
   /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
   favicon?: string;
-  icon?:
-    | LegacyTemplateResult
-    | Node
-    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
-    | ReturnType<typeof solidContent>;
+  icon?: LegacyTemplateResult | Node | LegacyDirectiveResult;
   title?: string | null;
   statusLabel?: string | null;
   badge?: string | null;
@@ -47,8 +43,7 @@ export type PanelHostedTabsElement = HTMLElement & {
     | LegacyTemplateResult
     | Node
     | typeof emptyLegacyContent
-    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- Lit intentionally exposes DirectiveResult as an empty opaque interface.
-    | ReturnType<typeof solidContent>;
+    | LegacyDirectiveResult;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };
