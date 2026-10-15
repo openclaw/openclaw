@@ -15,6 +15,7 @@ import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import type { WorkerInferenceCancellation } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
+  captureSessionAbortRequestOrigin,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
   resolveAuthorizedRunsForSessionKeys,
   resolveAuthorizedQueuedTurnsForSession,
@@ -101,22 +102,7 @@ export function prepareChatSessionAbort(
     stopReason: params.stopReason,
     assertCurrent: params.assertCurrent,
   });
-  const sessionOrigin: SubagentRequestSessionOrigin | undefined =
-    session?.entry &&
-    (params.requiredSessionId === undefined ||
-      session.entry.sessionId === params.requiredSessionId) &&
-    (params.sessionId === undefined || session.entry.sessionId === params.sessionId)
-      ? {
-          target: {
-            agentId: session.agentId,
-            storePath: session.storePath,
-            sessionKey: session.canonicalKey,
-            sessionId: session.entry.sessionId,
-            lifecycleRevision: session.entry.lifecycleRevision ?? null,
-          },
-          acceptsRequest,
-        }
-      : undefined;
+  const sessionOrigin = captureSessionAbortRequestOrigin(params, acceptsRequest);
   const queuedPlan = resolveAuthorizedQueuedTurnsForSession({
     ...ownerScope,
     context: params.context,

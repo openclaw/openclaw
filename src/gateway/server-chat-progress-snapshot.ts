@@ -186,29 +186,11 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
+  const isSummaryProgress =
+    isTool || isItem || isUsage || isRetryStatus || isFallbackStatus || isAssistant || isNotice;
   if (
-    mode === "summary" &&
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isRetryStatus &&
-    !isFallbackStatus &&
-    !isAssistant &&
-    !isNotice
-  ) {
-    return snapshot;
-  }
-  if (
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isStartupStatus &&
-    !isRetryStatus &&
-    !isFallbackStatus &&
-    !isAssistant &&
-    !isStandaloneGuardian &&
-    !isNotice &&
-    !resolvesStrictReview
+    !isSummaryProgress &&
+    (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))
   ) {
     return snapshot;
   }
