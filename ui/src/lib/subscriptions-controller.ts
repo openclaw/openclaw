@@ -1,23 +1,23 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 
 type Cleanup = () => void;
 type Listener = () => void;
 
 /** Keeps existing synchronous page controllers alive while Solid owns their DOM. */
-export class ControllerHost implements ReactiveControllerHost {
-  private readonly controllers = new Set<ReactiveController>();
+export class ControllerHost implements SolidControllerHost {
+  private readonly controllers = new Set<SolidController>();
   private readonly listeners = new Set<Listener>();
   private pendingUpdate: Promise<boolean> | null = null;
   isConnected = false;
 
-  addController(controller: ReactiveController): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
     if (this.isConnected) {
       controller.hostConnected?.();
     }
   }
 
-  removeController(controller: ReactiveController): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
 
@@ -113,11 +113,11 @@ type SourceEntry<T> = {
  * Source identity is checked before every render and all cleanup follows the
  * host lifecycle, so consumers do not need connected/updated retry loops.
  */
-export class SubscriptionsController implements ReactiveController {
+export class SubscriptionsController implements SolidController {
   private readonly entries: SourceEntry<unknown>[] = [];
   private connected = false;
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(private readonly host: SolidControllerHost) {
     host.addController(this);
   }
 
@@ -170,7 +170,7 @@ export class SubscriptionsController implements ReactiveController {
                 return;
               }
               this.host.requestUpdate();
-              // Commit bindings in the same frame, before Lit's queued microtask.
+              // Commit bindings in the same frame, before the queued render notification.
               commitInFrame();
             });
           }

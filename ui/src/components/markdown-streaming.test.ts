@@ -62,7 +62,7 @@ A clear explanation with **important details** and an inline \`value\`. The brow
 
 \`\`\`typescript
 export function sample${index}(value: number): number {
-  const doubled = value * 2;
+  const doubled = value < 0 ? 0 : value * 2;
   return doubled + ${index};
 }
 \`\`\`

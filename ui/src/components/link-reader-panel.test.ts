@@ -486,6 +486,9 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 2");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
+    const hostedTabs = panel.hostedTabs;
+    expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
+    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);

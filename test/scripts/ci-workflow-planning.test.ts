@@ -4146,7 +4146,7 @@ describe("ci workflow guards", () => {
       mkdirSync(bin);
       writeFileSync(path.join(bin, "pnpm"), '#!/bin/sh\nprintf "selected=%s\\n" "$*"\n');
       chmodSync(path.join(bin, "pnpm"), 0o755);
-      for (const partsSupported of [true, false]) {
+      for (const partsSupported of [2, true, false] as const) {
         const manifest = runCiManifestFixture({
           bundledPlanner: true,
           eventName: "workflow_dispatch",
@@ -4159,7 +4159,11 @@ describe("ci workflow guards", () => {
           expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix"),
         ).include as Array<{ task: string }>;
         expect(rows.map(({ task }) => task)).toEqual(
-          partsSupported ? ["test-1", "test-2", "test-3"] : ["test"],
+          partsSupported === 2
+            ? ["test-1", "test-2"]
+            : partsSupported
+              ? ["test-1", "test-2", "test-3"]
+              : ["test"],
         );
         const commands = rows.map(({ task }) => {
           const result = runWorkflowShellScript(runStep.run, {
@@ -4170,9 +4174,11 @@ describe("ci workflow guards", () => {
           return result.stdout.match(/^selected=(.*)$/m)?.[1];
         });
         expect(commands).toEqual(
-          partsSupported
-            ? ["test:macos:ci:1", "test:macos:ci:2", "test:macos:ci:3"]
-            : ["test:macos:ci"],
+          partsSupported === 2
+            ? ["test:macos:ci:1", "test:macos:ci:2"]
+            : partsSupported
+              ? ["test:macos:ci:1", "test:macos:ci:2", "test:macos:ci:3"]
+              : ["test:macos:ci"],
         );
       }
       expect(job.strategy["max-parallel"]).toBe(3);
@@ -7302,106 +7308,38 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("reuses isolated typecheck caches without bypassing compilation or cache authority", () => {
+  it("checks current type graphs without restoring cross-revision compiler state", () => {
     const workflow = readCiWorkflow();
-    for (const [jobId, runName] of [
-      ["check-shard", "Run check shard"],
-      ["check-test-types-hosted-core-shard", "Run hosted core test-types stripe"],
+    for (const [jobId, runName, tasks] of [
+      ["check-shard", "Run check shard", ["prod-types", "test-types"]],
+      ["check-test-types-hosted-core-shard", "Run hosted core test-types stripe", ["test-types"]],
     ] as const) {
       const steps = workflow.jobs[jobId].steps as WorkflowStep[];
-      const restore = expectDefined(
-        steps.find((step) => step.id === "test-type-cache"),
-        `${jobId} compiler cache`,
-      );
-      const save = expectDefined(
-        steps.find(
-          (step) => step.name?.startsWith("Save") && step.with?.path === ".artifacts/tsgo-cache",
+      expect(
+        steps.filter(
+          (step) =>
+            step.uses?.startsWith("actions/cache/") && step.with?.path === ".artifacts/tsgo-cache",
         ),
-        `${jobId} compiler cache writer`,
-      );
+      ).toEqual([]);
       const run = expectDefined(
         steps.find((step) => step.name === runName),
         `${jobId} compiler`,
       );
-      expect(steps.indexOf(restore)).toBeLessThan(steps.indexOf(run));
-      expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
       expect(run.run).not.toContain("cache-hit");
-      expect(restore.with?.path).toBe(".artifacts/tsgo-cache");
-      for (const cache of steps.filter(
-        (step) =>
-          step.uses?.startsWith("actions/cache/restore@") &&
-          step.with?.path === ".artifacts/tsgo-cache",
-      )) {
-        const key = cache.with?.key;
-        const restoreKeys = cache.with?.["restore-keys"];
-        if (typeof key !== "string" || typeof restoreKeys !== "string") {
-          throw new Error(`${jobId} compiler cache keys must be strings`);
-        }
-        expect(key).toContain("pnpm-lock.yaml");
-        expect(key).toContain("test/tsconfig/*.json");
-        const commitSuffix = "${{ github.sha }}";
-        expect(key.endsWith(commitSuffix)).toBe(true);
-        expect(restoreKeys.trim().split(/\s*\n\s*/u)).toEqual([key.slice(0, -commitSuffix.length)]);
-      }
-      expect(restore.with?.key).toContain(
-        jobId === "check-shard" ? "matrix.task" : "matrix.stripe",
-      );
-      expect(save.with?.key).toBe("${{ steps.test-type-cache.outputs.cache-primary-key }}");
-      const tasks =
-        jobId === "check-shard" ? ["prod-types", "test-types", "lint", "guards"] : ["test-types"];
       for (const task of tasks) {
-        const eligible = task === "prod-types" || task === "test-types";
         for (const cacheMode of ["restore", "off"]) {
-          for (const writable of [false, true]) {
-            for (const frozen of [false, true]) {
-              for (const outcome of ["success", "failure", "cancelled"] as const) {
-                for (const cacheHit of ["false", "true", ""]) {
-                  const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
-                    eventName: writable ? "push" : "pull_request",
-                    repository: "openclaw/openclaw",
-                    runAttempt: 1,
-                    frozenTarget: frozen,
-                    failed: outcome === "failure",
-                    cancelled: outcome === "cancelled",
-                    matrix: { task, stripe: 1 },
-                    preflightOutputs: {
-                      cache_mode: cacheMode,
-                      cache_write_allowed: String(writable),
-                    },
-                    steps: {
-                      check_setup: { outputs: {}, outcome: "success" },
-                      "test-type-cache": { outputs: { "cache-hit": cacheHit } },
-                    },
-                  };
-                  const canRestore = eligible && cacheMode !== "off" && !frozen;
-                  const canSave =
-                    canRestore && writable && outcome === "success" && cacheHit !== "true";
-                  expect(
-                    evaluateWorkflowCondition(
-                      expectDefined(restore.if, "cache restore condition"),
-                      context,
-                    ),
-                  ).toBe(canRestore);
-                  expect(
-                    evaluateWorkflowCondition(
-                      expectDefined(save.if, "cache save condition"),
-                      context,
-                    ),
-                  ).toBe(canSave);
-                  if (eligible && outcome === "success") {
-                    expect(
-                      evaluateWorkflowCondition(run.if ?? "true", {
-                        ...context,
-                        preflightOutputs: {
-                          ...context.preflightOutputs,
-                          central_lint_selection_json: "{}",
-                        },
-                      }),
-                    ).toBe(true);
-                  }
-                }
-              }
-            }
+          for (const frozen of [false, true]) {
+            expect(
+              evaluateWorkflowCondition(run.if ?? "true", {
+                eventName: "pull_request",
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                frozenTarget: frozen,
+                matrix: { task, stripe: 1 },
+                preflightOutputs: { cache_mode: cacheMode, central_lint_selection_json: "{}" },
+                steps: { check_setup: { outputs: {}, outcome: "success" } },
+              }),
+            ).toBe(true);
           }
         }
       }

@@ -3,7 +3,7 @@ import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
-import { createMarkdownIcon } from "./markdown-icon.ts";
+import { createIconElement } from "./markdown-icon.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -74,8 +74,8 @@ function enhanceTableShell(shell: HTMLElement): void {
   enhancedTableShells.add(shell);
   const label = shell.ownerDocument.createElement("span");
   label.textContent = t("common.expandTable");
-  expand.replaceChildren(createMarkdownIcon("maximize", shell.ownerDocument), label);
-  copy.replaceChildren(createMarkdownIcon("copy", shell.ownerDocument));
+  expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
+  copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
 }
 
@@ -233,7 +233,7 @@ async function showTableDialog(
     dismiss.setAttribute("aria-label", t("common.closeTable"));
     dismiss.autofocus = true;
     dismiss.addEventListener("click", close);
-    dismiss.append(createMarkdownIcon("x", document));
+    dismiss.append(createIconElement("x", document));
     content.append(dismiss, table.cloneNode(true));
     dialog.append(content);
     // Keep delegated file/session actions and modal teardown with their transcript.
@@ -275,7 +275,7 @@ export function handleMarkdownTableInteraction(event: Event): void {
         shell.querySelector("table") === table &&
         markdownTableCopyText(table) === text,
       (copied) => {
-        copy.replaceChildren(createMarkdownIcon(copied ? "check" : "copy", copy.ownerDocument));
+        copy.replaceChildren(createIconElement(copied ? "check" : "copy", copy.ownerDocument));
         if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
         } else {

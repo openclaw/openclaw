@@ -42,6 +42,7 @@ import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
@@ -50,12 +51,11 @@ import {
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
 import {
   loadAgentFileContent,
   overwriteAgentFile,
@@ -153,7 +153,7 @@ export class AgentsPageState
     runExternalMutation: (task, options) =>
       this.context.runtimeConfig.runExternalMutation(task, options),
   });
-  private readonly gateway = new GatewayPageController(this, {
+  private readonly gateway = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetForSourceChange(),
     invalidateRequests: (change) => {
@@ -321,10 +321,16 @@ export class AgentsPageState
     return this.routeData?.panel ?? DEFAULT_AGENT_PANEL;
   }
 
+  override connect() {
+    this.gateway.connect();
+    super.connect();
+  }
+
   override disconnect() {
     this.githubIdentity.dispose();
     this.subscriptions.clear();
     super.disconnect();
+    this.gateway.dispose();
   }
 
   applyRoute() {

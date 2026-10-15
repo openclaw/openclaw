@@ -186,13 +186,15 @@ it("refreshes one checkpoint with its partitions after an in-process replacement
           if (!replaced && isRecord(value) && value.kind === "refresh-session") {
             replaced = true;
             expect(
-              await activeLock!.writeRollup({
-                rollupId: sessionFile,
-                valueJson: new TextEncoder().encode(replacement.valueJson),
-                blob: replacement.blob,
-                partitions: replacement.partitions,
-                updatedAt: row.updatedAt + 1,
-              }),
+              await activeLock!.writeRollup([
+                {
+                  rollupId: sessionFile,
+                  valueJson: new TextEncoder().encode(replacement.valueJson),
+                  blob: replacement.blob,
+                  partitions: replacement.partitions,
+                  updatedAt: row.updatedAt + 1,
+                },
+              ]),
             ).toBe(true);
           }
           return onRequest(value, context);
@@ -550,8 +552,8 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
             !heldWrite &&
             isRecord(value) &&
             value.kind === "write" &&
-            isRecord(value.input) &&
-            value.input.key === growingFile
+            Array.isArray(value.input) &&
+            value.input.some((row) => isRecord(row) && row.key === growingFile)
           ) {
             heldWrite = true;
             writeEntered.resolve();
@@ -690,29 +692,27 @@ it("prunes a cached transcript after its queued selection disappears", async () 
   });
 });
 
-it("reports the failed session in doctor and clears it after successful refresh", async ({
-  onTestFinished,
-}) => {
+it("records failed rollups and clears health after retry", async ({ onTestFinished }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-failure-health";
-    const sessionFile = state.path("failed-refresh.jsonl");
-    await fs.writeFile(sessionFile, usageLine("failed-refresh"));
+    const sessionFiles = ["a", "b"].map((id) => state.path(`${id}.jsonl`));
+    const refresh = () => refreshCostUsageCacheForAgent({ config, agentId, sessionFiles });
+    await Promise.all(sessionFiles.map((file) => fs.writeFile(file, usageLine("failed-refresh"))));
+    let failedFiles: string[] = [];
     const published = vi.fn();
-    const unsubscribe = onSessionCostUsageUpdated(published);
-    onTestFinished(unsubscribe);
+    onTestFinished(onSessionCostUsageUpdated(published));
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
     const observer = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
       .mockImplementation((...args) => ({
         ...prepareLock(...args),
-        writeRollup: async () => {
+        writeRollup: async (rows) => {
+          failedFiles = rows.map((row) => row.rollupId);
           throw new Error("private transcript content");
         },
       }));
     try {
-      await expect(
-        refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
-      ).rejects.toThrow("private transcript content");
+      await expect(refresh()).rejects.toThrow("private transcript content");
       expect(published).toHaveBeenCalledExactlyOnceWith({
         agentId,
         usageUpdatedAt: expect.any(Number),
@@ -722,18 +722,20 @@ it("reports the failed session in doctor and clears it after successful refresh"
       observer.mockRestore();
     }
     const failures = await openUsageCostRefreshFailures(state.env).entries();
-    expect(failures).toMatchObject([
-      { value: { agentId, sessionFile, failedAt: expect.any(Number) } },
-    ]);
+    expect(failures.map(({ value }) => value)).toMatchObject(
+      failedFiles.map((sessionFile) => ({ agentId, sessionFile, failedAt: expect.any(Number) })),
+    );
     expect(JSON.stringify(failures)).not.toContain("private transcript content");
     note.mockClear();
     await maybeRepairLegacyRuntimeFiles(false, state.env);
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(sessionFile), "Usage cost cache");
+    for (const file of failedFiles) {
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(file), "Usage cost cache");
+    }
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("cached totals may be incomplete"),
       "Usage cost cache",
     );
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    await refresh();
     expect(published).toHaveBeenCalledTimes(2);
     expect(published).toHaveBeenLastCalledWith({ agentId, usageUpdatedAt: expect.any(Number) });
     expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);

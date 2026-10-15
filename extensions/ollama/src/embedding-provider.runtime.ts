@@ -96,8 +96,7 @@ const QUERY_INSTRUCTION_TEMPLATES = [
 ] as const;
 
 function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
-  const selected =
-    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const selected = outputDimensionality !== undefined ? vec.slice(0, outputDimensionality) : vec;
   if (selected.length === 0) {
     throw new Error("Ollama embed response contains an empty embedding");
   }

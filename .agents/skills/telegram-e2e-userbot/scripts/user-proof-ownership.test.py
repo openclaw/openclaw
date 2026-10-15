@@ -10,7 +10,11 @@ import sys
 import tempfile
 import time
 
-source = Path(sys.argv[1]).resolve()
+if sys.platform != "linux":
+    print("SKIP: native proof ownership requires Linux.")
+    sys.exit(0)
+
+source = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("driver", source / "user-driver.py")
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)

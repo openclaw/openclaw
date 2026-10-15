@@ -1,18 +1,13 @@
-import { nothing, render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { renderHubTabs } from "./hub-tabs.ts";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 
-it("restores keyboard focus when navigation replaces a Solid tab strip with Lit", async () => {
+it("restores keyboard focus when navigation replaces a Solid tab strip", async () => {
   const root = document.createElement("div");
   const destination = document.createElement("div");
   document.body.append(root);
-  onTestFinished(() => {
-    render(nothing, destination);
-    root.remove();
-  });
+  onTestFinished(() => root.remove());
   const onSelect = vi.fn();
   const tabs: Array<{ value: "plugins" | "skills"; label: string }> = [
     { value: "plugins", label: "Plugins" },
@@ -39,16 +34,18 @@ it("restores keyboard focus when navigation replaces a Solid tab strip with Lit"
 
   source.unmount();
   root.append(destination);
-  render(
-    renderHubTabs({
-      id: "mixed",
-      active: "skills",
-      tabs,
-      ariaLabel: "Sections",
-      panelId: "mixed-panel",
-      onSelect,
-    }),
-    destination,
+  mountSolid(
+    () => (
+      <HubTabs
+        id="mixed"
+        active="skills"
+        tabs={tabs}
+        ariaLabel="Sections"
+        panelId="mixed-panel"
+        onSelect={onSelect}
+      />
+    ),
+    { container: destination },
   );
   await expect.poll(() => document.activeElement?.id).toBe("mixed-tab-skills");
 });

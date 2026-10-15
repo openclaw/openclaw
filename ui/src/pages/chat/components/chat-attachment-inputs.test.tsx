@@ -41,7 +41,12 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
       return composerClass ? (
         <div class={composerClass}>
           <ChatAttachmentInputs {...props()} />
-          <div class="attachment-menu" onWa-select={handleChatAttachmentMenuSelection} />
+          <button
+            class="attachment-menu"
+            onClick={(event) => handleChatAttachmentMenuSelection(event.currentTarget, "camera")}
+          >
+            Take photo
+          </button>
         </div>
       ) : (
         <ChatAttachmentInputs {...props()} />
@@ -101,7 +106,7 @@ it.each(
     const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
     const draw = mountInputs(initialProps, composerClass);
     const camera = host.querySelector("openclaw-chat-camera-capture");
-    const menu = host.querySelector(".attachment-menu");
+    const menu = host.querySelector<HTMLButtonElement>(".attachment-menu");
     const nativeInput = host.querySelector<HTMLInputElement>(".agent-chat__camera-input");
     const photoInput = host.querySelector<HTMLInputElement>(".agent-chat__photo-input");
     if (!camera || !menu || !nativeInput || !photoInput) {
@@ -118,7 +123,7 @@ it.each(
     draw({ ...initialProps, disabled: false });
     await camera.updateComplete;
     const clickNative = vi.spyOn(nativeInput, "click").mockImplementation(() => undefined);
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "camera" } } }));
+    menu.click();
     await camera.updateComplete;
     if (android) {
       expect(clickNative).toHaveBeenCalledOnce();
@@ -142,7 +147,7 @@ it.each(
     ]) {
       draw({ ...initialProps, disabled: false, ...unavailable });
       await camera.updateComplete;
-      menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "camera" } } }));
+      menu.click();
       expect(clickNative).toHaveBeenCalledOnce();
       expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
     }
