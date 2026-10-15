@@ -742,4 +742,12 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["ui.command.result", "ui-command", "operator.read", "2026.10"],
   ["mcp.events.list", "mcp-events", "operator.read", "2026.10"],
   ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
+  // Inference spends tokens, even though its result never changes the conversation.
+  [
+    "chat.predict",
+    "chat",
+    "operator.write",
+    "2026.10",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

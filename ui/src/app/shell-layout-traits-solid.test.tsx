@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { SettingsPage, SettingsPageHeader } from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { renderModelProvidersPageShell } from "../pages/model-providers/view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
@@ -22,6 +23,38 @@ it("renders standalone settings without a shell layout owner", () => {
     </SettingsWorkspace>
   ));
   expect(view.getByRole("heading", { name: "Standalone settings" })).toBeTruthy();
+});
+
+it("reserves the Models page column before its body finishes loading", () => {
+  const content = document.createElement("main");
+  content.className = "content";
+  document.body.append(content);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  const [loaded, setLoaded] = createSignal(false);
+  render(
+    () => (
+      <ShellLayoutProvider value={{ owner, host: content }}>
+        {renderModelProvidersPageShell({
+          get body() {
+            return (
+              <Show when={loaded()} fallback={<span>Loading models</span>}>
+                <SettingsPage>Models ready</SettingsPage>
+              </Show>
+            );
+          },
+          login: undefined,
+        })}
+      </ShellLayoutProvider>
+    ),
+    { container: content },
+  );
+  expect(content.classList.contains("content--settings-page")).toBe(true);
+  expect(content.textContent).toContain("Loading models");
+  setLoaded(true);
+  flush();
+  expect(content.classList.contains("content--settings-page")).toBe(true);
+  expect(content.textContent).toContain("Models ready");
 });
 
 it("publishes settings layout before descendants render and measure updates", () => {

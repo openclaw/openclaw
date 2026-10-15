@@ -172,7 +172,7 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 // Discovery progress does not change the saved selection or disable known models.
 function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
   return (
-    <>
+    <div class="model-providers__catalog-feedback">
       {props.catalogDiscovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
@@ -187,7 +187,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           </button>
         </div>
       ) : undefined}
-    </>
+    </div>
   );
 }
 

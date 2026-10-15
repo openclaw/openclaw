@@ -293,14 +293,14 @@ export async function applySessionModelSelectionInternal(
     : undefined;
   using _ = { [Symbol.dispose]: () => placementAuthority?.release() };
   const placement = placementAuthority?.placement;
-  using placementRuntime = await prepareWorkerPlacementSessionRuntime({
+  const placementRuntime = await prepareWorkerPlacementSessionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
   const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime.read(params.cfg, nextEntry));
+    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;

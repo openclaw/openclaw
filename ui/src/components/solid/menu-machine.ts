@@ -112,6 +112,16 @@ export function useMenuMachine(
   const computed = machine.computed!;
   const adapted: typeof machine = {
     ...machine,
+    // The overlay subscription below owns controlled visibility. Keep the
+    // remaining Zag watchers without dispatching each open change twice.
+    watch({ track, action, context }) {
+      track([() => context.get("isSubmenu")], () => action(["setSubmenuPlacement"]));
+      track([() => context.hash("anchorPoint")], () => {
+        if (context.get("anchorPoint")) {
+          action(["reposition"]);
+        }
+      });
+    },
     computed: {
       ...computed,
       highlightedId(params) {
@@ -242,9 +252,16 @@ export function useMenuMachine(
     // Zag's default link click is not cancelable; native click keeps selection vetoable.
     navigate: ({ node }) => queueMicrotask(() => node.click()),
   };
-  const service = new VanillaMachine(adapted, props);
-  createEffect(direction, (dir) => service.updateProps({ ...props, dir, open: overlay.open }));
+  // Keep one current input snapshot. Vanilla updateProps retains every prior
+  // source, making each subsequent prop read replay the whole update history.
+  const service = new VanillaMachine(adapted, () => props);
   const [revision, setRevision] = createSignal(0);
+  createEffect(direction, (dir) => {
+    if (props.dir !== dir) {
+      props.dir = dir;
+      setRevision((n) => n + 1);
+    }
+  });
   const read = () => {
     revision();
     return connect(service.service, normalizer);
@@ -255,10 +272,15 @@ export function useMenuMachine(
       focusItem(state);
     });
     const stopOpen = overlay.subscribe((open) => {
-      service.updateProps({ ...props, dir: untrack(direction), open });
-      if (!open) {
-        service.send({ type: "CONTROLLED.CLOSE" });
-      } else if (options.items) {
+      props.dir = untrack(direction);
+      props.open = open;
+      // Deliver the same controlled transition as the menu open-prop watcher,
+      // preserving the event that selected keyboard opening/closing behavior.
+      service.send({
+        type: open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE",
+        previousEvent: service.service.event,
+      });
+      if (open && options.items) {
         untrack(() => {
           const enabled = options.items!().filter((item) => !item.disabled);
           service.send({

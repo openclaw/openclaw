@@ -3134,10 +3134,7 @@ describe("openclaw state database", () => {
       path: databasePath,
     });
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
-      ],
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
       warnings: [],
     });
 

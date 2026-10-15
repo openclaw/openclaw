@@ -236,7 +236,7 @@ export type PreparedModelCatalogProviderFacts = {
   expiresAt?: number;
   /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
   discoveryFailures?: number;
-  legacyRows?: ReadonlySet<string>;
+  legacyAcquired?: boolean;
 };
 
 export type PreparedModelCatalogInventory = {

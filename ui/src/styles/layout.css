@@ -758,6 +758,14 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--muted);
 }
 
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
 openclaw-settings-save-indicator {
   min-width: 0;
 }
@@ -4080,7 +4088,7 @@ button.gateway-status:focus-visible {
   text-overflow: ellipsis;
 }
 
-.sidebar-footer-build__update {
+.sidebar-identity-menu__update-badge {
   color: var(--inbox-attention);
 }
 

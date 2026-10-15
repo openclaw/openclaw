@@ -495,15 +495,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       );
     }
 
-    const contextReplacementChanged = (controller: AbortController | undefined) =>
-      controller?.signal !== options.signal ||
-      this.assertContextReplacementActive !== assertContextReplacementActive ||
-      this.onContextReplaced !== onContextReplaced;
     const committed = await withSessionManagerWrite(this.sessionManager, async () => {
       const currentController = isManual
         ? this.compactionAbortController
         : this.autoCompactionAbortController;
-      if (options.signal.aborted || contextReplacementChanged(currentController)) {
+      if (options.signal.aborted || currentController?.signal !== options.signal) {
         return undefined;
       }
       // Revalidate after admission too. In-memory transcripts have no SQLite
@@ -523,7 +519,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         const controller = isManual
           ? this.compactionAbortController
           : this.autoCompactionAbortController;
-        if (contextReplacementChanged(controller)) {
+        if (controller?.signal !== options.signal) {
           throw new Error("Compaction context changed before transcript commit");
         }
         assertContextReplacementActive?.();
