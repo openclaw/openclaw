@@ -673,7 +673,9 @@ The shared-state writer maintains SQLite planner statistics once during its
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
-connection has not queried. Contention skips that attempt;
+connection has not queried. On supported SQLite versions before 3.46, the cached
+native admission version selects bounded `ANALYZE main` because their optimizer
+cannot discover all missing or stale statistics. Contention skips that attempt;
 later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
