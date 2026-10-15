@@ -2,7 +2,7 @@
 .chat-controls__inline-select-menu,
 .agent-chat__attach-menu::part(menu),
 .agent-chat__capability-menu::part(menu),
-.chat-controls__permission-picker::part(menu),
+.chat-controls__permission-menu,
 .chat-talk-input-picker::part(menu) {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
@@ -11,16 +11,37 @@
   corner-shape: superellipse(1.5);
 }
 
-.chat-controls__inline-select[open] > wa-popup::part(popup) {
+.chat-controls__inline-select[open] > wa-popup::part(popup),
+.chat-controls__inline-select[open] > .chat-picker-overlay {
   animation: chat-composer-picker-in var(--control-ui-transition-fast) ease;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup) {
+.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup),
+.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="top"] {
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup) {
+.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup),
+.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
   transform-origin: top;
+}
+
+.chat-picker-overlay {
+  /* Try the full panel before shrinking it to the preferred side's remaining space. */
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
+  position-try-fallbacks:
+    --chat-picker-fit flip-block,
+    --chat-picker-fit,
+    --chat-picker-fit flip-inline,
+    --chat-picker-fit flip-block flip-inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+@position-try --chat-picker-fit {
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
 @keyframes chat-composer-picker-in {
@@ -102,6 +123,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-controls__inline-select[open] > .chat-picker-overlay {
+    animation: none;
+  }
+
   .agent-chat__input--dictating::after {
     --chat-dictation-edge-angle: 238deg;
     animation: none;
@@ -1207,6 +1232,11 @@
     );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
+
+  .agent-chat__input .chat-controls__inline-select > .chat-picker-overlay {
+    position-area: top span-all;
+    justify-self: center;
+  }
 }
 
 @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1938,6 +1968,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__inline-select-trigger:hover,
+.chat-controls__inline-select-trigger[aria-expanded="true"],
 .chat-controls__inline-select[open] > .chat-controls__inline-select-trigger {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text-strong);
@@ -2044,7 +2075,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
 
-.chat-controls__permission-picker::part(menu) {
+.chat-controls__permission-menu {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 16px;
@@ -2077,6 +2108,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
   grid-column: 1 / -1;
 }
 
+.chat-controls__permission-option > .oc-menu-item__check {
+  display: none;
+}
+
+.chat-controls__permission-option > :is(.oc-menu-item__icon, .oc-menu-item__details) {
+  margin-inline: 0;
+}
+
 .chat-controls__permission-icon,
 .chat-controls__permission-lock {
   display: inline-flex;
@@ -2091,6 +2130,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__permission-trigger .chat-controls__permission-icon {
   color: currentColor;
+}
+
+.chat-controls__permission-trigger > .oc-menu-item__label {
+  display: contents;
 }
 
 .agent-chat__input .chat-controls__permission-trigger--default,
@@ -2130,7 +2173,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--muted);
 }
 
-.chat-controls__permission-option:state(disabled) .chat-controls__permission-option-icon,
+.chat-controls__permission-option:disabled .chat-controls__permission-option-icon,
 .chat-controls__permission-option[data-chat-permission-option="full"]
   .chat-controls__permission-option-icon {
   color: var(--accent);

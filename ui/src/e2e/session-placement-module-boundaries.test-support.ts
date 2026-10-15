@@ -248,7 +248,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await thinkingSlider.press("End");
         await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
         await captureUiProof(suite, page, "01-cloud-thinking-level.png", {
-          surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+          surface: page.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
           content: [thinkingSlider],
         });
         await effortSelect.click();

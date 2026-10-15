@@ -145,6 +145,7 @@ const suite = createControlUiE2eSuite({
           agents: {
             ownership: "explicit",
             defaults: {
+              workspace: "${OPENCLAW_WORKSPACE_DIR}",
               model: "media-order-fixture/echo",
               utilityModel: "media-order-fixture/metadata",
               models: {
@@ -173,6 +174,7 @@ const suite = createControlUiE2eSuite({
           plugins: { allow: ["openai"] },
         },
       });
+      instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
       const mediaDir = instance.state.statePath("media", "ordering-fixture");
       await mkdir(mediaDir, { recursive: true });
       const first = path.join(mediaDir, "blue-card.png");

@@ -62,6 +62,7 @@ export type MenuNavigationOptions = {
   surface?: "menu" | "listbox";
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
+  pointerFocus?: () => "menu" | "trigger";
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
 };
@@ -408,14 +409,20 @@ export function useMenuMachine(
       return {
         ...result,
         onClick: (event: MouseEvent) => {
-          if (event.currentTarget instanceof HTMLAnchorElement) {
+          const anchor = event.currentTarget;
+          if (anchor instanceof HTMLAnchorElement) {
             if (disabled) {
               event.preventDefault();
               return;
             }
-            if (!shouldHandleNavigationClick(event)) {
+            if (
+              !shouldHandleNavigationClick(event) ||
+              (anchor.target !== "" && anchor.target !== "_self") ||
+              anchor.hasAttribute("download")
+            ) {
               return;
             }
+            // Selection is queued; prevent navigation now so its cancelable event can veto it.
             event.preventDefault();
           }
           result.onClick?.(event);
@@ -453,7 +460,10 @@ export function useMenuMachine(
           if (disabled) {
             return;
           }
-          focusFromKeyboard = true;
+          focusFromKeyboard = event.detail === 0 || options.pointerFocus?.() !== "trigger";
+          if (!focusFromKeyboard) {
+            overlay.trigger?.focus({ preventScroll: true });
+          }
           result.onClick?.(event);
         },
         onKeyDown: (e: KeyboardEvent) => {

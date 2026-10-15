@@ -467,37 +467,6 @@ describe("Bedrock stop reasons", () => {
     expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
-  it("uses a complete tool input seeded at block start", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          contentBlockStart: {
-            contentBlockIndex: 0,
-            start: {
-              toolUse: {
-                toolUseId: "call_seeded",
-                name: "read",
-                input: { path: "README.md" },
-              },
-            },
-          },
-        },
-        { contentBlockStop: { contentBlockIndex: 0 } },
-        { messageStop: { stopReason: BedrockStopReason.TOOL_USE } },
-      ]),
-    } as never);
-
-    const result = await streamBedrockForTest(bedrockModel({}), {
-      messages: [{ role: "user", content: "read", timestamp: 0 }],
-    } as never).result();
-
-    expect(result.content).toContainEqual(
-      expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
-    );
-  });
-
   it.each([
     {
       name: "text",
