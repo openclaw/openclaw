@@ -314,7 +314,12 @@ it("keeps descendant-only native overlap leased through closing and releases aft
   await expect.poll(() => states).toEqual([false, true]);
   const branch = [surface(), child];
   // Hold the parent too: its exit moves the submenu anchor before hiding it.
-  branch.forEach((menu) => menu.style.setProperty("--oc-overlay-hide-duration", "60s"));
+  branch.forEach((menu) => {
+    const animation = menu.animate({ opacity: [1, 0], scale: [1, 0.9] }, { duration: 1000 });
+    animation.pause();
+    animation.currentTime = 0;
+    cleanups.push(() => animation.cancel());
+  });
   const hidden = new Promise<void>((resolve) => {
     child.addEventListener("overlay-after-hide", () => resolve(), { once: true });
   });

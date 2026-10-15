@@ -9,6 +9,7 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
+import type { NodePermissionRequest } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
@@ -48,6 +49,16 @@ declare module "@solidjs/web" {
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
+        "prop:request"?: NodePermissionRequest | null;
+        "prop:onRetry"?: (message: string) => void;
+      };
+      "openclaw-chat-run-failure-notice": LegacyAttributes<
+        HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
+      > &
+        ElementProperties<
+          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
+        >;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
       "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
