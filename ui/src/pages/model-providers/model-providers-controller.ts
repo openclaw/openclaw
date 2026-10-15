@@ -462,17 +462,19 @@ export class ModelProvidersController extends ModelPageController {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    const reconcileCredentials = providerId !== undefined || this.pendingCredentialInvalidation;
-    if (this.pendingCredentialInvalidation) {
-      // The selected owner cannot account for writes from other clients.
-      providerId = undefined;
-      this.pendingCredentialInvalidation = false;
-    }
+    // Another client's write is outside the selected owner, so reconcile every provider.
+    const crossClient = this.pendingCredentialInvalidation;
+    this.pendingCredentialInvalidation = false;
+    const reconcile = providerId !== undefined || crossClient;
+    const target = reconcile && this.state.data ? this.state.data : undefined;
     return this.core.refresh(
       client,
       this.state.selectedAgentId,
       reason,
-      reconcileCredentials && this.state.data ? { providerId, data: this.state.data } : undefined,
+      target && {
+        providerId: crossClient ? undefined : providerId,
+        data: target,
+      },
     );
   }
 
