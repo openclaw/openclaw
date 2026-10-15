@@ -678,7 +678,12 @@ async function startPreparedPluginServices({
     // The previous owner's completion clears every marker, including later retained services.
     const reloads = new Map(ownedServices.map((entry) => [entry.registration, entry.reloading]));
     // Preserve each plugin's dependency order without serializing unrelated plugins.
-    const groups = Map.groupBy(registry.services, (entry) => entry.pluginId);
+    const groups = new Map<string, PluginServiceRegistration[]>();
+    for (const entry of registry.services) {
+      const entries = groups.get(entry.pluginId) ?? [];
+      entries.push(entry);
+      groups.set(entry.pluginId, entries);
+    }
     const result = await runTasksWithConcurrency({
       limit: 4,
       errorMode: "stop",
