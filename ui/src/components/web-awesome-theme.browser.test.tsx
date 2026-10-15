@@ -92,14 +92,12 @@ async function prepareControls(host: HTMLElement) {
 }
 
 async function focusNextOption(select: HTMLElement) {
-  const control = select as HTMLElementTagNameMap["wa-select"];
-  await control.show();
-  const { userEvent } = await import("vitest/browser");
+  const { page, userEvent } = await import("vitest/browser");
+  await page.elementLocator(select).getByRole("combobox").click();
   // Palette checks use idle colors, independent of the previous pointer target.
   await userEvent.unhover(select);
-  control.focus();
   await userEvent.keyboard("{ArrowDown}");
-  const current = control.querySelector<HTMLElement>("wa-option:state(current)");
+  const current = select.querySelector<HTMLElement>("wa-option:state(current)");
   expect(current, "keyboard-focused option").not.toBeNull();
   return current!;
 }

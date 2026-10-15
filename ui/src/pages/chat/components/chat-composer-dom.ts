@@ -8,7 +8,6 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "select",
   "textarea",
   "summary",
-  "wa-dropdown",
   "[contenteditable='true']",
   "[role='button']",
   "[role='menu']",
@@ -436,10 +435,7 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   }
   if (event.type === "pointerdown") {
     // Cancel only pointer focus; click and popover-owned focus still run.
-    if (
-      event.button === 0 &&
-      target.closest("summary, .oc-menu-trigger, wa-dropdown>[slot='trigger']")
-    ) {
+    if (event.button === 0 && target.closest("summary, .oc-menu-trigger")) {
       event.preventDefault();
     }
     return;

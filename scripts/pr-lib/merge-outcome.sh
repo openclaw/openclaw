@@ -867,7 +867,8 @@ merge_outcome_stable() {
     settle_delay="${MERGE_PRIOR_CI_UNKNOWN_DELAY:-2}"
   fi
   while true; do
-    if { [ "$prior_ci_round" = true ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
+    # Consume this round's fresh projection before applying a carried deadline.
+    if { [ "$prior_ci_round" = true ] && [ "$observation_attempt" -gt 0 ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
       [ "$(pr_merge_now)" -ge "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" ]; } ||
       { [ "$prior_ci_round" = false ] && [ "$settling" = true ] && [ "$(pr_merge_now)" -ge "$settle_deadline" ]; }; then
       merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"

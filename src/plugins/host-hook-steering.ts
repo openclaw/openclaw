@@ -1,11 +1,14 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { queueGuardedEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
+import { readSessionSubmittedInput } from "../config/sessions/session-accessor.pending-inputs.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { normalizePersistedSteerTargetRunId } from "../sessions/user-turn-transcript.metadata.js";
 import type { PluginActiveRunSteerParams, PluginActiveRunSteerResult } from "./plugin-api.types.js";
 
 export async function steerPluginActiveRun(params: {
@@ -19,6 +22,29 @@ export async function steerPluginActiveRun(params: {
   const sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
   if (!sessionId) {
     return { steered: false, reason: "no_active_run" };
+  }
+  const target = {
+    sessionId,
+    expectedSessionId: sessionId,
+    sessionKey,
+    sessionEntry: undefined,
+    agentId: resolveSessionAgentId({ config: params.cfg, sessionKey }),
+    config: params.cfg,
+  };
+  const idempotencyKey = params.input.idempotencyKey?.trim();
+  if (idempotencyKey) {
+    params.assertCurrent();
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(target, params.cfg);
+    params.assertCurrent();
+    const submitted = await readSessionSubmittedInput(
+      { ...target, ...runtimeTarget },
+      idempotencyKey,
+    );
+    params.assertCurrent();
+    if (submitted) {
+      const runId = normalizePersistedSteerTargetRunId(submitted["__openclaw"]?.steerTargetRunId);
+      return runId ? { steered: true, runId } : { steered: false, reason: "duplicate" };
+    }
   }
   const message = buildPersistedUserTurnMessage({
     text: params.input.text,
@@ -39,14 +65,7 @@ export async function steerPluginActiveRun(params: {
   const recorder = createUserTurnTranscriptRecorder({
     assertOriginalInputCommit: params.assertCurrent,
     message,
-    target: {
-      sessionId,
-      expectedSessionId: sessionId,
-      sessionKey,
-      sessionEntry: undefined,
-      agentId: resolveSessionAgentId({ config: params.cfg, sessionKey }),
-      config: params.cfg,
-    },
+    target,
   });
   params.assertCurrent();
   const outcome = await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(

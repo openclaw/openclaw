@@ -3100,15 +3100,15 @@ describe("ci workflow guards", () => {
 
     it("reserves tiny hybrid controls and fork owners before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;
-      const changedPaths = [".github/workflows/ci.yml"];
-      const baseline = manifestWithHostedNodeRows(1, { eventName, changedPaths });
+      const changedPaths = ["src/shared/runtime.ts"];
+      const options = { eventName, changedPaths, checkFamilyScope: true };
+      const baseline = manifestWithHostedNodeRows(1, options);
       expect(baseline.status, baseline.output).toBe(0);
       const nodeRows = 1 + 40 - Number(baseline.outputs.hybrid_hosted_base_rows);
       expect(nodeRows).toBeGreaterThan(0);
-      const sameRepository = manifestWithHostedNodeRows(nodeRows, { eventName, changedPaths });
+      const sameRepository = manifestWithHostedNodeRows(nodeRows, options);
       const fork = manifestWithHostedNodeRows(nodeRows, {
-        eventName,
-        changedPaths,
+        ...options,
         scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw" },
       });
       expect(sameRepository.status, sameRepository.output).toBe(0);
@@ -3122,13 +3122,15 @@ describe("ci workflow guards", () => {
       const hostedForkJobs = ["check-plan", "checks-baseline-ratchets", "docker-seed-e2e"].filter(
         (name) => forkRows.includes(name) && !sameRows.includes(name),
       ).length;
-      const forkBaseRows = 40 + hostedForkJobs - 2;
+      const forkBaseRows = 40 + hostedForkJobs - 3;
       expect(Number(fork.outputs.hybrid_hosted_base_rows)).toBe(forkBaseRows);
-      for (const job of ["preflight", "ci-gate", "pr-failure-report"]) {
+      for (const job of ["preflight", "ci-gate", "pr-failure-report", "check-plan"]) {
         expect(sameRows).toContain(job);
       }
+      expect(sameRows).toHaveLength(Number(sameRepository.outputs.hybrid_hosted_total_rows));
       expect(forkRows).not.toContain("preflight");
       expect(forkRows).not.toContain("ci-gate");
+      expect(forkRows).not.toContain("check-plan");
       expect(sameRepository.outputs.hybrid_hosted_offload).toBe("true");
       expect(fork.outputs.hybrid_hosted_offload).toBe(String(forkBaseRows <= 40));
       expect(Number(fork.outputs.hybrid_hosted_total_rows)).toBeLessThanOrEqual(45);
@@ -5810,7 +5812,25 @@ describe("ci workflow guards", () => {
     };
     for (const eventName of ["pull_request", "push", "schedule"] as const) {
       expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
-        "blacksmith-16vcpu-ubuntu-2404",
+        eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+      );
+    }
+    const discovery = workflow.jobs["check-plan"].steps.find(
+      (step: WorkflowStep) => step.id === "plan",
+    ).env.OPENCLAW_CI_TYPE_PLAN_SERIAL;
+    expect(evaluateWorkflowExpression(discovery, plannerContext)).toBe("1");
+    for (const override of [
+      { eventName: "push" },
+      { eventName: "schedule" },
+      { eventName: "workflow_dispatch" },
+      { headRepository: "contributor/openclaw" },
+      { runnerBackend: "blacksmith" },
+      { runnerBackend: "github" },
+      { runAttempt: 2 },
+      { frozenTarget: true },
+    ] as const) {
+      expect(evaluateWorkflowExpression(discovery, { ...plannerContext, ...override })).not.toBe(
+        "1",
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
@@ -7282,106 +7302,38 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("reuses isolated typecheck caches without bypassing compilation or cache authority", () => {
+  it("checks current type graphs without restoring cross-revision compiler state", () => {
     const workflow = readCiWorkflow();
-    for (const [jobId, runName] of [
-      ["check-shard", "Run check shard"],
-      ["check-test-types-hosted-core-shard", "Run hosted core test-types stripe"],
+    for (const [jobId, runName, tasks] of [
+      ["check-shard", "Run check shard", ["prod-types", "test-types"]],
+      ["check-test-types-hosted-core-shard", "Run hosted core test-types stripe", ["test-types"]],
     ] as const) {
       const steps = workflow.jobs[jobId].steps as WorkflowStep[];
-      const restore = expectDefined(
-        steps.find((step) => step.id === "test-type-cache"),
-        `${jobId} compiler cache`,
-      );
-      const save = expectDefined(
-        steps.find(
-          (step) => step.name?.startsWith("Save") && step.with?.path === ".artifacts/tsgo-cache",
+      expect(
+        steps.filter(
+          (step) =>
+            step.uses?.startsWith("actions/cache/") && step.with?.path === ".artifacts/tsgo-cache",
         ),
-        `${jobId} compiler cache writer`,
-      );
+      ).toEqual([]);
       const run = expectDefined(
         steps.find((step) => step.name === runName),
         `${jobId} compiler`,
       );
-      expect(steps.indexOf(restore)).toBeLessThan(steps.indexOf(run));
-      expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
       expect(run.run).not.toContain("cache-hit");
-      expect(restore.with?.path).toBe(".artifacts/tsgo-cache");
-      for (const cache of steps.filter(
-        (step) =>
-          step.uses?.startsWith("actions/cache/restore@") &&
-          step.with?.path === ".artifacts/tsgo-cache",
-      )) {
-        const key = cache.with?.key;
-        const restoreKeys = cache.with?.["restore-keys"];
-        if (typeof key !== "string" || typeof restoreKeys !== "string") {
-          throw new Error(`${jobId} compiler cache keys must be strings`);
-        }
-        expect(key).toContain("pnpm-lock.yaml");
-        expect(key).toContain("test/tsconfig/*.json");
-        const commitSuffix = "${{ github.sha }}";
-        expect(key.endsWith(commitSuffix)).toBe(true);
-        expect(restoreKeys.trim().split(/\s*\n\s*/u)).toEqual([key.slice(0, -commitSuffix.length)]);
-      }
-      expect(restore.with?.key).toContain(
-        jobId === "check-shard" ? "matrix.task" : "matrix.stripe",
-      );
-      expect(save.with?.key).toBe("${{ steps.test-type-cache.outputs.cache-primary-key }}");
-      const tasks =
-        jobId === "check-shard" ? ["prod-types", "test-types", "lint", "guards"] : ["test-types"];
       for (const task of tasks) {
-        const eligible = task === "prod-types" || task === "test-types";
         for (const cacheMode of ["restore", "off"]) {
-          for (const writable of [false, true]) {
-            for (const frozen of [false, true]) {
-              for (const outcome of ["success", "failure", "cancelled"] as const) {
-                for (const cacheHit of ["false", "true", ""]) {
-                  const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
-                    eventName: writable ? "push" : "pull_request",
-                    repository: "openclaw/openclaw",
-                    runAttempt: 1,
-                    frozenTarget: frozen,
-                    failed: outcome === "failure",
-                    cancelled: outcome === "cancelled",
-                    matrix: { task, stripe: 1 },
-                    preflightOutputs: {
-                      cache_mode: cacheMode,
-                      cache_write_allowed: String(writable),
-                    },
-                    steps: {
-                      check_setup: { outputs: {}, outcome: "success" },
-                      "test-type-cache": { outputs: { "cache-hit": cacheHit } },
-                    },
-                  };
-                  const canRestore = eligible && cacheMode !== "off" && !frozen;
-                  const canSave =
-                    canRestore && writable && outcome === "success" && cacheHit !== "true";
-                  expect(
-                    evaluateWorkflowCondition(
-                      expectDefined(restore.if, "cache restore condition"),
-                      context,
-                    ),
-                  ).toBe(canRestore);
-                  expect(
-                    evaluateWorkflowCondition(
-                      expectDefined(save.if, "cache save condition"),
-                      context,
-                    ),
-                  ).toBe(canSave);
-                  if (eligible && outcome === "success") {
-                    expect(
-                      evaluateWorkflowCondition(run.if ?? "true", {
-                        ...context,
-                        preflightOutputs: {
-                          ...context.preflightOutputs,
-                          central_lint_selection_json: "{}",
-                        },
-                      }),
-                    ).toBe(true);
-                  }
-                }
-              }
-            }
+          for (const frozen of [false, true]) {
+            expect(
+              evaluateWorkflowCondition(run.if ?? "true", {
+                eventName: "pull_request",
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                frozenTarget: frozen,
+                matrix: { task, stripe: 1 },
+                preflightOutputs: { cache_mode: cacheMode, central_lint_selection_json: "{}" },
+                steps: { check_setup: { outputs: {}, outcome: "success" } },
+              }),
+            ).toBe(true);
           }
         }
       }

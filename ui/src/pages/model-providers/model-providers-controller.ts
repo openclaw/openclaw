@@ -7,9 +7,9 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
@@ -164,7 +164,7 @@ export class ModelProvidersController extends ModelPageController {
     setDataClient: (client) => (this.dataClient = client),
     refreshPolicy: this.refreshPolicy,
   });
-  private readonly gateway = new GatewayPageController(this, {
+  private readonly gateway = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetConnectionState(),
     invalidateRequests: () => this.invalidateRequests(),
@@ -290,12 +290,18 @@ export class ModelProvidersController extends ModelPageController {
   private previousRouteData: ModelProvidersRouteData | undefined;
   private previousLoaderPending: boolean | undefined;
 
+  override connect() {
+    this.gateway.connect();
+    super.connect();
+  }
+
   override disconnect() {
     // Pending orders belong to this page; a delayed save must not dispatch
     // them after navigation over a replacement page's newer order.
     this.profileActions.resetOrders();
     this.subscriptions.clear();
     this.refreshPolicy.dispose();
+    this.gateway.dispose();
     super.disconnect();
   }
 

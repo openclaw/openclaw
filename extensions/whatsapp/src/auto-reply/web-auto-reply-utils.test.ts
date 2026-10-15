@@ -139,6 +139,13 @@ describe("resolveMentionTargets with @lid mapping", () => {
 
 describe("web auto-reply util", () => {
   describe("isLikelyWhatsAppCryptoError", () => {
+    it("recognizes authentication failures identified by the Baileys stack", () => {
+      const error = new Error("Unsupported state or unable to authenticate data");
+      error.stack = `${error.message}\n    at decrypt (noise-handler.js:10:2)`;
+      expect(isLikelyWhatsAppCryptoError(error)).toBe(true);
+      expect(isLikelyWhatsAppCryptoError(new Error(error.message))).toBe(false);
+    });
+
     it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;

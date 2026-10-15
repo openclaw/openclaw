@@ -1,4 +1,3 @@
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   createOwnMessageReaction,
   deleteOwnMessageReaction,
@@ -12,17 +11,9 @@ import {
 } from "./send.shared.js";
 import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 
-function resolveDiscordReactionClient(opts: DiscordReactOpts) {
-  if (opts.rest && opts.cfg && opts.accountId) {
-    return createDiscordClient(opts);
-  }
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
-  return createDiscordClient({ ...opts, cfg });
-}
-
 function reactionMutation(operation: typeof createOwnMessageReaction, label: string) {
   return async (channelId: string, messageId: string, emoji: string, opts: DiscordReactOpts) => {
-    const { rest, request } = resolveDiscordReactionClient(opts);
+    const { rest, request } = createDiscordClient(opts);
     const encoded = normalizeReactionEmoji(emoji);
     await request(() => operation(rest, channelId, messageId, encoded), label);
     return { ok: true };
@@ -37,7 +28,7 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts,
 ): Promise<{ ok: true; removed: string[] }> {
-  const { rest, request } = resolveDiscordReactionClient(opts);
+  const { rest, request } = createDiscordClient(opts);
   const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
@@ -72,7 +63,7 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number },
 ): Promise<DiscordReactionSummary[]> {
-  const { rest, request } = resolveDiscordReactionClient(opts);
+  const { rest, request } = createDiscordClient(opts);
   const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
