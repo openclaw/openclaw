@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import {
   onInternalDiagnosticEvent,
@@ -8,6 +9,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -19,7 +21,7 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-test("measures trusted-proxy connect success, rejection, and failed hello delivery without payloads", async () => {
+test("measures connect delivery and closed admission without payloads", async () => {
   const origin = "https://control.example.com";
   const auth = {
     mode: "trusted-proxy" as const,
@@ -46,33 +48,46 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
       { include: ["gateway.rpc"] },
     );
     try {
-      for (const outcome of ["ok", "error", "unavailable"] as const) {
+      for (const { outcome, rejected } of [
+        { outcome: "ok", rejected: false },
+        { outcome: "error", rejected: true },
+        { outcome: "unavailable", rejected: false },
+        { outcome: "unavailable", rejected: true },
+      ] as const) {
         events.length = 0;
         const socket = await openWs(port, {
           origin,
           "x-forwarded-for": "203.0.113.50",
           "x-forwarded-proto": "https",
-          ...(outcome === "error" ? {} : { "x-forwarded-user": "private-user@example.com" }),
+          ...(rejected ? {} : { "x-forwarded-user": "private-user@example.com" }),
         });
         // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below preserves the intercepted socket receiver.
         const originalSend = WebSocket.prototype.send;
+        const pendingWrite = createDeferred<() => void>();
         const spy =
           outcome === "unavailable"
             ? vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
                 this: WebSocket,
                 ...args: Parameters<WebSocket["send"]>
               ) {
-                if (typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
+                if (
+                  typeof args[0] === "string" &&
+                  (rejected
+                    ? args[0].includes('"type":"res"') && args[0].includes('"ok":false')
+                    : args[0].includes('"hello-ok"'))
+                ) {
                   const callback = args.findLast((arg) => typeof arg === "function");
-                  if (typeof callback !== "function") {
-                    throw new Error("missing send callback");
-                  }
-                  callback(new Error("synthetic delivery failure"));
+                  pendingWrite.resolve(() => {
+                    if (typeof callback === "function") {
+                      callback(new Error("synthetic delivery failure"));
+                    }
+                  });
                   return;
                 }
                 Reflect.apply(originalSend, this, args);
               })
             : undefined;
+        let releaseWrite: (() => void) | undefined;
         try {
           const closed = outcome === "unavailable" ? once(socket, "close") : undefined;
           const response = connectReq(socket, {
@@ -84,6 +99,11 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
           });
           if (closed) {
             void response.catch(() => {});
+            releaseWrite = await pendingWrite.promise;
+            await waitForDiagnosticEventsDrained();
+            expect(events.filter((event) => event.phase === "response")).toEqual([]);
+            releaseWrite();
+            releaseWrite = undefined;
             await closed;
           } else {
             const result = await response;
@@ -112,9 +132,38 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
           });
           expect(JSON.stringify(events)).not.toContain("private-");
         } finally {
+          releaseWrite?.();
           spy?.mockRestore();
           socket.close();
         }
+      }
+      events.length = 0;
+      const socket = await openWs(port, { origin });
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension).not.toBeNull();
+      try {
+        const result = await connectReq(socket, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          client: { ...CONTROL_UI_CLIENT, instanceId: "private-instance" },
+          scopes: ["operator.read"],
+          browserOrigin: origin,
+        });
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
+        await waitForDiagnosticEventsDrained();
+        expect(events.map((event) => event.phase)).toEqual(["received", "response", "dispatch"]);
+        expect(events[1]).toMatchObject({
+          outcome: "error",
+          firstResponse: true,
+          responseBytes: expect.any(Number),
+        });
+        expect(events[2]).toMatchObject({ outcome: "rejected", response: "sent" });
+      } finally {
+        suspension?.rollback();
+        socket.close();
       }
     } finally {
       unsubscribe();

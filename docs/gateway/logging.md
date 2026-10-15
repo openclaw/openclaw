@@ -273,7 +273,9 @@ The validated `connect` handshake also participates in the existing Gateway RPC
 metrics as `method="connect"`, including handler duration, first-response latency,
 response bytes, and delivery failures. Handler time includes completion work after
 the hello write; first-response time ends at the transport's write callback, not
-at browser receipt. These are server wall times, including awaited work.
+at browser receipt. These are server wall times, including awaited work. A validated connect rejected
+by restart or suspension admission reports a rejected dispatch and its response;
+it has no handler sample because authentication was never entered.
 
 Connect response logs follow the same slow-response threshold and include `authMs`
 (credentials through authentication), `attachMs` (device authorization, identity,

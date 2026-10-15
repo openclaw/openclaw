@@ -10,6 +10,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   type ConnectParams,
+  type ResponseFrame,
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -224,9 +225,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     let helloDelivered = false;
     let diagnostics: GatewayRpcDiagnostics | undefined;
     let dispatchOutcome: "returned" | "threw" = "returned";
-    let recordHandshakeResponse:
-      | ((ok: boolean, bytes?: number, sendMs?: number) => void)
-      | undefined;
+    let writeHandshakeResponse: ((response: ResponseFrame) => Promise<void>) | undefined;
+    let rejectionWrite: Promise<void> | undefined;
     // Connect phases share cleanup ownership; the outer catch must release
     // any claim installed before a later phase fails.
     const pendingNodePairingCleanup: { value?: NodePairingCleanupClaim } = {};
@@ -335,7 +335,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           Record<"auth_validated" | "session_attached" | "hello_payload_prepared", number>
         > = {};
         logWs("in", "req", { connId, id: frame.id, method: "connect" });
-        recordHandshakeResponse = (ok, bytes, sendMs) => {
+        const recordHandshakeResponse = (ok: boolean, bytes?: number, sendMs?: number) => {
           diagnostics?.response(ok ? "ok" : "error", bytes);
           logWs("out", "res", {
             connId,
@@ -354,6 +354,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 ? undefined
                 : phaseTimes.hello_payload_prepared - (phaseTimes.session_attached ?? 0),
           });
+        };
+        writeHandshakeResponse = async (response) => {
+          const sendStartedAt = performance.now();
+          let bytes: number;
+          try {
+            bytes = await sendFrame(response);
+          } catch (error) {
+            diagnostics?.response("unavailable");
+            throw error;
+          }
+          recordHandshakeResponse(response.ok, bytes, performance.now() - sendStartedAt);
         };
         const connectParams = frame.params as ConnectParams;
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
@@ -377,17 +388,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           message: string,
           options?: Parameters<typeof errorShape>[2],
         ) => {
-          const result = send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(code, message, options),
-          });
-          if (result.kind === "sent") {
-            recordHandshakeResponse?.(false, result.bytes);
-          } else {
-            diagnostics?.response("unavailable");
-          }
+          rejectionWrite = phaseContext
+            .sendFrame({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(code, message, options),
+            })
+            .catch(() => {});
         };
 
         const phaseContext = {
@@ -429,17 +437,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMeta,
           markHandshakeFailure,
           sendHandshakeErrorResponse,
-          sendFrame: async (obj) => {
-            const sendStartedAt = performance.now();
-            let bytes: number;
-            try {
-              bytes = await sendFrame(obj);
-            } catch (error) {
-              diagnostics?.response("unavailable");
-              throw error;
-            }
-            recordHandshakeResponse?.(true, bytes, performance.now() - sendStartedAt);
-          },
+          sendFrame: writeHandshakeResponse,
           onHelloDelivered: () => {
             helloDelivered = true;
             flushQueuedHandshakeFrames();
@@ -455,20 +453,29 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           releasePendingNodePairingCleanup,
         } satisfies GatewayConnectPhaseContext;
         await GatewayRpcDiagnostics.runHandler(async () => {
-          const authenticated = await authenticateGatewayConnect(phaseContext);
-          if (!authenticated) {
-            return;
+          try {
+            const authenticated = await authenticateGatewayConnect(phaseContext);
+            if (!authenticated) {
+              return;
+            }
+            const deviceAuthorized = await authorizeGatewayConnectDevice(
+              phaseContext,
+              authenticated,
+            );
+            if (!deviceAuthorized) {
+              return;
+            }
+            await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+            runDetachedConnectWork(
+              () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+              (error) =>
+                logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+            );
+          } finally {
+            if (rejectionWrite) {
+              await rejectionWrite;
+            }
           }
-          const deviceAuthorized = await authorizeGatewayConnectDevice(phaseContext, authenticated);
-          if (!deviceAuthorized) {
-            return;
-          }
-          await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
-          runDetachedConnectWork(
-            () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
-            (error) =>
-              logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
-          );
         }, diagnostics);
         return;
       }
@@ -484,16 +491,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       logGateway.error(`frame handler failed conn=${connId}: ${formatForLog(err)}`);
       logWs("out", "handler-error", { connId, error: formatForLog(err) });
       if (!helloDelivered && validateRequestFrame(parsed) && !isClosed()) {
-        const result = send({
+        const response: ResponseFrame = {
           type: "res",
           id: parsed.id,
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-        });
-        if (result.kind === "sent") {
-          recordHandshakeResponse?.(false, result.bytes);
+        };
+        if (writeHandshakeResponse) {
+          await writeHandshakeResponse(response).catch(() => {});
         } else {
-          diagnostics?.response("unavailable");
+          send(response);
         }
       }
     } finally {
@@ -536,20 +543,38 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       method: "connect",
       phase,
     });
-    await sendFrame({
-      type: "res",
-      id,
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
-        details: {
-          method: "connect",
-          reason,
-          phase,
-        },
-      }),
-    }).catch(() => {});
+    const diagnostics = createGatewayRpcDiagnostics(
+      "connect",
+      params.getMethodRegistry,
+      params.extraHandlers,
+    );
+    logWs("in", "req", { connId, id, method: "connect" });
+    try {
+      const bytes = await sendFrame({
+        type: "res",
+        id,
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `connect unavailable during gateway ${operation}`,
+          {
+            retryable: true,
+            retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+            details: {
+              method: "connect",
+              reason,
+              phase,
+            },
+          },
+        ),
+      });
+      diagnostics?.response("error", bytes);
+      logWs("out", "res", { connId, id, method: "connect", ok: false, bytes });
+    } catch {
+      diagnostics?.response("unavailable");
+    } finally {
+      diagnostics?.finish("rejected");
+    }
     queueMicrotask(() =>
       close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
     );

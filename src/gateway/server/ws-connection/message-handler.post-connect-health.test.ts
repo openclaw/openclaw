@@ -364,7 +364,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const owner = authMethod === "password";
         if (!owner) {
           await waitForFast(() =>
-            expect(harness.send).toHaveBeenCalledWith(
+            expect(harness.frames).toContainEqual(
               expect.objectContaining({
                 ok: false,
                 error: expect.objectContaining({
@@ -508,14 +508,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         await harness.runWhenIdle();
 
         expect(close).not.toHaveBeenCalled();
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             id: "connect",
             ok: false,
             error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
           }),
         );
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({ id: "update-after-snapshot", ok: true }),
         );
         expect(harness.logGateway.error).toHaveBeenCalledWith(
@@ -540,7 +540,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     await harness.runWhenIdle();
     expect(close).not.toHaveBeenCalled();
     expect(harness.client).toBeNull();
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({
         id: "failed-connect",
         ok: false,
@@ -549,11 +549,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
     harness.sendConnect("retry-connect", BACKEND_CONNECT_PARAMS);
     await harness.runWhenIdle();
-    expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
-      id: "retry-connect",
-      ok: true,
-      payload: { type: "hello-ok" },
-    });
+    expect(harness.frames).toContainEqual(
+      expect.objectContaining({
+        id: "retry-connect",
+        ok: true,
+        payload: expect.objectContaining({ type: "hello-ok" }),
+      }),
+    );
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -597,14 +599,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     await harness.runWhenIdle();
 
     expect(close).not.toHaveBeenCalled();
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({
         id: "failed",
         ok: false,
         error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
       }),
     );
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({ id: "update-after-handler", ok: true }),
     );
   });
@@ -654,7 +656,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
         harness.sendRequest("after-post-connect", "update.status");
         await harness.runWhenIdle();
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             id: "after-post-connect",
             ok: true,
@@ -1366,7 +1368,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           });
 
           await waitForFast(() => {
-            expect(harness.send).toHaveBeenCalledWith(
+            expect(harness.frames).toContainEqual(
               expect.objectContaining({
                 id: "connect-github-role-verification-failure",
                 ok: false,
@@ -1382,8 +1384,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             expect(close).toHaveBeenCalledWith(1013, expect.stringContaining(message));
           });
           expect(harness.client).toBeNull();
-          expect(harness.socketSend).not.toHaveBeenCalled();
-          expect(JSON.stringify(harness.send.mock.calls)).not.toContain("private upstream failure");
+          expect(harness.frames).toHaveLength(1);
+          expect(JSON.stringify(harness.frames)).not.toContain("private upstream failure");
         },
       );
     },
@@ -1702,7 +1704,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       releasePreparation.resolve();
 
       await waitForFast(() => {
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             ok: false,
             error: expect.objectContaining({
@@ -1715,7 +1717,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       });
       expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("origin not allowed"));
       expect(harness.client).toBeNull();
-      expect(harness.socketSend).not.toHaveBeenCalled();
+      expect(harness.frames).toHaveLength(1);
     } finally {
       releasePreparation.resolve();
       if (previousLoadConfig) {
@@ -1781,9 +1783,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
     expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
-    const response = harness.send.mock.calls.at(0)?.[0] as
-      | { error?: Record<string, unknown> }
-      | undefined;
+    const response = harness.frames.at(0) as { error?: Record<string, unknown> } | undefined;
     expect(response?.error).not.toHaveProperty("retryable");
     expect(response?.error).not.toHaveProperty("retryAfterMs");
     await harness.runWhenIdle();
@@ -1827,9 +1827,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("retry later"));
     });
 
-    const response = harness.send.mock.calls.at(0)?.[0] as
-      | { error?: Record<string, unknown> }
-      | undefined;
+    const response = harness.frames.at(0) as { error?: Record<string, unknown> } | undefined;
     expect(response?.error).toMatchObject({
       code: ErrorCodes.INVALID_REQUEST,
       message: "unauthorized: too many failed authentication attempts (retry later)",
