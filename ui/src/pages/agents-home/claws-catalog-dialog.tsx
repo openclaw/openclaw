@@ -2,7 +2,7 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -627,7 +627,9 @@ function ClawsCatalogContent(props: ClawsDialogProps) {
       revision: revision(),
     }),
     (value) =>
-      model.syncInitialSelection(value.initialEntry, value.initialPackageName, value.pageMode),
+      untrack(() =>
+        model.syncInitialSelection(value.initialEntry, value.initialPackageName, value.pageMode),
+      ),
   );
   onCleanup(() => model.dispose());
   // SAFETY: every view property is supplied by the get trap from model.view().
