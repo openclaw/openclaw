@@ -208,11 +208,22 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       const first = create(false, true);
       const second = create(true);
       const third = create();
-      retain(first, 1024 * 1024);
+      const firstTranscript = retain(first, 1024 * 1024);
       retain(second, 1024 * 1024);
       const thirdTranscript = retain(third, 1024 * 1024);
       // Three 2 MiB charges fit; growing and touching the oldest evicts the next oldest.
-      const grown = retain(first, 2 * 1024 * 1024);
+      // Shared payloads still count at each occurrence after a copy-on-write append.
+      const grown: SessionActorTranscriptReplica = {
+        ...firstTranscript,
+        tail: {
+          ...firstTranscript.tail,
+          events: [
+            ...firstTranscript.tail.events,
+            { ...firstTranscript.tail.events[0]!, rawSeq: 1 },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(first.state, grown);
       expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
       expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
       expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
