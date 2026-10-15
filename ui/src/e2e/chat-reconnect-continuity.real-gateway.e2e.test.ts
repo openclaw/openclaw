@@ -5,7 +5,10 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { startScrollInferenceFixture } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,6 +27,12 @@ type Frame = {
   params?: Record<string, unknown>;
   payload?: {
     inFlightRun?: { runId?: string; text?: string } | null;
+    messages?: Array<{
+      role?: string;
+      content?: unknown;
+      idempotencyKey?: string;
+      openclawAbort?: { aborted?: boolean; origin?: string; runId?: string };
+    }>;
   };
 };
 
@@ -99,7 +108,7 @@ suite.define(() => {
           JSON.stringify({ key: sessionKey, agentId: "main", label: "Reconnect continuity" }),
         ]);
         expect(create.code, create.stderr).toBe(0);
-        const readInFlightRun = async () => {
+        const readHistory = async () => {
           const history = await instance.cli([
             "gateway",
             "call",
@@ -109,7 +118,7 @@ suite.define(() => {
             JSON.stringify({ sessionKey }),
           ]);
           expect(history.code, history.stderr).toBe(0);
-          return (JSON.parse(history.stdout) as NonNullable<Frame["payload"]>).inFlightRun;
+          return JSON.parse(history.stdout) as NonNullable<Frame["payload"]>;
         };
         const url = new URL(suite.server.baseUrl);
         url.pathname = "/chat/main/reconnect-continuity";
@@ -178,26 +187,17 @@ suite.define(() => {
               .waitFor();
 
             const firstRunId = firstSend?.params?.idempotencyKey;
-            expect(typeof firstRunId).toBe("string");
+            if (typeof firstRunId !== "string") {
+              throw new Error("Expected the first chat.send request to identify its run");
+            }
             expect(connections).toBe(1);
             expect(dropConnection).toBeDefined();
             dropConnection?.();
-            await expect
-              .poll(() =>
-                page.evaluate(() => {
-                  const app = document.querySelector<
-                    HTMLElement & {
-                      runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
-                    }
-                  >("openclaw-app");
-                  return app?.runtime?.context?.gateway?.snapshot?.phase;
-                }),
-              )
-              .toBe("reconnecting");
+            await waitForControlUiGatewayReconnecting(page);
 
             await firstTurn.append(offlineTail);
             await expect
-              .poll(readInFlightRun, { timeout: 15_000 })
+              .poll(async () => (await readHistory()).inFlightRun, { timeout: 15_000 })
               .toMatchObject({ runId: firstRunId, text: opening + offlineTail });
             reconnectGate.resolve();
             await expect.poll(() => connections).toBe(2);
@@ -251,7 +251,28 @@ suite.define(() => {
                   frame.params?.runId === firstRunId,
               ).length;
             await expect.poll(firstRunAbortCount).toBe(1);
+            const abortRequest = sent.find(
+              ({ frame }) => frame.method === "chat.abort" && frame.params?.runId === firstRunId,
+            )?.frame;
+            await expect
+              .poll(() => received.find(({ frame }) => frame.id === abortRequest?.id)?.frame)
+              .toMatchObject({ type: "res", ok: true });
             await stop.waitFor({ state: "detached" });
+
+            // A new authenticated, cursor-free reader cannot recover this reply from
+            // the browser's IndexedDB or the Gateway's still-active stream buffer.
+            const abortedHistory = await readHistory();
+            expect(abortedHistory.inFlightRun ?? null).toBeNull();
+            const retainedPartials = abortedHistory.messages?.filter(
+              (message) => message.role === "assistant",
+            );
+            expect(retainedPartials).toHaveLength(1);
+            expect(retainedPartials?.[0]).toMatchObject({
+              role: "assistant",
+              content: [{ type: "text", text: opening + offlineTail }],
+              idempotencyKey: `${firstRunId}:assistant`,
+              openclawAbort: { aborted: true, origin: "rpc", runId: firstRunId },
+            });
 
             const followUpTurn = provider.plan();
             await composer.fill(followUpPrompt);
