@@ -10,7 +10,8 @@ import {
 } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { webHandlers } from "./web.js";
 
 const ACCOUNTS = ["account-a", "account-b"];
@@ -22,7 +23,7 @@ describe("web QR login lifecycle scoping", () => {
     async (connected) => {
       const { createChannelManager } = await import("../server-channels.js");
       const live = new Set<string>();
-      const starts = new Map(ACCOUNTS.map((id) => [id, createDeferredCore<void>()]));
+      const starts = new Map(ACCOUNTS.map((id) => [id, createDeferredCore()]));
       const loginAccounts: Array<string | undefined> = [];
       const plugin: ChannelPlugin = {
         id: "whatsapp",
@@ -77,6 +78,17 @@ describe("web QR login lifecycle scoping", () => {
         channelRuntimeEnvs: { whatsapp: runtimeForLogger(log) },
         scheduler: createTestGatewayScheduler(),
       });
+      const context = createGatewayRequestContext(
+        makeContextParams({
+          stopChannel: (channel, accountId) =>
+            manager.stopChannel(channel, accountId, { manual: true }),
+          startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
+          getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
+        }),
+      );
+      context.getRuntimeConfig = () => cfg;
+      // Direct handler calls do not carry a request-scoped method registry.
+      delete context.getGatewayMethodRegistry;
       const invoke = async (method: "web.login.start" | "web.login.wait") => {
         const params = { accountId: "account-b" };
         const respond = vi.fn();
@@ -89,15 +101,8 @@ describe("web QR login lifecycle scoping", () => {
           client: null,
           isWebchatConnect: () => false,
           respond,
-          context: {
-            stopChannel: (channel, accountId) =>
-              manager.stopChannel(channel, accountId, { manual: true }),
-            startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
-            getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
-            getRuntimeConfig: () => cfg,
-            isConfigReloadSettled: () => true,
-          },
-        } as GatewayRequestHandlerOptions);
+          context,
+        });
         expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       };
       try {
@@ -106,7 +111,7 @@ describe("web QR login lifecycle scoping", () => {
         expect([...live].toSorted()).toEqual(ACCOUNTS);
         await invoke("web.login.start");
         expect([...live]).toEqual(["account-a"]);
-        const restored = createDeferredCore<void>();
+        const restored = createDeferredCore();
         starts.set("account-b", restored);
         await invoke("web.login.wait");
         if (connected) {
