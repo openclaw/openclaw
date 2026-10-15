@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
@@ -16,38 +17,8 @@ export type McpToolSchemaEntry = {
   inputSchema: Record<string, unknown>;
 };
 
-function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description" | "parameters") {
-  try {
-    return tool[key];
-  } catch {
-    return undefined;
-  }
-}
-
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
-  return normalizeOptionalString(readLoopbackToolField(tool, "name"));
-}
-
-function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined {
-  const value = readLoopbackToolField(tool, "description");
-  return typeof value === "string" ? value : undefined;
-}
-
-function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unknown> | undefined {
-  let value;
-  try {
-    value = tool.parameters;
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(value)) {
-    return {};
-  }
-  try {
-    return { ...value };
-  } catch {
-    return undefined;
-  }
+  return normalizeOptionalString(tool.name);
 }
 
 function flattenUnionSchema(
@@ -95,7 +66,7 @@ function flattenUnionSchema(
         if (schema === false) {
           continue;
         }
-        if (areSchemaValuesEquivalent(existing, schema)) {
+        if (isDeepStrictEqual(existing, schema, { skipPrototype: true })) {
           continue;
         }
         // A prior const merge becomes an enum. Treat both as one literal family
@@ -128,57 +99,6 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
-function rememberSchemaPair(
-  left: object,
-  right: object,
-  seen: WeakMap<object, WeakSet<object>>,
-): boolean {
-  const existing = seen.get(left);
-  if (existing?.has(right)) {
-    return true;
-  }
-  const next = existing ?? new WeakSet<object>();
-  next.add(right);
-  if (!existing) {
-    seen.set(left, next);
-  }
-  return false;
-}
-
-function areSchemaValuesEquivalent(
-  left: unknown,
-  right: unknown,
-  seen = new WeakMap<object, WeakSet<object>>(),
-): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-    if (rememberSchemaPair(left, right, seen)) {
-      return true;
-    }
-    return left.every((value, index) => areSchemaValuesEquivalent(value, right[index], seen));
-  }
-  if (!isRecord(left) || !isRecord(right)) {
-    return false;
-  }
-  if (rememberSchemaPair(left, right, seen)) {
-    return true;
-  }
-  const leftKeys = Object.keys(left).toSorted();
-  const rightKeys = Object.keys(right).toSorted();
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
-  }
-  return leftKeys.every(
-    (key, index) =>
-      key === rightKeys[index] && areSchemaValuesEquivalent(left[key], right[key], seen),
-  );
-}
-
 // Deduplicate by tool, field, and reason across per-session schema cache misses.
 // Tool metadata stays stable until restart or explicit reload.
 const emittedSchemaWarnings = new Set<string>();
@@ -197,10 +117,7 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     if (!name) {
       return [];
     }
-    let raw = readLoopbackToolParameters(tool);
-    if (!raw) {
-      return [];
-    }
+    let raw = isRecord(tool.parameters) ? { ...tool.parameters } : {};
     if (raw.anyOf || raw.oneOf) {
       raw = flattenUnionSchema(raw, name);
     }
@@ -212,7 +129,7 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     }
     return {
       name,
-      description: readLoopbackToolDescription(tool),
+      description: typeof tool.description === "string" ? tool.description : undefined,
       inputSchema: raw,
     };
   });
