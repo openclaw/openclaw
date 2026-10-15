@@ -5,12 +5,12 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import {
-  ChatComposerPlusMenu,
-  type ChatComposerPlusMenuProps,
-  type ChatComposerCapabilityMenuProps,
-  type ChatComposerPlusMenuView,
-} from "../chat/components/chat-composer-plus-menu.tsx";
+import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
+import type {
+  ChatComposerPlusMenuProps,
+  ChatComposerCapabilityMenuProps,
+  ChatComposerPlusMenuView,
+} from "../chat/components/chat-composer-plus-menu.types.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();

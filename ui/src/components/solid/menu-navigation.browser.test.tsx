@@ -17,6 +17,82 @@ import { Menu, type MenuEntry, type MenuItem, type MenuProps } from "./menu.tsx"
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it("keeps submenu icons and details in the visible trigger", async () => {
+    let icon!: HTMLSpanElement;
+    let details!: HTMLSpanElement;
+    render(() => (
+      <Menu
+        id="people"
+        label="People"
+        items={[
+          {
+            id: "view",
+            label: "View",
+            icon: <span ref={(node) => (icon = node)}>Eye</span>,
+            details: <span ref={(node) => (details = node)}>V</span>,
+            children: [{ id: "reasoning", label: "Reasoning" }],
+          },
+        ]}
+      />
+    ));
+    flush();
+    await openMenu();
+    const view = item("View");
+    expect(view.contains(icon)).toBe(true);
+    expect(view.contains(details)).toBe(true);
+    await userEvent.click(view);
+    await phase(surface("people-view"), "open");
+    expect(view.contains(icon)).toBe(true);
+    expect(view.contains(details)).toBe(true);
+  });
+
+  it("materializes lazy content at first keyboard admission and retains it when reopened", async () => {
+    let itemReads = 0;
+    let childrenReads = 0;
+    const view = mountMenu({
+      lazy: true,
+      get items() {
+        itemReads += 1;
+        return [{ id: "ready", label: "Ready" }];
+      },
+      get children() {
+        childrenReads += 1;
+        return <span>Lazy heading</span>;
+      },
+    });
+    expect(itemReads).toBe(0);
+    expect(childrenReads).toBe(0);
+    trigger().focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await phase(surface(), "open");
+    const ready = item("Ready");
+    expect(document.activeElement).toBe(ready);
+    expect(childrenReads).toBe(1);
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(view.handle.open()).toBe(true);
+    await phase(surface(), "open");
+    expect(item("Ready")).toBe(ready);
+    expect(childrenReads).toBe(1);
+  });
+
+  it.each([false, true])("refuses lazy admission without active effects (veto %s)", (veto) => {
+    const view = mountMenu({
+      lazy: true,
+      items: veto ? [{ id: "ready", label: "Ready" }] : [],
+      onBeforeShow: (event) => {
+        if (veto) {
+          event.preventDefault();
+        }
+      },
+    });
+    trigger().focus();
+    expect(view.handle.open()).toBe(false);
+    expect(surface().matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(trigger());
+    expect(openSurfaces()).toEqual([]);
+  });
+
   it("navigates from search through grouped compound rows and custom controls", async () => {
     const selected: string[] = [];
     let pins = 0;
@@ -475,6 +551,39 @@ describe("Solid menu navigation", () => {
     await userEvent.tab();
     await phase(surface(), "hidden");
     expect(document.activeElement).toBe(view.getByRole("button", { name: "After menu" }));
+  });
+
+  it("moves between menu rows and embedded settings with Tab", async () => {
+    const view = mountMenu({
+      items: [
+        { id: "before", label: "Before settings" },
+        {
+          kind: "content",
+          id: "settings",
+          content: (
+            <>
+              <button data-form-control="">Send always</button>
+              <button data-form-control="">Receive always</button>
+            </>
+          ),
+        },
+        { id: "after", label: "After settings" },
+      ],
+    });
+    await openMenu();
+    const before = item("Before settings");
+    const send = view.getByRole("button", { name: "Send always" });
+    const receive = view.getByRole("button", { name: "Receive always" });
+    before.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(send);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(receive);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(send);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(before);
+    expect(surface().matches(":popover-open")).toBe(true);
   });
 
   it("keeps Tab in the current menu when a descendant menu has visible controls", async () => {

@@ -722,7 +722,7 @@ it.each([
   ]);
 });
 
-it("restricts authorization enrollment to its admitted worker entries", () => {
+it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
   const sources = {
     "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
     "src/agents/auth-profiles/authorization-enrollment.ts": `
@@ -741,8 +741,27 @@ it("restricts authorization enrollment to its admitted worker entries", () => {
         return { execute() { enrollAuthProfileAuthorizationInDatabase(); } };
       }
     `,
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function enrollOwnedAuthProfileAuthorization(context) {
+        if (context.maintenanceScope?.ownsSchemaMaintenance) {
+          enrollAuthProfileAuthorizationInDatabase();
+        }
+      }
+    `,
   };
   expect(inspect(sources)).toEqual([]);
+  const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  expect(
+    inspect({
+      ...sources,
+      [runtime]:
+        sources[runtime] +
+        `
+        export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
   expect(
     inspect({
       ...sources,

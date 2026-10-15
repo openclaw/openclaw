@@ -312,7 +312,15 @@ export function createSlackBoltApp(params: {
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
   onContextIdentity?: (identity: SlackContextIdentity) => void | Promise<void>;
-}) {
+}): {
+  app: InstanceType<SlackAppConstructor>;
+  receiver:
+    | InstanceType<SlackSocketModeReceiverConstructor>
+    | InstanceType<SlackHttpReceiverConstructor>
+    | SlackReceiver;
+  socketClient: InstanceType<SlackSocketModeReceiverConstructor>["client"] | undefined;
+  socketModeLogger: SlackSocketModeLogger;
+} {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",

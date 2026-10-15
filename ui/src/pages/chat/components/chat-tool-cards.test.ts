@@ -22,9 +22,9 @@ import { handleAgentEvent } from "../tool-stream.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import {
+  renderToolCard,
   renderToolFixture as render,
   settleToolBridges,
-  renderToolCard,
 } from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 

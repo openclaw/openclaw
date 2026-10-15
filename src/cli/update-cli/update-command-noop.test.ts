@@ -23,8 +23,8 @@ vi.mock("./update-command-runtime-preflight.js", async (original) => ({
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: async () => [],
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (original) => ({
-  ...(await original<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (original) => ({
+  ...(await original<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: async () => {},
 }));
 vi.mock("./update-command-service.js", async () => {
