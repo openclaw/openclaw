@@ -1671,8 +1671,8 @@ const manifest = {
   run_macos_node: runMacosNode,
   macos_node_matrix: createMatrix(
     runMacosNode
-      ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-        ? [1, 2, 3].map((part) => ({
+      ? [1, 2].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+        ? (hasPackageScript("test:macos:ci:3") ? [1, 2, 3] : [1, 2]).map((part) => ({
             check_name: `macos-node-${part}`,
             runtime: "node",
             task: `test-${part}`,

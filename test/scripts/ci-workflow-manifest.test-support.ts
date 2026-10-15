@@ -71,7 +71,7 @@ export function runCiManifestFixture(options: {
   androidCiCapabilities?: boolean;
   androidAccessNativeCapability?: boolean;
   nativeI18nCapabilities?: boolean;
-  macosNodeParts?: boolean;
+  macosNodeParts?: boolean | 2;
   windowsPlanner?: boolean;
   openClawKitTests?: boolean;
   protocolCoverage?: boolean;
@@ -417,7 +417,12 @@ export function runCiManifestFixture(options: {
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
           ...(macosNodeParts
-            ? Object.fromEntries([1, 2, 3].map((part) => [`test:macos:ci:${part}`, "true"]))
+            ? Object.fromEntries(
+                (macosNodeParts === 2 ? [1, 2] : [1, 2, 3]).map((part) => [
+                  `test:macos:ci:${part}`,
+                  "true",
+                ]),
+              )
             : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
