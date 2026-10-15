@@ -201,7 +201,7 @@ suite.define(() => {
               step: `warning:doctor:${index + 1}`,
               status: "completed" as const,
               detail:
-                "An optional integration needs attention. Review its configuration in Settings. ".repeat(
+                `Optional integration ${index + 1} needs attention. Review its configuration in Settings. `.repeat(
                   6,
                 ),
             })),
@@ -222,29 +222,7 @@ suite.define(() => {
           updatedAtMs: run.updatedAtMs,
         });
         const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
-        try {
-          await runView.getByText(headline, { exact: true }).first().waitFor();
-        } catch (error) {
-          const dom = await page
-            .evaluate(() => {
-              const view = document.querySelector("openclaw-modal-dialog openclaw-update-run-view");
-              return {
-                dialogCount: document.querySelectorAll("openclaw-modal-dialog").length,
-                runStatus:
-                  view?.querySelector(".update-run-view")?.getAttribute("data-run-status") ?? null,
-                headline:
-                  view?.querySelector(".update-run-view__heading h3")?.textContent?.slice(0, 500) ??
-                  null,
-              };
-            })
-            .catch(() => null);
-          const updateRunReads = await gateway
-            .getRequests("update.runs.get")
-            .then((requests) => requests.length)
-            .catch(() => null);
-          console.error("[update-run-e2e] final report wait failed", { dom, updateRunReads });
-          throw error;
-        }
+        await runView.getByText(headline, { exact: true }).first().waitFor();
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
         expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
