@@ -14,6 +14,7 @@ import {
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -21,6 +22,7 @@ export async function readPendingInputSource(
   scope: SessionAccessScope & { agentId: string; sessionId: string },
   idempotencyKey: string,
   pendingOnly: boolean,
+  harnessCompletion?: PendingInputSourceRead["harnessCompletion"],
 ) {
   const captured = {
     ...scope,
@@ -33,6 +35,7 @@ export async function readPendingInputSource(
     sessionId: captured.sessionId,
     idempotencyKey,
     pendingOnly,
+    harnessCompletion,
   };
   if (isIncognitoSessionKey(captured.sessionKey)) {
     // Process-held incognito storage retains its native owner until the actor cutover.
@@ -87,6 +90,7 @@ export async function readPendingInputSource(
     owner.readPendingInputSource({
       input: { ...input, sessionKey: resolved.sessionKey },
       env: captured.env,
+      admission: harnessCompletion ? resolveSessionTranscriptReadFence(captured) : undefined,
       source: {
         agentId: options.agentId,
         path,

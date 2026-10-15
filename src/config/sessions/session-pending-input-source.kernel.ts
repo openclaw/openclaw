@@ -3,9 +3,12 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { everySessionTranscriptUserInputFromSnapshot } from "./session-accessor.sqlite-active-events.js";
 import { parseSessionPendingInputMessage } from "./session-accessor.sqlite-pending-inputs.js";
+import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { createHarnessCompletionInputPredicate } from "./session-harness-completion-input.js";
 import type {
   PendingInputSourceRead,
   PendingInputSourceSnapshot,
@@ -40,6 +43,29 @@ export function readPendingInputSourceInDatabase(
     };
     if (!snapshot.current) {
       return snapshot;
+    }
+    if (input.harnessCompletion) {
+      const { claim, recoveryRunIds } = input.harnessCompletion;
+      const result = readCurrentProjectionSnapshot(
+        database,
+        {
+          agentId: claim.requesterAgentId,
+          databaseAgentId: database.agentId,
+          path: database.path,
+          sessionKey: input.sessionKey,
+          sessionId: input.sessionId,
+        },
+        (projection) =>
+          everySessionTranscriptUserInputFromSnapshot(
+            projection,
+            input.idempotencyKey,
+            createHarnessCompletionInputPredicate(claim, recoveryRunIds),
+          ),
+      );
+      if (result.kind !== "value") {
+        throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
+      }
+      return { ...snapshot, completionExecutable: result.value };
     }
     const pendingQuery = db
       .selectFrom("session_pending_inputs")

@@ -97,66 +97,75 @@ export function everySessionTranscriptUserInputFrom(
   accept: (message: unknown) => boolean,
 ): boolean {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const db = getActiveTranscriptKysely(projection.database);
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
-    const end = fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount;
-    const anchor = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .select("active.message_position")
-        .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.message_idempotency_key", "=", idempotencyKey)
-        .where("active.message_position", "is not", null)
-        .where("active.message_position", "<", end)
-        .limit(1),
-    );
-    if (anchor?.message_position == null) {
-      return false;
-    }
-    const window = resolveTranscriptBoundaryWindow(projection, "history", fence?.beforeRawSeq);
-    const postStart = window?.postBoundaryMessagePosition ?? 0;
-    // Kept-tail messages remain display history, not execution authority after
-    // a reset preceding this read fence.
-    if (anchor.message_position < postStart) {
-      return false;
-    }
-    const query = selectMessageRows(projection.database, projection.resolved.sessionId, {
-      start: anchor.message_position,
-      endExclusive: end,
-    })
-      .select(
-        /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')),
-          'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
-          "message_json",
-        ),
-      )
-      .where(
-        /* kysely-allow-raw: User-role filtering excludes assistant/tool payloads without materializing them. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`,
-        "=",
-        "user",
-      );
-    let seen = false;
-    for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
-      seen = true;
-      if (!accept(JSON.parse(row.message_json))) {
-        return false;
-      }
-    }
-    return seen;
+    return everySessionTranscriptUserInputFromSnapshot(projection, idempotencyKey, accept);
   });
+}
+
+/** Use an already admitted database snapshot, including a read-only worker owner. */
+export function everySessionTranscriptUserInputFromSnapshot(
+  projection: CurrentTranscriptProjection,
+  idempotencyKey: string,
+  accept: (message: unknown) => boolean,
+): boolean {
+  const db = getActiveTranscriptKysely(projection.database);
+  const fence = resolveSqliteSessionTranscriptReadFence({
+    database: projection.database,
+    ...projection.resolved,
+  });
+  const end = fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount;
+  const anchor = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    db
+      .selectFrom("transcript_event_identities as identity")
+      .innerJoin("session_transcript_active_events as active", (join) =>
+        join
+          .onRef("active.session_id", "=", "identity.session_id")
+          .onRef("active.event_seq", "=", "identity.seq"),
+      )
+      .select("active.message_position")
+      .where("identity.session_id", "=", projection.resolved.sessionId)
+      .where("identity.message_idempotency_key", "=", idempotencyKey)
+      .where("active.message_position", "is not", null)
+      .where("active.message_position", "<", end)
+      .limit(1),
+  );
+  if (anchor?.message_position == null) {
+    return false;
+  }
+  const window = resolveTranscriptBoundaryWindow(projection, "history", fence?.beforeRawSeq);
+  const postStart = window?.postBoundaryMessagePosition ?? 0;
+  // Kept-tail messages remain display history, not execution authority after
+  // a reset preceding this read fence.
+  if (anchor.message_position < postStart) {
+    return false;
+  }
+  const query = selectMessageRows(projection.database, projection.resolved.sessionId, {
+    start: anchor.message_position,
+    endExclusive: end,
+  })
+    .select(
+      /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
+      sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
+        'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
+        '__openclaw', json_object('runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')),
+        'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
+        "message_json",
+      ),
+    )
+    .where(
+      /* kysely-allow-raw: User-role filtering excludes assistant/tool payloads without materializing them. */
+      sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`,
+      "=",
+      "user",
+    );
+  let seen = false;
+  for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+    seen = true;
+    if (!accept(JSON.parse(row.message_json))) {
+      return false;
+    }
+  }
+  return seen;
 }
 
 /** Read one active identity using the caller's existing admitted snapshot. */

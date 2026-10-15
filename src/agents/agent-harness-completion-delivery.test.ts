@@ -21,6 +21,7 @@ import {
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as pendingInputSource from "../config/sessions/session-pending-input-source.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
@@ -463,6 +464,51 @@ describe("host-owned harness completion recovery", () => {
     },
   );
 
+  it.each(["initial-entry", "submitted-input", "entry-recheck"])(
+    "retains a fresh sibling when the %s reader is unavailable",
+    async (phase) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { entry, target, request } = await admit(state);
+        const original = sessionAccessor.readSessionEntriesFromStoreInWorker;
+        const entryRead = vi.spyOn(sessionAccessor, "readSessionEntriesFromStoreInWorker");
+        const submittedRead = vi.spyOn(sessionAccessor, "readSessionSubmittedInput");
+        const unavailable = new Error("Synthetic reader unavailable");
+        if (phase === "submitted-input") {
+          submittedRead.mockRejectedValueOnce(unavailable);
+        } else {
+          if (phase === "entry-recheck") {
+            entryRead.mockImplementationOnce(original);
+          }
+          entryRead.mockRejectedValueOnce(unavailable);
+        }
+        try {
+          await expect(
+            deliverAgentHarnessCompletion({
+              scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
+              isSourceSessionAdmissionAllowed: () => true,
+              childSessionKey: "harness:child-2",
+              childSessionId: "child-2",
+              announceId: "sibling",
+              status: "succeeded",
+              result: "result",
+            }),
+          ).resolves.toMatchObject({ delivered: false, recoveryPending: true });
+        } finally {
+          entryRead.mockRestore();
+          submittedRead.mockRestore();
+        }
+        await replaceSessionEntry(target, terminalEntry(entry));
+        expect(
+          await reconcileHarnessCompletionDelivery({
+            ...request,
+            sourceRunId: "announce:sibling",
+            taskRunId: "harness:child-2",
+          }),
+        ).toBe("unowned");
+      });
+    },
+  );
+
   it("keeps an accepted source pending and adopts its original identity in a new operational run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, claim, target, request } = await admit(state);
@@ -498,7 +544,13 @@ describe("host-owned harness completion recovery", () => {
       expect(successor.restartRecoveryHarnessCompletion).toEqual(claim);
       expect(await reconcileHarnessCompletionDelivery(request)).toBe("pending");
       const sibling = { ...request, sourceRunId: "announce:sibling", taskRunId: "harness:child-2" };
-      expect(await reconcileHarnessCompletionDelivery(sibling)).toBe("pending");
+      const sql = observeHostDataSql();
+      try {
+        expect(await reconcileHarnessCompletionDelivery(sibling)).toBe("pending");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(
         await sessionAccessor.readSessionSubmittedInput(
           { ...target, sessionId: entry.sessionId },
@@ -507,6 +559,122 @@ describe("host-owned harness completion recovery", () => {
       ).toBeUndefined();
       await replaceSessionEntry(target, terminalEntry(successor));
       expect(await reconcileHarnessCompletionDelivery(sibling)).toBe("unowned");
+    });
+  });
+
+  it.each(["physical", "claim", "released", "unavailable"])(
+    "rechecks sibling custody when %s changes during the worker read",
+    async (changed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { entry, target, request } = await admit(state);
+        await appendCompletionSource({ target, entry });
+        const entered = createDeferred();
+        const release = createDeferred();
+        const original = pendingInputSource.readPendingInputSource;
+        const read = vi
+          .spyOn(pendingInputSource, "readPendingInputSource")
+          .mockImplementation(async (...args) => {
+            const result = await original(...args);
+            if (args[3]) {
+              entered.resolve();
+              await release.promise;
+              if (changed === "unavailable") {
+                throw new Error("Synthetic reader unavailable");
+              }
+            }
+            return result;
+          });
+        const reconciliation = reconcileHarnessCompletionDelivery({
+          ...request,
+          sourceRunId: "announce:sibling",
+          taskRunId: "harness:child-2",
+        });
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            reconciliation,
+            "cold custody bypassed the worker read",
+          );
+          await replaceSessionEntry(
+            target,
+            changed === "released"
+              ? terminalEntry(entry)
+              : changed === "unavailable"
+                ? entry
+                : changed === "physical"
+                  ? { ...entry, sessionId: "replacement-physical" }
+                  : {
+                      ...entry,
+                      restartRecoveryHarnessCompletion: {
+                        ...entry.restartRecoveryHarnessCompletion!,
+                        sourceRunId: "announce:replacement",
+                      },
+                    },
+          );
+          release.resolve();
+          expect(await reconciliation).toBe(changed === "physical" ? "blocked" : "pending");
+          if (changed !== "physical") {
+            read.mockRestore();
+            await replaceSessionEntry(target, terminalEntry(entry));
+            expect(
+              await reconcileHarnessCompletionDelivery({
+                ...request,
+                sourceRunId: "announce:sibling",
+                taskRunId: "harness:child-2",
+              }),
+            ).toBe("unowned");
+          }
+        } finally {
+          release.resolve();
+          await reconciliation.finally(() => read.mockRestore());
+        }
+      });
+    },
+  );
+
+  it("retains completion custody in the process-held incognito store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const admitted = await admit(state);
+      const target = {
+        ...admitted.target,
+        sessionKey: "agent:main:dashboard:incognito-completion",
+      };
+      const entry: SessionEntry = {
+        ...admitted.entry,
+        incognito: true,
+        restartRecoveryHarnessCompletion: {
+          ...admitted.claim,
+          requesterSessionKey: target.sessionKey,
+        },
+      };
+      await replaceSessionEntry(target, entry);
+      await appendCompletionSource({ target, entry });
+      expect(await reconcileHarnessCompletionDelivery({ ...admitted.request, ...target })).toBe(
+        "pending",
+      );
+    });
+  });
+
+  it("keeps the admitted transcript fence across the cold-custody worker read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { entry, target, request } = await admit(state);
+      await appendCompletionSource({ target, entry });
+      const transcript = { ...target, sessionId: entry.sessionId };
+      await appendTranscriptMessage(transcript, {
+        eventId: "later-human",
+        message: { role: "user", content: "new work" },
+      });
+      const anchor = readActiveTranscriptEntryAnchor({ ...transcript, entryId: "later-human" });
+      if (!anchor) {
+        throw new Error("Missing admission fence anchor");
+      }
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+      expect(
+        await runWithSessionTranscriptReadFence(
+          { ...anchor, logicalTurnId: "recovery-R", role: "user" },
+          () => reconcileHarnessCompletionDelivery(request),
+        ),
+      ).toBe("pending");
     });
   });
 

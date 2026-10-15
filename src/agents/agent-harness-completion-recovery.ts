@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type {
@@ -7,6 +6,7 @@ import type {
 } from "../config/sessions/restart-recovery-types.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { everySessionTranscriptUserInputFrom } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { createHarnessCompletionInputPredicate } from "../config/sessions/session-harness-completion-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
@@ -160,48 +160,13 @@ export function readAdmittedHarnessCompletionInput(params: {
   const priorRunIds = (params.entry.restartRecoveryRuns ?? [])
     .filter((run) => Boolean(run.lifecycleGeneration))
     .map((run) => run.runId);
-  const claim = params.claim;
-  const allowedRunIds = new Set([params.operationalRunId, ...priorRunIds].filter(Boolean));
-  let sourceChecked = false;
   return everySessionTranscriptUserInputFrom(
     scope,
     `${params.claim.sourceRunId}:user`,
-    (message) => {
-      const record = asOptionalRecord(message);
-      const provenance = normalizeInputProvenance(record?.provenance);
-      const annotatedRunId = asOptionalRecord(record?.["__openclaw"])?.runId;
-      if (!sourceChecked) {
-        sourceChecked = true;
-        return (
-          record?.role === "user" &&
-          record.idempotencyKey === `${claim.sourceRunId}:user` &&
-          annotatedRunId === claim.sourceRunId &&
-          provenance?.kind === "inter_session" &&
-          provenance.sourceChannel === "internal" &&
-          ["agent_harness_task", "agent_harness_completion"].includes(
-            provenance.sourceTool ?? "",
-          ) &&
-          provenance.sourceSessionKey === claim.taskRunId
-        );
-      }
-      if (record?.role !== "user") {
-        return true;
-      }
-      // The recorder commits the exact input key before native mirroring adds
-      // runId. A present annotation must agree with this admitted recovery input.
-      const runId =
-        typeof record.idempotencyKey === "string"
-          ? [...allowedRunIds].find((id) => record.idempotencyKey === `${id}:user`)
-          : annotatedRunId;
-      return (
-        typeof runId === "string" &&
-        allowedRunIds.has(runId) &&
-        (annotatedRunId == null || annotatedRunId === runId) &&
-        provenance?.kind === "internal_system" &&
-        provenance.sourceTool === "main_session_restart_recovery" &&
-        provenance.sourceSessionKey === claim.requesterSessionKey
-      );
-    },
+    createHarnessCompletionInputPredicate(
+      params.claim,
+      params.operationalRunId ? [params.operationalRunId, ...priorRunIds] : priorRunIds,
+    ),
   );
 }
 

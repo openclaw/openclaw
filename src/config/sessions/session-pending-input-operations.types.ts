@@ -1,5 +1,6 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
   SessionPendingInputRow,
   readSessionInputCompletion,
@@ -21,6 +22,8 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+  /** Inspect executable completion custody instead of materializing the submitted message. */
+  harnessCompletion?: { claim: HarnessCompletionRecovery; recoveryRunIds: string[] };
 };
 
 export type PendingInputSourceSnapshot = {
@@ -28,6 +31,7 @@ export type PendingInputSourceSnapshot = {
   current: boolean;
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
+  completionExecutable?: boolean;
 };
 
 export type PendingInputSnapshot = {

@@ -1,3 +1,4 @@
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   PendingInputSourceRead,
@@ -10,6 +11,7 @@ export type Input = {
   env: NodeJS.ProcessEnv;
   input: PendingInputSourceRead;
   source: CapturedSessionEntryReadSource;
+  admission?: UserTurnTranscriptAdmissionReceipt;
 };
 export type Value = { kind: "session-pending-input-source"; snapshot: PendingInputSourceSnapshot };
 export type Reader = (

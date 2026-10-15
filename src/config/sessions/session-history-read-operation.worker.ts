@@ -77,7 +77,9 @@ export async function prepareSessionHistoryReadOperation(
         const read = withOpenClawAgentDatabaseReadOnly(
           (database) => {
             assertCapturedSessionEntryReadSource(request.source, database);
-            return readPendingInputSourceInDatabase(database, request.input);
+            return runWithSessionTranscriptReadFence(request.admission, () =>
+              readPendingInputSourceInDatabase(database, request.input),
+            );
           },
           { ...request.database, env: request.env },
         );
