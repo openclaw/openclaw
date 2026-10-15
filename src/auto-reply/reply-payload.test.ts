@@ -1,6 +1,8 @@
 // Reply payload tests cover internal reply metadata contracts.
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
   isCommandReplyForDelivery,
   isReplyPayloadSessionWriterDeliveryAuthorized,
   isReplyPayloadTerminalContent,
@@ -80,6 +82,35 @@ describe("reply payload terminal content", () => {
     ],
   ] as const)("classifies %s payloads", (_name, payload, expected) => {
     expect(isReplyPayloadTerminalContent(payload)).toBe(expected);
+  });
+});
+
+describe("live-only voice supplements", () => {
+  const liveOnlySupplement = {
+    text: "Here is the chart you asked for.",
+    mediaUrl: "file:///tmp/answer.opus",
+    ttsSupplement: {
+      spokenText: "Here is the chart you asked for.",
+      visibleTextAlreadyDelivered: true,
+      liveOnly: true,
+    },
+  };
+
+  // Delivery reads the lifetime from the normalized supplement: losing it here
+  // silently restores durable custody for audio whose writer fence recovery
+  // cannot rebuild.
+  it("keeps the live-only lifetime through normalization", () => {
+    expect(getReplyPayloadTtsSupplement(liveOnlySupplement)?.liveOnly).toBe(true);
+    expect(buildTtsSupplementMediaPayload(liveOnlySupplement).ttsSupplement?.liveOnly).toBe(true);
+  });
+
+  it("leaves an ordinary supplement durable", () => {
+    const ordinary = {
+      mediaUrl: "file:///tmp/answer.opus",
+      ttsSupplement: { spokenText: "answer" },
+    };
+    expect(getReplyPayloadTtsSupplement(ordinary)?.liveOnly).toBeUndefined();
+    expect(buildTtsSupplementMediaPayload(ordinary).ttsSupplement?.liveOnly).toBeUndefined();
   });
 });
 

@@ -102,7 +102,14 @@ describe("withDurableMessageSendContext", () => {
             presentationCount: 0,
             interactiveCount: 0,
             channelDataCount: 0,
-            items: [{ index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] }],
+            items: [
+              {
+                index: 0,
+                kinds: ["text"] as const,
+                text: "hello",
+                mediaUrls: [],
+              },
+            ],
           },
         });
         const send = await ctx.send(rendered);
@@ -150,7 +157,9 @@ describe("withDurableMessageSendContext", () => {
             mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
             audioAsVoice: true,
             presentation: { blocks: [{ type: "text", text: "card" }] },
-            interactive: { blocks: [{ type: "buttons", buttons: [{ label: "OK" }] }] },
+            interactive: {
+              blocks: [{ type: "buttons", buttons: [{ label: "OK" }] }],
+            },
             channelData: { native: true },
           },
         ],
@@ -221,7 +230,9 @@ describe("withDurableMessageSendContext", () => {
   it.each([
     {
       name: "title-only presentations",
-      payload: { presentation: { title: "Delivery failed: action required", blocks: [] } },
+      payload: {
+        presentation: { title: "Delivery failed: action required", blocks: [] },
+      },
       expected: { presentationCount: 1, items: [{ kinds: ["presentation"] }] },
     },
     {
@@ -323,7 +334,10 @@ describe("withDurableMessageSendContext", () => {
       "canonical-thread",
     ]);
     expect(
-      result.receipt?.parts.map(({ platformMessageId, kind }) => ({ platformMessageId, kind })),
+      result.receipt?.parts.map(({ platformMessageId, kind }) => ({
+        platformMessageId,
+        kind,
+      })),
     ).toEqual([
       { platformMessageId: "platform-1", kind: "text" },
       { platformMessageId: "platform-2", kind: "media" },

@@ -143,7 +143,11 @@ export function serializeDurableMessagePayloadOutcomes(
   }
   return outcomes.map((outcome): SerializedDurableMessagePayloadOutcome => {
     if (outcome.status === "sent") {
-      return { index: outcome.index, status: "sent", resultCount: outcome.results.length };
+      return {
+        index: outcome.index,
+        status: "sent",
+        resultCount: outcome.results.length,
+      };
     }
     if (outcome.status === "suppressed") {
       return {
