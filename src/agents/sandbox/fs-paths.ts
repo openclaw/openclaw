@@ -73,10 +73,33 @@ export function resolveProtectedSandboxDirectory(
     // Unmapped or container-only sources cannot establish installation provenance.
     return null;
   }
+  const source = resolveSandboxHostPathViaExistingAncestor(hostDirectory);
+  const writableAlias = mounts.some((mount) => {
+    if (!mount.writable) {
+      return false;
+    }
+    const hostRoot = resolveSandboxHostPathViaExistingAncestor(mount.hostRoot);
+    const relative = isPathInside(hostRoot, source)
+      ? path.relative(hostRoot, source)
+      : isPathInside(source, hostRoot)
+        ? ""
+        : null;
+    if (relative === null) {
+      return false;
+    }
+    const alias = path.posix.join(mount.containerRoot, ...relative.split(path.sep));
+    // The normal writable workspace is safe when its protected child wins here;
+    // a second visible writable mapping still permits replacement of the source.
+    return (
+      resolveSandboxFsMount(mounts, alias, containerOnlyMounts, {
+        containerOnlyAsUnmapped: true,
+      }) === mount
+    );
+  });
   if (
     resolved.writable ||
-    resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !==
-      resolveSandboxHostPathViaExistingAncestor(hostDirectory) ||
+    writableAlias ||
+    resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !== source ||
     [...mounts.map((mount) => mount.containerRoot), ...containerOnlyMounts].some(
       (root) =>
         root !== resolved.containerPath && isPathInsideContainerRoot(resolved.containerPath, root),

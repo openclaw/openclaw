@@ -34,6 +34,7 @@ or the calling user's model authority are absent.
 The backend must enforce read-only resource mounts; SSH sandbox file uploads do
 not qualify. Mounts or tmpfs overlays that replace the selected package also make
 it unavailable.
+Writable aliases of the package's backing files also disqualify it.
 
 The canonical skill discovers the enabled tool and calls it at its required
 checkpoint. If the tool is unavailable, enable the narrow capability or repair

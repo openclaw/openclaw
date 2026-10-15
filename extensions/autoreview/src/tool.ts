@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
@@ -8,6 +7,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 
@@ -224,7 +224,9 @@ export function createAutoReviewTool(
             AbortSignal.timeout(Math.ceil(timeoutSeconds * (passes + 1) * 1000)),
           ]);
           const directory = `/tmp/openclaw-autoreview-${randomUUID()}`;
-          const hostDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-autoreview-"));
+          const hostDirectory = await fs.mkdtemp(
+            path.join(resolvePreferredOpenClawTmpDir(), "autoreview-"),
+          );
           let helperRun: ReturnType<typeof runHelper> | undefined;
           try {
             scope.assertCurrent();

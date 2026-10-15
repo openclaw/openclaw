@@ -12,7 +12,9 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 
 const run = vi.hoisted(() => vi.fn());
 const resolveModel = vi.hoisted(() => vi.fn());
+// mock-isolation: Keep host processes outside this command-lifecycle fixture.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: run }));
+// mock-isolation: Exercise caller authority without discovering models or loading credentials.
 vi.mock("./embedded-agent-runner/model.js", () => ({ resolveModelAsync: resolveModel }));
 const roots: string[] = [];
 beforeEach(() => {
@@ -153,6 +155,20 @@ it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
     expect(capability.sandbox?.installedSkillRoots).toEqual({});
   },
 );
+
+it("rejects a writable workspace alias while preserving a read-only alias", () => {
+  const fixture = sandboxFixture();
+  const source = fixture.sandbox.workspaceDir;
+  const installedRoots = () =>
+    preparePluginToolExecutionCapabilities({
+      sandbox: fixture.sandbox,
+      skillsSnapshot: fixture.snapshot,
+    })(() => {}).sandbox?.installedSkillRoots;
+  fixture.sandbox.docker.binds = [`${source}:/alias:rw`];
+  expect(installedRoots()).toEqual({});
+  fixture.sandbox.docker.binds = [`${source}:/alias:ro`];
+  expect(installedRoots()).toEqual({ autoreview: "/guest/repo/skills/autoreview" });
+});
 
 it("refuses a retained command if invocation closes during backend preparation", async () => {
   const fixture = sandboxFixture();
