@@ -1112,6 +1112,14 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
     }
 }
 
+/// The existing Gateway refresh receipt, including the authoritative pre-refresh baseline.
+public struct OpenClawChatProgressCardRefreshResult: Decodable, Sendable {
+    private enum Status: String, Decodable, Sendable { case accepted }
+    public let runId: String
+    public let revision: Int
+    private let status: Status
+}
+
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public var id: String {
         "\(self.runId)-\(self.seq ?? -1)"

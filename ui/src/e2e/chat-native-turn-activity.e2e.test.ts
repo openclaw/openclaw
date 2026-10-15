@@ -2,12 +2,14 @@ import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import { createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("keeps roster activity until terminal delivery while chat foreground activity resumes on tools and retries", async () => {
     await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const source = await holdModuleResponse(page, /\/favicon\.svg(?:\?|$)/u);
       const { gateway, sessionKey, runId, stop } = await openMockAbortableRun(
         page,
         suite.server.baseUrl,
@@ -27,6 +29,33 @@ suite.define(() => {
       await expect.poll(() => thread.count()).toBe(0);
       await expect.poll(() => composer.textContent()).toBe("");
       await expect.poll(() => sidebar.count()).toBeGreaterThan(0);
+      await source.request;
+      const idleFavicon = await favicon.getAttribute("href");
+      expect(idleFavicon).toMatch(/^\/favicon\.svg(?:\?|$)/u);
+      source.release();
+      const workingColor = await page.evaluate(() => {
+        const root = document.documentElement;
+        return getComputedStyle(root)
+          .getPropertyValue(root.dataset.themeMode === "light" ? "--info" : "--accent")
+          .trim();
+      });
+      // Roster activity does not establish asynchronous favicon composition readiness.
+      await expect
+        .poll(() =>
+          favicon.evaluate((icon) => {
+            const href = icon.getAttribute("href");
+            const prefix = "data:image/svg+xml,";
+            if (!href?.startsWith(prefix)) {
+              return null;
+            }
+            const svg = new DOMParser().parseFromString(
+              decodeURIComponent(href.slice(prefix.length)),
+              "image/svg+xml",
+            );
+            return svg.documentElement.lastElementChild?.getAttribute("fill");
+          }),
+        )
+        .toBe(workingColor);
       const activeFavicon = await favicon.getAttribute("href");
       await emit(
         2,
@@ -65,7 +94,7 @@ suite.define(() => {
         message: { role: "assistant", content: [{ type: "text", text: "File read." }] },
       });
       await expect.poll(() => sidebar.count()).toBe(0);
-      await expect.poll(() => favicon.getAttribute("href")).not.toBe(activeFavicon);
+      await expect.poll(() => favicon.getAttribute("href")).toBe(idleFavicon);
       await stop.waitFor({ state: "hidden" });
     });
   });

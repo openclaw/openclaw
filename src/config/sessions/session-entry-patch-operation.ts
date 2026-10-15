@@ -167,7 +167,7 @@ export function reduceSessionBookkeeping(
   return reducer satisfies never;
 }
 
-function reduceSessionEntryPatch(
+export function reduceSessionEntryPatch(
   operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
@@ -347,7 +347,7 @@ function reduceSessionEntryPatch(
               status: terminalPending ? ("failed" as const) : ("done" as const),
             }
           : {}),
-        updatedAt: endedAt ?? Date.now(),
+        updatedAt: endedAt ?? entry.updatedAt,
       };
     }
   }

@@ -272,6 +272,14 @@ suite.define(() => {
                 }),
               ).toBe(true);
 
+              // A hovered hint owns the first Escape before the focused menu does.
+              await addTab.hover();
+              const hint = page.locator("openclaw-tooltip[open]");
+              await hint.locator('[role="tooltip"]').waitFor();
+              await page.keyboard.press("Escape");
+              await expect.poll(() => hint.count()).toBe(0);
+              expect(await menu.getAttribute("data-phase")).toBe("open");
+              expect(await menu.evaluate((element) => element.matches(":popover-open"))).toBe(true);
               await page.keyboard.press("Escape");
               await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
               expect(await addTab.getAttribute("aria-expanded")).toBe("false");

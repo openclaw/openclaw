@@ -97,30 +97,6 @@ function hitTestOnDivider(menu: HTMLElement, divider: HTMLElement): Element | nu
   return document.elementFromPoint(x, y);
 }
 
-type Dropdown = HTMLElementTagNameMap["wa-dropdown"];
-
-function menuSurface(dropdown: Dropdown): HTMLElement {
-  const surface = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-  if (!surface) {
-    throw new Error("expected rendered menu surface");
-  }
-  return surface;
-}
-
-async function openMenu(dropdown: Dropdown) {
-  const shown = new Promise<Event>((resolve) => {
-    dropdown.addEventListener("wa-after-show", resolve, { once: true });
-  });
-  dropdown.open = true;
-  await shown;
-}
-
-async function expectMenuInTopLayer(dropdown: Dropdown) {
-  const popup = dropdown.shadowRoot?.querySelector("wa-popup");
-  const surface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
-  await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
   const menu = card.querySelector<HTMLElement>(".oc-menu");
@@ -184,28 +160,33 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(distant).toEqual([false, true]);
   });
 
-  it("paints a dropdown above the divider through its own popover", async () => {
+  it("paints a native menu above the divider through its own popover", async () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "sidebar-session-sort-menu";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.style.position = "fixed";
-    trigger.style.left = `${Math.round(dividerBounds.left) - 120}px`;
-    trigger.style.top = "100px";
-    const item = document.createElement("wa-dropdown-item");
-    item.className = "sidebar-session-sort-menu__item";
-    item.textContent = "Created";
-    dropdown.append(trigger, item);
-    nav.append(dropdown);
-    // Popover membership precedes positioning; hit-test only after the completed show.
-    await openMenu(dropdown);
-    await expectMenuInTopLayer(dropdown);
-    expect(dropdown.closest("openclaw-menu-surface")).toBeNull();
-
-    const menu = menuSurface(dropdown);
+    const mounted = mountSolid(
+      () =>
+        createComponent(Menu, {
+          id: "sort-menu-stacking",
+          label: "Sort sessions",
+          panelClass: "sidebar-session-sort-menu",
+          triggerAttributes: {
+            style: {
+              position: "fixed",
+              left: `${Math.round(dividerBounds.left) - 120}px`,
+              top: "100px",
+            },
+          },
+          items: [{ id: "created", label: "Created" }],
+        }),
+      { container: nav },
+    );
+    onTestFinished(mounted.unmount);
+    nav.querySelector<HTMLButtonElement>(".oc-menu-trigger")!.click();
+    const menu = nav.querySelector<HTMLElement>(".oc-menu")!;
+    await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+    expect(menu.matches(":popover-open")).toBe(true);
+    expect(menu.closest("openclaw-menu-surface")).toBeNull();
     const menuBounds = menu.getBoundingClientRect();
     expect(menuBounds.right).toBeGreaterThan(dividerBounds.left);
     const hit = document.elementFromPoint(
@@ -213,7 +194,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
       menuBounds.top + menuBounds.height / 2,
     );
     expect(hit).not.toBeNull();
-    expect(dropdown.contains(hit)).toBe(true);
+    expect(menu.contains(hit)).toBe(true);
   });
 });
 

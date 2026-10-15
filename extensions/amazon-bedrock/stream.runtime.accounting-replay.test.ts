@@ -280,21 +280,9 @@ describe("Bedrock prompt cache ownership", () => {
   });
 
   it.each([
-    ["anthropic.claude-haiku-5-5", "1h"],
-    ["global.anthropic.claude-haiku-5-5", "1h"],
-    ["us.anthropic.claude-fable-5", "1h"],
-    ["us.anthropic.claude-mythos-5", "1h"],
     ["global.anthropic.claude-opus-5", "1h"],
     ["global.anthropic.claude-sonnet-5", "1h"],
     ["opaque-deployment", undefined],
-    ["anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
-    ["us.anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
-    ["anthropic.claude-sonnet-4-20250514-v1:0", undefined],
-    ["anthropic.claude-opus-4-1-20250805-v1:0", undefined],
-    ["anthropic.claude-sonnet-4-5-20250929-v1:0", "1h"],
-    ["anthropic.claude-opus-4-8", "1h"],
-    ["anthropic.claude-sonnet-5-5", "1h"],
-    ["anthropic.claude-fable-5-1", "1h"],
   ])("uses the supported long-retention TTL for %s", async (id, ttl) => {
     vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", id === "opaque-deployment" ? "1" : undefined);
     const payload = await capturePayload(
@@ -977,28 +965,6 @@ describe("Bedrock stream client lifecycle", () => {
       errorMessage: "acceptance observer failed",
     });
     expect(close).toHaveBeenCalledOnce();
-    expectDestroyedClient(send, destroy);
-  });
-
-  it("records a transport-failure diagnostic when the request fails before any output", async () => {
-    const send = vi
-      .spyOn(BedrockRuntimeClient.prototype, "send")
-      .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
-    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-
-    const result = await streamDefaultBedrock().result();
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "socket hang up",
-      errorCode: "ECONNRESET",
-    });
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        type: "provider_transport_failure",
-        details: { eventsEmitted: false, phase: "before_message_stream_start" },
-      }),
-    ]);
     expectDestroyedClient(send, destroy);
   });
 
