@@ -1548,12 +1548,12 @@ describe("handleFeishuMessage command authorization", () => {
 
   it.each([
     {
-      name: "maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist",
+      name: "maps legacy topicSessionMode=enabled to thread_id when both root_id and thread_id exist",
       accountConfig: { topicSessionMode: "enabled" as const },
       messageId: "msg-legacy-topic-thread-id",
       senderOpenId: "ou-legacy-thread-id",
       message: { root_id: "om_root_legacy", thread_id: "omt_topic_legacy" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:topic:omt_topic_legacy" },
       expectedParentPeer: { kind: "group" as const, id: "oc-group" },
     },
 
@@ -1607,7 +1607,7 @@ describe("handleFeishuMessage command authorization", () => {
         text: "topic reply",
         message: { root_id: "om_topic_starter_message", thread_id: "omt_topic_1" },
       },
-      topicId: "omt_topic_1",
+      topicIds: ["omt_topic_1", "omt_topic_1"] as const,
     },
     {
       chatType: "group" as const,
@@ -1619,11 +1619,11 @@ describe("handleFeishuMessage command authorization", () => {
         text: "follow up in same topic",
         message: { root_id: "msg-topic-first", thread_id: "omt_topic_created" },
       },
-      topicId: "msg-topic-first",
+      topicIds: ["msg-topic-first", "omt_topic_created"] as const,
     },
   ])(
-    "keeps the $chatType session key stable across topic creation",
-    async ({ chatType, senderOpenId, replyInThread, first, second, topicId }) => {
+    "keys the $chatType topic session from the event's thread_id",
+    async ({ chatType, senderOpenId, replyInThread, first, second, topicIds }) => {
       mockShouldComputeCommandAuthorized.mockReturnValue(false);
       const cfg = createFeishuTestConfig({
         groups: {
@@ -1636,9 +1636,9 @@ describe("handleFeishuMessage command authorization", () => {
           event: createFeishuTestEvent({ ...turn, senderOpenId, chatId: "oc-group", chatType }),
         });
       }
-      const peer = { kind: "group" as const, id: `oc-group:topic:${topicId}` };
-      expectResolvedRouteCall(0, peer, { kind: "group", id: "oc-group" });
-      expectResolvedRouteCall(1, peer, { kind: "group", id: "oc-group" });
+      const peer = (id: string) => ({ kind: "group" as const, id: `oc-group:topic:${id}` });
+      expectResolvedRouteCall(0, peer(topicIds[0]), { kind: "group", id: "oc-group" });
+      expectResolvedRouteCall(1, peer(topicIds[1]), { kind: "group", id: "oc-group" });
       if (chatType === "group") {
         expect(mockCreateFeishuReplyDispatcher).toHaveBeenNthCalledWith(
           2,
