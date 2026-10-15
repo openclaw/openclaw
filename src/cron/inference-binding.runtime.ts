@@ -72,7 +72,7 @@ export async function captureCronInferenceBinding(params: {
       const source = attempt?.plan.credentialSource;
       if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
         throw new Error(
-          "Automation requires a stored inference account or a key in provider config. Select an account with model@profile.",
+          "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
       }
       return undefined;
