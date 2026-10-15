@@ -16,15 +16,21 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   CliBackendConfig,
   CliBackendParseJsonlEvent,
+  CliBackendParseJsonlLifecycleEvent,
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
 import type {
+  CliCompactionDelta,
   CliStreamJsonOutputLimits,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
 import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
+import {
+  parseCliBackendLifecycleLine,
+  projectCliBackendLifecycleEvent,
+} from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
   isClaudeSubagentRecord,
@@ -174,18 +180,21 @@ function observePostBudgetReplyBoundaries(
 
 /**
  * Handles each post-budget line. Assembly has stopped, but the process is still
- * running: tool starts, tool results and attributed subagent progress are the
- * only facts the gateway's stall detector reads once a tool is active, so they
- * must keep flowing or a healthy run is recovered as a blocked one. Only the
- * terminal result is assembled; every other record is projected to its consumer
- * and dropped, so retention stays flat. Decoding each line costs a parse the
- * budget no longer wants to pay, but no cheaper filter can recognize a progress
- * record without risking the silent liveness loss this exists to prevent.
+ * running: tool starts, tool results, attributed subagent progress and native
+ * compaction phases are the only facts the gateway's stall detector reads, so
+ * they must keep flowing or a healthy run is recovered as a blocked one. Only
+ * the terminal result is assembled; every other record is projected to its
+ * consumer and dropped, so retention stays flat. Decoding each line costs a
+ * parse the budget no longer wants to pay, but no cheaper filter can recognize
+ * a progress record without risking the silent liveness loss this exists to
+ * prevent.
  */
 export function createClaudePostBudgetWatcher(params: {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
+  onCompaction?: (delta: CliCompactionDelta) => void;
   hasTerminalResult: () => boolean;
   onResultEvents: (
     parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[],
@@ -227,6 +236,28 @@ export function createClaudePostBudgetWatcher(params: {
   };
   return (line: string) => {
     if (!line) {
+      return;
+    }
+    // A compaction is silent but busy, so its phases decide whether the
+    // no-output watchdog grants outstanding-work grace or kills a healthy turn.
+    // The lifecycle parser is consulted first and claims the line outright, the
+    // same order and the same projector the pre-budget path uses: the records a
+    // lifecycle parser recognizes are not semantic subagent progress records, so
+    // nothing the stall detector reads is lost by claiming them here. A parser
+    // failure is dropped rather than latched — past a spent budget this watcher
+    // exists to keep a finished run recoverable, and nothing more is assembled.
+    const lifecycle = parseCliBackendLifecycleLine({
+      line,
+      backendId: params.providerId,
+      backend: params.backend,
+      parse: params.parseJsonlLifecycleEvent,
+    });
+    if (lifecycle) {
+      if (!("errorText" in lifecycle)) {
+        for (const event of lifecycle.events) {
+          params.onCompaction?.(projectCliBackendLifecycleEvent(event));
+        }
+      }
       return;
     }
     if (params.parseJsonlEvent) {

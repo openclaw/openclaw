@@ -56,7 +56,12 @@ const parseJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
     : null;
 };
 
-function contextFor(runId: string, noOutputMs = NO_OUTPUT_MS, timeoutMs = 3_600_000) {
+function contextFor(
+  runId: string,
+  noOutputMs = NO_OUTPUT_MS,
+  timeoutMs = 3_600_000,
+  jsonlDialect?: "claude-stream-json",
+) {
   const context = buildPreparedCliRunContext({
     runId,
     sessionId: runId,
@@ -68,6 +73,7 @@ function contextFor(runId: string, noOutputMs = NO_OUTPUT_MS, timeoutMs = 3_600_
     backend: {
       command: process.execPath,
       sessionMode: "none",
+      ...(jsonlDialect ? { jsonlDialect } : {}),
       reliability: { watchdog: { fresh: { minMs: noOutputMs, maxMs: noOutputMs } } },
     },
   });
@@ -267,6 +273,84 @@ it("bounds compaction silence from the last record while a parsed tool is active
     ping.resolve();
     finish.resolve();
     await Promise.allSettled([run, rejection]);
+  }
+});
+
+/**
+ * Ordinary parent records that spend the cumulative raw-character budget. Two
+ * of these cross the 8 MiB limit, so the second is the record that spends it and
+ * everything after it takes the post-budget path. `type: "system"` keeps them
+ * out of the partial-message exemption and out of binary normalization, so the
+ * whole line is charged.
+ */
+const BUDGET_FILLER = {
+  type: "system",
+  subtype: "status",
+  session_id: "budget-filler",
+  filler: "f".repeat(4 * 1024 * 1024 + 1_024),
+};
+
+it("grants compaction grace to a compaction that starts past a spent budget", async () => {
+  // A subagent-heavy Claude turn spends the parent budget and then compacts.
+  // Assembly is over, but the watchdog still has to see both phases: without the
+  // start it kills a healthy silent compaction at the ordinary no-output
+  // deadline, and without the end it holds a grace the turn no longer has.
+  const context = contextFor(
+    "compaction-post-budget",
+    NO_OUTPUT_MS,
+    3_600_000,
+    "claude-stream-json",
+  );
+  const recover = diagnostics(context);
+  const started = createDeferred<number>();
+  const release = createDeferred();
+  const ended = createDeferred<number>();
+  const finish = createDeferred();
+  context.executionTarget = {
+    kind: "plugin",
+    async *execute() {
+      yield BUDGET_FILLER;
+      yield BUDGET_FILLER;
+      yield START;
+      started.resolve(Date.now());
+      await release.promise;
+      yield { compact_result: "success" };
+      ended.resolve(Date.now());
+      await finish.promise;
+      yield RESULT;
+    },
+  };
+  const run = execute(context);
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  // Also absorbs the control's rejection so the abort surfaces as this flag.
+  void run.then(markSettled, markSettled);
+  try {
+    const startedAt = await started.promise;
+    await vi.advanceTimersByTimeAsync(240_000);
+    // The behavioral fact first: with the start phase lost the ordinary 180s
+    // no-output deadline terminates this healthy turn.
+    expect(settled).toBe(false);
+    expect(recover).not.toHaveBeenCalled();
+    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+      activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+      lastProgressAgeMs: 240_000,
+    });
+    release.resolve();
+    const clearedAt = await ended.promise;
+    // The stuck-flag direction: the end phase re-arms the ordinary watchdog.
+    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+      activeBackendLivenessDeadlineAtMs: clearedAt + NO_OUTPUT_MS,
+    });
+    finish.resolve();
+    // Text assembly never resumes, yet the finished turn is still recovered.
+    await expect(run).resolves.toMatchObject({ text: RESULT.result });
+  } finally {
+    release.resolve();
+    finish.resolve();
+    await Promise.allSettled([run]);
   }
 });
 

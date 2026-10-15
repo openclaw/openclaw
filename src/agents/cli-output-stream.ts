@@ -225,10 +225,15 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (lifecycle) {
       if ("errorText" in lifecycle) {
         parseErrorText = lifecycle.errorText;
-      } else if (chargeClaudeRawLine(rawLine.length + 1)) {
-        for (const parsed of decodeCliRecords(line)) {
-          observeSessionId(parsed);
+      } else {
+        if (chargeClaudeRawLine(rawLine.length + 1)) {
+          for (const parsed of decodeCliRecords(line)) {
+            observeSessionId(parsed);
+          }
         }
+        // The line that spends the budget may itself be a compaction phase.
+        // Only assembly stops when the budget is gone; the watchdog still has to
+        // know a silent compaction is running, or finish, on that very record.
         for (const event of lifecycle.events) {
           params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
         }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
+import type { CliBackendParseJsonlLifecycleEvent } from "../plugins/cli-backend.types.js";
+import type {
+  CliCompactionDelta,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+} from "./cli-output-contracts.js";
 import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "./cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
@@ -320,6 +325,111 @@ describe("terminal selection past a spent budget keeps the tool-split reply", ()
         ],
       }),
     ).toBe("Before.\n\nDONE");
+  });
+});
+
+/**
+ * Native compaction phases past a spent budget. Claude Code goes silent while it
+ * compacts, so these two records are the only evidence the no-output watchdog
+ * ever gets that the turn is busy rather than hung. Shaped exactly like the
+ * Anthropic extension's registered `parseClaudeCliJsonlLifecycleEvent` input.
+ */
+const compactionStartLine = JSON.stringify({
+  type: "system",
+  subtype: "status",
+  status: "compacting",
+  session_id: "budget-session",
+});
+const compactionEndLine = JSON.stringify({ compact_result: "success" });
+
+/** The same recognition the registered Anthropic lifecycle parser performs. */
+const parseJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
+  if (!line.includes("compacting") && !line.includes("compact_result")) {
+    return null;
+  }
+  const record = JSON.parse(line) as Record<string, unknown>;
+  if (record.compact_result === "success" || record.compact_result === "failed") {
+    return { kind: "compaction", phase: "end", completed: record.compact_result === "success" };
+  }
+  return record.type === "system" && record.subtype === "status" && record.status === "compacting"
+    ? { kind: "compaction", phase: "start" }
+    : null;
+};
+
+function createCompactionParser() {
+  const compactions: CliCompactionDelta[] = [];
+  const assistantDeltas: string[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
+    parseJsonlLifecycleEvent,
+    onCompaction: (delta) => compactions.push(delta),
+  });
+  return { parser, compactions, assistantDeltas };
+}
+
+describe("native compaction lifecycle past a spent budget", () => {
+  it("reports a compaction that starts after exhaustion", () => {
+    const { parser, compactions, assistantDeltas } = createCompactionParser();
+
+    exhaustLineBudget(parser);
+    expect(compactions).toEqual([]);
+
+    parser.push(`${compactionStartLine}\n`);
+
+    // The watchdog grants outstanding-work grace only on this fact.
+    expect(compactions).toEqual([{ phase: "start" }]);
+
+    parser.push(`${compactionEndLine}\n`);
+    parser.push(`${terminalResultLine("compaction survived")}\n`);
+    parser.finish();
+
+    expect(compactions).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
+    // Assembly stays stopped: the phases are projected, not re-assembled.
+    expect(assistantDeltas).toEqual([]);
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutput()).toMatchObject({ text: "compaction survived" });
+  });
+
+  it("reports the end of a compaction that started before exhaustion", () => {
+    // The stuck-flag direction: a start seen while the budget was live must be
+    // cleared by an end seen after it, or the turn keeps a grace it no longer has.
+    const { parser, compactions } = createCompactionParser();
+
+    parser.push(`${compactionStartLine}\n`);
+    expect(compactions).toEqual([{ phase: "start" }]);
+
+    exhaustLineBudget(parser);
+    parser.push(`${compactionEndLine}\n`);
+
+    expect(compactions).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
+  });
+
+  it("reports a compaction carried by the record that spends the budget", () => {
+    // The budget is live until this very line, so it takes the pre-budget path
+    // and is charged there; the charge failing must not discard the phase.
+    const { parser, compactions } = createCompactionParser();
+
+    parser.push(`${parentStatusLine()}\n`.repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines));
+    expect(parser.getErrorText()).toBeNull();
+
+    parser.push(`${compactionStartLine}\n`);
+
+    expect(compactions).toEqual([{ phase: "start" }]);
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 20000 lines");
+  });
+
+  it("does not invent a compaction from an unrecognized post-budget record", () => {
+    // Control: only what the backend's lifecycle parser claims is a phase.
+    const { parser, compactions } = createCompactionParser();
+
+    exhaustLineBudget(parser);
+    parser.push(`${parentToolUseLine("toolu_after_budget", "Bash")}\n`);
+    parser.push(`${parentAssistantTextLine("not a compaction")}\n`);
+    parser.finish();
+
+    expect(compactions).toEqual([]);
   });
 });
 
