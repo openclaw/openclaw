@@ -429,18 +429,28 @@ try {
     if (values["warm-reload"]) {
       await page.locator(".chat-pane-cache__pane--active").evaluate(async (element, sessionKey) => {
         const store = Reflect.get(element, "sessionSnapshotStore");
-        if (!store) throw new Error("Missing transcript snapshot owner");
+        if (!store) {
+          throw new Error("Missing transcript snapshot owner");
+        }
         await store.flush();
         const request = indexedDB.open("openclaw-chat-snapshots");
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
+          request.addEventListener("success", () => resolve(request.result), { once: true });
+          request.addEventListener(
+            "error",
+            () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
+            { once: true },
+          );
         });
         try {
           const read = database.transaction("snapshots").objectStore("snapshots").getAll();
           const snapshots = await new Promise<unknown[]>((resolve, reject) => {
-            read.onsuccess = () => resolve(read.result);
-            read.onerror = () => reject(read.error);
+            read.addEventListener("success", () => resolve(read.result), { once: true });
+            read.addEventListener(
+              "error",
+              () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
+              { once: true },
+            );
           });
           if (
             !snapshots.some((value) => {
@@ -450,8 +460,9 @@ try {
                   : undefined;
               return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
             })
-          )
+          ) {
             throw new Error("Warm reload requires the selected session's persisted transcript");
+          }
         } finally {
           database.close();
         }
