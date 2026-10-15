@@ -72,7 +72,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
               return begin(...args);
             });
           observers.defer(() => observing.mockRestore());
-          const project = operation.projectToolAuthorityFingerprintAsync.bind(operation);
+          const project = operation.projectToolAuthorityFingerprintAsync;
           let held = false;
           const delaying = vi
             .spyOn(operation, "projectToolAuthorityFingerprintAsync")
