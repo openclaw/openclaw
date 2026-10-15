@@ -233,12 +233,13 @@ describe("WhatsApp poll record store", () => {
       limit: 3,
     });
     expect(listed.map((entry) => entry.pollMessageId)).toEqual(["C", "B", "A"]);
+    // The limit applies per origin: the newest sent poll and the newest received one.
     expect(
       (
         await listWhatsAppChatPollIds({
           account: ACCOUNT,
           chatJids: ["15550002222@s.whatsapp.net", "777@lid"],
-          limit: 2,
+          limit: 1,
         })
       ).map((entry) => entry.pollMessageId),
     ).toEqual(["C", "B"]);

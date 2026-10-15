@@ -8,6 +8,7 @@ import {
   readPluginStateErrorCode,
   readWhatsAppPollRecord,
   warnWhatsAppPollState,
+  type WhatsAppChatPollIndexEntry,
   type WhatsAppPollAccount,
   type WhatsAppPollRecord,
 } from "./poll-vote-store.js";
@@ -33,6 +34,8 @@ type WhatsAppPollResultsPoll = {
 };
 
 const MAX_POLLS = 3;
+// The agent's own polls keep up to two of the slots, so members' polls cannot push them out.
+const RESERVED_SENT_POLLS = 2;
 // Index rows can outlive their record, so read past the ones that no longer resolve.
 const INDEX_READ_LIMIT = 12;
 const MAX_NAMES_PER_OPTION = 50;
@@ -134,31 +137,47 @@ function payloadBytes(payload: WhatsAppPollResultsContextEntry["payload"]): numb
   return Buffer.byteLength(JSON.stringify(payload));
 }
 
-/** Drops voter names from the oldest poll first, then the oldest poll itself. */
-function fitPayload(polls: WhatsAppPollResultsPoll[]): WhatsAppPollResultsPoll[] {
-  const fitted = [...polls];
-  for (let index = fitted.length - 1; index >= 0; index--) {
-    if (payloadBytes({ note: NOTE, polls: fitted }) <= MAX_PAYLOAD_BYTES) {
-      return fitted;
+type SelectedPoll = { poll: WhatsAppPollResultsPoll; sent: boolean; recordedAt: number };
+
+function withoutNames(poll: WhatsAppPollResultsPoll): WhatsAppPollResultsPoll {
+  return {
+    ...poll,
+    options: poll.options.map(({ option, votes }) => ({
+      option,
+      votes,
+      voters: votes > 0 ? [`+${votes} more`] : [],
+    })),
+  };
+}
+
+/**
+ * A poll whose question and options alone exceed the budget is left out first,
+ * so it cannot displace the others. Then voter names and whole polls go,
+ * members' polls oldest first, the agent's own polls last. Input is newest first.
+ */
+function fitPayload(selected: readonly SelectedPoll[]): WhatsAppPollResultsPoll[] {
+  const kept = new Map(
+    selected
+      .filter(
+        ({ poll }) =>
+          payloadBytes({ note: NOTE, polls: [withoutNames(poll)] }) <= MAX_PAYLOAD_BYTES,
+      )
+      .map((entry) => [entry, entry.poll] as const),
+  );
+  const fits = () => payloadBytes({ note: NOTE, polls: [...kept.values()] }) <= MAX_PAYLOAD_BYTES;
+  const trimOrder = [...kept.keys()]
+    .toReversed()
+    .toSorted((a, b) => Number(a.sent) - Number(b.sent));
+  for (const entry of trimOrder) {
+    if (fits()) {
+      break;
     }
-    const poll = fitted[index];
-    if (!poll) {
-      continue;
+    kept.set(entry, withoutNames(entry.poll));
+    if (!fits()) {
+      kept.delete(entry);
     }
-    fitted[index] = {
-      ...poll,
-      options: poll.options.map(({ option, votes }) => ({
-        option,
-        votes,
-        voters: votes > 0 ? [`+${votes} more`] : [],
-      })),
-    };
-    if (payloadBytes({ note: NOTE, polls: fitted }) <= MAX_PAYLOAD_BYTES) {
-      return fitted;
-    }
-    fitted.splice(index, 1);
   }
-  return fitted;
+  return [...kept.values()];
 }
 
 /**
@@ -181,37 +200,31 @@ export async function readWhatsAppPollResultsContext(params: {
       limit: INDEX_READ_LIMIT,
       errors: "throw",
     });
-    const polls: WhatsAppPollResultsPoll[] = [];
-    for (const { pollMessageId } of ids) {
-      if (polls.length >= MAX_POLLS) {
+    const selected: SelectedPoll[] = [];
+    const tried = new Set<string>();
+    const select = async (entry: WhatsAppChatPollIndexEntry) => {
+      if (tried.has(entry.pollMessageId)) {
+        return;
+      }
+      tried.add(entry.pollMessageId);
+      const poll = await readVisiblePoll(params, chatJids, entry.pollMessageId);
+      if (poll) {
+        selected.push({ poll, sent: entry.origin === "sent", recordedAt: entry.recordedAt });
+      }
+    };
+    for (const entry of ids.filter(({ origin }) => origin === "sent")) {
+      if (selected.length >= RESERVED_SENT_POLLS) {
         break;
       }
-      const record = await readWhatsAppPollRecord(params.account, pollMessageId, {
-        errors: "throw",
-      });
-      if (!record || !record.chatJids.some((jid) => chatJids.has(jid))) {
-        continue;
-      }
-      // A hidden creator takes the whole poll with them. A sent poll was read under the
-      // linked phone's own keys, so it is this assistant's and always shows, as does
-      // the owner's own poll posted from that phone.
-      const linkedPhone = isLinkedPhonePoll(record, params.account.self);
-      if (
-        record.origin === "received" &&
-        !linkedPhone &&
-        params.isCreatorVisible?.(record) === false
-      ) {
-        continue;
-      }
-      const tally = await readWhatsAppPollTally({
-        record,
-        account: params.account,
-        pollMessageId,
-        errors: "throw",
-      });
-      polls.push(buildPoll(pollMessageId, record, linkedPhone, tally ?? [], params.filterVoters));
+      await select(entry);
     }
-    const fitted = fitPayload(polls);
+    for (const entry of ids) {
+      if (selected.length >= MAX_POLLS) {
+        break;
+      }
+      await select(entry);
+    }
+    const fitted = fitPayload(selected.toSorted((a, b) => b.recordedAt - a.recordedAt));
     if (fitted.length === 0) {
       return undefined;
     }
@@ -227,6 +240,32 @@ export async function readWhatsAppPollResultsContext(params: {
     });
     return undefined;
   }
+}
+
+/** The poll as the block shows it, or undefined when it is gone, elsewhere, or hidden. */
+async function readVisiblePoll(
+  params: Parameters<typeof readWhatsAppPollResultsContext>[0],
+  chatJids: ReadonlySet<string>,
+  pollMessageId: string,
+): Promise<WhatsAppPollResultsPoll | undefined> {
+  const record = await readWhatsAppPollRecord(params.account, pollMessageId, { errors: "throw" });
+  if (!record || !record.chatJids.some((jid) => chatJids.has(jid))) {
+    return undefined;
+  }
+  // A hidden creator takes the whole poll with them. A sent poll was read under the
+  // linked phone's own keys, so it is this assistant's and always shows, as does
+  // the owner's own poll posted from that phone.
+  const linkedPhone = isLinkedPhonePoll(record, params.account.self);
+  if (record.origin === "received" && !linkedPhone && params.isCreatorVisible?.(record) === false) {
+    return undefined;
+  }
+  const tally = await readWhatsAppPollTally({
+    record,
+    account: params.account,
+    pollMessageId,
+    errors: "throw",
+  });
+  return buildPoll(pollMessageId, record, linkedPhone, tally ?? [], params.filterVoters);
 }
 
 /**

@@ -467,7 +467,11 @@ export async function readWhatsAppPollRecord(
   return record;
 }
 
-/** Newest first, merged across both origins; ids may outlive their record and must be re-read. */
+/**
+ * Newest first, merged across both origins, up to `limit` per origin so incoming
+ * polls cannot crowd the agent's own out of the list. Ids may outlive their
+ * record and must be re-read.
+ */
 export async function listWhatsAppChatPollIds(params: {
   account: WhatsAppPollAccount;
   chatJids: readonly (string | null | undefined)[];
@@ -493,6 +497,7 @@ export async function listWhatsAppChatPollIds(params: {
         if (typeof store?.entriesInKeyRange !== "function") {
           continue;
         }
+        const entries = new Map<string, WhatsAppChatPollIndexEntry>();
         for (const chatJid of chatJids) {
           const prefix = buildChatIndexPrefix(scope, chatJid);
           const rows = await store.entriesInKeyRange({
@@ -511,13 +516,15 @@ export async function listWhatsAppChatPollIds(params: {
             ) {
               continue;
             }
-            found.set(pollMessageId, { pollMessageId, origin, recordedAt });
+            entries.set(pollMessageId, { pollMessageId, origin, recordedAt });
           }
         }
+        const newest = [...entries.values()].toSorted((a, b) => b.recordedAt - a.recordedAt);
+        for (const entry of newest.slice(0, params.limit)) {
+          found.set(entry.pollMessageId, entry);
+        }
       }
-      return [...found.values()]
-        .toSorted((a, b) => b.recordedAt - a.recordedAt)
-        .slice(0, params.limit);
+      return [...found.values()].toSorted((a, b) => b.recordedAt - a.recordedAt);
     },
   });
 }

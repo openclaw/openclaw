@@ -264,6 +264,52 @@ describe("readWhatsAppPollResultsContext", () => {
     expect(polls[1]?.options.map((option) => option.votes)).toEqual([15, 15]);
   });
 
+  it("keeps the agent's own poll when members post more newer polls than the index read", async () => {
+    const base = Date.now() - 100_000;
+    await addPoll({ id: "OURS", recordedAt: base, origin: "sent" });
+    for (let index = 1; index <= 13; index++) {
+      await addPoll({ id: `Q${index}`, recordedAt: base + index, options: ["Yes"] });
+    }
+    const context = await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [HOME] });
+    expect(context?.payload.polls.map((poll) => poll.poll_id)).toEqual(["Q13", "Q12", "OURS"]);
+  });
+
+  it("leaves out a poll too large to show on its own instead of every other poll", async () => {
+    const base = Date.now() - 100_000;
+    await addPoll({ id: "OURS", recordedAt: base, origin: "sent" });
+    await addPoll({
+      id: "HUGE",
+      recordedAt: base + 1,
+      options: Array.from({ length: 8 }, (_, index) => `${index}${"x".repeat(600)}`),
+    });
+    const context = await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [HOME] });
+    expect(context?.payload.polls.map((poll) => poll.poll_id)).toEqual(["OURS"]);
+  });
+
+  it("trims members' polls before the agent's own when the block is over 4096 bytes", async () => {
+    const base = Date.now() - 100_000;
+    const longOptions = ["A".repeat(400), "B".repeat(400)];
+    await addPoll({ id: "OURS", recordedAt: base, options: longOptions, origin: "sent" });
+    await addPoll({ id: "MIDDLE", recordedAt: base + 1, options: longOptions });
+    await addPoll({ id: "NEWEST", recordedAt: base + 2, options: longOptions });
+    for (const id of ["OURS", "MIDDLE", "NEWEST"]) {
+      for (let index = 0; index < 30; index++) {
+        await addVote(
+          id,
+          `1555200${String(index).padStart(4, "0")}@s.whatsapp.net`,
+          [longOptions[index % 2] ?? ""],
+          `Voter number ${index} with a long display name`,
+        );
+      }
+    }
+    const context = await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [HOME] });
+    expect(Buffer.byteLength(JSON.stringify(context?.payload))).toBeLessThanOrEqual(4096);
+    const polls = context?.payload.polls ?? [];
+    expect(polls.map((poll) => poll.poll_id)).toEqual(["NEWEST", "OURS"]);
+    expect(polls[0]?.options.map((option) => option.voters)).toEqual([["+15 more"], ["+15 more"]]);
+    expect(polls[1]?.options[0]?.voters).toContain("Voter number 0 with a long display name");
+  });
+
   it("never exposes LID JIDs, the secret or option hashes", async () => {
     await addPoll({ id: "P1", recordedAt: Date.now(), options: ["Yes"] });
     await addVote("P1", "11110000003@lid", ["Yes"]);
