@@ -5,6 +5,7 @@ import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionModelControl } from "./model-control.ts";
 import { NewSessionPageOwner } from "./new-session-page-owner.ts";
 import "./new-session-page-entry.ts";
 
@@ -65,15 +66,18 @@ describe("new session draft route ownership", () => {
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
     const updated = vi.spyOn(NewSessionPageOwner.prototype, "updated");
+    const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
     await enterMessage(page, "warmup");
     for (const text of ["h", "he", "hello"]) {
       prepare.mockClear();
       updated.mockClear();
+      renderModels.mockClear();
       await enterMessage(page, text);
       expect(updated).toHaveBeenCalled();
       expect(prepare).toHaveBeenCalledTimes(updated.mock.calls.length);
+      expect(renderModels).not.toHaveBeenCalled();
       expect(page.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe(text);
     }

@@ -34,7 +34,7 @@ import { createApprovalHandler } from "./src/approvals.js";
 import { prepareMuseSessionContext } from "./src/context.js";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
-import { readMuseCatalog, verifyMuseSetup } from "./src/verify-setup.js";
+import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -52,6 +52,7 @@ function museRefusal(message: string): AgentHarnessPreflightError {
 
 export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV2 {
   const pool = new MusePool(options.binaryPath);
+  const catalogReader = new MuseCatalogReader();
   const queue = new KeyedAsyncQueue();
   const active = new Map<string, () => Promise<void>>();
   const inFlight = new Set<Promise<unknown>>();
@@ -68,13 +69,12 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       }
       params.hostCapabilities.assertActive();
       params.abortSignal?.throwIfAborted();
-      if (
-        params.sandbox ||
-        params.requireWorkspaceOnly ||
-        params.pluginHarnessToolPolicyRestricted
-      ) {
+      // Core admits a restricted tool policy only after native-runtime consent
+      // (assertPluginHarnessConversationToolPolicySupport). Muse exposes no
+      // OpenClaw tools, so a consented restriction has nothing left to filter.
+      if (params.sandbox || params.requireWorkspaceOnly) {
         throw museRefusal(
-          "Muse cannot enforce this OpenClaw sandbox or tool policy. Select the openclaw runtime for this session.",
+          "Muse cannot enforce this OpenClaw sandbox or workspace-only policy. Select the openclaw runtime for this session.",
         );
       }
       if (params.thinkLevel === "adaptive") {
@@ -479,10 +479,10 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
     executionEnvironment: "host-only",
-    verifySetup: verifyMuseSetup,
+    verifySetup: (ctx) => catalogReader.verify(ctx),
     async loadModelCatalog(params) {
       catalogs.delete(params.agentDir);
-      const request = readMuseCatalog({
+      const request = catalogReader.read({
         config: params.config,
         signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(30_000)]),
         assertCurrent: () => {
@@ -566,6 +566,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       await Promise.allSettled([...active.values()].map((abort) => abort()));
       await Promise.allSettled(inFlight);
       await pool.dispose();
+      await catalogReader.dispose();
     },
   };
 }

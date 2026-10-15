@@ -1,3 +1,4 @@
+import { ACTIVATION_HINT_COMPAT_RECORDS } from "./activation-hint-records.js";
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
 import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
@@ -29,15 +30,6 @@ import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
-
-const ACTIVATION_HINT_METADATA = {
-  status: "active",
-  owner: "plugin-execution",
-  introduced: "2026-04-24",
-  docsPath: "/plugins/manifest",
-  diagnostics: ["activation plan compat reason"],
-  tests: ["src/plugins/activation-planner.test.ts"],
-} as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
@@ -86,7 +78,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-09-07",
     deprecated: "2026-10-02",
     warningStarts: "2026-10-02",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement:
       "Await getManyAsync, retireSessionPlacementAsync, listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, getAdmittedDeviceSessionCountsAsync, and deferOrphanedRequestsAsync on the Gateway context. For placement standing-grant preparation, await resolveBindingAsync, retainAsync, and validateAsync. Placement get/getMany read committed in-process receipts only; cold reads require getAsync/getManyAsync. Synchronous placement inventories and writes retain their deprecated signatures but fail with migration guidance; use listAsync, listForReconcileAsync, clearLocalTurnClaimsAfterRestartAsync, retireSessionPlacementAsync, and the result-reader replacements. Other listed surfaces follow their owner-specific migration contracts.",
     docsPath:
@@ -128,9 +120,9 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-09-26",
     deprecated: "2026-09-26",
     warningStarts: "2026-09-26",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement:
-      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost and webhook.port inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost and webhook.port inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved ordinary stable removal.",
     docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
     surfaces: [
       "TelegramAccountConfig.webhookPort",
@@ -158,7 +150,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-09-20",
     deprecated: "2026-09-20",
     warningStarts: "2026-09-20",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
       "Await getSessionBindingService().bind, unbind, inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Bundled current-conversation mutations and session listings use the existing worker owner. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Legacy external adapters retain their synchronous projection contract.",
     docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
@@ -201,9 +193,9 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-08-21",
     deprecated: "2026-09-15",
     warningStarts: "2026-09-15",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
-      "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins until explicit breaking-release approval.",
+      "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins through 2026-12-31; removal ships in the first January 2027 stable release.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#managed-node-workspace-acquisition",
     surfaces: ["OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace"],
     diagnostics: [
@@ -224,14 +216,25 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-05-29",
     deprecated: "2026-09-11",
     warningStarts: "2026-09-11",
-    removalGate: "stable-deprecation-period",
+    removeAfter: "2026-12-31",
     replacement:
-      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return until they are removed after a stable deprecation period and supported external-plugin migration.",
+      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
     docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
     surfaces: [
       "api.runtime.state.openSyncKeyedStore",
       "PluginStateSyncKeyedStore",
       "createPluginStateSyncKeyedStore",
+      "PluginStateSyncKeyedStore.register",
+      "PluginStateSyncKeyedStore.registerIfAbsent",
+      "PluginStateSyncKeyedStore.update",
+      "PluginStateSyncKeyedStore.deleteIf",
+      "PluginStateSyncKeyedStore.lookup",
+      "PluginStateSyncKeyedStore.lookupMany",
+      "PluginStateSyncKeyedStore.consume",
+      "PluginStateSyncKeyedStore.delete",
+      "PluginStateSyncKeyedStore.entries",
+      "PluginStateSyncKeyedStore.count",
+      "PluginStateSyncKeyedStore.clear",
       "PluginStateKeyedStore.update",
       "PluginStateKeyedStore.deleteIf",
     ],
@@ -256,14 +259,14 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-28",
     deprecated: "2026-08-19",
     warningStarts: "2026-08-19",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement: '`MemoryReadResult` with explicit `status: "ok" | "not_found"`',
     docsPath: "/plugins/sdk-migration#memory-read-missing-results",
     surfaces: ["statusless external memory manager read results"],
     diagnostics: ["host memory-manager acquisition adapter"],
     tests: ["src/plugins/memory-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "External memory managers must return explicit not-found status for absence; statusless results retain legacy successful-read semantics through the next Plugin SDK major.",
+      "External memory managers must return explicit not-found status for absence; statusless results retain legacy successful-read semantics through an announced ordinary stable deprecation window.",
   },
   {
     code: "context-engine-legacy-host-param-default",
@@ -588,51 +591,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["plugin status report"],
     tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
-  {
-    code: "activation-agent-harness-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement:
-      "top-level `cliBackends[]` for CLI aliases and future `agentRuntime` ownership metadata",
-    surfaces: ["activation.onAgentHarnesses", "activation planner"],
-  },
-  {
-    code: "activation-provider-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`providers[]` manifest ownership",
-    surfaces: ["activation.onProviders", "activation planner"],
-  },
-  {
-    code: "activation-channel-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`channels[]` manifest ownership",
-    surfaces: ["activation.onChannels", "activation planner"],
-  },
-  {
-    code: "activation-command-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "`commandAliases` or command contribution metadata",
-    surfaces: ["activation.onCommands", "activation planner"],
-  },
-  {
-    code: "activation-route-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "HTTP route contribution metadata",
-    surfaces: ["activation.onRoutes", "activation planner"],
-  },
-  {
-    code: "activation-config-path-hint",
-    ...ACTIVATION_HINT_METADATA,
-    introduced: "2026-04-27",
-    replacement: "manifest contribution ownership for root config surfaces",
-    surfaces: ["activation.onConfigPaths", "startup plugin selection"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts"],
-  },
-  {
-    code: "activation-capability-hint",
-    ...ACTIVATION_HINT_METADATA,
-    replacement: "manifest contribution ownership",
-    surfaces: ["activation.onCapabilities", "activation planner"],
-  },
+  ...ACTIVATION_HINT_COMPAT_RECORDS,
   {
     code: "embedded-pi-agent-sdk-aliases",
     status: "removed",

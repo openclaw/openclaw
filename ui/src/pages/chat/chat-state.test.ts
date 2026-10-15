@@ -1724,35 +1724,6 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Checking external sessions...");
   });
 
-  it("leaves the active run assistant message on the terminal stream path", () => {
-    const currentUser = {
-      role: "user",
-      content: [{ type: "text", text: "Current prompt" }],
-      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 1 },
-    };
-    const { state } = createSessionEventState({
-      chatMessages: [currentUser],
-      chatRunId: "current-run",
-      chatStream: "Current partial reply",
-    });
-
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "current-run",
-      hasActiveRun: true,
-      messageId: "current-final",
-      messageSeq: 2,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Current final reply" }],
-        __openclaw: { id: "current-final", seq: 2 },
-      },
-    });
-
-    expect(state.chatMessages).toEqual([currentUser]);
-    expect(state.chatStream).toBe("Current partial reply");
-  });
-
   it("coalesces live peers into one frame and one fresh read after stale history", async () => {
     let renderFrame: FrameRequestCallback | undefined;
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
@@ -130,7 +130,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
         child.stdout.destroy();
       }
       mockedChildren.clear();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       await tempDirs.cleanup();
     }
   });

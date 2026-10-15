@@ -536,7 +536,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.store.set", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["secrets.store.delete", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["users.prefs.get", "users", "operator.read", "2026.8"],
-  ["users.prefs.set", "users", "operator.write", "2026.8"],
+  ["users.prefs.set", "users", "operator.read", "2026.8"],
   ["projects.add", "projects", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   [
     "projects.searchRemote",
@@ -738,5 +738,16 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "operator.admin",
     "2026.10",
     CONTROL_PLANE_WRITE,
+  ],
+  ["ui.command.result", "ui-command", "operator.read", "2026.10"],
+  ["mcp.events.list", "mcp-events", "operator.read", "2026.10"],
+  ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
+  // Inference spends tokens, even though its result never changes the conversation.
+  [
+    "chat.predict",
+    "chat",
+    "operator.write",
+    "2026.10",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
   ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

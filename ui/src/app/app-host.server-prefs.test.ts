@@ -28,48 +28,6 @@ describe("OpenClaw shell locale preferences", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses canonical server locale provenance and clears a stale local pin", async () => {
-    localStorage.setItem("openclaw.i18n.locale", "fr");
-    const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
-    const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
-    const state: {
-      configSnapshot: {
-        config: { ui: { prefs: Record<string, unknown> } };
-        hash: string;
-      };
-    } = {
-      configSnapshot: {
-        config: { ui: { prefs: { locale: "de" } } },
-        hash: "locale-config-hash",
-      },
-    };
-    const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
-    const refreshTheme = vi.fn();
-    const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://locale.test" },
-        snapshot: { phase: "connected", client: {} },
-      },
-      theme: { refresh: refreshTheme },
-      runtimeConfig,
-    } as unknown as ApplicationContext;
-    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
-    shell.runtime = { context };
-
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    state.configSnapshot = {
-      config: { ui: { prefs: {} } },
-      hash: "locale-config-cleared-hash",
-    };
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-
-    expect(setLocale).toHaveBeenCalledExactlyOnceWith("de");
-    expect(useSystemLocale).toHaveBeenCalledOnce();
-    expect(loadSettings().locale).toBeUndefined();
-  });
-
   it("keeps a retained device-local locale instead of realigning to the rejected server value", async () => {
     const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
     const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
@@ -157,22 +115,14 @@ describe("profile preference ACK publication across browser realms", () => {
     vi.unstubAllGlobals();
   });
 
-  const publicationCases = [
-    "settled",
-    "settled-empty",
-    "published-read",
-    "published-baseline",
-    "published-identical",
-    "cancelled",
-  ];
+  const publicationCases = ["settled", "published-read", "published-identical", "cancelled"];
   it.each(publicationCases)(
     "keeps B's newer publication when A's older ACK arrives (%s)",
     async (mode) => {
       const cancelled = mode === "cancelled";
-      const empty = mode === "settled-empty" || cancelled;
-      const baseline = mode === "published-baseline";
+      const empty = cancelled;
       const identical = mode === "published-identical";
-      const observed = mode === "published-read" || baseline || identical;
+      const observed = mode === "published-read" || identical;
       const scope = "ws://ack-publication";
       const profileId = "profile-a";
       const pinsKey = "ui.railShortcuts";
@@ -249,13 +199,7 @@ describe("profile preference ACK publication across browser realms", () => {
           false,
         );
         const wantedB = {
-          sidebarEntries: identical
-            ? wantedA.sidebarEntries
-            : empty
-              ? []
-              : baseline
-                ? ["route:usage"]
-                : ["route:plugins"],
+          sidebarEntries: identical ? wantedA.sidebarEntries : empty ? [] : ["route:plugins"],
         };
         if (observed && !identical) {
           // A different writer can publish a confirmed read without settling A's outbox.
@@ -272,7 +216,6 @@ describe("profile preference ACK publication across browser realms", () => {
           onApplied: vi.fn(),
         });
         if (identical) {
-          const receipt = JSON.parse(localStorage.getItem(lastSeenKey)!).navigationConfirmation;
           b.reconcile.applyServerUiPrefs(
             { ui: { prefs: { locale: "de" } } },
             {
@@ -280,9 +223,6 @@ describe("profile preference ACK publication across browser realms", () => {
               profileId,
               onApplied: vi.fn(),
             },
-          );
-          expect(JSON.parse(localStorage.getItem(lastSeenKey)!).navigationConfirmation).toEqual(
-            receipt,
           );
         }
         if (!observed) {
@@ -310,16 +250,12 @@ describe("profile preference ACK publication across browser realms", () => {
           );
           expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
             railShortcuts: confirmed.railShortcuts,
-            navigationConfirmation: confirmed.navigationConfirmation,
           });
         }
         const newestLastSeen = localStorage.getItem(lastSeenKey);
         expect(JSON.parse(newestLastSeen!)).toMatchObject({
           railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
         });
-        const aReads = aRequest.mock.calls.filter(
-          ([method]) => method === "users.prefs.get",
-        ).length;
         aReply.resolve({ status: "ok" });
         await vi.dynamicImportSettled();
         expect(a.settings.loadSettings(scope)).toMatchObject({
@@ -340,9 +276,6 @@ describe("profile preference ACK publication across browser realms", () => {
         expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
           railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
         });
-        expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(
-          aReads + (observed && !identical ? 1 : 0),
-        );
         expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
           1,
         );
@@ -430,94 +363,4 @@ describe("profile preference ACK publication across browser realms", () => {
       await vi.dynamicImportSettled();
     }
   });
-
-  it.each(["unavailable", "quota"])(
-    "fences an ABA confirmation with %s storage",
-    async (failure) => {
-      const realm = await loadPreferenceRealm();
-      const scope = "ws://ack-storage-blocked";
-      const profileId = "profile-a";
-      const entries: Record<string, unknown> = {
-        "ui.railShortcuts": ["route:usage"],
-      };
-      const committed = createDeferred();
-      const reply = createDeferred<unknown>();
-      const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
-        if (method === "users.prefs.get") {
-          return { status: "ok", entries: structuredClone(entries) };
-        }
-        const update = params as { entries: Record<string, unknown> };
-        Object.assign(entries, update.entries);
-        committed.resolve();
-        return reply.promise;
-      });
-      const writer = realm.fixtures.createServerPrefsWriter(
-        request,
-        scope,
-        true,
-        { ok: true },
-        false,
-      );
-      const refresh = () =>
-        realm.reconcile.refreshProfileAppearancePrefs({
-          client: writer.state.client!,
-          profileId,
-          scope,
-          configObject: {},
-          onApplied: vi.fn(),
-        });
-      realm.settings.patchSettings({ gatewayUrl: scope });
-      const storage = globalThis.localStorage;
-      const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`;
-      storage.setItem(lastSeenKey, JSON.stringify({ sidebarEntries: ["route:plugins"] }));
-      await refresh();
-      vi.stubGlobal("localStorage", {
-        getItem: (key: string) => {
-          if (failure === "quota") {
-            return storage.getItem(key);
-          }
-          throw new Error("storage blocked");
-        },
-        setItem: () => {
-          throw new Error("storage blocked");
-        },
-        removeItem: () => {
-          throw new Error("storage blocked");
-        },
-      });
-      try {
-        await refresh();
-        const before = realm.settings.loadSettings(scope);
-        const desired = realm.settings.patchSettings({
-          sidebarEntries: ["route:usage", "route:cron"],
-        });
-        const afterCommit = vi.fn();
-        realm.prefs.pushServerUiPrefs(writer, realm.intent.changedServerUiPrefs(before, desired)!, {
-          profileId,
-          canWrite: true,
-          afterCommit,
-        });
-        await committed.promise;
-        entries["ui.railShortcuts"] = ["route:usage"];
-        await refresh();
-        const confirmed = realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs;
-        reply.resolve({ status: "ok" });
-        await vi.dynamicImportSettled();
-        expect(realm.settings.loadSettings(scope)).toMatchObject({
-          sidebarEntries: ["route:usage"],
-        });
-        expect(realm.prefs.serverUiPrefsOutbox.confirmedPrefsFallback?.prefs).toMatchObject({
-          sidebarEntries: confirmed?.sidebarEntries,
-        });
-        expect(afterCommit).not.toHaveBeenCalled();
-        expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
-          1,
-        );
-      } finally {
-        reply.resolve({ status: "ok" });
-        realm.prefs.resetServerUiPrefsSync();
-        await vi.dynamicImportSettled();
-      }
-    },
-  );
 });

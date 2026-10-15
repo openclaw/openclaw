@@ -46,6 +46,7 @@ export type TestChatPane = HTMLElement & {
   sessionKey: string;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
+  handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
@@ -58,6 +59,8 @@ export type TestChatPane = HTMLElement & {
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
+  presented: boolean;
+  visuallyPresented: boolean;
   resetOlderMessagesViewport: () => void;
   readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
@@ -65,6 +68,7 @@ export type TestChatPane = HTMLElement & {
     activeSessionKey: string | null;
     readonly isPositionSettled: boolean;
     readonly isProgrammaticScroll: boolean;
+    readonly isMaintenanceScroll: boolean;
     readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
@@ -174,7 +178,10 @@ export function appendChatThread(
   thread.className = "chat-thread";
   thread.scrollTop = options.scrollTop ?? 0;
   Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
-  Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
+  Object.defineProperty(thread, "scrollHeight", {
+    configurable: true,
+    value: options.scrollHeight ?? 2_000,
+  });
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   return thread;

@@ -26,7 +26,6 @@ function controls(overrides: Partial<Props>) {
   const container = document.createElement("div");
   const props: Props = {
     activeRunId: null,
-    activeRunSessionKey: "main",
     connected: true,
     gatewayAvailable: true,
     loading: false,
@@ -85,7 +84,7 @@ it.each([
   { name: "sending", sending: true },
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
-])("edits model and reasoning preferences while $name without enabling speed", (busy) => {
+])("edits model, reasoning, and speed preferences while $name", (busy) => {
   const {
     model,
     option,
@@ -104,9 +103,9 @@ it.each([
   slider.value = "0";
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
-  expect(speed.disabled).toBe(true);
+  expect(speed.disabled).toBe(false);
   speed.click();
-  expect(onFastModeSelect).not.toHaveBeenCalled();
+  expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
 });
 
 it.each([

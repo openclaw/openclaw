@@ -18,8 +18,13 @@ External-plugin compatibility work follows this order:
 3. Emit a diagnostic or warning naming the old path and replacement.
 4. Cover both paths in tests.
 5. Document the deprecation and migration path.
-6. Remove only after the announced migration window, usually in a major
-   release.
+6. Remove only after the announced migration window, in the designated ordinary
+   stable release.
+
+For the [synchronous SQLite APIs](/plugins/sdk-migration/sqlite-async), the final
+compatibility day is **2026-12-31**. Removal ships in the **first January 2027
+stable release**, without a Plugin SDK major version. Other compatibility
+records retain their own separately announced windows.
 
 SQLite and SDK writer migrations use one shared runtime warning budget per plugin
 identity and deprecated capability family per Gateway process. Warnings occur on
@@ -76,8 +81,8 @@ The `transcript-lock-sync-message-preparation` and
 targets with their original transaction ordering. One deprecation warning is
 emitted per plugin for this family. Incognito and actor-bound targets reject the
 old form with an actionable replacement error. The old exports and fields remain
-available to compile existing plugins and will be removed at the **next Plugin SDK
-major**. Incognito targets use the memory actor. Durable stored data, schema,
+available to compile existing plugins through **2026-12-31** and will be removed
+in the **first January 2027 stable release**. Incognito targets use the memory actor. Durable stored data, schema,
 retention, and update behavior are unchanged.
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
@@ -174,8 +179,8 @@ migration.
 
 The Gateway context exposed by `GatewayRequestHandlerOptions` from `core` and
 `gateway-runtime`, and by `getPluginRuntimeGatewayRequestScope()` from
-`plugin-runtime`, retains deprecated placement signatures through the next
-Plugin SDK major. Placement reads and writes now use the existing shared-state
+`plugin-runtime`, retains deprecated placement signatures until their separately
+announced ordinary stable removal release. Placement reads and writes now use the existing shared-state
 workers; the native synchronous database paths are retired.
 
 `workerSessionPlacementService.get` and `getMany` read only committed in-process
@@ -290,8 +295,8 @@ progress adapters use `adoptProgressDraft(draft)` instead: they keep the card an
 its rendering, and the host pushes prepared items and retires the card once. See
 [progress card handoff](/plugins/sdk-channel-plugins/status-and-media#progress-card-handoff).
 
-The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until the
-next Plugin SDK major and explicit breaking-release approval. The host never
+The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until an
+announced later stable release with explicit removal approval. The host never
 offers it, so a published adapter that checks for it keeps ordinary waiting-reply
 delivery and the host never receives a receipt. Telegram, the only bundled
 adopter, uses the draft handoff. No schema, stored data, retention, or update
@@ -398,7 +403,7 @@ migration warnings. Schemas, retained data, and update behavior are unchanged.
 The `mention-inbox-sync-persistence` record retains the TypeScript signatures of
 `mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
 `mentionInbox.recordCommittedInput(input)`, and `mentionInbox.invalidate(sessionKey)`
-until the next Plugin SDK major. Their native synchronous persistence adapters
+until their separately announced ordinary stable removal release. Their native synchronous persistence adapters
 were retired on October 11, 2026 so Gateway database work runs only in workers.
 `list` and `dismiss` now return an `UNAVAILABLE` result with migration guidance;
 `invalidate` throws an error with the same guidance. These rejected calls do not
@@ -438,8 +443,9 @@ credential storage, retention, and update behavior are unchanged.
 The October 1, 2026 records `session-manager-sync-persistence`,
 `extension-session-sync-persistence`, and `provider-replay-sync-persistence`
 retain the shipped synchronous transcript contracts as named third-party
-compatibility adapters. Their removal gate is `stable-deprecation-period`, with no
-calendar removal date. Existing exports and immediate return values remain
+compatibility adapters. Their final compatibility day is 2026-12-31, with
+removal in the first January 2027 stable release and no Plugin SDK major version.
+Existing exports and immediate return values remain
 available while plugins migrate; synchronous SessionManager methods and their extension/provider adapters share
 one warning per plugin and session-persistence family per process.
 
@@ -449,7 +455,7 @@ types. Bundled code uses the awaited contracts. File-backed writes reuse the
 shared worker writer; incognito uses the session actor's memory backend.
 Synchronous incognito persistence refuses access and names its awaited
 replacement. Schemas, persisted bytes, and supported update paths are unchanged.
-Removal still requires explicit breaking-release approval.
+Removal follows the announced window and the shipped-surface gates.
 
 ### Reply run-start transcript facts
 
@@ -485,12 +491,12 @@ supported. The publication source also accepts the execution object shape shippe
 in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
 `capturePreparedGenerationClaim` method in parameter-derived types; internal
 native-adoption capabilities are not required from plugins. Ordinary preparation
-reuses a completed native generation; host
-admission can request current schema proof through an optional third argument.
+and host admission reuse a completed native generation and its published schema
+facts. The two-argument contract is also unchanged in `v2026.10.3`.
 
 The `agent-execution-preparation-released-signature` compatibility record is
 active, with no deprecation warning or required migration. Breaking the released
-contract requires an explicitly approved Plugin SDK major release. Schemas,
+contract requires a separately approved and announced compatibility window. Schemas,
 stored data, and update behavior are unchanged.
 
 ### ACP metadata binding compatibility
@@ -504,7 +510,7 @@ supply internal incognito actor bindings.
 The `acp-session-metadata-released-signatures` compatibility record is active:
 these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
-an explicitly approved Plugin SDK major release.
+a separately approved and announced compatibility window.
 
 The synchronous `readAcpSessionEntry` export remains available for the
 `v2026.9.4` contract, but is deprecated. Await `readAcpSessionEntryAsync` to read
@@ -676,8 +682,8 @@ At registration, every statusless result from an older external memory manager
 preserves its legacy successful-read semantics and becomes `status: "ok"`,
 including empty results without range metadata. Only an explicit
 `status: "not_found"` reports absence. New producers must emit that status for
-missing files; registered-input normalization remains available through the
-next Plugin SDK major.
+missing files; registered-input normalization remains available until an
+announced ordinary stable removal release.
 
 ### Runtime config snapshot reads
 
@@ -799,8 +805,10 @@ Harness plugins receive the prepared storage instance as `params.authStorage`.
 existing plugins. The path is used only to derive the owning agent directory;
 the adapter reads and writes SQLite, not the named JSON file. Migrate to
 `await AuthStorage.forAgentAsync(...)` now. The path-taking form emits
-`AUTH_STORAGE_CREATE_DEPRECATED` and is eligible for removal after
-2026-10-01, provided the published-plugin reader sweep is clean.
+`AUTH_STORAGE_CREATE_DEPRECATED`. The earlier October review condition is
+superseded by the common synchronous SQLite compatibility window: the final
+compatibility day is 2026-12-31, with removal in the first January 2027 stable
+release and no Plugin SDK major version.
 
 `FileAuthStorageBackend` is an internal SQLite-backed adapter, not an exported
 Plugin SDK backend. It is not available as a named import from
@@ -812,9 +820,13 @@ file. Its internal deprecation window does not preserve the former SDK import.
 
 ### Auth display-path compatibility
 
-Retain `resolveAuthStorePathForDisplay` until its selected-path use case has a
-public awaited replacement or an explicitly approved migration. It chooses the
-agent-local database when that auth store exists, otherwise the shared store.
+Public physical database-path displays are retired after 2026-12-31. External
+plugins should display provider/profile identifiers instead; there is no public
+async replacement for `resolveAuthStorePathForDisplay`.
+
+Bundled plugins can await `AuthStorage.resolvePathForDisplayAsync` from the private
+`openclaw/plugin-sdk/agent-sessions` surface. Like the deprecated synchronous helper,
+it chooses the agent-local database when that auth store exists, otherwise the shared store.
 `resolveProviderAuthProfileMetadataAsync` returns profile/account identifiers,
 not the selected database path, so it is not an equivalent replacement.
 
@@ -822,12 +834,10 @@ The bundled Hermes migration uses this distinction in auth and secret preview
 targets (`database-path#profileId`), including profiles that do not exist yet.
 The source callers are `extensions/migrate-hermes/auth.ts` and
 `extensions/migrate-hermes/secrets.ts`; selected-store behavior is covered by
-`src/agents/auth-profiles/path-resolve.shared-store.test.ts`. This is evidence
-for retaining the capability, not a claim about external plugin usage. The
-core-internal `resolveAuthStorePathForDisplayAsync` demonstrates an awaited
-implementation, but plugins must not import it through private paths. The
-public export and its behavior remain unchanged; the parity decision and
-removal date are pending.
+`src/agents/auth-profiles/paths-direct-import.test.ts`. The private static method
+uses the canonical awaited resolver without constructing `AuthStorage` or loading
+credentials. The synchronous helper remains compatible through 2026-12-31 and
+is removed in the first January 2027 stable release.
 
 If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;

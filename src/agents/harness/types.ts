@@ -98,6 +98,7 @@ type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, 
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
+  | "thinkingExplicit"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
@@ -541,7 +542,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removal follows a stable deprecation period.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

@@ -666,6 +666,7 @@ function* assembleOpenClawCodingTools(
       sessionKey: executionSessionKey,
       accountId: gatewayCaller.accountId,
       capabilityProfile,
+      tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
         toolsAllow: finalizedTools.map((tool) => tool.name),
       },
@@ -738,7 +739,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   );
 }
 
-/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. */
+/** @deprecated Use createOpenClawCodingToolsAsync to prepare policy through the worker. Supported through 2026-12-31. */
 export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): AnyAgentTool[] {
   warnPluginSdkDeprecation({
     family: "tool-surface",

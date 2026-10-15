@@ -52,6 +52,8 @@ auth health, sandbox images, and plugin installs.
 
     An unfinished agent deletion keeps ownership of its database during an update. Doctor includes resumable pending stores in schema preflight and pre-migration backups, then prepares their schemas under the current deletion owner. Other per-agent content migrations defer those stores. Gateway recovery resumes the full session cleanup, including native bindings and related state, before removing or retaining files according to the original deletion request. This also supports older journals without a phase field. Completed retained deletions and unfinished Claw removals keep their existing restoration and removal owners.
 
+    Doctor's legacy-main session-key repair uses the session import target policy. Retained retired-agent stores stay untouched even when their schemas need admission, and Doctor warns with each skipped store's path. Any legacy-main rows in those stores remain preserved for explicit agent restoration; they do not block an active agent's update. Unreadable active stores still require repair.
+
     Doctor finishes database work started by its repair before releasing maintenance. A check that finds no repair leaves existing runtime handles open. If maintenance ownership is lost, Doctor stops its repairs and cleans up its own resources without closing independently admitted runtime work.
 
     `openclaw doctor --fix`, including the repair pass during `openclaw update`, removes surrounding whitespace from historical task run IDs and child session keys. It repairs related subagent task bindings in the same transaction while preserving task IDs, physical subagent run IDs, and delivery records. If distinct run IDs would become the same ID, Doctor leaves the transaction unchanged and reports the conflicting bindings. New task writes normalize these fields before persistence; Gateway reads use the existing indexes without scanning for whitespace repairs. When replacing a binary directly, run Doctor against the same state before starting the new Gateway; official container image activation includes this repair pass.
@@ -146,6 +148,9 @@ auth health, sandbox images, and plugin installs.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans legacy agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, Doctor repairs the branch while staging its history for import into SQLite. The raw JSONL file stays unchanged and is archived after successful import.
+
+    Doctor also drops redundant session headers from staged history when every field except `timestamp` matches the first header. Import retries and validation use that same staged history. Headers with conflicting identity or metadata are retained for investigation; the original JSONL bytes remain unchanged.
+
   </Accordion>
   <Accordion title="4. State integrity checks (session persistence, routing, and safety)">
     The state directory is the operational brainstem. If it vanishes, you lose sessions, credentials, logs, and config unless you have backups elsewhere.

@@ -374,7 +374,9 @@ describe("mobile release CI tools", () => {
         },
         inputs: { operation: scenario.operation },
         vars: { ANDROID_INTERNAL_ENABLED: scenario.enabled },
+        needs: { qualify: { result: "success" } },
         always: () => true,
+        cancelled: () => false,
       };
       const evaluate = (expression: string) => evaluateWorkflowExpression(expression, context);
       expect(Boolean(evaluate(release.if)), JSON.stringify(scenario)).toBe(

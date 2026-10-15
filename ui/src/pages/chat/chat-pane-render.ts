@@ -37,7 +37,6 @@ import {
   readChatPaneMutationAccess,
   readChatPublicationAccess,
   renderChatPaneComposerControls,
-  openChatPaneModelPicker,
 } from "./chat-pane-session-controls.ts";
 import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
@@ -444,15 +443,16 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(
-        state,
-        catalogKey ? this.catalogMessages : null,
-        projectionRunId,
-      ),
+      ...projectChatPaneTranscript(state, catalog ? this.catalogMessages : null, projectionRunId),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      composerPredictions: {
+        enabled: this.context.config.current.composerPredictionsEnabled === true,
+        active: !catalogKey && this.active && this.presented,
+        gateway: this.context.gateway,
+      },
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
       mentionsUnsupported,
@@ -598,12 +598,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
-        canChangeModel: mutationAccess.model.allowed && !catalogKey && !suggestionViewer,
         isCurrent: () =>
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
-        openModelPicker: () => openChatPaneModelPicker(state),
       }),
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),

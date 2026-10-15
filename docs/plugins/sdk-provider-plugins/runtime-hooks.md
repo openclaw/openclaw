@@ -107,8 +107,8 @@ Existing one-argument hooks remain compatible, and direct callers can omit confi
     Existing wrappers may still pass the deprecated `maxRetries` stream option,
     including `0`. Built-in text transports ignore it: the embedded runner owns
     retry budgeting, and SDK-internal retries stay disabled. New wrappers should
-    omit the option. This shipped source contract is retained until a future
-    Plugin SDK major release and a published-plugin reader sweep confirm removal
+    omit the option. This shipped source contract is retained until a separately
+    announced ordinary stable release and a published-plugin reader sweep confirm removal
     is safe; it does not change image-generation or native-runtime retry policy.
 
   </Tab>
@@ -204,6 +204,11 @@ system-prompt boundary. Use `splitSystemPromptCacheBoundary` from
 prefix separately, and consume the marker before sending any payload.
 Use `stripSystemPromptCacheBoundary` when caching is disabled. By default,
 OpenClaw strips the marker before invoking a custom transport.
+
+Google-family transports can use `buildGoogleSimpleThinking` and
+`buildGoogleGenerationConfig` from the same runtime entrypoint. They share the
+Gemini/Vertex thinking policy, including the output-token reservation; pass the
+caller's original `maxTokens` once, before serializing the request.
 
 For custom `createStreamFn` transports that accumulate JSON tool arguments,
 use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.

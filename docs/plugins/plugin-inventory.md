@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-68 plugins
+69 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -125,6 +125,8 @@ Each entry lists the package, distribution route, and description.
 - **[lmstudio](/plugins/reference/lmstudio)** (`@openclaw/lmstudio-provider`) - included in OpenClaw. Adds LM Studio model provider support to OpenClaw.
 
 - **[logbook](/plugins/reference/logbook)** (`@openclaw/logbook`) - included in OpenClaw. Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.
+
+- **[mcp-events](/plugins/reference/mcp-events)** (`@openclaw/mcp-events`) - included in OpenClaw. Subscribe to events from configured MCP accounts and trigger authored automations.
 
 - **[mcp-relay](/plugins/reference/mcp-relay)** (`@openclaw/mcp-relay`) - included in OpenClaw. Connect remote MCP clients to your OpenClaw Gateway.
 

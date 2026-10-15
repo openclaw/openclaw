@@ -181,7 +181,6 @@ packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/anthropic.test.ts
-packages/ai/src/providers/mistral.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
@@ -228,7 +227,6 @@ src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
-src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
@@ -307,7 +305,6 @@ src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts
 src/cli/gateway-cli/run.ts
 src/cli/mcp-cli.ts
-src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts

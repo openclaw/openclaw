@@ -1353,7 +1353,6 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           systemPromptDigest: expect.stringMatching(/\S/),
           toolDigest: expect.stringMatching(/\S/),
           toolCount: 0,
-          toolNames: [],
         });
         for (const [index, snapshot] of cacheSnapshots.entries()) {
           expect(snapshot, `cache:state for ${cacheRunIds[index]}`).toEqual(primedCachePolicy);

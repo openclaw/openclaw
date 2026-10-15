@@ -21,7 +21,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
-import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   collectActiveSessionWorkAdmissions,
   getSessionWorkAdmissionRelease,
@@ -41,9 +40,11 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
 import {
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
+  installReplyDispatchHook,
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
 } from "./server.chat-goal.test-support.js";
@@ -62,7 +63,6 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -172,26 +172,8 @@ async function useFreshSessionStore() {
   expect(loadSessionEntry(scope())).toBeUndefined();
 }
 
-function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
-  const handler = vi.fn(async () => ({
-    handled: true,
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  }));
-  const registry = getTestPluginRegistry();
-  registry.typedHooks.push({
-    pluginId: "goal-dispatch-fixture",
-    hookName: "reply_dispatch",
-    handler,
-    ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
-    source: "test",
-  });
-  initializeGlobalHookRunner(registry);
-  return handler;
-}
-
 async function rpc(
-  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.goal.update",
+  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.abort" | "sessions.goal.update",
   params: Record<string, unknown>,
   onResponse?: RespondFn,
   requestClient: GatewayClient = client,
@@ -279,6 +261,8 @@ async function waitForModelRun(count = 1) {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+
   registerGoalChatRestartSettlementCase({
     scope,
     createStorePath() {

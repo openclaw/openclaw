@@ -662,7 +662,6 @@ export abstract class ChatPaneBase extends ControllerHost {
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
-  protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since

@@ -15,7 +15,7 @@ it("opens above a modal, focuses search, selects and restores its trigger", asyn
   dialog.showModal();
   await picker.updateComplete;
   const trigger = picker.querySelector<HTMLButtonElement>(".agent-emoji-picker__trigger")!;
-  const search = picker.querySelector<HTMLInputElement>(".agent-emoji-picker__search")!;
+  const search = picker.querySelector<HTMLInputElement>(".emoji-search-panel__search")!;
   const popover = picker.querySelector<HTMLElement>(".agent-emoji-picker__popover")!;
   await page.elementLocator(trigger).click();
   await expect.poll(() => popover.matches(":popover-open")).toBe(true);

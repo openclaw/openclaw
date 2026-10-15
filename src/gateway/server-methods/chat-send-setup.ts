@@ -79,7 +79,7 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  if (normalizedRequest.value.goalOperation) {
+  if (normalization instanceof Promise || normalizedRequest.value.goalOperation) {
     try {
       assertCurrent?.();
     } catch (error) {

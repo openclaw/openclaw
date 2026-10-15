@@ -17,7 +17,7 @@
 | `willUpdate`                            | `createMemo`, or function-form `createSignal`                                                                  |
 | `updated()`                             | `createEffect(compute, apply)`; `apply` runs after the DOM commit and returns cleanup                          |
 | `firstUpdated`                          | `onSettled` (one-shot; return cleanup; no reactive primitives or `flush()` inside)                             |
-| `connected`/`disconnectedCallback`      | the component body / `onCleanup`                                                                               |
+| `connected`/`disconnectedCallback`      | synchronous setup + `onCleanup`; DOM-dependent `onSettled` + returned cleanup                                  |
 | `requestUpdate()`                       | delete it                                                                                                      |
 | `html`/`svg` templates                  | JSX                                                                                                            |
 | `cond ? html\`…\` : nothing`            | `<Show when>` or a ternary; `nothing` in attributes → `undefined`                                              |
@@ -42,20 +42,21 @@
 
 Don't convert `keyed`, `live`, `guard`, `cache`, custom directives, unsafe HTML, controller lifetimes, or cancellation mechanically. Each encodes an ownership decision.
 
+Keep synchronous subscriptions in the component or factory body when descendants
+can publish during setup, and pair teardown with `onCleanup`. Use `onSettled`
+when setup needs committed DOM, and return its cleanup.
+
 ## Bindings and types
 
 - `prop:` is the only surviving JSX namespace. `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` compile to literal attributes or no-ops; lint rejects them.
 - Custom tags with properties need typings: augment `@solidjs/web`'s `JSX.IntrinsicElements` in a `.d.ts` (see `ui/src/types/solid-elements.d.ts`). Keep that file a module with a side-effect `import "@solidjs/web";`. Lint forbids `export {}`, and without a module marker `declare module` silently becomes an ambient declaration instead of an augmentation. Inside the augmented `namespace JSX`, refer to `HTMLAttributes` unqualified.
 - Native ARIA attributes are typed enumerations: `aria-pressed={on() ? "true" : "false"}`.
-- Nonkeyed `Show` callback children receive accessors; keyed children receive raw values. Calling a branch accessor after its branch unmounted throws.
+- Nonkeyed `Show` preserves its branch across truthy values and passes an accessor; keyed `Show` remounts on identity change and passes a raw value. Neither accepts falsy identities. Calling a branch accessor after its branch unmounted throws. See [list and branch lifetimes](idioms.md#key-lists-by-the-lifetime-you-intend).
 - Every new non-`const` type assertion needs a `// SAFETY: <invariant>` comment (assertion-safety ratchet). Prefer a real type.
 
 ## Async and effects
 
-- Async memos discard superseded results but get no `AbortSignal`. Keep generation guards around shared caches and Gateway writes. For immediate transport cancellation, use an owned async-iterable adapter whose `return()` aborts. Cancellation is never rollback.
-- Reactive reads after the first `await` are untracked: read everything you depend on first.
-- `action` uses a generator: `yield` restores the transaction context; `await` alone does not.
-- Proxies and stores break `WeakMap` identity caches. Keep immutable message and tool objects out of stores.
+Read [idioms](idioms.md) for tracked compute versus imperative apply, paired lifecycle cleanup, async computations with `Loading`/`Errored`, and owner-backed mutations. Keep immutable message and tool identities out of store proxies; preserve existing WeakMap caches.
 
 ## Size
 

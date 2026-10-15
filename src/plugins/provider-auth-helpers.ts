@@ -108,7 +108,7 @@ export function buildApiKeyCredential(
   };
 }
 
-/** @deprecated Use upsertApiKeyProfileAsync. Retained until an announced stable removal window. */
+/** @deprecated Use upsertApiKeyProfileAsync. Final compatibility day: 2026-12-31. */
 export function upsertApiKeyProfile(params: {
   provider: string;
   input: SecretInput;

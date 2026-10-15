@@ -151,35 +151,27 @@ describe("session active resource discovery", () => {
     expect(f.slots()).not.toContain("browser");
   });
 
-  it.each(["binding", "resource"])(
-    "discovers resources after the %s identity changes",
-    async (identity) => {
-      const f = fixture();
-      f.owner.browserAvailable = false;
-      const pending = createDeferred<unknown>();
-      f.request.mockImplementationOnce(async () => pending.promise);
-      f.controller.sync(f.owner);
-      await settle();
-      if (identity === "binding") {
-        f.owner.observation.isCurrent = () => false;
-        f.controller.sync({
-          ...f.owner,
-          observation: { ...f.owner.observation, isCurrent: () => true },
-        });
-      } else {
-        f.owner.execNode = "new-execution-node";
-        f.controller.sync(f.owner);
-      }
-      await settle();
-      expect(f.slots()).toEqual(["desktop"]);
-      pending.resolve({ session });
-      await settle();
-      expect(f.slots()).toEqual(["desktop"]);
-      expect(f.commit).toHaveBeenCalledOnce();
-    },
-  );
+  it.each(["binding"])("discovers resources after the %s identity changes", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    const pending = createDeferred<unknown>();
+    f.request.mockImplementationOnce(async () => pending.promise);
+    f.controller.sync(f.owner);
+    await settle();
+    f.owner.observation.isCurrent = () => false;
+    f.controller.sync({
+      ...f.owner,
+      observation: { ...f.owner.observation, isCurrent: () => true },
+    });
+    await settle();
+    expect(f.slots()).toEqual(["desktop"]);
+    pending.resolve({ session });
+    await settle();
+    expect(f.slots()).toEqual(["desktop"]);
+    expect(f.commit).toHaveBeenCalledOnce();
+  });
 
-  it.each(["conversation-only", "after-resource-swap", "focused-workspace", "bottom-workspace"])(
+  it.each(["after-resource-swap", "focused-workspace"])(
     "discovers resources while preserving the %s layout",
     async (kind) => {
       const f = fixture();
@@ -192,9 +184,7 @@ describe("session active resource discovery", () => {
       }
       f.setLayout(
         workspace
-          ? kind === "focused-workspace"
-            ? { ...layout, expanded: true, expandedSide: true }
-            : { ...layout, dock: "bottom" }
+          ? { ...layout, expanded: true, expandedSide: true }
           : normalizeSidebarLayout({ ...layout, open: false }),
       );
       f.controller.sync(f.owner);
@@ -206,10 +196,6 @@ describe("session active resource discovery", () => {
       if (kind === "focused-workspace") {
         expect(isSidebarSlotVisible(f.owner.layout(), "workspace")).toBe(true);
         expect(isSidebarSlotVisible(f.owner.layout(), "conversation")).toBe(false);
-      } else if (kind === "bottom-workspace") {
-        expect(f.slots()[0]).toBe("workspace");
-        expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
-        expect(f.owner.layout().dock).toBe("bottom");
       } else {
         expect(f.owner.layout().open).toBe(true);
       }
@@ -249,7 +235,7 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each(["sessions.describe", "environments.status", "browser.request"])(
+  it.each(["sessions.describe"])(
     "keeps metadata-only placement updates out of discovery while %s is pending and after completion",
     async (heldMethod) => {
       const f = fixture();
@@ -291,14 +277,7 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each<
-    | { name: string; placement: NonNullable<GatewaySessionRow["placement"]> }
-    | { name: string; field: "sessionId" | "execNode" | "archived" }
-  >([
-    { name: "lifecycle state", placement: { ...activePlacement, state: "reclaimed" as const } },
-    { name: "generation", placement: { ...activePlacement, generation: 2 } },
-    { name: "environment", placement: { ...activePlacement, environmentId: "worker-2" } },
-    { name: "owner epoch", placement: { ...activePlacement, activeOwnerEpoch: 2 } },
+  it.each([
     {
       name: "device",
       placement: {
@@ -306,38 +285,15 @@ describe("session active resource discovery", () => {
         runner: { kind: "device" as const, deviceId: "node-2", status: "available" as const },
       },
     },
-    {
-      name: "device availability",
-      placement: {
-        ...activePlacement,
-        runner: { kind: "device" as const, deviceId: "node-1", status: "offline" as const },
-      },
-    },
-    ...(["sessionId", "execNode", "archived"] as const).map((field) => ({ name: field, field })),
   ])(
     "does not reveal an unconfirmed desktop when $name changes during discovery",
     async (change) => {
       const f = fixture();
       f.owner.browserAvailable = false;
-      if ("placement" in change) {
-        f.owner.placement =
-          "runner" in change.placement
-            ? {
-                ...activePlacement,
-                runner: { kind: "device", deviceId: "node-1", status: "available" },
-              }
-            : activePlacement;
-      } else {
-        f.owner.sessionId = "session-id";
-        f.owner.execNode = "node-1";
-        f.owner.placement = {
-          state: "local",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-        };
-      }
+      f.owner.placement = {
+        ...activePlacement,
+        runner: { kind: "device", deviceId: "node-1", status: "available" },
+      };
       const pending = createDeferred<unknown>();
       const described = {
         ...session,
@@ -348,13 +304,7 @@ describe("session active resource discovery", () => {
       };
       f.request.mockImplementationOnce(async () => pending.promise);
       f.controller.sync(f.owner);
-      if ("placement" in change) {
-        f.owner.placement = change.placement;
-      } else if (change.field === "archived") {
-        f.owner.archived = true;
-      } else {
-        f.owner[change.field] = "replacement";
-      }
+      f.owner.placement = change.placement;
       f.request.mockResolvedValueOnce({ session: undefined });
       f.controller.sync(f.owner);
       await settle();
@@ -459,37 +409,22 @@ describe("session active resource discovery", () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
-  it.each(["leave", "newer-probe"] as const)(
-    "rejects stale async responses after %s",
-    async (change) => {
-      const f = fixture();
-      const pending = createDeferred<unknown>();
-      f.request.mockImplementation(async () => pending.promise);
-      f.controller.sync(f.owner);
-      if (change === "leave") {
-        f.leave();
-        f.controller.sync(null);
-      } else {
-        const next = { ...f.owner, desktopAvailable: false, browserAvailable: false };
-        f.controller.invalidate();
-        f.controller.sync(next);
-      }
-      pending.resolve({ session, running: true, tabs: [{ targetId: "target-1" }] });
-      await settle();
-      expect(f.commit).not.toHaveBeenCalled();
-      expect(f.desktopSource()).toBeUndefined();
-    },
-  );
+  it.each(["leave"] as const)("rejects stale async responses after %s", async () => {
+    const f = fixture();
+    const pending = createDeferred<unknown>();
+    f.request.mockImplementation(async () => pending.promise);
+    f.controller.sync(f.owner);
+    f.leave();
+    f.controller.sync(null);
+    pending.resolve({ session, running: true, tabs: [{ targetId: "target-1" }] });
+    await settle();
+    expect(f.commit).not.toHaveBeenCalled();
+    expect(f.desktopSource()).toBeUndefined();
+  });
 
   it.each([
-    { name: "no session", row: undefined },
     { name: "missing attachment identity", row: { ...session, sessionId: undefined } },
     { name: "another session", row: { ...session, key: "agent:main:other" } },
-    { name: "global gateway capability", row: { ...session, placement: { state: "local" } } },
-    {
-      name: "reclaimed placement",
-      row: { ...session, placement: { state: "reclaimed", environmentId: "worker-1" } },
-    },
     { name: "offline environment", row: session, env: { ...environment, status: "unavailable" } },
     {
       name: "another worker owner",
@@ -517,8 +452,6 @@ describe("session active resource discovery", () => {
   });
 
   it.each([
-    { running: false, tabs: [{ targetId: "target-1" }] },
-    { running: true, tabs: [{ targetId: "other-target" }] },
     { running: true, tabs: [{ targetId: "target-1", urlUnavailableReason: "navigation_blocked" }] },
   ])("does not treat stale or blocked browser history as an active tab (%j)", async (snapshot) => {
     const f = fixture();

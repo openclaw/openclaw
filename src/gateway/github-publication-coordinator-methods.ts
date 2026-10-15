@@ -43,7 +43,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
-/** @deprecated Use GitHubPublicationClaimRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationClaimRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationClaimRequest = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
@@ -55,7 +55,7 @@ export type GitHubPublicationClaimRequest = {
   expectedPublisher?: GitHubPublicationPublisher;
 };
 
-/** @deprecated Use GitHubPublicationSessionRequestV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationSessionRequestV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
   agentId: string;
   expectedRunId?: string;
@@ -86,49 +86,6 @@ export function exactClaimForPlacement(
       kind: "local",
       ...(placement.environmentId ? { environmentId: placement.environmentId } : {}),
       ...(placement.activeOwnerEpoch !== null ? { ownerEpoch: placement.activeOwnerEpoch } : {}),
-    },
-  };
-}
-
-export function createSharedGitHubPublicationReadMethods(
-  kind: Parameters<typeof readSharedGitHubPublication>[0],
-) {
-  return {
-    async sharedStatus(
-      session: PublicationSessionIdentity,
-      requestId: string,
-    ): Promise<SessionGitHubStatusResult | undefined> {
-      const row = await readSharedGitHubPublication(kind, session, { requestId });
-      return row ? { result: publicationResult(row), confirmation: null } : undefined;
-    },
-
-    async latestShared(
-      session: PublicationSessionIdentity,
-      idempotencyKey?: string,
-      isSuperseded?: (
-        snapshot: Pick<
-          PublicationRow,
-          "repository" | "branch" | "source_head_commit" | "workspace_tree"
-        >,
-      ) => Promise<boolean>,
-    ): Promise<SessionGitHubStatusResult | null> {
-      const row = await readSharedGitHubPublication(kind, session, { idempotencyKey });
-      // Discovery offers recovery for current work, not a failure whose accepted
-      // snapshot has since been published. Exact-key and by-id history stay intact.
-      if (
-        row?.status === "failed" &&
-        idempotencyKey === undefined &&
-        isSuperseded &&
-        (await isSuperseded({
-          repository: row.repository,
-          branch: row.branch,
-          source_head_commit: row.source_head_commit,
-          workspace_tree: row.workspace_tree,
-        }))
-      ) {
-        return null;
-      }
-      return row ? { result: publicationResult(row), confirmation: null } : null;
     },
   };
 }
@@ -490,7 +447,42 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       ];
     },
 
-    ...createSharedGitHubPublicationReadMethods("worktree"),
+    async sharedStatus(
+      session: PublicationSessionIdentity,
+      requestId: string,
+    ): Promise<SessionGitHubStatusResult | undefined> {
+      const row = await readSharedGitHubPublication(session, { requestId });
+      return row ? { result: publicationResult(row), confirmation: null } : undefined;
+    },
+
+    async latestShared(
+      session: PublicationSessionIdentity,
+      idempotencyKey?: string,
+      isSuperseded?: (
+        snapshot: Pick<
+          PublicationRow,
+          "repository" | "branch" | "source_head_commit" | "workspace_tree"
+        >,
+      ) => Promise<boolean>,
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(session, { idempotencyKey });
+      // Discovery offers recovery for current work, not a failure whose accepted
+      // snapshot has since been published. Exact-key and by-id history stay intact.
+      if (
+        row?.status === "failed" &&
+        idempotencyKey === undefined &&
+        isSuperseded &&
+        (await isSuperseded({
+          repository: row.repository,
+          branch: row.branch,
+          source_head_commit: row.source_head_commit,
+          workspace_tree: row.workspace_tree,
+        }))
+      ) {
+        return null;
+      }
+      return row ? { result: publicationResult(row), confirmation: null } : null;
+    },
 
     async readAsync(requestId: string): Promise<SessionGitHubPublicationResult | undefined> {
       const row = await readGitHubPublicationRequestAsync({ requestId });

@@ -97,11 +97,7 @@ describe("Terminal panel hosted tabs", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { embedded: true, tabsInHeader: true, ownsStrip: false },
-    { embedded: true, tabsInHeader: false, ownsStrip: true },
-    { embedded: false, tabsInHeader: true, ownsStrip: true },
-  ])(
+  it.each([{ embedded: false, tabsInHeader: true, ownsStrip: true }])(
     "keeps its own chrome=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);

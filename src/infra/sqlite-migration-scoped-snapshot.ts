@@ -10,7 +10,7 @@ import {
 } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
-import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import { foldSqliteIdentifierCase, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 import { withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
 import {
@@ -22,14 +22,14 @@ import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-ver
 const SCOPED_MIGRATION_APPLICATION_ID = 0x4f434d53;
 const quote = quoteSqliteIdentifier;
 const statisticTables = ["sqlite_stat1", "sqlite_stat4"];
-const isStatisticTable = (name: string) => statisticTables.includes(name.toLowerCase());
+const isStatisticTable = (name: string) => statisticTables.includes(foldSqliteIdentifierCase(name));
 const identifier = z
   .string()
   .min(1)
   .refine((value) => !value.includes("\0"));
 const tableSchema = z.object({
   name: identifier.refine(
-    (value) => !value.toLowerCase().startsWith("sqlite_") || isStatisticTable(value),
+    (value) => !foldSqliteIdentifierCase(value).startsWith("sqlite_") || isStatisticTable(value),
   ),
   sql: z.string().min(1).nullable(),
   columns: z.array(identifier),
@@ -46,7 +46,7 @@ const inspectionSchema = z
     tables: z.array(tableSchema).min(1),
   })
   .refine(({ tables }) => {
-    const names = tables.map((table) => table.name.toLowerCase());
+    const names = tables.map((table) => foldSqliteIdentifierCase(table.name));
     return (
       new Set(names).size === names.length &&
       (!names.some(isStatisticTable) || statisticTables.every((name) => names.includes(name)))
@@ -73,7 +73,7 @@ export function inspectScopedMigrationTables(
   tables: readonly string[],
 ): ScopedMigrationInspection {
   const names = [...new Set(tables)];
-  if (!names.length || new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
+  if (!names.length || new Set(names.map(foldSqliteIdentifierCase)).size !== names.length) {
     throw new ScopedMigrationSnapshotUnsupportedError("the scope must name distinct tables");
   }
   if (
@@ -122,11 +122,13 @@ export function inspectScopedMigrationTables(
       tables: names.map((name) => {
         if (
           !identifier.safeParse(name).success ||
-          (name.toLowerCase().startsWith("sqlite_") && !isStatisticTable(name))
+          (foldSqliteIdentifierCase(name).startsWith("sqlite_") && !isStatisticTable(name))
         ) {
           throw new ScopedMigrationSnapshotUnsupportedError(`reserved or invalid table ${name}`);
         }
-        const object = catalog.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+        const object = catalog.find(
+          (entry) => foldSqliteIdentifierCase(entry.name) === foldSqliteIdentifierCase(name),
+        );
         if (!object) {
           return { name, sql: null, columns: [], rowid: null, objects: [] };
         }
@@ -147,7 +149,7 @@ export function inspectScopedMigrationTables(
         const rowid = kind.wr
           ? null
           : ["rowid", "_rowid_", "oid"].find(
-              (alias) => !columns.some((column) => column.name.toLowerCase() === alias),
+              (alias) => !columns.some((column) => foldSqliteIdentifierCase(column.name) === alias),
             );
         if (rowid === undefined) {
           throw new ScopedMigrationSnapshotUnsupportedError(`${name} hides every rowid alias`);
@@ -159,7 +161,7 @@ export function inspectScopedMigrationTables(
           rowid,
           objects: catalog.filter(
             (entry) =>
-              entry.tbl_name === object.name &&
+              foldSqliteIdentifierCase(entry.tbl_name) === foldSqliteIdentifierCase(object.name) &&
               entry.sql &&
               (entry.type === "index" || entry.type === "trigger"),
           ),
@@ -411,7 +413,7 @@ export function restoreScopedMigrationSnapshot(params: {
             const currentSql = currentTables.find(
               (entry) =>
                 typeof entry.name === "string" &&
-                entry.name.toLowerCase() === table.name.toLowerCase(),
+                foldSqliteIdentifierCase(entry.name) === foldSqliteIdentifierCase(table.name),
             )?.sql;
             if (
               /\bAUTOINCREMENT\b/iu.test(table.sql ?? "") ||
@@ -424,7 +426,7 @@ export function restoreScopedMigrationSnapshot(params: {
             const current = kinds.find(
               (entry) =>
                 typeof entry.name === "string" &&
-                entry.name.toLowerCase() === table.name.toLowerCase(),
+                foldSqliteIdentifierCase(entry.name) === foldSqliteIdentifierCase(table.name),
             );
             if (current && current.type !== "table") {
               throw new Error(`Cannot restore scoped backup over nonordinary table: ${table.name}`);
