@@ -284,6 +284,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
+              "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().activeRoute === "workboard",

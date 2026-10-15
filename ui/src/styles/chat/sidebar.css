@@ -1599,20 +1599,15 @@ openclaw-chat-html-preview {
   tab-size: 4;
 }
 
-openclaw-session-diff-menu[popover] {
-  width: 0;
-  height: 0;
-  margin: 0;
-  padding: 0;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-}
-
-wa-dropdown.session-diff-menu::part(menu) {
+.session-diff-menu__surface {
   width: min(var(--session-diff-menu-width), calc(100vw - 16px));
   min-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
   max-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+  --oc-overlay-distance: 4px;
+}
+
+.session-diff-menu__scope-item > .oc-menu-item__check {
+  display: none;
 }
 
 .session-diff-menu__scope-item .session-menu__text {
