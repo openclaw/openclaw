@@ -54,8 +54,6 @@ export async function setSidebarProofTheme(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);

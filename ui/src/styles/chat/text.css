@@ -234,7 +234,6 @@
 .markdown-table-modal {
   --openclaw-modal-width: min(1200px, calc(100vw - 64px));
   --openclaw-modal-backdrop-filter: blur(3px);
-  --wa-color-overlay-modal: color-mix(in srgb, var(--bg) 92%, transparent);
 }
 
 .markdown-table-dialog {

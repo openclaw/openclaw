@@ -48,8 +48,6 @@ async function setDarkTheme(page: Page) {
     const root = document.documentElement;
     root.dataset.themeMode = "dark";
     root.dataset.themeResolved = "dark";
-    root.classList.remove("wa-light");
-    root.classList.add("wa-dark");
     root.style.colorScheme = "dark";
   });
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");

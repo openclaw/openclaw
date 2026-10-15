@@ -473,7 +473,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
-  wa-dropdown.session-menu {
+  .session-menu__panel {
     --menu-item-height: 40px;
     --menu-padding: 3px;
   }

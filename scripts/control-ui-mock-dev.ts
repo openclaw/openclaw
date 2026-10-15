@@ -325,8 +325,6 @@ const boardFixtureHtml = `<!doctype html>
         const mode = mediaQuery.matches ? "light" : "dark";
         document.documentElement.dataset.theme = mode;
         document.documentElement.dataset.themeMode = mode;
-        document.documentElement.classList.toggle("wa-light", mode === "light");
-        document.documentElement.classList.toggle("wa-dark", mode === "dark");
         document.documentElement.style.colorScheme = mode;
       };
       applyTheme();
@@ -3492,8 +3490,6 @@ async function createMockGatewayPlugin(
           root.dataset.theme = mode;
           root.dataset.themeMode = mode;
           root.dataset.themeResolved = mode;
-          root.classList.toggle("wa-light", mode === "light");
-          root.classList.toggle("wa-dark", mode === "dark");
           root.style.colorScheme = mode;
           syncControlUiSystemChrome();
           for (const button of control.querySelectorAll("button")) {

@@ -96,8 +96,6 @@ suite("Control UI JSON tree and source views", () => {
           const root = document.documentElement;
           root.dataset.themeMode = mode;
           root.dataset.themeResolved = mode;
-          root.classList.toggle("wa-light", mode === "light");
-          root.classList.toggle("wa-dark", mode === "dark");
           root.style.colorScheme = mode;
         }, theme);
         if (proofDir) {

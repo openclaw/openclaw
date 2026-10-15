@@ -110,7 +110,7 @@ const webkitTestFiles = [
   "src/components/web-awesome-select-controls.browser.test.ts",
   "src/components/web-awesome-select.browser.test.ts",
   "src/components/web-awesome.test.ts",
-  "src/components/web-awesome-theme.browser.test.ts",
+  "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.ts",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
