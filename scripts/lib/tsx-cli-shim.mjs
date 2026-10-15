@@ -279,6 +279,7 @@ async function runCliShim(moduleUrl, options, nodeArgs) {
     const exitCode = options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted: false };
   }
 }
 
@@ -303,7 +304,7 @@ export async function runTsxCliShim(moduleUrl, options = {}) {
       console.error(error);
       writeFailureTrailer(options.failureTool, 1);
       process.exitCode = 1;
-      return;
+      return { interrupted: false };
     }
   }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
