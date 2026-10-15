@@ -15,8 +15,8 @@ import { roleClient } from "./session-sharing.test-utils.js";
 const createAgentTurnService = vi.hoisted(() =>
   vi.fn<typeof import("./agent-turn/agent-turn-service.js").createAgentTurnService>(),
 );
-// mock-isolation: Stop at inference; tool preparation, scope projection, router authorization,
-// target ownership, request validation, and source identity use their production owners.
+// Tool preparation, scope projection, authorization, and source identity retain their real owners.
+// mock-isolation: Stop before model inference and isolate its execution state.
 vi.mock("./agent-turn/agent-turn-service.js", () => ({ createAgentTurnService }));
 
 const PARENT = "agent:main:dashboard:followup-parent";
