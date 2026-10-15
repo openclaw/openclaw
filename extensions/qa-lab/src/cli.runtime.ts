@@ -643,8 +643,10 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     throw new Error("QA profile evidence requires a taxonomy identity.");
   }
   // Capture before the suite runs so later taxonomy reads cannot rebind its evidence.
-  const taxonomyIdentity = scorecardReport.taxonomy.identity;
-  const proofRequirements = profileReport.proofRequirements;
+  const taxonomyIdentity = { ...scorecardReport.taxonomy.identity };
+  const proofRequirements = profileReport.proofRequirements
+    ? structuredClone(profileReport.proofRequirements)
+    : undefined;
   const evidenceMode = opts.evidenceMode ?? profileReport.evidenceMode;
   const membership = resolveQaRunProfileMembership(
     {

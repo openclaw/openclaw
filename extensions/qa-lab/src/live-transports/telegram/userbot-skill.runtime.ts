@@ -37,7 +37,7 @@ type TelegramTestApiProxy = {
 type TelegramUserbotSkillRuntime = {
   createStateRoot(): string;
   parseCredential(value: unknown): TelegramTestCredential;
-  restoreCredential(value: unknown, stateRoot: string): RestoredTelegramTestCredential;
+  restoreCredential(this: void, value: unknown, stateRoot: string): RestoredTelegramTestCredential;
   startApiProxy(leaseHealth: {
     assertHealthy(): void;
     whenUnhealthy: Promise<Error>;
