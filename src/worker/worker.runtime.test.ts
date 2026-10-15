@@ -59,7 +59,15 @@ import { listRunningSessions, waitForExecScope } from "../agents/bash-process-re
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
-import { SETTLED_TOOL_TERMINAL_CONTINUATION_BODY } from "../agents/recovery-nudge-text.js";
+import {
+  REASONING_ONLY_RETRY_BODY,
+  SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+} from "../agents/recovery-nudge-text.js";
+
+// A finalizer answer that quotes a different recovery nudge before reporting the
+// requested result. Only the settled-tool instruction was injected, so the worker
+// must keep this answer rather than treat it as an echo of the global catalog.
+const DIAGNOSTIC_TERMINAL_REPLY = `${REASONING_ONLY_RETRY_BODY} The disk has 12 GB free.`;
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -158,6 +166,7 @@ type InferencePlan =
   | "oversized-error"
   | "empty-terminal"
   | "echoed-terminal"
+  | "diagnostic-terminal"
   | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
@@ -681,6 +690,10 @@ class FakeWorkerGateway {
       this.sendTextTurn(socket, frame.params, "stop", SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
       return;
     }
+    if (plan === "diagnostic-terminal") {
+      this.sendTextTurn(socket, frame.params, "stop", DIAGNOSTIC_TERMINAL_REPLY);
+      return;
+    }
     this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
@@ -1009,6 +1022,19 @@ describe("worker runtime", () => {
     expect(messages.at(-1)).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "worker reply" }],
+    });
+  });
+
+  it("keeps a finalizer answer that quotes a nudge it did not receive", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "diagnostic-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: DIAGNOSTIC_TERMINAL_REPLY }],
     });
   });
 

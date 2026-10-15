@@ -473,7 +473,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           );
           terminalAssistant = completion.getCurrentAttemptAssistant();
           try {
-            assertSettledTurnFinalizationResult({ assistant: terminalAssistant! });
+            assertSettledTurnFinalizationResult({ assistant: terminalAssistant! }, instruction);
             break;
           } catch (error) {
             const echoedInstruction =
