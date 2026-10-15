@@ -175,13 +175,14 @@ export function resolveSandboxToolPolicyForAgent(
   const containedTools = new Set(options?.containedToolNames);
   const defaultAllow = uniqueStrings([...DEFAULT_TOOL_ALLOW, ...containedTools]);
   const resolvedAllow = mergeAllowlist(allowConfig.values, alsoAllowConfig.values, defaultAllow);
-  const resolvedDeny =
-    denyConfig.values !== undefined
-      ? [...denyConfig.values]
-      : filterDefaultDenyForExplicitAllows({
-          deny: DEFAULT_TOOL_DENY.filter((name) => !containedTools.has(name)),
-          explicitAllowPatterns,
-        });
+  // A configured deny list extends the shipped default denies; it never clears them.
+  const resolvedDeny = uniqueStrings([
+    ...filterDefaultDenyForExplicitAllows({
+      deny: DEFAULT_TOOL_DENY.filter((name) => !containedTools.has(name)),
+      explicitAllowPatterns,
+    }),
+    ...(denyConfig.values ?? []),
+  ]);
 
   const expanded = expandResolvedPolicy({
     allow: resolvedAllow,
