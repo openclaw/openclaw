@@ -72,7 +72,6 @@ import {
   createMigrationContext,
   drainSessionMigrationFixture,
 } from "./state-migrations.session-store.test-support.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWithSurfaces>[0];
 type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
@@ -423,7 +422,6 @@ function createWorktreeInserter(db: EngineConnection, root: string, stateDir: st
 afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyStateDirForTest();
   await closeDatabaseTestCohorts(migrationDatabaseClosers);
   resetPluginRuntimeStateForTest();
 });

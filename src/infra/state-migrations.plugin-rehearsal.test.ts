@@ -23,13 +23,11 @@ import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   clearPluginDoctorContractRegistryCache();

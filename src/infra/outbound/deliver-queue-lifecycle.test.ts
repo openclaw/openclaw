@@ -65,7 +65,13 @@ function startDelivery() {
     entered.resolve();
     return await core.promise;
   });
-  const delivery = deliverOutboundPayloadsWithQueueCleanup(params, "queued-1", 1, "claim-1", lease);
+  const delivery = deliverOutboundPayloadsWithQueueCleanup(
+    params,
+    "queued-1",
+    1,
+    "claim-1",
+    lease,
+  ).finally(() => lease.stop());
   const outcome = delivery.then(
     (results) => ({ results, error: undefined }),
     (error: unknown) => {

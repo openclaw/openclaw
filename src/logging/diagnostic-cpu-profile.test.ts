@@ -137,9 +137,9 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
-  it("refuses native reuse when disposal fails", async () => {
+  it("reports disposal failure and allows a later native capture", async () => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-    native.dispose.mockImplementation(() => {
+    native.dispose.mockImplementationOnce(() => {
       throw new Error("private native failure");
     });
     expect(await capture()).toEqual({
@@ -148,8 +148,8 @@ describe("diagnostic CPU profile owner", () => {
       cleanupFailed: true,
     });
     expect(native.dispose).toHaveBeenCalledOnce();
-    expect(await capture()).toMatchObject({ status: "unavailable", reason: "cleanup-failed" });
-    expect(native.start).toHaveBeenCalledOnce();
+    expect((await capture()).status).toBe("complete");
+    expect(native.start).toHaveBeenCalledTimes(2);
   });
   it("reports synchronous start blocking separately from awaited capture time", async () => {
     let now = 100;
@@ -326,9 +326,9 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it("preserves the capture failure and refuses reuse when disconnect fails", async () => {
+  it("reports disconnect failure and allows a later inspector capture", async () => {
     native.post.mockRejectedValue(new Error("private native error"));
-    native.disconnect.mockImplementation(() => {
+    native.disconnect.mockImplementationOnce(() => {
       throw new Error("private disconnect error");
     });
     expect(await capture()).toEqual({
@@ -336,12 +336,9 @@ describe("diagnostic CPU profile owner", () => {
       reason: "capture-failed",
       cleanupFailed: true,
     });
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "cleanup-failed",
-      cleanupFailed: true,
-    });
-    expect(native.connect).toHaveBeenCalledOnce();
+    returnProfile();
+    expect((await capture()).status).toBe("complete");
+    expect(native.connect).toHaveBeenCalledTimes(2);
   });
 
   it.each([

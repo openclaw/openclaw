@@ -13,7 +13,6 @@ import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const controls = vi.hoisted(() => ({
   entries: [] as ReturnType<typeof listPluginDoctorStateMigrationEntries>,
@@ -56,7 +55,6 @@ const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
   controls.entries = [];
   controls.failSettlement = false;
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();

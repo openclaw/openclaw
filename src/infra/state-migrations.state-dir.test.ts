@@ -3,19 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  autoMigrateLegacyStateDir,
-  resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.state-dir.js";
+import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 
 async function withStateDirFixture(run: (root: string) => Promise<void>): Promise<void> {
-  try {
-    await withTestDir({ prefix: "openclaw-state-dir-" }, async (root) => {
-      await run(root);
-    });
-  } finally {
-    resetAutoMigrateLegacyStateDirForTest();
-  }
+  await withTestDir({ prefix: "openclaw-state-dir-" }, async (root) => {
+    await run(root);
+  });
 }
 
 describe("legacy state dir auto-migration", () => {
@@ -126,6 +119,43 @@ describe("legacy state dir auto-migration", () => {
       expect(fs.lstatSync(legacyDir).isDirectory()).toBe(true);
       expect(fs.readdirSync(legacyDir)).toEqual([]);
       expect(fs.readFileSync(path.join(targetDir, "openclaw.json"), "utf8")).toBe("{}");
+
+      const retainedTarget = path.join(root, "retained-canonical");
+      fs.renameSync(targetDir, retainedTarget);
+      await expect(
+        autoMigrateLegacyStateDir({ env: {}, homedir: () => root }),
+      ).resolves.toMatchObject({ migrated: true, skipped: false, warnings: [] });
+      expect(fs.existsSync(legacyDir)).toBe(false);
+      expect(fs.lstatSync(targetDir).isDirectory()).toBe(true);
+      expect(fs.readFileSync(path.join(retainedTarget, "openclaw.json"), "utf8")).toBe("{}");
+    });
+  });
+
+  it("detects independent roots and skips a completed relocation without changing its data", async () => {
+    await withStateDirFixture(async (root) => {
+      for (const name of ["first", "second"]) {
+        const home = path.join(root, name);
+        const legacyDir = path.join(home, ".clawdbot");
+        const targetDir = path.join(home, ".openclaw");
+        const bytes = Buffer.from(name + " legacy state\u0000\n");
+        fs.mkdirSync(legacyDir, { recursive: true });
+        fs.writeFileSync(path.join(legacyDir, "marker"), bytes);
+        const params = { env: {}, homedir: () => home };
+
+        await expect(autoMigrateLegacyStateDir(params)).resolves.toMatchObject({
+          migrated: true,
+          skipped: false,
+          warnings: [],
+        });
+        await expect(autoMigrateLegacyStateDir(params)).resolves.toEqual({
+          migrated: false,
+          skipped: true,
+          changes: [],
+          warnings: [],
+        });
+        expect(fs.existsSync(legacyDir)).toBe(false);
+        expect(fs.readFileSync(path.join(targetDir, "marker"))).toEqual(bytes);
+      }
     });
   });
 

@@ -15,7 +15,6 @@ import {
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "../infra/state-migrations.doctor.js";
 import { writeLegacySessionsFixture } from "../infra/state-migrations.session-store.test-support.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -35,7 +34,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    resetAutoMigrateLegacyStateDirForTest();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     resetPluginStateStoreForTests();

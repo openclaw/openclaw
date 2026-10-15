@@ -265,21 +265,19 @@ export async function createDoctorMaintenanceState(options: {
       owner = undefined;
       options.assertCurrent?.();
       const migration = prepareLegacyStateDirMigration({ env });
-      if (migration && !migration.result.migrated) {
+      if (!migration.result.migrated) {
         throw new Error(migration.result.warnings.join("\n"));
       }
       selectedEnv = env;
       await state.acquire();
-      if (migration) {
-        const { loadDotEnv } = await import("../infra/dotenv.js");
-        loadDotEnv({ quiet: true });
-        const result = migration.result;
-        for (const change of [...result.changes, ...(result.notices ?? [])]) {
-          params.runtime.log(sanitizeDoctorNote(change));
-        }
-        for (const warning of result.warnings) {
-          options.warn(sanitizeDoctorNote(warning));
-        }
+      const { loadDotEnv } = await import("../infra/dotenv.js");
+      loadDotEnv({ quiet: true });
+      const result = migration.result;
+      for (const change of [...result.changes, ...(result.notices ?? [])]) {
+        params.runtime.log(sanitizeDoctorNote(change));
+      }
+      for (const warning of result.warnings) {
+        options.warn(sanitizeDoctorNote(warning));
       }
     },
     async repairSqliteNoCow(paths: readonly string[]) {

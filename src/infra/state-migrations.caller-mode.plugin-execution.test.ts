@@ -36,7 +36,6 @@ import {
   autoMigrateLegacyPluginDoctorState,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -46,7 +45,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();

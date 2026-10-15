@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -107,31 +106,20 @@ export class LegacyPluginSdkResourceHost {
 
   /** Projection failures still own their asynchronous release until it settles. */
   releaseClaim(claim: ResourceClaim): void {
-    const operation = createDeferredCore();
-    const completion = operation.promise.then(
-      () => {
-        this.pending.delete(completion);
-      },
-      (error: unknown) => {
+    const completion = Promise.resolve()
+      .then(() =>
+        AsyncWorkScope.runWhenAllIdle(
+          () => [this.work],
+          () => claim.release(),
+        ),
+      )
+      .catch((error: unknown) => {
         this.failures.push(error);
+      })
+      .finally(() => {
         this.pending.delete(completion);
-      },
-    );
-    // Register before release can reenter host close through a disposer.
+      });
     this.pending.add(completion);
-    try {
-      // Failed projections may leave admitted tails; an idle host still releases immediately.
-      operation.resolve(
-        this.work.hasPendingWork
-          ? AsyncWorkScope.runWhenAllIdle(
-              () => [this.work],
-              () => claim.release(),
-            )
-          : claim.release(),
-      );
-    } catch (error) {
-      operation.reject(error);
-    }
   }
 
   /** Fence new SDK work and join its tails before prepared resources can retire. */

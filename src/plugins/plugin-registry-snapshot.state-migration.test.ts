@@ -5,7 +5,6 @@ import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-met
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
@@ -35,7 +34,6 @@ beforeEach(() => {
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });

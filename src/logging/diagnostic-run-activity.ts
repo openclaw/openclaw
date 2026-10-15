@@ -622,9 +622,8 @@ export function getDiagnosticSessionActivitySnapshot(
       if (
         registration &&
         owned &&
-        resolveCurrentDiagnosticOwner(registration.owner, owned.assertCurrent) === registration &&
         registration.activity === activity &&
-        registration[kind] === owned
+        resolveCurrentDiagnosticOwner(registration.owner, owned.assertCurrent) === registration
       ) {
         deadlines[field] = Math.max(deadlines[field] ?? owned.deadlineAtMs, owned.deadlineAtMs);
       }

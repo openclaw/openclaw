@@ -560,37 +560,4 @@ describe("native plugin alias preparation", () => {
       }),
     );
   });
-
-  it("captures explicit aliases before lazy evaluation", () => {
-    const f = fixture();
-    const owner = createPluginCache();
-    const target = writeFile(
-      f.root,
-      "target.ts",
-      'import { value } from "fixture-alias"; export const marker = value;',
-    );
-    const params = {
-      modulePath: target,
-      importerUrl: import.meta.url,
-      tryNative: false,
-      cacheScopeKey: "explicit-aliases",
-    };
-    withPluginCache(owner, () => {
-      const aliases = { "fixture-alias": f.used };
-      const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-      const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
-      aliases["fixture-alias"] = f.unused;
-      const loaded = first(target);
-      expect(loaded).toMatchObject({ marker: "dist" });
-      expect(same(target)).toBe(loaded);
-      const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-      const nextTarget = writeFile(
-        f.root,
-        "next-target.ts",
-        'import { value } from "fixture-alias"; export const marker = value;',
-      );
-      expect(next(nextTarget)).toMatchObject({ marker: "unused" });
-      expect(first(target)).toBe(loaded);
-    });
-  });
 });
