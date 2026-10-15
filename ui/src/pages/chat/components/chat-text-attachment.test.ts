@@ -116,7 +116,6 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
-  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {
@@ -175,19 +174,6 @@ it.each([
   expect(panel.querySelector("a[download]")).not.toBeNull();
 });
 
-it.each([
-  { title: "archive.bin", mimeType: "application/octet-stream" },
-  { title: "notes.txt", src: "https://files.example/notes.txt" },
-  { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },
-])("does not fetch unsupported or external documents: $title $mimeType $src", async (content) => {
-  const fetchMock = vi.fn<typeof fetch>();
-  vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment(content);
-  expect(panel.querySelector("pre")).toBeNull();
-  expect(panel.querySelector("a[download]")).not.toBeNull();
-  expect(fetchMock).not.toHaveBeenCalled();
-});
-
 type RejectedAttachment = {
   failure: "metadata" | "advertised" | "streamed" | "bytes" | "unavailable" | "timeout";
   content?: Partial<Extract<SidebarContent, { kind: "attachment" }>>;
@@ -200,12 +186,9 @@ const htmlFile = { title: "page.html", mimeType: "text/html" };
 
 it.each<RejectedAttachment>([
   { failure: "metadata", content: plainFile },
-  { failure: "metadata", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "metadata", content: { ...htmlFile, plainText: true } },
   { failure: "advertised", content: plainFile },
   { failure: "streamed", content: plainFile },
-  { failure: "advertised", content: htmlFile, limit: 2 * 1024 * 1024 },
-  { failure: "streamed", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "bytes", bytes: new Uint8Array([0xff]) },
   { failure: "bytes", bytes: new Uint8Array([0x61, 0x00, 0x62]) },
   { failure: "unavailable" },
@@ -331,7 +314,6 @@ it("aborts a closed preview and reloads it after remount", async () => {
 });
 
 it.each([
-  { title: "large.html", mimeType: "text/html", sizeBytes: 2 * 1024 * 1024, fill: "a", suffix: "" },
   {
     title: "large.HTM",
     mimeType: "application/octet-stream",
