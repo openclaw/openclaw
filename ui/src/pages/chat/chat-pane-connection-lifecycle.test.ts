@@ -101,6 +101,7 @@ describe("chat pane connection lifecycle", () => {
         createReconnectRequest({ messages: [canonical], sessionId: "pairing-session" }),
       );
       const { pane, state } = createTestChatPane({ client });
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
       const hello = sessionMutationGatewayHello();
       pane.context.gateway.snapshot.selfUser = { id: "fixture-user-before" };
       const connected = {
