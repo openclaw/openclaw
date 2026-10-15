@@ -64,7 +64,7 @@ async function snapshotCandidateState(): Promise<unknown> {
           input.streamEntryProgress,
         ),
       });
-      return { ...inventory, databases: [...databases] };
+      return { ...inventory, databases: [...databases], snapshotSpace: "single-generation" };
     }
     case "database-backup": {
       const { createUpdateDatabaseBackupInProcess } = await import("./update-database-backup.js");
