@@ -49,12 +49,19 @@ export OPENCLAW_STATE_DIR="$smoke_root/state"
 export OPENCLAW_CONFIG_PATH="$smoke_root/state/openclaw.json"
 export OPENCLAW_WORKSPACE_DIR="$smoke_root/workspace"
 export OPENCLAW_AGENT_DIR="$smoke_root/state/agents/dev/agent"
+export CODEX_HOME="$smoke_root/codex"
 unset PI_CODING_AGENT_DIR OPENCLAW_OAUTH_DIR
 unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_TOKEN OPENCLAW_GATEWAY_PASSWORD
 unset OPENCLAW_CONFIG_READONLY OPENCLAW_INCLUDE_ROOTS
 export npm_config_cache="$smoke_root/npm-cache"
 export npm_config_prefix="$smoke_root/install"
 ```
+
+The empty `CODEX_HOME` prevents discovery/bootstrap from borrowing the personal
+Codex login, including on the API-key path. For a native CLI OAuth check,
+replace it with the independently owned fixture's directory, never the personal
+CLI directory. Apply the selected provider's corresponding directory contract
+before its discovery/setup commands too.
 
 Use the same environment for every setup, auth, model, Gateway and client
 command. Keep the candidate installation and execution cwd disposable too;
