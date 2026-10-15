@@ -344,6 +344,7 @@ suite.define(() => {
     }
     const owner = instance;
     const rpc: RpcObservation[] = [];
+    const pageErrors: string[] = [];
     const queries: QueryObservation[] = [];
     const assets: Array<{ path: string; servedSha256: string; builtSha256: string }> = [];
     const screenshots: string[] = [];
@@ -380,6 +381,14 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
+          page.on("pageerror", (error) => {
+            pageErrors.push(
+              error.message
+                .replaceAll(owner.gatewayToken, "[redacted fixture token]")
+                .replaceAll(owner.hookToken, "[redacted fixture token]")
+                .replace(/\b[a-z][a-z\d+.-]*:\/\/\S+/giu, "[redacted URL]"),
+            );
+          });
           observeSearchTraffic(page, rpc);
           expect((await page.goto(url.href))?.status()).toBe(404);
           await enterControlUiSession(page);
@@ -744,13 +753,19 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
-        await writeFile(
-          path.join(artifactDir, "gateway-failure.log"),
-          owner
-            .logs()
-            .replaceAll(owner.gatewayToken, "[redacted fixture token]")
-            .replaceAll(owner.hookToken, "[redacted fixture token]"),
+        const gatewayLogs = owner
+          .logs()
+          .replaceAll(owner.gatewayToken, "[redacted fixture token]")
+          .replaceAll(owner.hookToken, "[redacted fixture token]");
+        console.error("[search-proof] Gateway failure logs:\n" + gatewayLogs);
+        console.error(
+          "[search-proof] browser failure diagnostics:",
+          JSON.stringify({
+            pageErrors,
+            rpc: rpc.map(({ method, elapsedMs, ok }) => ({ method, elapsedMs, ok })),
+          }),
         );
+        await writeFile(path.join(artifactDir, "gateway-failure.log"), gatewayLogs);
       }
       await writeFile(
         path.join(artifactDir, "search-proof.json"),
