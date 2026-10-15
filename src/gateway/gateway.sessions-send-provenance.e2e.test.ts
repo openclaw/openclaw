@@ -818,6 +818,35 @@ async function verifyCrossHumanAdmission(
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   const firstReply = humanReplies.length;
   let alice: ReturnType<typeof runHuman> | undefined;
+  let stage = "queue-setting application";
+  // Disposal retains a body failure when restoring config also fails.
+  await using _ = {
+    async [Symbol.asyncDispose]() {
+      let cleanupStage = "active-work settlement";
+      try {
+        scenario.releaseIncumbent.resolve();
+        scenario.releaseTarget.resolve();
+        await Promise.allSettled([alice]);
+        await waitForGatewayActiveWork(30_000);
+        cleanupStage = "config restoration";
+        await patchProofConfig(
+          {
+            messages: { queue: { allowCollaborativeSteering: previousSetting ?? null } },
+            tools: { toolsBySender: { "id:alice": { deny: null }, "id:bob": { deny: null } } },
+            agents: { entries: { deployment: { tools: { deny: null } } } },
+          },
+          [
+            "messages.queue.allowCollaborativeSteering",
+            "tools.toolsBySender.id:alice.deny",
+            "tools.toolsBySender.id:bob.deny",
+            "agents.entries.deployment.tools.deny",
+          ],
+        );
+      } catch (cause) {
+        throw new Error(`${id}: cleanup ${cleanupStage} after ${stage} failed`, { cause });
+      }
+    },
+  };
   try {
     await patchProofConfig(
       { messages: { queue: { allowCollaborativeSteering: allowCollaborativeSteering ?? null } } },
@@ -826,10 +855,12 @@ async function verifyCrossHumanAdmission(
     expect(getRuntimeConfig().messages?.queue?.allowCollaborativeSteering).toBe(
       allowCollaborativeSteering,
     );
+    stage = "sender-policy preparation";
     await updateSenderPolicies({
       "id:alice": { deny: null },
       "id:bob": { deny: collaborative ? ["message"] : null },
     });
+    stage = "Alice admission";
     alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
       (result) => {
         scenario.incumbentCompleted = true;
@@ -844,6 +875,7 @@ async function verifyCrossHumanAdmission(
       ),
       signal,
     );
+    stage = "Bob steering admission";
     const receipt = await runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
     expect(receipt.deferredToActiveRun).toBe(collaborative ? "steer" : "followup");
     expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
@@ -858,6 +890,7 @@ async function verifyCrossHumanAdmission(
     );
     expect(scenario.incumbentCompleted).toBe(false);
     expect(scenario.sourceRequests).toEqual([]);
+    stage = "current-policy update";
     if (collaborative) {
       // Alice keeps her prepared tools, but a later delegation reads both the
       // original requester's current policy and the destination's current policy.
@@ -872,10 +905,12 @@ async function verifyCrossHumanAdmission(
       });
     }
     expect(getRuntimeConfig().tools?.toolsBySender?.["id:bob"]).toEqual({ deny: ["message"] });
+    stage = "Alice and delegate completion";
     scenario.releaseIncumbent.resolve();
     await alice;
     await withinTest(scenario.targetStarted.promise, signal);
     await waitForGatewayActiveWork(30_000);
+    stage = "result assertions";
     expect(providerErrors).toEqual([]);
     expect(scenario.accepted).toMatchObject({ status: "accepted" });
     expect(scenario.incumbentRequests.every((request) => request.tools.includes("message"))).toBe(
@@ -912,24 +947,8 @@ async function verifyCrossHumanAdmission(
     ).toEqual(
       (collaborative ? [1] : [1, 2]).map((index) => `${scenario.marker}_INCUMBENT_${index}`),
     );
-  } finally {
-    scenario.releaseIncumbent.resolve();
-    scenario.releaseTarget.resolve();
-    await Promise.allSettled([alice]);
-    await waitForGatewayActiveWork(30_000);
-    await patchProofConfig(
-      {
-        messages: { queue: { allowCollaborativeSteering: previousSetting ?? null } },
-        tools: { toolsBySender: { "id:alice": { deny: null }, "id:bob": { deny: null } } },
-        agents: { entries: { deployment: { tools: { deny: null } } } },
-      },
-      [
-        "messages.queue.allowCollaborativeSteering",
-        "tools.toolsBySender.id:alice.deny",
-        "tools.toolsBySender.id:bob.deny",
-        "agents.entries.deployment.tools.deny",
-      ],
-    );
+  } catch (cause) {
+    throw new Error(`${id}: ${stage} failed`, { cause });
   }
 }
 

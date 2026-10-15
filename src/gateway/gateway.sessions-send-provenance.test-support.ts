@@ -443,7 +443,7 @@ beforeAll(async () => {
     },
     gateway: { auth: { mode: "token", token } },
     hooks: { enabled: false },
-    logging: { audit: { enabled: false, executionIdentity: false } },
+    logging: { consoleLevel: "error", audit: { enabled: false, executionIdentity: false } },
     models: {
       mode: "replace",
       providers: {
