@@ -44,15 +44,8 @@ import {
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
-const browserRuntime = vi.hoisted(() => ({ execute: vi.fn() }));
+const browserRuntime = { execute: vi.fn<AnyAgentTool["execute"]>() };
 const readPublicItem = vi.fn<AnyAgentTool["execute"]>();
-
-// mock-isolation: Keep browser I/O and service lifetime isolated while exercising real registration.
-vi.mock("../../extensions/browser/register.runtime.js", () => ({
-  createBrowserTool: () => ({ execute: browserRuntime.execute }),
-  hasBrowserNodeHostWork: () => false,
-  stopBrowserControlService: async () => {},
-}));
 
 let registerBrowserPlugin: NonNullable<OpenClawPluginDefinition["register"]>;
 const sessionKey = "agent:main:policy-regression";
@@ -120,6 +113,23 @@ function assemble(allow: string[], deny: string[] = []) {
       preferBuiltPluginArtifacts: false,
     });
     const api = registry.createApi(record, { config });
+    if (manifest.id === "browser") {
+      const registerTool = api.registerTool;
+      // Exercise the plugin's real registration and tool metadata while isolating
+      // browser I/O at the public registration boundary, not its private modules.
+      api.registerTool = (factory, options) => {
+        if (typeof factory !== "function") {
+          throw new Error("Expected browser tool factory");
+        }
+        registerTool((context) => {
+          const tool = factory(context);
+          if (!tool || Array.isArray(tool)) {
+            throw new Error("Expected one registered browser tool");
+          }
+          return { ...tool, execute: browserRuntime.execute };
+        }, options);
+      };
+    }
     runPluginRegisterSyncInRegistry(
       manifest.id === "browser"
         ? registerBrowserPlugin
