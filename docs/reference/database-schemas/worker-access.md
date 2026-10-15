@@ -51,7 +51,7 @@ The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
 Task pools whose canonical database access is entirely read-only declare
-`databaseAccess: "read-only"`. The memory retrieval and chunk-preparation pools
+`databaseAccess: "read-only"`. The transcript reader, memory retrieval, and chunk-preparation pools
 use this declaration so ordinary worker retirement preserves the store's admitted
 facts. A worker that may write still invalidates admission if it exits with an
 open database, because committed changes may lack their final publication receipt.
