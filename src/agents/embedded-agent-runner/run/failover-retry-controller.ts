@@ -350,8 +350,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "non_transient");
         return false;
       }
-      // Honor the SDK's retry-delay cap when replay-safe fallback is available.
-      // Otherwise a long Retry-After must wait: declining would end the turn.
+      // Bound replay-safe waits; the failover owner rotates credentials, tries
+      // configured models, or surfaces the existing error after exhaustion.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&
@@ -360,7 +360,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
-        fallbackConfigured &&
         retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&

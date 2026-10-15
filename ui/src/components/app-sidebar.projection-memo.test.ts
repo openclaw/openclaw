@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
@@ -64,12 +65,15 @@ async function mount(rows: GatewaySessionRow[]) {
   const gateway = createGatewayHarness(
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
-  const context = createContext(gateway.gateway, sessions.sessions, {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "work" }],
-  });
+  const context = {
+    ...createContext(gateway.gateway, sessions.sessions, {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "work" }],
+    }),
+    chatSubmissions: createChatSubmissions(),
+  };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
   context.overlays.subscribe = (listener) => {
     overlayListeners.add(listener);
@@ -116,6 +120,45 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps one provisional row and invalidates admission without a new list or route", async () => {
+    const old = session("old");
+    const created = session("dashboard:creating");
+    const { sidebar, context, gateway, publish, row } = await mount([old]);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = created.key;
+    gateway.publish({ sessionKey: old.key });
+    const creation = { sessionKey: created.key, admitted: false };
+    const release = context.chatSubmissions.beginCreate({
+      creation,
+      message: null,
+      canDisplay: () => true,
+    });
+    try {
+      await settleLitElement(sidebar);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(old.key)?.visuallyActive).toBe(false);
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      publish([old, created]);
+      await settleLitElement(sidebar);
+      expect(row(created.key)).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      const result = sidebar.sessionData.sessionsResult;
+      const navigation = sidebar.getSessionNavigationState();
+      expect(result?.sessions.some((value) => value.key === created.key)).toBe(true);
+      creation.admitted = true;
+      sidebar.requestUpdate();
+      await settleLitElement(sidebar);
+      expect(sidebar.sessionData.sessionsResult).toBe(result);
+      expect(sidebar.getSessionNavigationState()).not.toBe(navigation);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(created.key)?.visuallyActive).toBe(true);
+      expect(row(created.key)).not.toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(0);
+    } finally {
+      release();
+    }
+  });
+
   it("shares the projection across unrelated updates and refreshes route, list, and filter inputs", async () => {
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
     const rows = [

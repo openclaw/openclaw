@@ -305,7 +305,7 @@ if(args[0]==="update") {
     if(scenario==="marker-stream-close"&&!present("marker-waited")){put("marker-waited",1);emit({runId:params.runId,status:"timeout"});}
     else {
       const marker=accepted.message.split(": ").at(-1);
-      const receipt={runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",terminalDisposition:"visible",effective:{provider:"fixture",model:"exact-model",responseModel:"exact-model"}};
+      const receipt={runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",terminalDisposition:"visible",requested:{provider:"fixture",model:"exact-model"},effective:{provider:"fixture",model:"exact-model",responseModel:"exact-model"}};
       if(scenario==="marker-wrong-session") receipt.sessionId="different-session";
       if(scenario==="marker-wrong-model") receipt.effective.model="different-model";
       if(scenario==="marker-response-model-alias") receipt.effective.responseModel="provider-response-alias";
@@ -666,6 +666,12 @@ function writeRelease(fixture, releaseSha = sha) {
   writeFileSync(join(release, "dist", "control-ui", "assets", "app.js"), "fixture();\n");
   writeFileSync(join(release, "dist", "index.js"), gatewaySource(fixture), { mode: 0o755 });
   mkdirSync(join(release,"dist/plugin-sdk"),{recursive:true});
+  writeFileSync(join(release,"dist/plugin-sdk/model-ref-parse.js"), `
+export function splitTrailingAuthProfile(raw) {
+  if (raw !== "fixture/exact-model") throw Error("unexpected synthetic model route");
+  return {model: raw};
+}
+`);
   writeFileSync(join(release,"dist/plugin-sdk/gateway-runtime.js"), `
 import {spawnSync} from 'node:child_process';
 export function isGatewayTransportError(error) {

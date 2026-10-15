@@ -37,7 +37,6 @@ type DirectReservationCaller =
   | "session-manager.write"
   | "session-manager.note"
   | "session-actor.command"
-  | "history.cold-read"
   | "history.model-context"
   | "history.hydration";
 

@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For } from "solid-js";
+import { createEffect, createMemo, createSignal, For } from "solid-js";
 import {
   normalizeSessionIconValue,
   SESSION_COLOR_IDS,
@@ -17,7 +17,6 @@ import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
 export type AppearancePickerProps = {
-  inline?: boolean;
   allowSvg?: boolean;
   clearable?: boolean;
   mode: "grid" | "custom";
@@ -44,11 +43,12 @@ export function AppearancePicker(props: AppearancePickerProps) {
       normalized && (props.allowSvg || !normalized.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX))
     );
   };
-  const tabStop = () =>
+  const tabStop = createMemo(() =>
     props.clearable !== false && props.currentIcon === null
       ? null
       : ([...EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find((icon) => icon === props.currentIcon) ??
-        EMOJI_CHOICES[0]);
+        EMOJI_CHOICES[0]),
+  );
   const choice = (icon: string | null, glyph = false) => (
     <button
       type="button"
@@ -65,7 +65,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
     </button>
   );
   return (
-    <div slot={props.inline ? undefined : "submenu"} class="session-menu__appearance">
+    <div class="session-menu__appearance">
       <div class="session-menu__icon-section-label">{t("sessionsView.setColorMenu")}</div>
       <div class="session-menu__colors" role="group" aria-label={t("sessionsView.setColorMenu")}>
         <For each={props.clearable === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]}>
@@ -333,9 +333,8 @@ export function useSessionMenuAppearance(
   return {
     prepare,
     showIconGrid,
-    render: (inline = false) => (
+    render: () => (
       <AppearancePicker
-        inline={inline}
         allowSvg
         mode={mode()}
         currentIcon={readState().session.icon}

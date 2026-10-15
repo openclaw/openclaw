@@ -107,6 +107,11 @@ Alternatively, on a Docker-enabled Testbox, start `postgres:17` with trust auth
 and a loopback-only port, run the same command with
 `postgresql://postgres@127.0.0.1:5432/postgres`, then remove the container.
 
+The port-command integration scenarios share their fixture across separate files so
+the existing Vitest workers can overlap independent recovery and custody cases.
+They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
+no additional job or service is started.
+
 CI's **PostgreSQL conformance** job uses a fresh `postgres:17` service. It runs
 on scheduled main CI and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,

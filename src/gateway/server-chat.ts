@@ -2,10 +2,8 @@
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
-  ChatStatusEventSchema,
   projectChatErrorDetail,
   type ChatEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -67,6 +65,7 @@ import {
   chatWireProjection,
   liveTextDelivery,
   prepareAgentWirePayload,
+  projectChatStatusEvent,
   scheduleLiveTextFlush,
 } from "./server-chat-live-text.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
@@ -1278,34 +1277,13 @@ export function createAgentEventHandler({
       );
     }
     if (evt.stream === "run_status" && chatLink && isControlUiVisible && sessionKey && !isAborted) {
-      const payload = {
+      const payload = projectChatStatusEvent(evt, {
         runId: clientRunId,
         sessionKey,
-        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-        ...(spawnedBy && { spawnedBy }),
-        seq: evt.seq,
-        state: "status" as const,
-        ...(evt.data.phase === "retrying"
-          ? {
-              phase: "starting_model",
-              ...(["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].includes(
-                String(evt.data.reason),
-              )
-                ? {
-                    retry: {
-                      attempt: evt.data.attempt,
-                      maxAttempts: evt.data.maxAttempts,
-                      reason: evt.data.reason,
-                      ...(typeof evt.data.retryAt === "number" && Number.isFinite(evt.data.retryAt)
-                        ? { retryAt: evt.data.retryAt }
-                        : {}),
-                    },
-                  }
-                : {}),
-            }
-          : { phase: evt.data.phase }),
-      };
-      if (Value.Check(ChatStatusEventSchema, payload)) {
+        agentId: sessionAgentId,
+        spawnedBy,
+      });
+      if (payload) {
         sendLivePayload("chat", sessionKey, payload, {
           agentId: sessionAgentId,
           controlUiVisible: true,

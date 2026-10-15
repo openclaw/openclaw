@@ -4,6 +4,7 @@ import {
   projectCodexCatalogNativeThread,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
+import type { CodexCatalogNativeThread } from "../session-catalog-types.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import { parseCodexAppServerMessage } from "./client-message-decoder.js";
 import {
@@ -24,7 +25,7 @@ export type CodexCatalogDecodeInput = {
 };
 export type CodexCatalogDecodeResult = {
   message?: unknown;
-  previewStates?: (boolean | undefined)[];
+  preview?: { rows: CodexCatalogNativeThread[]; states: (boolean | undefined)[] };
   projectionError?: { id: number; error: Error };
   failures: { value: string; error: unknown; fragmentCount: number }[];
 };
@@ -69,22 +70,24 @@ export function projectCodexCatalogMessage(
     }
     if (route.kind === "list") {
       const raw = message.result;
-      message.result = projectCodexCatalogNativeResponse(
+      const page = projectCodexCatalogNativeResponse(
         raw,
         sanitizeTerminalText,
         cachedPreview,
         remainingRows,
       );
+      message.result = page;
       if (!cachedPreview) {
-        result.previewStates = Array.isArray(raw.data)
+        const states = Array.isArray(raw.data)
           ? raw.data
-              .slice(0, Array.isArray(message.result.data) ? message.result.data.length : 0)
+              .slice(0, page.data.length)
               .map((row) =>
                 isJsonObject(row) && typeof row.preview === "string"
                   ? Boolean(row.preview)
                   : undefined,
               )
           : [];
+        result.preview = { rows: page.data, states };
       }
     } else {
       const thread = message.result.thread;

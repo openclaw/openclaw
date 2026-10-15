@@ -4,6 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -21,7 +22,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { isOperatorScope } from "../operator-scopes.js";
+import { APPROVALS_SCOPE, WRITE_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
@@ -70,6 +71,15 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   const registeredScope = methodRegistry.getScope(method);
+  if (
+    method === "plugin.approval.request" &&
+    registeredScope === APPROVALS_SCOPE &&
+    client.internal?.syntheticClient === true &&
+    client.internal.pluginApprovalRequestOwnerId?.trim() &&
+    roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
+  ) {
+    return { error: null };
+  }
   let scopeAuth = isOperatorScope(registeredScope)
     ? authorizeOperatorScopesForRequiredScope(
         registeredScope,

@@ -397,6 +397,23 @@ describe("openclaw path CLI", () => {
       const unboundedRead = vi
         .spyOn(fs, "readFile")
         .mockRejectedValue(new Error("unbounded file read"));
+      // The loader reads through a descriptor stream; count the bytes it pulls.
+      const open = fs.open.bind(fs);
+      let opens = 0;
+      let bytesRead = 0;
+      const observedOpen = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === filePath) {
+          opens += 1;
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+            const result = await read(...readArgs);
+            bytesRead += result.bytesRead;
+            return result;
+          });
+        }
+        return handle;
+      });
       const cases: ReadonlyArray<{
         code: string;
         run: (runtime: TestRuntime) => Promise<void>;
@@ -438,6 +455,8 @@ describe("openclaw path CLI", () => {
 
       try {
         for (const testCase of cases) {
+          opens = 0;
+          bytesRead = 0;
           const rt = createTestRuntime();
           await testCase.run(rt);
           expect(rt.exitCode).toBe(2);
@@ -445,9 +464,12 @@ describe("openclaw path CLI", () => {
           expect(JSON.parse(stderrText(rt))).toMatchObject({
             error: { code: testCase.code },
           });
+          expect(opens).toBeGreaterThan(0);
+          expect(bytesRead).toBeLessThanOrEqual(JSONC_INPUT_LIMIT_BYTES + 1);
         }
         expect(unboundedRead).not.toHaveBeenCalled();
       } finally {
+        observedOpen.mockRestore();
         unboundedRead.mockRestore();
       }
     });

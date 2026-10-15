@@ -3,6 +3,7 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
@@ -13,6 +14,9 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
+import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { ClawsExplore } from "./claws-explore.tsx";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -22,12 +26,15 @@ type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "
 };
 
 type AgentsHomeProps = {
+  canCreate: boolean;
   cards: AgentCard[];
   context: ApplicationContext;
   connected: boolean;
   loading: boolean;
   error: string | null;
-  canCreate: boolean;
+  showExplore: boolean;
+  onOpenCatalog: () => void;
+  onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
 };
 
@@ -69,24 +76,37 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           subtitle={subtitle()}
           actions={
             <>
+              {props.showExplore ? (
+                <button
+                  type="button"
+                  class="btn btn--icon"
+                  data-claws-open-catalog
+                  aria-label={t("clawsCatalog.search")}
+                  title={t("clawsCatalog.search")}
+                  aria-haspopup="dialog"
+                  disabled={!props.connected}
+                  onClick={props.onOpenCatalog}
+                >
+                  <Icon name="search" />
+                </button>
+              ) : undefined}
               {manage()}
-              <a
-                class="btn primary"
-                href={
-                  props.canCreate
-                    ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`
-                    : pathForRoute("agents", props.context.basePath)
-                }
-                onClick={(event) =>
-                  navigate(
-                    event,
-                    props.canCreate ? "custodian" : "agents",
-                    props.canCreate ? { search: "?intent=new-agent" } : undefined,
-                  )
-                }
+              <ReasonedDisabledControl
+                reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
               >
-                {t("agentsHome.create")}
-              </a>
+                <button
+                  class="btn primary"
+                  disabled={!props.canCreate}
+                  title={!props.canCreate ? t("custodian.accessRequired") : undefined}
+                  onClick={() => {
+                    if (props.canCreate) {
+                      props.context.navigate("custodian", { search: "?intent=new-agent" });
+                    }
+                  }}
+                >
+                  {t("agentsHome.create")}
+                </button>
+              </ReasonedDisabledControl>
             </>
           }
         />
@@ -170,6 +190,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
             )}
           </For>
         </div>
+        {props.showExplore ? <ClawsExplore onSelect={props.onSelectClaw} /> : undefined}
       </section>
     </>
   );

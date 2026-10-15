@@ -115,6 +115,10 @@ browser…**. The device code and **Open sign-in** link remain available during
 the wait. After approval, OpenClaw checks access before showing **Muse Code is
 connected**; you can then start a new chat or close the dialog.
 
+Setup shows **Testing your AI connection…** while checking model access, then
+**Turning on your AI connection…** while enabling the runtime and applying the
+Gateway configuration. The connection is ready when that application completes.
+
 For Muse-owned sign-ins, OpenClaw checks that Muse can fetch the candidate model
 from Meta's live catalog. It does not run a model turn or expose native tools
 during verification. The same check runs again before activation is committed.

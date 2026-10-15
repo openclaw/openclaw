@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -355,7 +355,7 @@ function createPublicationBackend(
         .onConflict((conflict) => conflict.column("key").doUpdateSet({ value })),
     );
   };
-  return {
+  return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
     async prepare(command) {
       if (command.type !== "vector.prepare") {
         return;
@@ -372,12 +372,6 @@ function createPublicationBackend(
         throw new Error(loaded.error ?? "unknown sqlite-vec load error");
       }
       loadedExtensions.set(db, loaded.extensionPath);
-    },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Memory publication left an unsettled native connection");
-      }
     },
     execute(command) {
       if (command.type === "connection.inspect") {
@@ -628,7 +622,7 @@ function createPublicationBackend(
     close() {
       discard();
     },
-  } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
+  });
 }
 
 function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(

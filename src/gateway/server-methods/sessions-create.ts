@@ -47,7 +47,7 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
@@ -498,11 +498,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           commitGuard,
           onTitleError: (error) =>
             sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
-          onTitlePersisted: () =>
-            emitSessionsChanged(context, {
+          onTitleStateChanged: () =>
+            emitSessionTitleChanged(context, {
               sessionKey: lifecycleTarget.key,
+              sessionId: lifecycleTarget.entry?.sessionId,
               agentId: lifecycleTarget.agentId,
-              reason: "chat.title",
             }),
         });
         if (prepared.ok) {
@@ -521,6 +521,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clientScopes,
     ).allowed;
     const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
+    const waitForModelCatalog = async <T>(operation: () => Promise<T>) =>
+      catalogWait.run(operation, (await operatorCapture.preparation)?.authority.signal);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -585,13 +587,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository && !deviceFolder,
-      loadGatewayModelCatalogSnapshot: async () => {
-        const captured = await operatorCapture.preparation;
-        return catalogWait.run(
-          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
-          captured?.authority.signal,
-        );
-      },
+      waitForModelCatalog,
+      loadGatewayModelCatalogSnapshot: () =>
+        waitForModelCatalog(() =>
+          context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+        ),
       commitGuard,
       bindSharingCreation: (operation) =>
         sessionMutationAuthorization?.bindCreation?.(p, operation),

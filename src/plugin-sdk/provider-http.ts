@@ -52,6 +52,7 @@ export {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { postJsonResponse } from "../media-understanding/provider-json-post.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export {
   runHttpTlsPreflight,

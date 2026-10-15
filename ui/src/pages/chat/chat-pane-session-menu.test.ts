@@ -9,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
@@ -155,13 +156,18 @@ describe("chat pane session menu boundary", () => {
     draw();
     await menu.updateComplete;
     expectRetainedMenu();
-    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "session-files" } },
-      }),
-    );
-    expect(workspace.onToggleCollapsed).not.toHaveBeenCalled();
-    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-after-hide"));
+    const layout = await openChatLayoutMenu({
+      container,
+      click: async (element) => {
+        element.click();
+        await Promise.resolve();
+        flush();
+      },
+    });
+    layout.querySelector<HTMLButtonElement>('[data-value="session-files"]')!.click();
+    await Promise.resolve();
+    flush();
+
     expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
 
     state.settings = { ...state.settings };
@@ -203,8 +209,8 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each(["subagents", "processes"] as const)(
-    "keeps the selected %s opening intent when live state changes while Layout hides",
-    (slot) => {
+    "keeps the selected %s opening intent after Layout closes",
+    async (slot) => {
       const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
       const container = document.body.appendChild(document.createElement("div"));
       const draw = () =>
@@ -220,13 +226,19 @@ describe("chat pane session menu boundary", () => {
           container,
         );
       draw();
-      const menu = container.querySelector(".chat-pane__layout-menu")!;
-      menu.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: `session-${slot}` } } }),
-      );
+      await Promise.resolve();
+      flush();
+      const menu = await openChatLayoutMenu({
+        container,
+        click: async (element) => {
+          element.click();
+          await Promise.resolve();
+          flush();
+        },
+      });
+      menu.querySelector<HTMLButtonElement>(`[value="session-${slot}"]`)!.click();
       state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
       draw();
-      menu.dispatchEvent(new Event("wa-after-hide"));
       expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
     },
   );

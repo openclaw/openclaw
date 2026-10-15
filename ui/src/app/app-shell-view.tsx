@@ -1,6 +1,7 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, Show } from "solid-js";
+import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { renderGatewayStatus } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
@@ -24,7 +25,6 @@ import {
   MACOS_TITLEBAR_ELEMENT,
   SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { LitRouteHost } from "./lit-route-host.tsx";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -238,11 +238,13 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             tabindex={view().mobileNavLayout ? -1 : undefined}
             inert={view().navigationSurfaceHidden}
           >
-            <LitRouteHost
-              renderValue={() =>
-                view().settingsTakeover ? view().navigationContent : props.host.navigationSidebar
-              }
-            />
+            <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
+              <LazySettingsSidebar
+                loader={props.host.settingsSidebar}
+                revision={props.host.shellRevision()}
+                sidebarProps={view().settingsSidebarProps}
+              />
+            </Show>
           </div>
         </Show>
         <Show
@@ -281,6 +283,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
+              "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().activeRoute === "workboard",
@@ -321,7 +324,11 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             <FloatingUpdateCard {...view().floatingUpdateCard} />
           </Show>
           <Show when={view().embedNavigation}>
-            <LitRouteHost renderValue={() => view().navigationContent} />
+            <LazySettingsSidebar
+              loader={props.host.settingsSidebar}
+              revision={props.host.shellRevision()}
+              sidebarProps={view().settingsSidebarProps}
+            />
           </Show>
           <ShellLayoutProvider
             value={{

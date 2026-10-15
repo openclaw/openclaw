@@ -117,6 +117,8 @@ async function migrateAgentDatabase(params: {
     agentId: params.agentId,
     path: params.pathname,
     env: params.env,
+    // Register with the admitted handle; registering after close revokes its proof.
+    register: true,
     onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
   };
   const runSchema = (operation: Parameters<typeof runSqliteIntegrityOperationInWorker>[0]) =>
@@ -159,6 +161,7 @@ async function migrateAgentDatabase(params: {
     ) {
       // Unchanged stores keep their clean-close proof. Explicit Doctor owns
       // content repairs; an update only prepares stores needing migration.
+      registerOpenClawAgentDatabase(schemaOptions);
       return {
         deferred: true,
         rewrittenSessions: 0,
@@ -195,6 +198,7 @@ async function migrateAgentDatabase(params: {
           // The version phase verified this file under the same Doctor custody.
           // Only ordinary additive maintenance remains before readers can open it.
           ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
+          registerOpenClawAgentDatabase(schemaOptions);
         } else {
           await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
         }
@@ -608,8 +612,6 @@ export async function migrateLegacyMediaPersistence(
             }
             warnings.push(...result.warnings);
             recoverableWarningCount += result.warnings.length;
-            // A prior attempt may have committed the schema before publishing its registration.
-            registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
             const schemaAdvanced = result.finalVersion > result.initialVersion;
             if (
               schemaAdvanced &&

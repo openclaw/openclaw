@@ -34,6 +34,14 @@ export type TerminalOperation = {
   cancelIntent?: () => void;
 };
 
+export type TerminalRestoreBatch = {
+  operation: TerminalOperation;
+  pending: Map<string, TerminalPanelSessionTab | undefined>;
+  userClosedTab: boolean;
+  input: { interacted: boolean; stop: () => void };
+  cancelIntent?: () => void;
+};
+
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
   catalog?: CatalogSessionKey,
@@ -62,6 +70,7 @@ export type TerminalPanelSessionControllerState = {
 
 export interface TerminalPanelSessionControllerHost {
   readonly updateComplete: Promise<unknown>;
+  readonly ownerDocument: Document;
   requestUpdate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
@@ -78,6 +87,7 @@ export interface TerminalPanelSessionControllerHost {
   readonly terminalPanelUploadController: TerminalPanelUploadController;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
   ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;

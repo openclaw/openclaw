@@ -48,7 +48,6 @@ export const AppearancePicker = defineSolidBridge<PickerProperties>(
     });
     return (
       <AppearanceGrid
-        inline
         clearable={properties.props.clearable}
         mode={mode()}
         currentIcon={properties.props.icon}

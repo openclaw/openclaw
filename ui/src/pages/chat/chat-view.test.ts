@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -30,8 +31,9 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -94,7 +96,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -3287,14 +3289,15 @@ describe("chat welcome", () => {
     onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
-    render(
-      renderWelcomeState({
-        assistantName: "Val",
-        onDraftChange: () => undefined,
-        onSend: () => undefined,
-        ...params,
-      }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(ChatWelcome, {
+          assistantName: "Val",
+          onDraftChange: () => undefined,
+          onSend: () => undefined,
+          ...params,
+        }),
+      { container },
     );
     return container;
   }
@@ -3411,6 +3414,39 @@ describe("chat welcome", () => {
 
     itemAt(rows, 0, "recent session row").click();
     expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  });
+
+  it("retains the draft composer when secondary welcome content fades", () => {
+    const composer = document.createElement("textarea");
+    composer.value = "Unsubmitted draft";
+    let fade!: () => void;
+    const view = mountSolid(() => {
+      const [faded, setFaded] = createSignal(false);
+      fade = () => setFaded(true);
+      return createComponent(ChatWelcome, {
+        assistantName: "Val",
+        assistantAvatar: "🦉",
+        composer,
+        get fadeSecondaryContent() {
+          return faded();
+        },
+        onDraftChange: () => undefined,
+        onSend: () => undefined,
+      });
+    });
+    composer.focus();
+    composer.setSelectionRange(4, 8);
+
+    fade();
+    flush();
+
+    expect(view.container.querySelector("textarea")).toBe(composer);
+    expect(composer.value).toBe("Unsubmitted draft");
+    expect(document.activeElement).toBe(composer);
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([4, 8]);
+    expect(
+      view.container.querySelector(".agent-chat__welcome-secondary")?.getAttribute("aria-hidden"),
+    ).toBe("true");
   });
 
   it("renders welcome text from the active locale", async () => {
