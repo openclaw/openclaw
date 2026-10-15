@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
+import { hasUnresolvedImageCode } from "./image-code-retention.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
@@ -418,6 +419,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       completedParagraphs.push(paragraph);
     }
     const pending: PositionedNode[] = [block];
+    const regionStart = regions.length;
     let hasReferenceCandidate = false;
     let hasInlineCode = false;
     while (pending.length > 0) {
@@ -481,7 +483,13 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       }
     }
     // A later image reference definition can turn inline code into unprotected alt text.
-    if (hasReferenceCandidate && hasInlineCode && blockStart !== undefined) {
+    if (
+      hasReferenceCandidate &&
+      hasInlineCode &&
+      blockStart !== undefined &&
+      blockEnd !== undefined &&
+      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+    ) {
       retainStart = Math.min(retainStart, blockStart);
     }
   }

@@ -304,6 +304,22 @@ describe("assistantTraceTextFilter streamed projection", () => {
       visiblePrefix: "",
     },
     {
+      name: "a completed citation paragraph with unrelated inline code",
+      filter: assistantTraceTextFilter,
+      prefix: "tool call: hidden\nSee [1] and use `foo`.\n\n",
+      line: "An ordinary explanation continues with a function call and a tool call.\n",
+      suffix: "Done.",
+      visiblePrefix: "See [1] and use `foo`.\n\n",
+    },
+    {
+      name: "a completed image paragraph with unrelated inline code",
+      filter: assistantTraceTextFilter,
+      prefix: "tool call: hidden\nSee ![photo][id] and use `foo`.\n\n",
+      line: "An ordinary explanation continues with a function call and a tool call.\n",
+      suffix: "Done.",
+      visiblePrefix: "See ![photo][id] and use `foo`.\n\n",
+    },
+    {
       name: "fenced payload markers",
       filter: plainToolCallTextFilter,
       prefix: "```ts\n",
@@ -450,6 +466,11 @@ describe("assistantTraceTextFilter streamed projection", () => {
       "a late image reference that revokes inline-code protection",
       "tool call: hidden\n![example `x\ntool call: literal\nx`][id]\n\nAfter\n\n[id]: /url",
       "![example `x\nx`][id]\n\nAfter\n\n[id]: /url",
+    ],
+    [
+      "a late image reference with escaped and code-owned brackets",
+      "tool call: hidden\n![a \\[b `]x\ntool call: literal\nx`][id]\n\nAfter\n\n[id]: /url",
+      "![a \\[b `]x\nx`][id]\n\nAfter\n\n[id]: /url",
     ],
     [
       "a settled definition before an image reference",
