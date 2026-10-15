@@ -70,39 +70,37 @@ export function createPluginToolExecutionBinding(context: {
         ? (...args: unknown[]) => context.call(value, tool, args)
         : value;
     };
-    context.admit(() => {
-      for (
-        let owner: object | null = tool;
-        owner && owner !== Object.prototype;
-        owner = Object.getPrototypeOf(owner)
-      ) {
-        for (const key of Reflect.ownKeys(owner)) {
-          if (key === "constructor" || Object.hasOwn(view, key)) {
-            continue;
-          }
-          const descriptor = Object.getOwnPropertyDescriptor(owner, key);
-          if (!descriptor) {
-            continue;
-          }
-          // Accessors remain lazy so an unreadable schema reaches tool quarantine,
-          // and class-backed tools keep their private-field receiver.
-          Object.defineProperty(view, key, {
-            configurable: true,
-            enumerable: descriptor.enumerable,
-            ...("value" in descriptor
-              ? { writable: true, value: bindValue(key, descriptor.value) }
-              : {
-                  get: descriptor.get
-                    ? () => context.admit(() => bindValue(key, Reflect.get(tool, key, tool)))
-                    : undefined,
-                  set: descriptor.set
-                    ? (value: unknown) => context.admit(() => Reflect.set(tool, key, value, tool))
-                    : undefined,
-                }),
-          });
+    for (
+      let owner: object | null = tool;
+      owner && owner !== Object.prototype;
+      owner = Object.getPrototypeOf(owner)
+    ) {
+      for (const key of Reflect.ownKeys(owner)) {
+        if (key === "constructor" || Object.hasOwn(view, key)) {
+          continue;
         }
+        const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+        if (!descriptor) {
+          continue;
+        }
+        // Accessors remain lazy so an unreadable schema reaches tool quarantine,
+        // and class-backed tools keep their private-field receiver.
+        Object.defineProperty(view, key, {
+          configurable: true,
+          enumerable: descriptor.enumerable,
+          ...("value" in descriptor
+            ? { writable: true, value: bindValue(key, descriptor.value) }
+            : {
+                get: descriptor.get
+                  ? () => context.admit(() => bindValue(key, Reflect.get(tool, key, tool)))
+                  : undefined,
+                set: descriptor.set
+                  ? (value: unknown) => context.admit(() => Reflect.set(tool, key, value, tool))
+                  : undefined,
+              }),
+        });
       }
-    });
+    }
     // SAFETY: Data fields retain their values; callable fields retain their signatures and receiver.
     return view as T;
   };
