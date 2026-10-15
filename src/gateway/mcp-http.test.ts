@@ -1954,7 +1954,7 @@ describe("mcp loopback server", () => {
     body: string;
     status: number;
     headers: Record<string, string>;
-    expected: unknown;
+    expected: Record<string, unknown> | Record<string, unknown>[];
   }>([
     {
       name: "invalid JSON",
