@@ -480,6 +480,7 @@ export const versionedStateMigrations: ReadonlyArray<{
 export function migrateBoundedStateSchema(
   db: DatabaseSync,
   previousVersion: number,
+  options: { versionMigrationOnly?: boolean } = {},
 ): string[] | undefined {
   const migrations = [
     statePredicateColumnMigration,
@@ -500,24 +501,25 @@ export function migrateBoundedStateSchema(
   );
   // Older binaries can leave same-version repairs pending alongside a version change.
   if (
-    tableExists(db, "cron_run_logs") ||
-    collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
-      ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-      allowedMissingColumns: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
-        ...pending.flatMap((migration) => migration.columns),
-      ],
-      allowedMissingIndexes: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
-        ...indexes.map((index) => index.name),
-      ],
-      excludedIndexes: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
-        // v22 replaces these historical expression indexes during its column backfill.
-        "idx_acp_sessions_resume_agent",
-        "idx_acp_sessions_resume_acpx",
-      ],
-    }).length > 0
+    !options.versionMigrationOnly &&
+    (tableExists(db, "cron_run_logs") ||
+      collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
+        ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+        allowedMissingColumns: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
+          ...pending.flatMap((migration) => migration.columns),
+        ],
+        allowedMissingIndexes: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
+          ...indexes.map((index) => index.name),
+        ],
+        excludedIndexes: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
+          // v22 replaces these historical expression indexes during its column backfill.
+          "idx_acp_sessions_resume_agent",
+          "idx_acp_sessions_resume_acpx",
+        ],
+      }).length > 0)
   ) {
     return undefined;
   }

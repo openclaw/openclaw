@@ -86,7 +86,7 @@ export async function backupDoctorMigrationDatabases(params: {
   if (params.versionMigrationsOnly && !isUpdateDoctorLintPass(params.env)) {
     for (const pathname of pending) {
       const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
-      const tables = migration?.kind === "agent" && resolveSchemaMigrationBackupTables(migration);
+      const tables = migration && resolveSchemaMigrationBackupTables(migration);
       if (!tables) {
         migrationTables.clear();
         break;
@@ -157,7 +157,9 @@ export async function backupDoctorMigrationDatabases(params: {
     ...(migrationTables.size > 0
       ? {
           versionMigrations: params.pendingMigrations?.filter((migration) =>
-            params.agentDatabaseTargets?.some((target) => target.path === migration.path),
+            migration.kind === "state"
+              ? migration.path === sharedPath
+              : params.agentDatabaseTargets?.some((target) => target.path === migration.path),
           ),
         }
       : {}),
