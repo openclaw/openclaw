@@ -476,8 +476,9 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
       .mockImplementation((...args) => {
         const owner = prepareLock(...args);
-        pruneRows = vi.fn(owner.pruneRows.bind(owner));
-        return { ...owner, pruneRows };
+        const prune = vi.fn(owner.pruneRows.bind(owner));
+        pruneRows = prune;
+        return { ...owner, pruneRows: prune };
       });
     try {
       expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");

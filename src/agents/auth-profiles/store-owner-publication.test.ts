@@ -80,7 +80,7 @@ describe("auth publication owner receipts", () => {
           apiKey("shared"),
         );
 
-        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+        saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
         const emptyLocal = await loadAuthProfileStoreForCatalogAsync(agentDir);
         expect(emptyLocal.displayPath).toBe(localPath);
         expect(emptyLocal.store.profiles.shared).toEqual(apiKey("shared"));
@@ -99,14 +99,15 @@ describe("auth publication owner receipts", () => {
           );
         }
 
+        const unreadableAgentDir = path.join(stateDir, "agents", "unreadable", "agent");
         writePersistedAuthProfileStoreRaw(
           { version: 1, profiles: "invalid-profile-map" },
-          agentDir,
+          unreadableAgentDir,
         );
-        await expect(loadAuthProfileStoreForCatalogAsync(agentDir)).rejects.toThrow(
+        await expect(loadAuthProfileStoreForCatalogAsync(unreadableAgentDir)).rejects.toThrow(
           "is unreadable",
         );
-        expect(() => loadAuthProfileStoreWithoutExternalProfiles(agentDir)).toThrow(
+        expect(() => loadAuthProfileStoreWithoutExternalProfiles(unreadableAgentDir)).toThrow(
           "is unreadable",
         );
       },
