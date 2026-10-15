@@ -3,15 +3,29 @@ import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
 
+const openRouterModel: Model<"openai-completions"> = {
+  api: "openai-completions",
+  provider: "openrouter",
+  id: "anthropic/claude-sonnet-4.6",
+  name: "Claude",
+  baseUrl: "",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 8192,
+};
+
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
-  const payload = {
-    messages: [{ role: "system", content: "system prompt" }],
-  };
+  let payload: ReturnType<typeof buildOpenAICompletionsParams> | undefined;
   const baseStreamFn: StreamFn = (resolvedModel, context, options) => {
+    payload = buildOpenAICompletionsParams(resolvedModel, context, {
+      cacheRetention: options?.cacheRetention,
+    });
     options?.onPayload?.(payload, resolvedModel);
     return createAssistantMessageEventStream();
   };
@@ -19,15 +33,14 @@ function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   const wrapped = createOpenRouterSystemCacheWrapper(baseStreamFn);
   void wrapped(
     {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "anthropic/claude-sonnet-4.6",
+      ...openRouterModel,
       ...model,
-    } as Model<"openai-completions">,
-    { messages: [] },
+    },
+    { systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`, messages: [] },
     {},
   );
 
+  assert(payload);
   return payload;
 }
 
@@ -120,12 +133,19 @@ describe("proxy stream wrappers", () => {
     "~anthropic/claude-haiku-latest",
     "openrouter/anthropic/claude-sonnet-4.6",
     "openrouter/~anthropic/claude-haiku-latest",
-  ])("injects cache_control markers for OpenRouter model %s on the default route", (id) => {
+  ])("preserves the cache breakpoint through request building for OpenRouter model %s", (id) => {
     const payload = runSystemCacheWrapper({ id });
 
-    expect(payload.messages[0]?.content).toEqual([
-      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "VOLATILE" },
+        ],
+      },
     ]);
+    expect(payload.model).toBe(id);
   });
 
   it("does not inject cache_control markers for declared OpenRouter providers on custom proxy URLs", () => {
@@ -133,7 +153,7 @@ describe("proxy stream wrappers", () => {
       baseUrl: "https://proxy.example.com/v1",
     });
 
-    expect(payload.messages[0]?.content).toBe("system prompt");
+    expect(payload.messages).toEqual([{ role: "system", content: "STABLE\nVOLATILE" }]);
   });
 
   it.each(["deepseek/deepseek-v3.2", "~openai/gpt-4o", "openrouter/~openai/gpt-4o"])(
@@ -141,7 +161,8 @@ describe("proxy stream wrappers", () => {
     (id) => {
       const payload = runSystemCacheWrapper({ id });
 
-      expect(payload.messages[0]?.content).toBe("system prompt");
+      expect(payload.messages).toEqual([{ role: "system", content: "STABLE\nVOLATILE" }]);
+      expect(payload.model).toBe(id);
     },
   );
 
@@ -151,8 +172,14 @@ describe("proxy stream wrappers", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    expect(payload.messages[0]?.content).toEqual([
-      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "VOLATILE" },
+        ],
+      },
     ]);
   });
 
@@ -167,16 +194,9 @@ describe("proxy stream wrappers", () => {
       const model: Model<"openai-completions"> & {
         compat: { requiresStringContent: boolean };
       } = {
-        api: "openai-completions",
-        provider: "openrouter",
+        ...openRouterModel,
         id: "anthropic/claude-sonnet-4-6",
-        name: "Claude",
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
         compat: { requiresStringContent },
       };
       let payload: Record<string, unknown> = {};
