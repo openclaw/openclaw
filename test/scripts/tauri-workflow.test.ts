@@ -37,18 +37,16 @@ it.each(["build_linux", "build_windows", "build_macos"])(
   },
 );
 
-it("budgets Windows source packaging within the desktop job", () => {
+it.each([
+  ["build", "Build native inline browser candidate"],
+  ["test-windows-power", "Build Windows installer without publishing"],
+])("budgets source packaging within desktop job %s", (jobName, stepName) => {
   const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
-  const windows = workflow.jobs["test-windows-power"];
-  const build = windows.steps.find(
-    (step: { name: string }) => step.name === "Build Windows installer without publishing",
-  );
+  const job = workflow.jobs[jobName];
+  const build = job.steps.find((step: { name: string }) => step.name === stepName);
   const packageMinutes = Number(build.env?.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS) / 60_000;
 
   expect(packageMinutes).toBeGreaterThanOrEqual(60);
-  expect(windows["timeout-minutes"] - packageMinutes).toBeGreaterThanOrEqual(40);
+  expect(job["timeout-minutes"] - packageMinutes).toBeGreaterThanOrEqual(40);
   expect(workflow.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS).toBeUndefined();
-  expect(JSON.stringify(workflow.jobs.build)).not.toContain(
-    "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
-  );
 });

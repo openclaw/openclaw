@@ -1386,6 +1386,139 @@ describe("publication status real CLI", () => {
     },
   );
 
+  it.each([
+    ["unconfirmed", "dispatch-unconfirmed"],
+    ["awaiting", "awaiting-admission"],
+    ["admitted", "success"],
+    ["rejected", "failure"],
+    ["wrong-source", "success"],
+    ["foreign-request", "success"],
+    ["legacy-attempt", "request-attempt-unknown"],
+  ])("correlates the Linux builder through its owner admission (%s)", async (kind, operation) => {
+    const fixture = publicationFixture();
+    fixture.publisherJobs.push({
+      ...job(
+        "Request Linux assets after publication",
+        kind === "unconfirmed" ? "failure" : "success",
+      ),
+      id: 8810,
+      run_id: 88,
+      run_attempt: 1,
+      steps: [
+        {
+          number: 1,
+          name: "Retain Linux request evidence",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    });
+    const request = {
+      ...fixture.publisher,
+      id: 909,
+      workflow_id: 9090,
+      head_branch: "main",
+      head_sha: SHA,
+      created_at: "2026-08-02T00:00:00Z",
+      path: ".github/workflows/linux-app-release-request.yml",
+      run_attempt: 1,
+      display_title: "Linux App Release Request [v2026.8.2] desktop=false",
+      conclusion: "success",
+    };
+    const builder = {
+      ...request,
+      id: 910,
+      workflow_id: 9100,
+      event: "workflow_run",
+      path: ".github/workflows/linux-app-release.yml",
+      display_title: "Linux App Release request=909 attempt=1",
+      head_sha: kind === "rejected" ? "f".repeat(40) : SHA,
+      conclusion: kind === "rejected" ? "failure" : "success",
+    };
+    const result = await runPublicationCli(fixture, undefined, async (responses, artifact) => {
+      const tag = fixture.diagnostic.context.releaseTag!;
+      request.display_title = `Linux App Release Request [${tag}] desktop=false`;
+      await artifact(4, fixture.publisher, "linux-release-dispatch-88-1", "linux-dispatch.json", {
+        tag,
+        sourceSha: TARGET_SHA,
+        state: kind === "unconfirmed" ? "dispatch-unconfirmed" : "request-dispatched",
+        requestRunId: kind === "unconfirmed" ? undefined : "909",
+        requestRunAttempt: ["unconfirmed", "legacy-attempt"].includes(kind) ? undefined : "1",
+        workflowSha: kind === "unconfirmed" ? undefined : SHA,
+      });
+      if (kind === "unconfirmed") {
+        return;
+      }
+      responses[`repos/${REPOSITORY}/actions/runs/909`] = request;
+      responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1`] = request;
+      responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: request.path };
+      responses[
+        `repos/${REPOSITORY}/actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=%3E%3D2026-08-02T00%3A00%3A00Z&per_page=100&page=1`
+      ] = {
+        total_count: kind === "awaiting" ? 1 : 2,
+        workflow_runs: [
+          { ...builder, id: 999, display_title: "Linux App Release request=908 attempt=1" },
+          ...(kind === "awaiting" ? [] : [builder]),
+        ],
+      };
+      if (kind === "awaiting") {
+        return;
+      }
+      responses[`repos/${REPOSITORY}/actions/runs/910`] = builder;
+      responses[`repos/${REPOSITORY}/actions/workflows/9100`] = { id: 9100, path: builder.path };
+      await artifact(
+        5,
+        builder,
+        "linux-release-admission-909-1-910-1",
+        "linux-release-admission.json",
+        {
+          schemaVersion: 1,
+          repository: REPOSITORY,
+          request: {
+            runId: kind === "foreign-request" ? "908" : "909",
+            runAttempt: "1",
+            headSha: SHA,
+          },
+          builder: { runId: "910", runAttempt: "1", toolingSha: builder.head_sha },
+          tag: kind === "rejected" ? null : tag,
+          sourceSha:
+            kind === "rejected" ? null : kind === "wrong-source" ? "e".repeat(40) : TARGET_SHA,
+          admission: kind === "rejected" ? "rejected" : "admitted",
+        },
+      );
+      responses[`repos/${REPOSITORY}/actions/runs/910/attempts/1/jobs?per_page=100&page=1`] = {
+        total_count: 1,
+        jobs: [
+          {
+            ...job("Validate release tag", builder.conclusion),
+            id: 9101,
+            run_id: 910,
+            run_attempt: 1,
+            steps: [
+              {
+                number: 1,
+                name: "Retain Linux builder admission",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const surface = JSON.parse(result.stdout).publication.surfaces.nativeLinux;
+    const mismatch = ["wrong-source", "foreign-request"].includes(kind);
+    expect(result.status, result.stderr + result.stdout).toBe(mismatch ? 1 : 0);
+    expect(surface.operation.state).toBe(operation);
+    expect(surface.children.map((child: { runId: string }) => child.runId)).toEqual(
+      ["unconfirmed", "awaiting", "legacy-attempt"].includes(kind) ? [] : ["910"],
+    );
+    expect(surface.terminalMarker.state).toBe(
+      kind === "rejected" ? "rejected" : kind === "admitted" ? "admitted" : "unknown",
+    );
+    expect(surface.verification.state).toBe("unknown");
+  });
+
   it.each(["complete", "denied", "duplicate", "changed-total"])(
     "handles a second artifact page: %s",
     async (kind) => {

@@ -564,7 +564,7 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
         writerConclusion: null,
         writerRef: workflowRef,
         writerFullRef: workflowFullRef,
-        writerPath: ".github/workflows/linux-app-release.yml",
+        writerPath: ".github/workflows/linux-app-mirror.yml",
         writerEvent: "workflow_dispatch",
       },
     } satisfies State),
@@ -694,7 +694,9 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
       value.authority.writerPath =
         mode === "finalize-core"
           ? ".github/workflows/openclaw-release-publish.yml"
-          : ".github/workflows/linux-app-release.yml";
+          : mode === "publish"
+            ? ".github/workflows/linux-app-release.yml"
+            : ".github/workflows/linux-app-mirror.yml";
       value.authority.writerEvent = mode === "publish" ? "workflow_run" : "workflow_dispatch";
     });
     if (mode === "publish") {
