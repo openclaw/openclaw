@@ -16,11 +16,7 @@ import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import { solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
-import {
-  renderChatVoiceStatus,
-  renderMicrophoneActivity,
-  voiceStatusLabel,
-} from "./chat-voice-activity.ts";
+import { ChatVoiceStatus, MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 export type ChatRunControlsProps = Omit<ComposerVoiceButtonProps, "idleLabel"> & {
   canAbort: boolean;
@@ -455,12 +451,7 @@ export function renderComposerDictationStatusSolid(dictation?: ComposerDictation
   }
   if (dictation.connecting) {
     return (
-      <LitContent
-        value={renderChatVoiceStatus({
-          status: "connecting",
-          detail: t("chat.composer.microphoneAccessPending"),
-        })}
-      />
+      <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
     );
   }
   return (
@@ -646,11 +637,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
                 {voiceErrored() ? null : (
-                  <LitContent
-                    value={renderMicrophoneActivity({
-                      status: props.voiceStatus,
-                      inputLevel: props.voiceInputLevel,
-                    })}
+                  <MicrophoneActivity
+                    status={props.voiceStatus}
+                    inputLevel={props.voiceInputLevel}
                   />
                 )}
                 <span class="chat-send-btn__voice-stop-glyph">

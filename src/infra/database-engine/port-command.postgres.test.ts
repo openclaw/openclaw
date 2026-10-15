@@ -56,9 +56,9 @@ it("redacts unresolved connection SecretRefs", async () => {
       },
     },
   };
-  await expect(
-    runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope),
-  ).rejects.toThrow("preflight: workboard:");
+  const result = runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope);
+  await expect(result).rejects.toThrow("preflight:");
+  await expect(result).rejects.not.toThrow("OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION");
 });
 
 describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () => {

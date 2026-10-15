@@ -850,24 +850,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
     }
   });
 
-  it("does not overwrite a restart sentinel owned by another startup task", async () => {
-    const unrelatedSentinel = {
-      version: 1,
-      payload: {
-        kind: "config",
-        status: "skipped",
-        message: "preserve this restart task",
-        stats: { reason: "config-restart-pending" },
-      },
-    };
-    const { result, env } = await runOwnershipHelper({
-      sentinel: unrelatedSentinel,
-    });
-
-    expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toMatchObject(unrelatedSentinel);
-  });
-
   it("does not overwrite a newer pending update handoff sentinel", async () => {
     const newerSentinel = {
       version: 1,

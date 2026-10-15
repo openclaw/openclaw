@@ -38,7 +38,7 @@ export class SessionsPageArchive {
       return null;
     }
   }
-  async archiveTree(row: GatewaySessionRow) {
+  async archive(row: GatewaySessionRow, hasDescendants = false) {
     const scope = this.host.captureScope();
     if (!scope) {
       return;
@@ -47,75 +47,70 @@ export class SessionsPageArchive {
     if (!operations || !this.host.isCurrent(scope)) {
       return;
     }
-    await operations.archiveSessionTreeWithUndo(
-      {
-        sessionData: {
-          isSessionMutationScopeCurrent: () => this.host.isCurrent(scope),
-          publishSessionMutationError: (_candidate, error) => {
-            this.host.publishError(scope, error);
-          },
-          refreshSidebarSessions: async () => {
-            await this.host.refresh(scope);
-          },
-        },
-        pruneSidebarSessionEntry: (key) => {
-          scope.context.navigation.update({
-            sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
-              (entry) => entry !== "session:" + key,
-            ),
-          });
-        },
-        selectSession: (key) => {
-          selectApplicationSession({
-            selection: scope.context.agentSelection,
-            gateway: scope.gateway,
-            sessionKey: key,
-            agentId: this.host.agentId(key, scope.context),
-          });
-        },
-        sidebarSessionStatusFilter: () => "all",
-      },
-      {
-        key: row.key,
-        agentId: row.agentId,
-        sessionId: row.sessionId,
-        label: row.label ?? row.displayName ?? row.key,
-        pinned: row.pinned === true,
-        archived: row.archived,
-        category: row.category,
-        sharingRole: row.sharingRole,
-        active: false,
-      },
-      {
-        ...scope,
-        selectedAgentId: resolveUiSessionRowAgentId(
-          row,
-          scope.context.agentSelection.state.selectedId ??
-            resolveUiDefaultAgentId({
-              agentsList: scope.context.agents.state.agentsList,
-              hello: scope.gateway.snapshot.hello,
-            }),
-        ),
-      },
-    );
-  }
-
-  async archive(row: GatewaySessionRow) {
-    const scope = this.host.captureScope();
-    if (!scope) {
+    const session = {
+      ...row,
+      label: row.label ?? row.displayName ?? row.key,
+      pinned: row.pinned === true,
+      active: false,
+      hasArchiveDescendants: hasDescendants,
+    };
+    const mutationScope = {
+      ...scope,
+      selectedAgentId: resolveUiSessionRowAgentId(
+        row,
+        scope.context.agentSelection.state.selectedId ??
+          resolveUiDefaultAgentId({
+            agentsList: scope.context.agents.state.agentsList,
+            hello: scope.gateway.snapshot.hello,
+          }),
+      ),
+    };
+    let choice: Awaited<ReturnType<typeof operations.confirmSessionArchive>>;
+    try {
+      choice = await operations.confirmSessionArchive(session, mutationScope, () =>
+        this.host.isCurrent(scope),
+      );
+    } catch (error) {
+      if (this.host.isCurrent(scope)) {
+        this.host.publishError(scope, error);
+      }
       return;
     }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !this.host.isCurrent(scope)) {
+    if (!choice) {
       return;
     }
-    if (
-      !(await operations.confirmRunningSessionsArchive(
-        [{ ...row, label: row.label ?? row.displayName ?? row.key }],
-        scope.signal,
-      )) ||
-      !this.host.isCurrent(scope)
-    ) {
+    if (choice.kind === "tree") {
+      await operations.archiveConfirmedSessionsWithUndo(
+        {
+          sessionData: {
+            isSessionMutationScopeCurrent: () => this.host.isCurrent(scope),
+            publishSessionMutationError: (_candidate, error) => {
+              this.host.publishError(scope, error);
+            },
+            refreshSidebarSessions: async () => {
+              await this.host.refresh(scope);
+            },
+          },
+          pruneSidebarSessionEntry: (key) => {
+            scope.context.navigation.update({
+              sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
+                (entry) => entry !== "session:" + key,
+              ),
+            });
+          },
+          selectSession: (key) => {
+            selectApplicationSession({
+              selection: scope.context.agentSelection,
+              gateway: scope.gateway,
+              sessionKey: key,
+              agentId: this.host.agentId(key, scope.context),
+            });
+          },
+          sidebarSessionStatusFilter: () => "all",
+        },
+        choice.rows,
+        mutationScope,
+      );
       return;
     }
     const onConfirmed = prepareArchiveOutcome(

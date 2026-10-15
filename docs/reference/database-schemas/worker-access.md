@@ -298,8 +298,10 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
-Durable actor residency retains narrow navigation and exact byte accounting,
-not settled append bodies. Full bodies stay in SQLite and committed append
+Durable actor residency retains only tree links (`type`, `id`, `parentId`,
+`targetId`, `appendParentId`, and `appendMode`) and exact byte accounting.
+Cold hydration projects those fields in SQL; model-context navigation belongs
+to the history reader. Full bodies stay in SQLite and committed append
 receipts; retries read canonical storage when their payload is no longer in the
 current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
 the UTF-8 size of the primary prepared event or message payload (summed message
@@ -664,6 +666,13 @@ event identity and payload byte bounds. Durable lifecycle deletion also uses the
 worker when initializer rollback or harness cleanup is present; initializer
 rollback is consumed only after the committed receipt. Opaque harness cleanup is
 deprecated and runs after commit, with failures reported as warnings.
+
+Saved session-send recovery discovers current sessions with unconsumed queued or
+interrupted inputs in one metadata query per store through the existing session
+reader. It opens bounded input history only for those candidates. The history
+owner still reconciles lost queued-input custody, and delivery still checks
+current endpoints and communication permissions before dispatch. New inputs
+accepted after discovery belong to their ordinary live delivery owner.
 
 Released synchronous SDK readers and cross-store authorization checks remain
 explicitly counted. Incognito reads memory actor state without SQL. Cross-store checks protect
@@ -1865,8 +1874,10 @@ reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
 Worker transport already detaches these internal postimages. Settlement and
-replica installation share them without another deep freeze or copy; internal
-borrowers treat snapshots and receipts as read-only and copy before editing.
+replica installation share them without another copy. Installation freezes the
+entry facts exposed to shared readers; the complete transcript graph is not
+deep-frozen. Internal borrowers treat snapshots and receipts as read-only and
+copy before editing.
 Replica residency uses an approximate heap budget based on string lengths and
 object/slot overhead, without serializing postimages or transcript bodies just
 to count bytes. The 128-snapshot and 8 MiB LRU limits retain one oversized
@@ -1912,8 +1923,11 @@ repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
-a cold miss loads the requested entries in one existing worker batch. Complete
-entry commit receipts refresh the entry projection without claiming transcript,
+a cold miss loads the requested entries in one existing worker batch. Retained
+entry facts are frozen and shared, including selected prompt snapshots and sharing
+records. Mutable turn and workspace owners make shallow working copies when they
+adopt these facts; the public SDK detaches its mutable result at its own boundary.
+Complete entry commit receipts refresh the entry projection without claiming transcript,
 membership, or pending-input coverage. Missing ancillary facts still use the
 existing reader. Scoped receipt counters keep unrelated session writes from
 evicting resident entries, while a before/after write-token check preserves one

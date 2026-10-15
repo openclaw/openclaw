@@ -1,11 +1,10 @@
-import { html, LitElement } from "lit";
-import { state } from "lit/decorators.js";
+import { render } from "@solidjs/web";
+import { createSignal } from "solid-js";
+import { BoardView } from "../components/board/board-view.tsx";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
-// The fixture page renders outside the app shell, so it must load the app
-// stylesheet itself (Web Awesome theme included) or dropdown menus render
-// theme-less: dark item text on the fixture's dark panels.
+import type { BoardViewCallbacks } from "../lib/board/view-types.ts";
+// The standalone fixture loads the app stylesheet for its board surfaces and menus.
 import "../styles.css";
-import "../components/board/board-view.ts";
 
 const initialSnapshot: BoardSnapshot = {
   sessionKey: "agent:main:board-fixture",
@@ -249,57 +248,48 @@ export function applyBoardFixtureOps(
   return { ...next, revision: next.revision + 1 };
 }
 
-class BoardFixture extends LitElement {
-  @state() private snapshot = structuredClone(initialSnapshot);
-  @state() private activeTabId = "overview";
-
-  override createRenderRoot() {
-    return this;
-  }
-
-  private async applyOps(ops: BoardOp[]): Promise<void> {
-    this.snapshot = applyBoardFixtureOps(this.snapshot, ops);
-  }
-
-  private async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
-    this.snapshot = {
-      ...this.snapshot,
-      revision: this.snapshot.revision + 1,
-      widgets: this.snapshot.widgets.map((widget) =>
-        widget.name === name ? { ...widget, grantState: decision } : widget,
-      ),
-    };
-  }
-
-  override render() {
-    return html`
-      <main class="board-fixture-shell">
-        <header class="board-fixture-header">
-          <div>
-            <span>SESSION DASHBOARD / MOCK</span>
-            <h1>Launch control</h1>
-          </div>
-          <div class="board-fixture-status"><i></i> fixture online</div>
-        </header>
-        <openclaw-board-view
-          .snapshot=${this.snapshot}
-          .activeTabId=${this.activeTabId}
-          .widgetFrameUrl=${frameUrl}
-          .callbacks=${{
-            applyOps: (ops: BoardOp[]) => this.applyOps(ops),
-            grant: (name: string, decision: "granted" | "rejected") => this.grant(name, decision),
-            selectTab: (tabId: string) => {
-              this.activeTabId = tabId;
-            },
-          }}
-        ></openclaw-board-view>
-      </main>
-    `;
-  }
+function BoardFixture() {
+  const [snapshot, setSnapshot] = createSignal(structuredClone(initialSnapshot));
+  const [activeTabId, setActiveTabId] = createSignal("overview");
+  const callbacks: BoardViewCallbacks = {
+    applyOps: async (ops) => {
+      setSnapshot((previous) => applyBoardFixtureOps(previous, ops));
+    },
+    grant: async (name, decision) => {
+      setSnapshot((previous) => ({
+        ...previous,
+        revision: previous.revision + 1,
+        widgets: previous.widgets.map((widget) =>
+          widget.name === name ? { ...widget, grantState: decision } : widget,
+        ),
+      }));
+    },
+    selectTab: setActiveTabId,
+  };
+  return (
+    <main class="board-fixture-shell">
+      <header class="board-fixture-header">
+        <div>
+          <span>SESSION DASHBOARD / MOCK</span>
+          <h1>Launch control</h1>
+        </div>
+        <div class="board-fixture-status">
+          <i></i> fixture online
+        </div>
+      </header>
+      <BoardView
+        snapshot={snapshot()}
+        activeTabId={activeTabId()}
+        widgetFrameUrl={frameUrl}
+        callbacks={callbacks}
+      />
+    </main>
+  );
 }
 
-if (!customElements.get("openclaw-board-fixture")) {
-  customElements.define("openclaw-board-fixture", BoardFixture);
+const root = document.querySelector("#app");
+if (root) {
+  const host = document.createElement("openclaw-board-fixture");
+  root.append(host);
+  render(BoardFixture, host);
 }
-
-document.querySelector("#app")?.append(document.createElement("openclaw-board-fixture"));

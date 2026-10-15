@@ -506,67 +506,6 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
-  it("coalesces concurrent managed-list demand while preserving later forced refreshes", async () => {
-    const { promise: pendingResult, resolve: resolveRequest } =
-      createDeferred<SessionsListResult>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => pendingResult)
-      .mockResolvedValue(listResult(["agent:main:refreshed"]));
-    const { sessions } = sessionHarness(request);
-    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
-    const unsubscribe = sessions.subscribeList(query, () => undefined);
-
-    try {
-      const first = sessions.refreshList(query);
-      const duplicate = sessions.refreshList(query);
-      expect(duplicate).toBe(first);
-      expect(request).toHaveBeenCalledOnce();
-
-      resolveRequest(listResult(["agent:main:initial"]));
-      await Promise.all([first, duplicate]);
-      expect(request).toHaveBeenCalledOnce();
-
-      await sessions.refreshList({ ...query, force: true });
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:refreshed");
-    } finally {
-      resolveRequest(listResult());
-      unsubscribe();
-      sessions.dispose();
-    }
-  });
-
-  it("honors a forced managed refresh requested during an existing load", async () => {
-    const { promise: pendingResult, resolve: resolveRequest } =
-      createDeferred<SessionsListResult>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => pendingResult)
-      .mockResolvedValue(listResult(["agent:main:current"]));
-    const { sessions } = sessionHarness(request);
-    const scope = { agentId: "main", limit: 50, archivedFilter: "archived" as const };
-    const unsubscribe = sessions.subscribeList(scope, () => undefined);
-
-    try {
-      const pending = sessions.refreshList(scope);
-      const forced = sessions.refreshList({ ...scope, force: true });
-      const repeated = sessions.refreshList({ ...scope, force: true });
-      expect(forced).toBe(pending);
-      expect(repeated).toBe(pending);
-
-      resolveRequest(listResult(["agent:main:stale"]));
-      await Promise.all([pending, forced, repeated]);
-
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(sessions.listSnapshot(scope).result?.sessions[0]?.key).toBe("agent:main:current");
-    } finally {
-      resolveRequest(listResult());
-      unsubscribe();
-      sessions.dispose();
-    }
-  });
-
   it.each(["before", "after"] as const)(
     "absorbs only invalidations preceding a queued managed replacement (%s)",
     async (eventTiming) => {

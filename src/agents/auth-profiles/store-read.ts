@@ -10,6 +10,7 @@ import {
   loadInheritedAuthProfileStore,
   readRuntimeAuthProfileStoreFromSnapshots,
 } from "./inherited-store.js";
+import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveNativeSharedAuthStorePath } from "./path-resolve.native.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { materializePersonalAuthProfile } from "./personal-profiles.js";
@@ -348,15 +349,50 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     );
   }
 
+  /** Catalog labels use the same persisted-source selection as the credential read. */
+  async function loadAuthProfileStoreForCatalogAsync(
+    agentDir: string,
+    options?: Parameters<typeof loadAuthProfileStoreWithoutExternalProfiles>[1],
+  ): Promise<{ store: AuthProfileStore; displayPath: string }> {
+    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
+      let localDisplayPath: string | undefined;
+      const localPath = prepared.effectiveAgentDir
+        ? resolveAgentAuthPath(prepared.effectiveAgentDir)
+        : undefined;
+      const store = await readAuthProfileStoreAsynchronously(
+        prepared,
+        (directory, preparedOptions, env) =>
+          loadAuthProfileStoreWithoutExternalProfilesReads(
+            directory,
+            {
+              ...preparedOptions,
+              onReadSource: (source) => {
+                if (source.databasePath === localPath && source.hasStore) {
+                  localDisplayPath = source.databasePath;
+                }
+              },
+            },
+            env,
+          ),
+      );
+      if (localDisplayPath === undefined) {
+        await prepareSharedAuthStoreOwnership(prepared.env);
+      }
+      return { store, displayPath: localDisplayPath ?? resolveSharedAuthStorePath(prepared.env) };
+    });
+  }
+
   function* loadAuthProfileStoreWithoutExternalProfilesReads(
     agentDir?: string,
-    loadOptions?: Parameters<typeof loadAuthProfileStoreWithoutExternalProfiles>[1],
+    loadOptions?: Parameters<typeof loadAuthProfileStoreWithoutExternalProfiles>[1] &
+      Pick<LoadAuthProfileStoreOptions, "onReadSource">,
     env?: NodeJS.ProcessEnv,
   ): AuthProfileStoreReadSequence {
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveLoadOptions = resolveRuntimeAuthProfileLoadOptions(loadOptions);
     const options: LoadAuthProfileStoreOptions = {
       readOnly: true,
+      onReadSource: effectiveLoadOptions?.onReadSource,
       allowKeychainPrompt: effectiveLoadOptions?.allowKeychainPrompt ?? false,
       ...(effectiveLoadOptions?.inheritedAuthDir
         ? { inheritedAuthDir: effectiveLoadOptions.inheritedAuthDir }
@@ -609,6 +645,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
   return {
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForCatalogAsync,
     ensureAuthProfileStore,
     ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,

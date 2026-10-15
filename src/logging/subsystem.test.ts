@@ -56,6 +56,28 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it.each([
+    ["guest", undefined, "WARN"],
+    ["input", undefined, "WARN"],
+    ["bridge", "invalid_input", "WARN"],
+    ["bridge", "input_contract", "WARN"],
+    ["bridge", "tool_error", "ERROR"],
+    ["bridge", "output_contract", "ERROR"],
+    ["host", "runtime_unavailable", "ERROR"],
+  ] as const)("logs %s/%s failures at %s", async (failurePhase, failureCode, level) => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+    logCodeModeFailure(new Error("synthetic failure"), { failurePhase, failureCode });
+    await testApi.flushFileLogQueueForTests();
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(records[0]._meta.logLevelName).toBe(level);
+  });
+
   it("records raw Code Mode causes and correlation ids without a debug flag", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "error", consoleLevel: "silent", file });

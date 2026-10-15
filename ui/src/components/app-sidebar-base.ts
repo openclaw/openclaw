@@ -148,6 +148,7 @@ export abstract class AppSidebarBase {
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
   contextualSidebar: ContextualSidebar | undefined;
+
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
@@ -271,6 +272,14 @@ export abstract class AppSidebarBase {
 
   get sessionInvolvingMeFilterActive(): boolean {
     return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
+  }
+
+  get sessionCatalogRowsVisible(): boolean {
+    return (
+      this.navigationView === "sessions" &&
+      this.sidebarAgentsMode === "chip" &&
+      !this.contextualSidebar
+    );
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilterController;

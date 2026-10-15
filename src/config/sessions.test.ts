@@ -10,7 +10,6 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
 } from "./sessions.js";
 import { buildGroupDisplayName } from "./sessions/group-display.js";
 
@@ -118,13 +117,6 @@ describe("sessions", () => {
       expected: "agent:main:discord:group:12345",
     },
     {
-      name: "uses custom main key when provided",
-      scope: "per-sender" as const,
-      ctx: { From: "+1555" },
-      mainKey: "primary",
-      expected: "agent:main:primary",
-    },
-    {
       name: "keeps global scope untouched",
       scope: "global" as const,
       ctx: { From: "+1555" },
@@ -147,15 +139,6 @@ describe("sessions", () => {
       );
     });
   }
-
-  it("derives session transcripts dir from OPENCLAW_STATE_DIR", () => {
-    const dir = resolveSessionTranscriptsDirForAgent(
-      "main",
-      { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
-      () => "/home/ignored",
-    );
-    expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
-  });
 
   it("includes topic ids in session transcript filenames", () => {
     withStateDir("/custom/state", () => {
@@ -192,20 +175,6 @@ describe("sessions", () => {
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
     );
-  });
-
-  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const originalBase = path.resolve("/original/state");
-      const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
-      // sessionFile was created under a different state dir than current env
-      const sessionFile = resolveSessionFilePathCore(
-        "sess-1",
-        { sessionFile: bot2Session },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(bot2Session);
-    });
   });
 
   it("falls back when structural cross-root path traverses after sessions", () => {

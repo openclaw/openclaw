@@ -1360,7 +1360,7 @@ src/agents/provider-secret-egress.ts	1
 src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	1
 src/agents/runtime-plan/build.ts	4
-src/agents/runtime-plan/tools.ts	3
+src/agents/runtime-plan/tools.ts	2
 src/agents/runtime/proxy.ts	3
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
@@ -2673,7 +2673,6 @@ ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	2
-ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1
