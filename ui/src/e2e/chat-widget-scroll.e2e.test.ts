@@ -166,7 +166,10 @@ suite.define(() => {
             expect(offset).toBeGreaterThanOrEqual(previous - 1);
             previous = offset;
           }
-          expect(sample.released - sample.before).toBeGreaterThan(120);
+          expect(
+            sample.released - sample.before,
+            JSON.stringify({ target, ...sample }),
+          ).toBeGreaterThan(120);
           expect(sample.settled - sample.released).toBeGreaterThan(20);
         }
 

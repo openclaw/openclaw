@@ -36,7 +36,6 @@ const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
 const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
-const markClawPackageIndependentlyOwnedMock = vi.fn(async () => 0);
 const tempDirs = createTrackedTempDirs();
 
 vi.mock("../../infra/clawhub-skills.js", async (importOriginal) => ({
@@ -82,11 +81,6 @@ vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
 vi.mock("../../infra/fs-safe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/fs-safe.js")>()),
   pathExists: pathExistsMock,
-}));
-
-vi.mock("../../state/claw-package-adoption.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/claw-package-adoption.js")>()),
-  markClawPackageIndependentlyOwned: markClawPackageIndependentlyOwnedMock,
 }));
 
 vi.mock("./skill-tree-digest.js", async (importOriginal) => ({
@@ -194,14 +188,6 @@ function expectInstalledSkill(
   if (expected.targetDir) {
     expect(result.targetDir).toBe(expected.targetDir);
   }
-}
-
-function expectInvalidSlug(result: Awaited<ReturnType<typeof installSkillFromClawHub>>) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected invalid slug failure");
-  }
-  expect(result.error).toContain("Invalid skill slug");
 }
 
 function installTestSkill(
@@ -413,13 +399,11 @@ export {
   evaluateSkillInstallPolicyMock,
   pathExistsMock,
   digestClawHubSkillTreeMock,
-  markClawPackageIndependentlyOwnedMock,
   tempDirs,
   bindHostWorkspace,
   expectInstallPackageSourceDir,
   installPolicyInput,
   expectInstalledSkill,
-  expectInvalidSlug,
   installTestSkill,
   updateTestSkill,
   mockArchiveInstallResolution,

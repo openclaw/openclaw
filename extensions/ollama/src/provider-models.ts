@@ -169,7 +169,7 @@ function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelSho
 
 function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return (
-    typeof info.contextWindow === "number" ||
+    info.contextWindow !== undefined ||
     (info.capabilities?.length ?? 0) > 0 ||
     info.thinkingLevelMap !== undefined
   );

@@ -371,8 +371,16 @@ to deliver guidance to the session's active run without starting a new turn.
 It returns `{ steered: true, runId? }` when the run accepts the text, or
 `{ steered: false, reason }` when no run is active, the run is not accepting
 steering, or the runtime rejects it. Acceptance does not wait for transcript
-commitment. The optional `idempotencyKey` is carried by the transcript recorder
-for duplicate correlation.
+commitment. Repeating an `idempotencyKey` within the same active run reuses the
+original accepted result without queueing another model input, including when
+calls overlap. A key already stored in the session also prevents delivery to a
+later run: the host returns the original `runId` when its steering receipt is
+available, or `{ steered: false, reason: "duplicate" }` otherwise. A duplicate is
+a terminal no-op; do not enqueue fallback guidance for it. A rejected attempt
+does not reserve the key, so it can be retried.
+Internal Codex guidance is appended to the transcript only after native
+acceptance. A pre-dispatch rejection leaves no guidance in later model context
+and does not prevent retrying the key.
 
 Active steering requires a guarded (V2) runtime, such as the built-in OpenClaw
 runtime or Codex. Legacy V1 runtimes, including Copilot, return
@@ -396,7 +404,7 @@ injection queue when steering is unavailable:
 ```typescript
 const guidance = { sessionKey, text, idempotencyKey: "review-1" };
 const result = await api.session.workflow.steerActiveRun(guidance);
-if (!result.steered) {
+if (!result.steered && result.reason !== "duplicate") {
   await api.session.workflow.enqueueNextTurnInjection({
     ...guidance,
     ttlMs: 24 * 60 * 60 * 1000,

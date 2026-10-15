@@ -178,6 +178,7 @@ jobs:
       source_channel_test_env_json: ${{ steps.manifest.outputs.source_channel_test_env_json }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
+      node_test_group_pools_json: ${{ steps.manifest.outputs.node_test_group_pools_json }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_pr_madge_import_cycles: ${{ steps.manifest.outputs.run_pr_madge_import_cycles }}
@@ -757,7 +758,7 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh")
-              platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py")
+              platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
               # Preflight imports these siblings by file-relative paths.
               preflight_scripts = (
@@ -2589,6 +2590,7 @@ jobs:
             ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts \
@@ -3477,6 +3479,23 @@ jobs:
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      - name: Resolve pooled Node test groups
+        id: node-test-groups
+        if: matrix.groups_pool
+        env:
+          GROUP_POOL: ${{ fromJSON(needs.preflight.outputs.node_test_group_pools_json)[matrix.groups_pool] }}
+          GROUP_INDEX: ${{ matrix.groups_index }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { decodeNodeTestGroups, encodeNodeTestGroups } from './scripts/lib/ci-node-test-groups-codec.mts';
+          const groups = decodeNodeTestGroups(process.env.GROUP_POOL)[Number(process.env.GROUP_INDEX)];
+          if (!Array.isArray(groups)) {
+            throw new Error('Node test group pool does not contain the selected row');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `groups_gzip_base64=${encodeNodeTestGroups(groups)}\n`);
+          JS
+
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -3484,7 +3503,7 @@ jobs:
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: *frozen_target
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
-          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
@@ -3528,7 +3547,7 @@ jobs:
     name: check-plan
     needs: [preflight]
     if: needs.preflight.outputs.run_check_plan == 'true'
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["","blacksmith","hybrid"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.node_runner_backend != 'runson' && github.run_attempt == 1 && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.frozen_target != 'true' && github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (contains(fromJSON('["","blacksmith","hybrid"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.node_runner_backend != 'runson' && github.run_attempt == 1 && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.frozen_target != 'true' && github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["","blacksmith","hybrid"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && !(github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend != 'runson' && github.run_attempt == 1 && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.frozen_target != 'true' && github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (contains(fromJSON('["","blacksmith","hybrid"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && !(github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend != 'runson' && github.run_attempt == 1 && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.frozen_target != 'true' && github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       check_matrix: ${{ steps.plan.outputs.check_matrix }}
@@ -3559,7 +3578,7 @@ jobs:
         id: plan
         env:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
-          OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
+          OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && '1' || vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
         run: node scripts/ci-check-plan.mts
 
       - name: Check narrow PR global guards
@@ -3610,61 +3629,6 @@ jobs:
           cache-mode: *cache_mode
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
-
-      - name: Restore typecheck incremental state
-        id: test-type-cache
-        if: (matrix.task == 'prod-types' || matrix.task == 'test-types') && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
-      - name: Restore changed core test-type stripe 1
-        if: &changed_core_test_type_cache_gate matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
-      - name: Restore changed core test-type stripe 2
-        if: *changed_core_test_type_cache_gate
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
-      - name: Restore changed core test-type stripe 3
-        if: *changed_core_test_type_cache_gate
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
-      - name: Restore changed core test-type stripe 4
-        if: *changed_core_test_type_cache_gate
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
-      - name: Restore changed core test-type stripe 5
-        if: *changed_core_test_type_cache_gate
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -4059,14 +4023,6 @@ jobs:
           esac
           finish_checks
 
-      - name: Save typecheck incremental state
-        if: success() && (matrix.task == 'prod-types' || matrix.task == 'test-types') && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
-
   check-lint-hosted-core-shard:
     permissions:
       contents: read
@@ -4240,16 +4196,6 @@ jobs:
       - *linux_node_checkout_step
       - *semantic_node_setup_step
 
-      - name: Restore core test-type incremental state
-        id: test-type-cache
-        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-
       - name: Run hosted core test-types stripe
         env:
           CORE_STRIPE: ${{ matrix.stripe }}
@@ -4291,14 +4237,6 @@ jobs:
             fi
             finish_static_checks
           fi
-
-      - name: Save core test-type incremental state
-        if: success() && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .artifacts/tsgo-cache
-          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
   check-additional-shard:
     permissions:
@@ -5323,6 +5261,20 @@ jobs:
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
 
+      - name: Restore iOS test build products
+        id: ios-build-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off' && matrix.phase == 'tests' && env.IOS_MAIN_TIER == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_build_cache_paths |
+            ~/Library/Developer/Xcode/DerivedData/OpenClaw-*/Build
+            ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+            ~/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex
+            apps/ios/build/ci-input-metadata.json
+          key: ios-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('scripts/swift-build-cache-metadata.py', 'apps/ios/project.yml', 'apps/ios/Config/**', 'apps/ios/**/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved', 'apps/shared/OpenClawWatchRTC/Cargo.*', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh') }}-${{ hashFiles('apps/ios/Sources/**', 'apps/ios/Tests/**', 'apps/ios/ShareExtension/**', 'apps/ios/ActivityWidget/**', 'apps/ios/WatchApp/**', 'apps/ios/Resources/**', 'apps/shared/**/Sources/**', 'apps/shared/OpenClawKit/Plugins/**', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/swabble/Sources/**', 'apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift', 'apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift', 'apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift', 'apps/macos/Tests/OpenClawIPCTests/TestWait.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift', 'apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift') }}
+          restore-keys: |
+            ios-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('scripts/swift-build-cache-metadata.py', 'apps/ios/project.yml', 'apps/ios/Config/**', 'apps/ios/**/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved', 'apps/shared/OpenClawWatchRTC/Cargo.*', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh') }}-
+
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
         id: watch-rust-toolchain
@@ -5484,6 +5436,8 @@ jobs:
                       os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_FROZEN_TARGET") != "true"
                   ):
                       subprocess.run(["pnpm", "ios:gen"], check=True)
+                      if os.environ.get("IOS_MAIN_TIER") == "true" and os.environ.get("IOS_FROZEN_TARGET") != "true":
+                          subprocess.run(["python3", "-I", "-S", ".ci-harness/scripts/swift-build-cache-metadata.py", "restore", "ios"], check=True)
                       subprocess.run([
                           "python3", ".ci-harness/scripts/ci-xcodebuild.py",
                           "-project", "apps/ios/OpenClaw.xcodeproj",
@@ -5491,8 +5445,11 @@ jobs:
                           "-configuration", "Debug",
                           "-destination", os.environ.get("IOS_DEST") or "generic/platform=iOS Simulator",
                           "-showBuildTimingSummary",
-                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" else "build",
+                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true" else "build",
                       ], check=True)
+                      if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true":
+                          with open(os.environ["GITHUB_ENV"], "a") as environment:
+                              environment.write("IOS_TEST_BUILD_PREPARED=true\n")
                   else:
                       subprocess.run(["pnpm", "ios:build"], check=True)
                   print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
@@ -5569,7 +5526,7 @@ jobs:
           # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
           # Preserve xcresult bundles and command logs without that extra collection.
           test_action=test
-          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
             test_action=test-without-building
           fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
@@ -5632,7 +5589,7 @@ jobs:
             )
           fi
           test_action=test
-          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
             test_action=test-without-building
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
@@ -5735,6 +5692,22 @@ jobs:
             "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
+
+      - name: Record iOS build-cache input metadata
+        id: record-ios-build-cache-metadata
+        if: success() && steps.ios-build-cache.outputs.cache-primary-key != '' && steps.ios-build-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'schedule'
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 -I -S scripts/swift-build-cache-metadata.py record ios
+
+      - name: Save iOS test build products
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && steps.record-ios-build-cache-metadata.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_build_cache_paths
+          key: ${{ steps.ios-build-cache.outputs.cache-primary-key }}
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}

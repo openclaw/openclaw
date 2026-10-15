@@ -213,6 +213,11 @@ Searches keep reading the published index, and targeted session updates can
 still publish when its identity is valid. Explicit CLI repair bypasses the
 process-local cooldown.
 
+Optional embedding-provider failures also share their 30-second recovery cooldown
+with search-triggered maintenance. Searches retain keyword recall, and existing
+semantic indexes remain intact. An already keyword-only index can still accept
+file updates during the cooldown; semantic indexing resumes after recovery.
+
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,

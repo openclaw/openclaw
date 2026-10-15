@@ -23,12 +23,10 @@ function assertUsagePartitionWorker(): void {
   }
 }
 
-export function writeSessionCostUsagePartitionsInDatabase(
+export function deleteSessionCostUsagePartitionsInDatabase(
   db: DatabaseSync,
   params: {
     rollupId: string;
-    updatedAt: number;
-    partitions?: UsageCostPartition[];
     removedDates?: string[];
     replacePartitions?: boolean;
   },
@@ -52,31 +50,6 @@ export function writeSessionCostUsagePartitionsInDatabase(
         .deleteFrom("cache_entries")
         .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
         .where("key", "=", usageCostPartitionKey(params.rollupId, date)),
-    );
-  }
-  for (const partitions of chunkItems(params.partitions ?? [], 100)) {
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("cache_entries")
-        .values(
-          partitions.map((partition) => ({
-            scope: USAGE_COST_PARTITION_SCOPE,
-            key: usageCostPartitionKey(params.rollupId, partition.date),
-            value_json: partition.valueJson,
-            blob: partition.blob,
-            expires_at: null,
-            updated_at: params.updatedAt,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
-            value_json: eb.ref("excluded.value_json"),
-            blob: eb.ref("excluded.blob"),
-            expires_at: eb.ref("excluded.expires_at"),
-            updated_at: eb.ref("excluded.updated_at"),
-          })),
-        ),
     );
   }
 }

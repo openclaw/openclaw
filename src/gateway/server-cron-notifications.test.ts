@@ -12,6 +12,7 @@ import type { CronJob } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -233,6 +234,36 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
         });
       }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
+  it.each(["announce", "webhook"] as const)(
+    "records non-delivery when admission refuses a %s failure alert",
+    async (mode) => {
+      markGatewayRestartDraining();
+      const onDeliverySettled = vi.fn(async () => {});
+      await expect(
+        sendGatewayCronFailureAlertBase({
+          routing: { defaultAgentId: "main" },
+          deps: {} as CliDeps,
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+          job: createCompletionWebhookJob(),
+          payload: { text: "cron failed" },
+          mode,
+          channel: "discord",
+          to: mode === "webhook" ? "https://example.invalid/failure" : "channel:ops",
+          onDeliverySettled,
+        }),
+      ).rejects.toThrow("Gateway is restarting");
+      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: false,
+        status: "not-delivered",
+        error: "Gateway is restarting. Please try again shortly.",
+      });
+      expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
   );

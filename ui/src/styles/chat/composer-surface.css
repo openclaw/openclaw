@@ -1045,17 +1045,6 @@
   }
 }
 
-.agent-chat__input [data-chat-pointer-restored-focus]:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.agent-chat__input
-  wa-dropdown[data-chat-pointer-opened-picker]
-  wa-dropdown-item:is(:focus, :focus-visible) {
-  outline: none;
-}
-
 .chat-thread-inner {
   /* Shared gutter plus the responsive side inset that used to be
      .chat-thread's horizontal padding (moved off the scroll container so

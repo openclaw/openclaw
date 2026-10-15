@@ -40,10 +40,12 @@ The manifest reads the OpenClaw version and commit from `dist/build-info.json`.
 Rerun `pnpm build` after source changes; changing the checkout alone does not update
 the identity of an existing runtime build.
 
-On macOS, database operations also require a supported SQLite library. Provision
-one through the packaging owner or follow
-[SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
-Compiling the executable does not provision that system dependency.
+On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
+`scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
+target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default
+`15.0`). Standalone builds prefer this library before host discovery; an explicit
+`OPENCLAW_SQLITE_LIBRARY` remains an override. Homebrew is not required to run
+the artifact. See [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
 
 The build produces exactly these deliverables:
 
@@ -79,28 +81,40 @@ bytecode. An AOT artifact needs its own runtime and signing qualification.
 `manifest.json` describes the output for packaging and verification. Its version
 1 contract is:
 
-| Field           | Contents                                                                  |
-| --------------- | ------------------------------------------------------------------------- |
-| `schemaVersion` | Manifest schema version, `1`.                                             |
-| `mode`          | `jit`, `bytecode`, or `aot`.                                              |
-| `target`        | `platform` and `arch` for the compiled executable.                        |
-| `bun`           | Compiler `version`, `revision`, `commit`, and `executableSha256`.         |
-| `openclaw`      | OpenClaw `version` and source `commit`.                                   |
-| `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                               |
-| `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, and `symlinkCount`.  |
-| `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.          |
-| `pruning`       | Applied `patterns`, `removedFiles`, and `removedBytes`.                   |
-| `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map. |
+| Field           | Contents                                                                                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | Manifest schema version, `1`.                                                                                     |
+| `mode`          | `jit`, `bytecode`, or `aot`.                                                                                      |
+| `target`        | `platform` and `arch` for the compiled executable.                                                                |
+| `bun`           | Compiler `version`, `revision`, `commit`, and `executableSha256`.                                                 |
+| `openclaw`      | OpenClaw `version` and source `commit`.                                                                           |
+| `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                       |
+| `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`. |
+| `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                  |
+| `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                         |
+| `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                         |
 
 Keep compiler provenance when signing or packaging the executable. Signing
 changes its bytes: refresh `executable.sizeBytes` and `executable.sha256` after
 signing. If packaging changes the sidecar, refresh its recorded inventory too.
+
+`runtime.categories` records `{ "files": number, "bytes": number }` for each
+resource category. Its totals equal `runtime.fileCount` and `runtime.sizeBytes`.
+`runtime.sidecarPlugins` is empty because bundled plugin code is embedded in the
+executable. Browser scripts served as plugin assets are counted as resources.
+
+`runtime.sqlite` records the selected SQLite version, compile options, and extension
+loading support. For macOS it also records the bundled library's relative `path`,
+`sha256`, public-domain license, and pinned source archive provenance. Linux uses
+Bun's built-in SQLite after the builder verifies its version and required features.
 
 The sidecar digest covers regular files and symbolic links, sorted by their
 relative POSIX paths in UTF-16 lexical order. Each file contributes
 `path\0file\0content-sha256\n`; each link contributes
 `path\0symlink\0link-target\n`. Hash these UTF-8 records with SHA-256. Directory
 entries and symlink targets are not counted again in `runtime.sizeBytes`.
+Manifest generation rejects absolute symlinks, dangling symlinks, and links whose
+resolved targets are outside `runtime/`, so links remain valid when the artifact moves.
 
 ### macOS signing
 
@@ -110,7 +124,9 @@ copying the entitlements for a separate `runtime/bin/bun` executable. The set is
 mode-specific; bytecode is not a reason to disable JIT permissions.
 
 Sign native sidecar libraries and addons according to the package's ownership
-and signing policy. The runtime can load native code from installed plugins,
+and signing policy. Sign `runtime/lib/libsqlite3.dylib` with the app's signing
+identity and update its `runtime.sqlite.sha256` and the sidecar inventory after
+signing. The runtime can load native code from installed plugins,
 including plugins with a different signing identity. Validate the signed output
 through the functional campaign below; a successful `--version` probe does not
 exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
@@ -137,15 +153,46 @@ state before upgrading; see [Updating](/install/updating).
 
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module
-boundaries. The sidecar still contains JavaScript for metadata and dynamic
-external plugins, plus native addons, libraries, templates, bundled and Custodian
-skills, license notices, and other resources.
-It is not an empty-resource or single-file distribution.
+boundaries. The sidecar contains the resources read from disk:
 
-Pruning removes source maps and TypeScript declarations. It does not remove
-JavaScript from the sidecar. The strict trace verifies that the exercised
-application and worker paths use embedded JavaScript; external plugins or other
-unexercised paths require their own proof.
+- Public documentation Markdown/MDX and its navigation metadata, plus workspace
+  templates, including JSON team presets and workspace instructions.
+- Bundled and Custodian skills, including their supporting files.
+- Plugin manifests, package metadata, and assets such as browser scripts, styles,
+  WebAssembly, SQL templates, browser extensions, and plugin-declared static files.
+- Control UI static files.
+- Canvas A2UI bundles, session-card fonts, HTML export templates, and bundled hook metadata.
+- Native addons, shared libraries, dependency resources, and their package and
+  license metadata.
+- Runtime identity and startup metadata, install-owner metadata, and license notices.
+
+The builder removes embedded application and bundled plugin JavaScript, source
+maps, declarations, development tooling, and package-manager links. Dependencies
+that need disk resources use regular files in versioned `runtime/native/`
+directories; the packaged sidecar has no symlinks or pnpm store. Immutable
+executable metadata supplies bundled plugin source checks and Doctor contract
+hashes. Installed plugins keep their normal filesystem admission and loading
+rules and live in the configured state directory.
+
+Installed TypeScript plugins use the embedded Jiti loader and Babel transformer.
+The builder captures constant conditional-export resolutions before compilation;
+these modules remain lazy and do not require JavaScript in the sidecar.
+
+Private `docs/internal/` content and the root documentation authoring instructions
+(`docs/AGENTS.md` and `docs/CLAUDE.md`) are excluded from the snapshot and sidecar.
+
+Bundled hook handlers and plugin helper programs use the executable's embedded
+child entrypoints. Browser scripts and HTML export scripts remain physical assets
+because they run in the browser rather than the OpenClaw process.
+
+The resource policy is declarative and derived from the compiled dependency
+graph. Runtime traces verify the exercised paths; they are not a frozen list of
+files to ship. Browser JavaScript and skill scripts remain disk resources even
+though application JavaScript executes from the image.
+
+The builder validates the resource plan before compiling the executable. Hoisted
+copies targeting the same resource path share one file when their content hashes
+match; conflicting copies stop the build and identify both source paths.
 
 Native dependencies must match the target platform and architecture. A
 standalone build does not make an arbitrary plugin portable, provide a signing

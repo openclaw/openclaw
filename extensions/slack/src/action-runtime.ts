@@ -711,15 +711,8 @@ export async function handleSlackAction(
           for (const [index, message] of preparedMessages.entries()) {
             await sendSlackMessage(destination, message.text, {
               ...baseSendOpts,
+              ...message,
               ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
-              ...(message.blocks ? { blocks: message.blocks } : {}),
-              ...(message.authoredTextPlacement
-                ? { authoredTextPlacement: message.authoredTextPlacement }
-                : {}),
-              ...(Object.hasOwn(message, "nativeDataFallbackBaseText")
-                ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                : {}),
-              ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
             });
           }
         } else if (blocks) {
@@ -727,7 +720,7 @@ export async function handleSlackAction(
         } else {
           await sendSlackMessage(destination, content ?? "", {
             ...sendOpts,
-            mediaUrl: mediaUrl ?? undefined,
+            mediaUrl,
             blocks,
           });
         }
@@ -810,10 +803,10 @@ export async function handleSlackAction(
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
-          before: before ?? undefined,
-          after: after ?? undefined,
-          threadId: threadId ?? undefined,
-          messageId: messageId ?? undefined,
+          before,
+          after,
+          threadId,
+          messageId,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(message, message.ts),
@@ -844,14 +837,12 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const readToken = resolveSlackOperationToken(account, "read");
         const readOpts = buildActionOpts("read", target.teamId);
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
-          ...(readToken && !readOpts.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
-          threadId: threadId ?? undefined,
+          threadId,
         });
         if (!downloaded) {
           return jsonResult({

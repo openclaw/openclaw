@@ -49,6 +49,32 @@ it("keeps native close conservative until an unqualified reader is retired", asy
   }
 });
 
+it("takes no writer reservations for 150 concurrent cold history reads", async () => {
+  observed.preparedDatabase = false;
+  const request = input();
+  const reservations = channel("openclaw.agent-database.reservation");
+  const reserve = vi.fn();
+  reservations.subscribe(reserve);
+  observed.run.mockResolvedValue({
+    ok: true,
+    value: { kind: "transcript-watermark", watermark: undefined },
+  });
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 150 }, (_, index) =>
+        withSessionHistoryWorkerDatabase(request.database, (owner) =>
+          owner.readWatermark({ scope: { ...request.scope, sessionId: `cold-${index}` } }),
+        ),
+      ),
+    );
+    expect(results).toHaveLength(150);
+    expect(observed.run).toHaveBeenCalledTimes(150);
+    expect(reserve.mock.calls.length).toBe(0);
+  } finally {
+    reservations.unsubscribe(reserve);
+  }
+});
+
 it.each([false, true])(
   "orders cold read admission without holding consumer writes (prepared=%s)",
   async (prepared) => {
@@ -211,7 +237,7 @@ it("keeps cold reads progressing while history searches await the same writer", 
     );
     releaseWriter.resolve();
     await writer;
-    // A cold reader holding the writer must not queue behind searches needing that writer.
+    // Cold schema admission must not queue behind searches needing the same admission turn.
     expect(await coldQueued.promise).toBe(false);
     allowStatus.resolve();
     expect(await cold).toBe(false);

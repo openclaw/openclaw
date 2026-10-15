@@ -7,6 +7,7 @@ import {
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
@@ -27,11 +28,16 @@ const secondTab: PanelHostedTab = {
 };
 const tabs = [firstTab, secondTab];
 
+function HostedPanel(props: { panel: HTMLElement }) {
+  return props.panel;
+}
+
 async function mount(
   options: {
     tabs?: PanelHostedTab[];
     fetchFavicon?: LinkFaviconFetcher;
     slot?: SidebarSlotId;
+    wrapped?: boolean;
   } = {},
 ) {
   const slot = options.slot ?? "browser";
@@ -40,7 +46,13 @@ async function mount(
     activeHostedTabId: "remote:page:1",
     selectHostedTab: vi.fn(),
     closeHostedTab: vi.fn().mockResolvedValue(undefined),
+    handleToggleRequest: vi.fn(),
   }) satisfies PanelHostedTabsElement;
+  const wrapped = options.wrapped !== false;
+  if (wrapped) {
+    panel.setAttribute("data-sidebar-panel-host", "");
+  }
+  const content = wrapped ? solidContent(HostedPanel, { panel }) : panel;
   const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${shells.length}`;
   region.layout = activatePanel(
@@ -49,7 +61,7 @@ async function mount(
   );
   region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
-      content: definition.slot === slot ? panel : null,
+      content: definition.slot === slot ? content : null,
     }),
   );
   region.fetchFavicon = options.fetchFavicon;
@@ -64,9 +76,9 @@ async function mount(
   };
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
-  const content = document.createElement("div");
-  content.className = "sidebar-region__right-runtime";
-  shell.append(region, content);
+  const outlet = document.createElement("div");
+  outlet.className = "sidebar-region__right-runtime";
+  shell.append(region, outlet);
   document.body.append(shell);
   shells.push(shell);
   await region.updateComplete;
@@ -94,6 +106,29 @@ afterEach(() => {
 });
 
 describe("chat sidebar hosted tabs", () => {
+  it("delivers panel commands through the native view wrapper", async () => {
+    const { panel, region, shell } = await mount();
+    const container = shell.querySelector('[data-panel-slot="browser"]')!;
+    const event = new CustomEvent("openclaw:browser-toggle", {
+      detail: { open: true, newTab: true },
+    });
+
+    expect(container.firstElementChild).not.toBe(panel);
+    expect(region.deliverPanelEvent("browser", event)).toBe(true);
+    expect(panel.handleToggleRequest).toHaveBeenCalledExactlyOnceWith(event);
+    expect(labels(shell)).toEqual(["Review", "First page", "Second page", "Files"]);
+  });
+
+  it("keeps the direct-host contract for raw panel content", async () => {
+    const { panel, region, shell } = await mount({ wrapped: false });
+    const event = new CustomEvent("openclaw:browser-toggle");
+
+    expect(shell.querySelector('[data-panel-slot="browser"]')?.firstElementChild).toBe(panel);
+    expect(region.deliverPanelEvent("browser", event)).toBe(true);
+    expect(panel.handleToggleRequest).toHaveBeenCalledExactlyOnceWith(event);
+    expect(labels(shell)).toEqual(["Review", "First page", "Second page", "Files"]);
+  });
+
   it("restores an expanded hosted panel only from its active page tab", async () => {
     const { region, shell } = await mount();
     region.layout = { ...region.layout, expanded: true, expandedSide: true };

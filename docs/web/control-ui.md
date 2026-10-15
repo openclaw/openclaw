@@ -349,9 +349,12 @@ agent's identity, model, current work status, last activity, and a preview from 
 main chat. **Open chat** opens that agent's
 main session. Working agents appear first, followed by the most recently active.
 
-**Manage agents** opens `/settings/agents`. **New agent** opens the existing
-agent creation flow when available, or agent settings otherwise. `/agents` now
-opens the roster; agent configuration remains at `/settings/agents`.
+**Manage agents** opens `/settings/agents`. **New agent** requires the Gateway's
+`openclaw.chat` method and `operator.admin` scope. Without that access, the Agents
+home and settings controls stay visible but disabled; their tooltip explains how
+to pair with the required scope and reconnect. Opening the custodian directly
+also explains missing access instead of silently waiting. `/agents` opens the
+roster; agent configuration remains at `/settings/agents`.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

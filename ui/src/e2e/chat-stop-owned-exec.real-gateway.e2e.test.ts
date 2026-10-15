@@ -211,9 +211,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             await stop.waitFor({ state: "hidden" });
             proof.childClosed = true;
             proof.processOpenAfterStopReply = provider.processIsOpen();
-            // Preserve the genuine baseline before the expected failure waits for process cleanup.
-            // The suite closes the recording even when this pre-fix wait reaches the test deadline.
-            await capture(page, "stop-replied", pane, [composer, output]);
             proof.stage = "wait for physical process cleanup";
             await saveProof();
             expect(proof.processOpenAfterStopReply, "Stop must join physical command cleanup").toBe(

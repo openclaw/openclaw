@@ -264,6 +264,33 @@ export function listPendingOperatorApprovals(params: Input<"operatorApprovals.pe
     },
   });
 }
+export function prepareOperatorApprovalReplay(
+  params: Input<"operatorApprovals.prepareReplay"> = {},
+) {
+  const {
+    databaseOptions: _databaseOptions,
+    assertCurrent: _assertCurrent,
+    guard: _guard,
+    nowMs = Date.now(),
+    ...selection
+  } = params;
+  return execute(
+    "operatorApprovals.prepareReplay",
+    { ...params, nowMs },
+    {
+      read: {
+        command: { type: "operatorApprovals.prepareReplay", input: { ...selection, nowMs } },
+        // Due expirations and corrupt rows retain this admission through writer settlement.
+        project: (result) =>
+          result.type === "operatorApprovals.prepareReplay" &&
+          result.replay.outcome === "pending" &&
+          !result.replay.corrupt.length
+            ? { outcome: "pending", records: result.replay.records }
+            : undefined,
+      },
+    },
+  );
+}
 export function resolveOperatorApproval(
   params: Input<"operatorApprovals.resolve"> & {
     /** Non-throwing observer of this operation's real native commit. */
@@ -275,18 +302,6 @@ export function resolveOperatorApproval(
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
   return execute("operatorApprovals.deny", params);
-}
-export function expireDueOperatorApprovals(params: Input<"operatorApprovals.expire">) {
-  return execute("operatorApprovals.expire", params, {
-    read: {
-      command: { type: "operatorApprovals.hasDue", nowMs: params.nowMs ?? Date.now() },
-      // No due rows means no writer transaction behind unrelated foreground writes.
-      project: (result) =>
-        result.type === "operatorApprovals.hasDue" && !result.hasDue
-          ? { affected: 0, records: [] }
-          : undefined,
-    },
-  });
 }
 export function consumeOperatorApprovalAllowOnce(params: Input<"operatorApprovals.consume">) {
   return execute("operatorApprovals.consume", params);

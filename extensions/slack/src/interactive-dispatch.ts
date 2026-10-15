@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ModalInputSummary } from "./monitor/events/modal-input-summary.js";
 
-type SlackInteractiveHandlerResult = {
+export type SlackInteractiveHandlerResult = {
   handled?: boolean;
   systemEvent?: {
     summary?: string;

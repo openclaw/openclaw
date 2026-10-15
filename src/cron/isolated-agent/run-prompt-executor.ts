@@ -24,6 +24,7 @@ import {
   modelSupportsInput,
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   resolveScheduledToolCallerContext,
@@ -506,9 +507,12 @@ export function createCronPromptExecutor(
                     })
                   : undefined;
                 if (trigger === "cron" && !binding && authProfileId) {
-                  throw new Error(
+                  const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
                   );
+                  // Another model would only bypass the operator's account choice.
+                  recordModelFallbackStop(refusal);
+                  throw refusal;
                 }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
