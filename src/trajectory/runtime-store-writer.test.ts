@@ -216,7 +216,7 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
     };
     await flush(events[0]!);
     await flush(events[1]!);
-    await patchSessionEntryCore(target, { updatedAt: 2 });
+    await patchSessionEntryCore(target, () => ({ updatedAt: 2 }));
     await flush(events[2]!);
     expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual(events.slice(1));
     await deleteSessionEntryLifecycle({
