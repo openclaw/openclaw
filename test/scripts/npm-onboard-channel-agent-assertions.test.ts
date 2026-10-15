@@ -22,6 +22,10 @@ function writeConfig(home: string, channels: Record<string, unknown>): void {
   fs.writeFileSync(path.join(configDir, "openclaw.json"), JSON.stringify({ channels }));
 }
 
+function storeRef(fill: string) {
+  return { source: "store", provider: "default", id: `CHANNEL_SETUP_${fill.repeat(32)}` };
+}
+
 function writeOnboardConfig(home: string): void {
   const configDir = path.join(home, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
@@ -373,9 +377,9 @@ describe("npm onboard channel agent assertions", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
     try {
       writeConfig(tempDir, {
-        discord: { enabled: true, token: "discord-token" },
-        slack: { enabled: true, appToken: "xapp-token", botToken: "xoxb-token" },
-        telegram: { enabled: true, botToken: "telegram-token" },
+        discord: { enabled: true, token: storeRef("A") },
+        slack: { enabled: true, appToken: storeRef("B"), botToken: storeRef("C") },
+        telegram: { enabled: true, botToken: storeRef("D") },
       });
 
       expect(runAssert(tempDir, "telegram", "telegram-token").status).toBe(0);
@@ -390,13 +394,34 @@ describe("npm onboard channel agent assertions", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
     try {
       writeConfig(tempDir, {
-        telegram: { enabled: true, token: "telegram-token" },
+        telegram: { enabled: true, token: storeRef("A") },
       });
 
       const result = runAssert(tempDir, "telegram", "telegram-token");
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("telegram config did not persist botToken");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects plaintext channel tokens in config", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    try {
+      writeConfig(tempDir, {
+        telegram: { enabled: true, botToken: "telegram-token" },
+      });
+      const result = runAssert(tempDir, "telegram", "telegram-token");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("did not persist botToken as a store SecretRef");
+
+      writeConfig(tempDir, {
+        telegram: { enabled: true, botToken: storeRef("A"), note: "telegram-token" },
+      });
+      const leaked = runAssert(tempDir, "telegram", "telegram-token");
+      expect(leaked.status).not.toBe(0);
+      expect(leaked.stderr).toContain("telegram config persisted the plaintext botToken");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

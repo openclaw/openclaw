@@ -147,7 +147,10 @@ function assertChannelConfig() {
   const channel = process.argv[3];
   const expectedTokens = process.argv.slice(4);
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const cfg = readJson(configPath);
+  const configText = readTextFileBounded(configPath, "config", JSON_ARTIFACT_MAX_BYTES, {
+    tailBytes: ERROR_DETAIL_TAIL_BYTES,
+  });
+  const cfg = JSON.parse(configText);
   const entry = cfg.channels?.[channel];
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
@@ -165,12 +168,21 @@ function assertChannelConfig() {
       `${channel} channel config assertion requires ${channel === "slack" ? "bot and app tokens" : "one bot token"}`,
     );
   }
+  // `channels add` stores new credentials in the protected secret store and
+  // persists only a store SecretRef (#169732).
   for (const [index, field] of tokenFields.entries()) {
-    const expected = expectedTokens[index];
-    if (entry[field] !== expected) {
+    const ref = entry[field];
+    if (
+      ref?.source !== "store" ||
+      typeof ref.provider !== "string" ||
+      !/^CHANNEL_SETUP_[0-9A-F]{32}$/u.test(String(ref.id))
+    ) {
       throw new Error(
-        `${channel} config did not persist ${field}; expected ${expected}, got ${JSON.stringify(entry[field])}`,
+        `${channel} config did not persist ${field} as a store SecretRef; got ${JSON.stringify(ref)}`,
       );
+    }
+    if (configText.includes(expectedTokens[index])) {
+      throw new Error(`${channel} config persisted the plaintext ${field}`);
     }
   }
 }
