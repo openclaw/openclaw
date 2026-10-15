@@ -1,6 +1,18 @@
 #!/bin/bash
 # Shared by both installer profiles; only function definitions belong here.
 
+validate_git_checkout_head() {
+    local repo_dir="$1"
+    [[ -e "$repo_dir/.git" ]] || return 0
+    # Git accepts directories and linked-worktree gitfiles. Explicit metadata
+    # prevents an incomplete checkout from borrowing an enclosing repo's HEAD.
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+    installer_error "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
+    return 1
+}
+
 detect_downloader() {
     if command -v curl &> /dev/null; then
         DOWNLOADER="curl"

@@ -22,6 +22,7 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  createInstallGitWorktreeFixtureScript,
   createInstallGitBranchFallbackFixtureScript,
   createInstallGitCloneFixtureScript,
   createInstallGitUpdateFixtureScript,
@@ -425,6 +426,16 @@ NODE
     expect(result.stdout).toContain("fake-node:");
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
   });
+
+  it.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
+    "preserves linked checkout boundaries: %s",
+    (scenario) => {
+      const result = runInstallShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
+        FIXTURE_NODE: nodeExecutable,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
 
   it("rejects a git checkout without a commit without modifying it", () => {
     const result = runInstallShell(`

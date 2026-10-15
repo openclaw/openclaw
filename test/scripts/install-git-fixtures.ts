@@ -316,3 +316,78 @@ ${setup}
       CONCURRENT_REPO="$root/concurrent"
   `;
 }
+
+export function createInstallGitWorktreeFixtureScript(scriptPath: string, scenario: string) {
+  return `
+    set -euo pipefail
+    source "${scriptPath}"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    seed="$tmp/seed"
+    repo="$tmp/linked checkout"
+    git init -q --initial-branch=main "$seed"
+    git -C "$seed" config user.email test@example.invalid
+    git -C "$seed" config user.name test
+    git -C "$seed" config commit.gpgsign false
+    git -C "$seed" config core.hooksPath /dev/null
+    printf 'dist/\\n' > "$seed/.gitignore"
+    git -C "$seed" add .gitignore
+    git -C "$seed" commit -qm base
+    git -C "$seed" worktree add -q --detach "$repo" HEAD
+    git -C "$seed" commit --allow-empty -qm selected
+    selected="$(git -C "$seed" rev-parse HEAD)"
+    if [[ "${scenario}" == missing-head ]]; then
+      git -C "$repo" symbolic-ref HEAD refs/heads/missing
+    elif [[ "${scenario}" == broken-gitfile ]]; then
+      printf 'gitdir: %s/missing\\n' "$tmp" > "$repo/.git"
+    elif [[ "${scenario}" == subdirectory ]]; then
+      repo="$seed/subdirectory"
+      mkdir "$repo"
+      printf 'keep\\n' > "$repo/local.txt"
+    fi
+    if [[ -f "$repo/.git" ]]; then
+      cp "$repo/.git" "$tmp/original-gitfile"
+    fi
+    before="$(git -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
+    PREFIX="$tmp/prefix"
+    HOME="$tmp/home"
+    mkdir -p "$PREFIX/tools/node/bin" "$HOME"
+    ln -s "$FIXTURE_NODE" "$PREFIX/tools/node/bin/node"
+    OPENCLAW_VERSION="$selected"
+    ensure_git() { :; }
+    check_git() { return 0; }
+    ensure_pnpm() { touch "$tmp/build-started"; }
+    ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
+    should_prefer_offline_pnpm_install() { return 1; }
+    run_quiet_step() { shift; "$@"; }
+    run_pnpm() {
+      mkdir -p "$repo/dist"
+      printf 'console.log("fixture-cli");\\n' > "$repo/dist/entry.js"
+    }
+    set +e
+    (set -e; install_openclaw_from_git "$repo")
+    install_exit="$?"
+    set -e
+    if [[ "${scenario}" == valid ]]; then
+      [[ "$install_exit" -eq 0 ]] || exit 1
+      [[ "$(git -C "$repo" rev-parse HEAD)" == "$selected" ]] || exit 1
+      wrapper="$PREFIX/bin/openclaw"
+      [[ -x "$wrapper" ]] || wrapper="$HOME/.local/bin/openclaw"
+      [[ "$("$wrapper" --version)" == fixture-cli ]] || exit 1
+      if declare -F preflight_fresh_git_disk_space >/dev/null; then
+        available_disk_kib() { printf '1\\n'; }
+        preflight_fresh_git_disk_space "$repo" || exit 1
+      fi
+    else
+      [[ "$install_exit" -ne 0 ]] || exit 1
+      [[ ! -e "$tmp/build-started" ]] || exit 1
+      [[ "$(git -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)" == "$before" ]] || exit 1
+    fi
+    if [[ -f "$tmp/original-gitfile" ]]; then
+      cmp "$repo/.git" "$tmp/original-gitfile" || exit 1
+    else
+      [[ "$(cat "$repo/local.txt")" == keep ]] || exit 1
+    fi
+    [[ "$(git -C "$seed" rev-parse HEAD)" == "$selected" ]] || exit 1
+  `;
+}

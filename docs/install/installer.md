@@ -250,6 +250,10 @@ If no TTY is available and no install method is set, it defaults to `npm` and wa
 
 The script exits with code `2` for invalid method selection or invalid `--install-method` values.
 
+Existing checkout roots may use a `.git` directory or a `.git` file, including
+linked Git worktrees. All three installers validate the checkout's own commit before
+updating it and refuse incomplete checkouts or nonempty non-repository paths.
+
 With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing
 object or fetches that exact commit from `origin`, checks it out detached, and
