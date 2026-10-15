@@ -284,6 +284,23 @@ describe("Node Code Mode worker custody", () => {
     },
   );
 
+  it.each([0, 60_000])(
+    "keeps elapsed idle expiry when the wall clock moves backward after %i ms",
+    async (elapsedMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const pool = fixture.pools.at(-1)!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        vi.setSystemTime(Date.now() - 60 * 60_000);
+        await vi.advanceTimersByTimeAsync(5 * 60_000 - elapsedMs);
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("bounds the warm set and retires every idle pool on memory pressure", async () => {
     const results = await Promise.all(Array.from({ length: 6 }, run));
     expect(results.every((result) => result.status === "completed")).toBe(true);
