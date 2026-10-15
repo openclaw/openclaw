@@ -272,13 +272,20 @@ export function applyHistoryRun(params: {
     (event) => event.runId === inFlightRunId && event.stream === "run_status",
   );
   const startupPhase = startup?.data.phase;
-  if (run.text && !isChatRunRecoveryStatus(state.chatRunStartup)) {
+  if (
+    run.text &&
+    startupPhase !== "waiting_for_model" &&
+    !isChatRunRecoveryStatus(state.chatRunStartup)
+  ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && isChatRunStartupPhase(startupPhase)) {
     reconcileChatRunStartup(state, {
       state: "status",
       runId: inFlightRunId,
       phase: startupPhase,
+      ...(startupPhase === "waiting_for_model"
+        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
+        : {}),
       seq: startup.seq,
     });
   }

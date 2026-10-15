@@ -1785,7 +1785,10 @@ if (hybridHostedEligible) {
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification || hostedHybridControls),
     "ci-gate": count(hostedHybridControls),
-    "check-plan": count(hostedPlanner && runCheckPlan),
+    "check-plan": count(
+      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
+        runCheckPlan,
+    ),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
         (hostedHybridControls ||

@@ -24,7 +24,6 @@ import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratc
 import type {
   CronRunReceiptCurrentFacts,
   CronRunReceiptCurrentReadCommand,
-  CronRunReceiptOwnerObservation,
 } from "../cron/store/run-receipt.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type {
@@ -175,7 +174,6 @@ export type OpenClawStateReadCommand =
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
       >[0];
     }
-  | { type: "operatorApprovals.hasDue"; nowMs: number }
   | {
       type: "operatorApprovals.prepareReplay";
       input: Parameters<
@@ -205,7 +203,6 @@ export type OpenClawStateReadCommand =
     }
   | CronRunReceiptCurrentReadCommand
   | CronScratchReadCommand
-  | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "exec-approvals.read" }
@@ -358,7 +355,6 @@ export type OpenClawStateReadResult =
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
       >;
     }
-  | { type: "operatorApprovals.hasDue"; hasDue: boolean }
   | {
       type: "operatorApprovals.prepareReplay";
       replay: ReturnType<
@@ -410,10 +406,6 @@ export type OpenClawStateReadResult =
       type: "cron.jobNames";
       storeKey: string;
       names: Map<string, string | undefined>;
-    }
-  | {
-      type: "cron.activeReceiptOwners";
-      owners: CronRunReceiptOwnerObservation[];
     }
   | {
       type: "subagents.sessionList";

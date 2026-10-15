@@ -24,7 +24,7 @@ function createCacheKeyData(model: string, dimensions?: number): Record<string, 
   return {
     provider: "local",
     model,
-    ...(typeof dimensions === "number" ? { outputDimensionality: dimensions } : {}),
+    ...(dimensions !== undefined ? { outputDimensionality: dimensions } : {}),
   };
 }
 

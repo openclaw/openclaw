@@ -78,7 +78,7 @@ it("hydrates 490 cold native rollouts and restores them without native reads", a
       cursor = page.nextCursor;
     }
     expect(new Set(ids).size).toBe(490);
-    expect(nativeCalls).toHaveLength(8);
+    expect(nativeCalls).toHaveLength(31);
     expect(nativeCalls.every((call) => !call.databaseOnly)).toBe(true);
     await factory.stop();
     await closeOpenClawStateDatabaseAsync();

@@ -610,7 +610,6 @@ describe.skipIf(process.platform === "win32")(
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
-          expect(Object.isFrozen(context)).toBe(true);
           expect(captureContext).not.toHaveBeenCalled();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",

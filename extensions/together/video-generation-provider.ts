@@ -6,13 +6,11 @@ import {
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   normalizeBaseUrl,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonResponse,
+  postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -225,7 +223,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         }
         body.media = { frame_images: [{ input_image: value, frame: "first" }] };
       }
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse<TogetherVideoResponse>({
         url: `${baseUrl}/videos`,
         headers,
         body,
@@ -236,74 +234,66 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Together video generation failed",
       });
-      try {
-        await assertOkOrThrowHttpError(response, "Together video generation failed");
-        const submitted = await readProviderJsonResponse<TogetherVideoResponse>(
-          response,
-          "Together video generation failed",
-        );
-        const failureMessage = readTogetherVideoFailureMessage(submitted);
-        if (failureMessage) {
-          throw new Error(failureMessage);
-        }
-        const videoId = normalizeOptionalString(submitted.id);
-        if (!videoId) {
-          throw new Error("Together video generation response missing id");
-        }
-        const completed =
-          submitted.status === "completed"
-            ? submitted
-            : await pollProviderOperationJson<TogetherVideoResponse>({
-                url: `${baseUrl}/videos/${videoId}`,
-                headers,
-                deadline:
-                  deadline.deadlineAtMs === undefined
-                    ? createProviderOperationDeadline({
-                        timeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
-                        label: `Together video generation task ${videoId}`,
-                      })
-                    : { ...deadline, label: `Together video generation task ${videoId}` },
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                fetchFn,
-                maxAttempts: MAX_POLL_ATTEMPTS,
-                pollIntervalMs: POLL_INTERVAL_MS,
-                requestFailedMessage: "Together video status request failed",
-                timeoutMessage: `Together video generation task ${videoId} did not finish in time`,
-                isComplete: (payload) => payload.status === "completed",
-                getFailureMessage: readTogetherVideoFailureMessage,
-              });
-        const videoUrl = extractTogetherVideoUrl(completed);
-        if (!videoUrl) {
-          throw new Error("Together video generation completed without an output URL");
-        }
-        const video = await downloadGeneratedVideoAsset({
-          url: videoUrl,
-          timeoutMs: createProviderOperationTimeoutResolver({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          }),
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          fetchFn,
-          provider: "together",
-          label: "Together generated video download",
-          requestFailedMessage: "Together generated video download failed",
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
-          validateBinaryResponse: true,
-          chunkTimeoutMs: 0,
-        });
-        return {
-          videos: [video],
-          model: completed.model ?? req.model ?? DEFAULT_TOGETHER_VIDEO_MODEL,
-          metadata: {
-            videoId,
-            status: completed.status,
-            videoUrl,
-          },
-        };
-      } finally {
-        await release();
+      const failureMessage = readTogetherVideoFailureMessage(submitted);
+      if (failureMessage) {
+        throw new Error(failureMessage);
       }
+      const videoId = normalizeOptionalString(submitted.id);
+      if (!videoId) {
+        throw new Error("Together video generation response missing id");
+      }
+      const completed =
+        submitted.status === "completed"
+          ? submitted
+          : await pollProviderOperationJson<TogetherVideoResponse>({
+              url: `${baseUrl}/videos/${videoId}`,
+              headers,
+              deadline:
+                deadline.deadlineAtMs === undefined
+                  ? createProviderOperationDeadline({
+                      timeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
+                      label: `Together video generation task ${videoId}`,
+                    })
+                  : { ...deadline, label: `Together video generation task ${videoId}` },
+              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+              fetchFn,
+              maxAttempts: MAX_POLL_ATTEMPTS,
+              pollIntervalMs: POLL_INTERVAL_MS,
+              requestFailedMessage: "Together video status request failed",
+              timeoutMessage: `Together video generation task ${videoId} did not finish in time`,
+              isComplete: (payload) => payload.status === "completed",
+              getFailureMessage: readTogetherVideoFailureMessage,
+            });
+      const videoUrl = extractTogetherVideoUrl(completed);
+      if (!videoUrl) {
+        throw new Error("Together video generation completed without an output URL");
+      }
+      const video = await downloadGeneratedVideoAsset({
+        url: videoUrl,
+        timeoutMs: createProviderOperationTimeoutResolver({
+          deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        provider: "together",
+        label: "Together generated video download",
+        requestFailedMessage: "Together generated video download failed",
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+        validateBinaryResponse: true,
+        chunkTimeoutMs: 0,
+      });
+      return {
+        videos: [video],
+        model: completed.model ?? req.model ?? DEFAULT_TOGETHER_VIDEO_MODEL,
+        metadata: {
+          videoId,
+          status: completed.status,
+          videoUrl,
+        },
+      };
     },
   };
 }

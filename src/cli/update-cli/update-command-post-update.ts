@@ -545,6 +545,8 @@ async function finishSettledUpdate(
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
+            observePackageReplacement:
+              params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,

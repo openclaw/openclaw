@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -12,9 +11,8 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
@@ -44,7 +42,7 @@ beforeEach(() => {
   document.body.append(container);
 });
 afterEach(() => {
-  render(null, container);
+  disposeChatView(container);
   container.remove();
   resetChatViewState();
   resetTranscriptTestDom();
@@ -69,9 +67,9 @@ it.each([false, true])(
       sessionKey: "agent:main:main",
       messages: [question],
       onAsyncQuestionSubmit: submit,
-      onRequestUpdate: () => render(renderChat(props), container),
+      onRequestUpdate: () => renderChatPropsInto(container, props),
     });
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     await vi.waitFor(() =>
       expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
     );
@@ -80,7 +78,7 @@ it.each([false, true])(
     answer.dispatchEvent(new Event("input", { bubbles: true }));
     if (laterWork) {
       props.messages = [question, terminal("old-run"), terminal("later-run")];
-      render(renderChat(props), container);
+      renderChatPropsInto(container, props);
       expect(container.querySelector(".agent-chat__question-dock")).not.toBeNull();
       expect(
         container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
@@ -122,9 +120,9 @@ it("selects a reopened historical question ahead of another pending request", as
     sessionKey: "agent:main:main",
     messages: [old],
     onAsyncQuestionSubmit: vi.fn(async () => true),
-    onRequestUpdate: () => render(renderChat(props), container),
+    onRequestUpdate: () => renderChatPropsInto(container, props),
   });
-  const draw = () => render(renderChat(props), container);
+  const draw = () => renderChatPropsInto(container, props);
   draw();
   await vi.waitFor(() =>
     expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
@@ -161,7 +159,7 @@ it("refreshes a mounted question summary when a canonical answer appears or is r
     messages: [question],
     onAsyncQuestionSubmit: vi.fn(async () => true),
   });
-  const draw = () => render(renderChat(props), container);
+  const draw = () => renderChatPropsInto(container, props);
   const summary = () => container.querySelector(".chat-question-summary")?.textContent;
   draw();
   await waitForSolid(() => expect(summary()).toContain("Answer above"));
@@ -218,7 +216,7 @@ it.each(["discard", "consumed"] as const)(
         requestUpdate: () => {
           props.queue = host.chatQueue;
           props.messages = host.chatMessages;
-          render(renderChat(props), element);
+          renderChatPropsInto(element, props);
         },
       });
       const props = createChatProps({
@@ -322,7 +320,7 @@ it.each(["discard", "consumed"] as const)(
     } finally {
       for (const { element, stop } of panes) {
         stop();
-        render(null, element);
+        disposeChatView(element);
         element.remove();
       }
     }

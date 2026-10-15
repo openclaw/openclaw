@@ -152,8 +152,6 @@ export type ChatPaneConnectionScope = {
   headerOutcomeOwner: string;
   sessions: ApplicationContext["sessions"];
 };
-const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open]:not([data-chat-native-picker]), .context-usage details[open]:not([data-chat-native-picker])";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
@@ -170,7 +168,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
-
 // Shortcut menus own only advertised, enabled keys; every other printable key
 // can still transfer to the composer through the normal browser input pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
@@ -214,21 +211,6 @@ function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
       !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
-}
-
-/** Close this pane's disclosures, except those containing the current pointer event. */
-export function closeChatPaneDetails(
-  root: ParentNode,
-  retainedPath: readonly EventTarget[] = [],
-): boolean {
-  let changed = false;
-  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
-    if (!retainedPath.includes(details)) {
-      details.open = false;
-      changed = true;
-    }
-  });
-  return changed;
 }
 
 export function focusChatComposerFromPrintableKeydown(

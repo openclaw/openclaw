@@ -14,8 +14,8 @@ import {
 import { WizardLogin, WizardLoginController } from "../../components/wizard-login-controller.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   modelProviderConfigBusy,
@@ -43,7 +43,7 @@ const INSTALLATION_STATUS = {
 } as const;
 
 type InstalledAgentsOptions = {
-  gateway: GatewayPageController;
+  gateway: GatewayPageBinding;
   getContext: () => ApplicationContext;
 };
 

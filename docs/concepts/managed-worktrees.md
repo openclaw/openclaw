@@ -54,9 +54,11 @@ metadata and ignored-file provisioning are not mounted or copied into it.
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
-Gateway is ready, it prepares the default session base for configured agent
-repositories in the background. A session arriving during preparation waits for
-the same build; later checkouts arrive with `node_modules`. Other selected commits
+Gateway is ready, it prepares the default session base for agent repositories
+with sandbox mode `all` or `non-main` in the background. Agents with sandbox mode
+`off` skip background dependency preparation; creator-role-required sandboxes
+still prepare dependencies on first use. A session arriving during preparation
+waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still prepare their dependencies on first use. Shutdown cancels preparation and
 waits for the disposable installer to be removed.
 The private checkout storage must support filesystem acceleration, and

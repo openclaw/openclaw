@@ -286,7 +286,7 @@ export function createMatrixVerificationEventRouter(params: {
   readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
   sasNoticeRetryDelayMs?: number;
-  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
+  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
 }) {
   const routerStartedAtMs = Date.now();
   const routedVerificationEvents = new Set<string>();
@@ -512,16 +512,10 @@ export function createMatrixVerificationEventRouter(params: {
         await sendVerificationNotice(roomId, body);
       }
     };
-    if (params.runDetachedTask) {
-      void params.runDetachedTask(
-        `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-        routeTask,
-      );
-    } else {
-      void routeTask().catch((err: unknown) => {
-        params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
-      });
-    }
+    void params.runDetachedTask(
+      `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+      routeTask,
+    );
 
     return true;
   }
