@@ -432,7 +432,7 @@ EOF
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
   when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
-"always"`, still prompts.
+  "always"`, still prompts.
 
 Outside the full-permission Gateway session exception, if the host approvals
 document stays stricter than config, the stricter host policy still wins.
@@ -614,7 +614,7 @@ change retroactively:
 - A resolving surface may override the default per grant with the
   `grantExpiresInDays` field on `approval.resolve` /
   `exec.approval.resolve`, or `openclaw approvals resolve <id> allow-always
---expires-in-days <n>`. The override wins over the config default.
+  --expires-in-days <n>`. The override wins over the config default.
 - Expired grants fall back to prompting and are pruned opportunistically.
 
 ### Listing and revoking

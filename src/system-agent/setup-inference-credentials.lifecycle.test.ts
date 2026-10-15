@@ -422,6 +422,12 @@ it.each([
         ...setup.config.models,
         providers: {
           ...setup.config.models?.providers,
+          openai: {
+            ...setup.config.models?.providers?.openai,
+            baseUrl: "https://provider.example/v1",
+            models: setup.config.models?.providers?.openai?.models ?? [],
+            apiKey: "synthetic-working-primary-key",
+          },
           meta: {
             baseUrl: "https://api.meta.ai/v1",
             models: [],
