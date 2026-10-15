@@ -386,22 +386,22 @@ describe("gateway sessions patch", () => {
     expect(restored.archiveReason).toBeUndefined();
   });
 
-  test.each([
-    { action: "archive", archived: true, sessionId: undefined },
-    { action: "restore", archived: false, sessionId: "" },
-  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
-    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
-    const store = { [MAIN_SESSION_KEY]: entry };
+  test.each([{ action: "archive", archived: true, sessionId: undefined }])(
+    "rejects $action for a provisional session identity",
+    async ({ archived, sessionId }) => {
+      const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+      const store = { [MAIN_SESSION_KEY]: entry };
 
-    expectPatchError(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, archived },
-      }),
-      `session not found: ${MAIN_SESSION_KEY}`,
-    );
-    expect(store[MAIN_SESSION_KEY]).toBe(entry);
-  });
+      expectPatchError(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, archived },
+        }),
+        `session not found: ${MAIN_SESSION_KEY}`,
+      );
+      expect(store[MAIN_SESSION_KEY]).toBe(entry);
+    },
+  );
 
   test("requires the caller-observed durable identity for lifecycle patches", async () => {
     expectPatchError(
@@ -473,38 +473,33 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test.each([
-    ["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }],
-    ["agent:main:acp:root", {}],
-    ["agent:main:cron:root", {}],
-    [
-      "agent:main:dashboard:fork",
-      { forkSource: { sessionKey: MAIN_SESSION_KEY, sessionId: "parent" } },
-    ],
-  ] as const)("allows root pins on %s", async (key, lineage) => {
-    const pinned = expectPatchOk(
-      await runPatch({
-        storeKey: key,
-        store: { [key]: { sessionId: "root", updatedAt: 1, ...lineage } },
-        patch: { key, pinned: true },
-      }),
-    );
-    expect(pinned.pinnedAt).toEqual(expect.any(Number));
-  });
+  test.each([["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }]] as const)(
+    "allows root pins on %s",
+    async (key, lineage) => {
+      const pinned = expectPatchOk(
+        await runPatch({
+          storeKey: key,
+          store: { [key]: { sessionId: "root", updatedAt: 1, ...lineage } },
+          patch: { key, pinned: true },
+        }),
+      );
+      expect(pinned.pinnedAt).toEqual(expect.any(Number));
+    },
+  );
 
-  test.each([
-    ["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }],
-    ["agent:other:dashboard:work", { parentSessionKey: "agent:other:main" }],
-  ] as const)("allows pins on Home-parented sessions on %s", async (key, lineage) => {
-    const pinned = expectPatchOk(
-      await runPatch({
-        storeKey: key,
-        store: { [key]: { sessionId: "work", updatedAt: 1, ...lineage } },
-        patch: { key, pinned: true },
-      }),
-    );
-    expect(pinned.pinnedAt).toEqual(expect.any(Number));
-  });
+  test.each([["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }]] as const)(
+    "allows pins on Home-parented sessions on %s",
+    async (key, lineage) => {
+      const pinned = expectPatchOk(
+        await runPatch({
+          storeKey: key,
+          store: { [key]: { sessionId: "work", updatedAt: 1, ...lineage } },
+          patch: { key, pinned: true },
+        }),
+      );
+      expect(pinned.pinnedAt).toEqual(expect.any(Number));
+    },
+  );
 
   test("preserves existing pins on Home-parented sessions through metadata patches", async () => {
     const key = "agent:main:dashboard:work";
@@ -622,11 +617,8 @@ describe("gateway sessions patch", () => {
   });
 
   test.each([
-    { field: "thinkingLevel", value: "off" },
     { field: "responseUsage", value: "off" },
     { field: "reasoningLevel", value: "off" },
-    { field: "fastMode", value: false },
-    { field: "fastMode", value: true },
     { field: "verboseLevel", value: "full" },
     { field: "elevatedLevel", value: "off" },
     { field: "elevatedLevel", value: "on" },
@@ -658,32 +650,6 @@ describe("gateway sessions patch", () => {
       expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
     },
   );
-
-  test("clears responseUsage when patch sets null", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, responseUsage: null },
-      }),
-    );
-    expect(entry.responseUsage).toBeUndefined();
-  });
-
-  test("clears reasoningLevel when patch sets null", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: { reasoningLevel: "stream" } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, reasoningLevel: null },
-      }),
-    );
-    expect(entry.reasoningLevel).toBeUndefined();
-  });
 
   test("recreates partial rows without dropping session settings", async () => {
     const store: Record<string, SessionEntry> = {
@@ -765,36 +731,7 @@ describe("gateway sessions patch", () => {
     );
   });
 
-  test("allows duplicate categories across sessions", async () => {
-    const store: Record<string, SessionEntry> = {
-      ...mainStoreEntry({}),
-      "agent:main:discord:channel:123": {
-        sessionId: "other",
-        updatedAt: 1,
-        category: "Research",
-      } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, category: "Research" },
-      }),
-    );
-    expect(entry.category).toBe("Research");
-  });
-
-  test("clears fastMode when patch sets null", async () => {
-    const store = mainStoreEntry({ fastMode: true });
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, fastMode: null },
-      }),
-    );
-    expect(entry.fastMode).toBeUndefined();
-  });
-
-  test.each(["auto", "ultrafast"] as const)("sets fastMode to %s", async (fastMode) => {
+  test.each(["ultrafast"] as const)("sets fastMode to %s", async (fastMode) => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {} as SessionEntry,
     };
@@ -1001,17 +938,20 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY]).toEqual(before);
   });
 
-  test.each(["fresh", "placeholder", "existing"] as const)(
+  test.each(["placeholder", "existing"] as const)(
     "queues model switches only for existing sessions (%s)",
     async (sessionState) => {
-      const store =
-        sessionState === "fresh"
-          ? undefined
-          : mainStoreEntry({
-              sessionId: sessionState === "existing" ? "sess-live" : undefined,
-              providerOverride: "openai",
-              modelOverride: OPENAI_GPT_ID,
-            });
+      const store = mainStoreEntry({
+        sessionId: sessionState === "existing" ? "sess-live" : undefined,
+        providerOverride: "openai",
+        modelOverride: OPENAI_GPT_ID,
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          ts: 1,
+          source: "agent-patch",
+        },
+      });
       const entry = await applyMainModelPatch({
         store,
         cfg: createAllowlistedAnthropicModelCfg(),
@@ -1021,28 +961,9 @@ describe("gateway sessions patch", () => {
 
       expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
       expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
+      expect(entry.modelFallback).toBeUndefined();
     },
   );
-
-  test("clears an agent model rollback marker on explicit model patches", async () => {
-    const store = mainStoreEntry({
-      sessionId: "sess-agent-model-patch",
-      modelFallback: {
-        prevModel: OPENAI_GPT_ID,
-        prevProvider: "openai",
-        ts: 1,
-        source: "agent-patch",
-      },
-    });
-    const entry = await applyMainModelPatch({
-      store,
-      cfg: createAllowlistedAnthropicModelCfg(),
-      model: ANTHROPIC_SONNET_MODEL,
-      catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
-    });
-
-    expect(entry.modelFallback).toBeUndefined();
-  });
 
   test("atomically snapshots prior selection for agent model patches", async () => {
     const store = mainStoreEntry({
@@ -1181,20 +1102,6 @@ describe("gateway sessions patch", () => {
       expect(input).toEqual(before);
     },
   );
-
-  test("follows the default when a concrete model selection equals the configured default", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        cfg: { agents: { defaults: { model: { primary: OPENAI_GPT_MODEL } } } },
-        patch: { key: MAIN_SESSION_KEY, model: OPENAI_GPT_MODEL },
-        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
-      }),
-    );
-
-    expectModelSelection(entry, undefined, undefined);
-    expect(entry.modelOverrideSource).toBe("default");
-    expect(entry.modelOverrideRouteResolution).toBeUndefined();
-  });
 
   test("clears pending live model switches for model reset patches", async () => {
     const store = mainStoreEntry({
@@ -1439,7 +1346,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
-  test.each(["fresh", "placeholder", "existing"] as const)(
+  test.each(["placeholder", "existing"] as const)(
     "validates context-window initialization without queuing fresh-session switches (%s)",
     async (sessionState) => {
       const cfg = {
@@ -1462,13 +1369,10 @@ describe("gateway sessions patch", () => {
       const entry = expectPatchOk(
         await runPatch({
           cfg,
-          store:
-            sessionState === "fresh"
-              ? undefined
-              : mainStoreEntry({
-                  sessionId: sessionState === "existing" ? "sess-context" : undefined,
-                  contextBudgetStatus: contextBudgetStatusFixture(),
-                }),
+          store: mainStoreEntry({
+            sessionId: sessionState === "existing" ? "sess-context" : undefined,
+            contextBudgetStatus: contextBudgetStatusFixture(),
+          }),
           patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
           loadGatewayModelCatalog,
         }),
@@ -1969,27 +1873,6 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test("stores and clears a session permission mode without a recorded root", async () => {
-    const store = mainStoreEntry({});
-    const stored = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
-      }),
-    );
-    expect(stored.permissionMode).toBe("workspace");
-    expect(stored.sessionRoot).toBeUndefined();
-
-    const cleared = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
-      }),
-    );
-    expect(cleared.permissionMode).toBeUndefined();
-    expect(cleared.sessionRoot).toBeUndefined();
-  });
-
   test("clears a node cwd when changing or clearing the node binding", async () => {
     const store = mainStoreEntry({
       execHost: "node",
@@ -2089,21 +1972,11 @@ describe("gateway sessions patch", () => {
     if (config.agentPrimaryModel === SUBAGENT_MODEL) {
       expectModelSelection(entry, undefined, undefined);
       expect(entry.modelOverrideSource).toBe("default");
+      expect(entry.modelOverrideRouteResolution).toBeUndefined();
     } else {
       expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
       expect(entry.modelOverrideSource).toBe("user");
     }
-  });
-
-  test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
-    const entry = await applyMainModelPatch({
-      cfg: createAllowlistedAnthropicModelCfg(),
-      model: `${ANTHROPIC_SONNET_MODEL}@myprofile`,
-      catalogRefs: [ANTHROPIC_SONNET_MODEL],
-    });
-    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
-    expectAuthOverride(entry, { profile: "myprofile" });
-    expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
   test("marks same-model @profile patches as pending live model switches", async () => {

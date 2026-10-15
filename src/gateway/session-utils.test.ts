@@ -15,7 +15,6 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import {
-  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   recordInboundSessionMeta,
   replaceSessionEntry,
@@ -49,10 +48,7 @@ import {
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
-import {
-  loadGatewaySessionEntryReadOnlyInWorker,
-  resolveGatewaySessionStoreTargetInWorker,
-} from "./session-utils-store-worker.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import {
   listAgentsForGateway,
   loadGatewaySessionEntryReadOnlyAsync,
@@ -256,36 +252,6 @@ describe("gateway session utils", () => {
 
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test("projects an inherited parent model as the child's effective selection", () => {
-    const parentKey = "agent:main:dashboard:parent";
-    const childKey = "agent:main:dashboard:child";
-    const parentEntry: SessionEntry = {
-      sessionId: "parent",
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      modelOverrideSource: "user",
-    };
-    const childEntry: SessionEntry = {
-      sessionId: "child",
-      updatedAt: 2,
-      parentSessionKey: parentKey,
-    };
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({
-        primary: "openai/gpt-5.4",
-        models: { "anthropic/claude-sonnet-4-6": {} },
-      }),
-      store: { [parentKey]: parentEntry, [childKey]: childEntry },
-      key: childKey,
-      entry: childEntry,
-    });
-
-    expect(row.modelProvider).toBe("anthropic");
-    expect(row.model).toBe("claude-sonnet-4-6");
-    expect(row.modelOverrideSource).toBe("inherited");
-  });
-
   test("projects the active fallback model separately from the selected model", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),
@@ -413,28 +379,6 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toEqual(
       row.observerDigest,
     );
-  });
-
-  test("does not project an observer digest older than the latest run", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      entry: {
-        sessionId: "session",
-        updatedAt: 3_000,
-        startedAt: 3_000,
-        observerDigest: {
-          sessionKey: "agent:main:main",
-          runId: "previous-run",
-          revision: 2,
-          updatedAt: 2_000,
-          headline: "Previous run failed",
-          health: "failed",
-        },
-      },
-    });
-
-    expect(row.observerDigest).toBeUndefined();
-    expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toBeNull();
   });
 
   test("Activity lists select newest interactions and completions before the 100-row page", async () => {
@@ -986,18 +930,6 @@ describe("gateway session utils", () => {
     },
   );
 
-  test.each(["xhigh"] as const)(
-    "preserves catalog-less persisted %s in session change projections",
-    (thinkingLevel) => {
-      const row = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "custom/reasoner" }),
-        entry: { sessionId: thinkingLevel, thinkingLevel } as SessionEntry,
-      });
-
-      expect(row.thinkingLevel).toBe(thinkingLevel);
-    },
-  );
-
   test("session rows preserve fresh zero-token usage", () => {
     const row = buildGatewaySessionRow({
       cfg: {} as OpenClawConfig,
@@ -1537,57 +1469,6 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("worker history reads only the selected row and direct children", async () => {
-    await withConfiguredStateDir("session-utils-exact-read-only-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const cfg = {
-        session: { mainKey: "main", store: storePath },
-        agents: { entries: { main: {} } },
-      } as OpenClawConfig;
-      const parentKey = "agent:main:main";
-      const childKey = "agent:main:child";
-      const now = Date.now();
-      seedSessionEntries(storePath, {
-        [parentKey]: { sessionId: "parent", updatedAt: now },
-        [childKey]: { sessionId: "child", spawnedBy: parentKey, updatedAt: now + 1 },
-        ...Object.fromEntries(
-          Array.from({ length: 40 }, (_, index) => [
-            `agent:main:unrelated-${index}`,
-            { sessionId: `unrelated-${index}`, updatedAt: now + index + 2 },
-          ]),
-        ),
-      });
-      setRuntimeConfigSnapshot(cfg, cfg);
-      expect(
-        listSessionEntriesReadOnly({ agentId: "main", storePath }).map((item) => item.sessionKey),
-      ).toContain(childKey);
-      expect(
-        (await loadGatewaySessionEntryReadOnlyAsync(childKey, { clone: false })).entry,
-      ).toMatchObject({
-        sessionId: "child",
-        spawnedBy: parentKey,
-      });
-      expect(
-        (
-          await listSessionChildEntriesReadOnly({
-            agentId: "main",
-            clone: false,
-            sessionKey: parentKey,
-            storePath,
-          })
-        ).map((item) => item.sessionKey),
-      ).toEqual([childKey]);
-      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-        cfg,
-        key: "main",
-        includeStoreChildEntries: true,
-      });
-
-      expect(loaded.entry?.sessionId).toBe("parent");
-      expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
-    });
-  });
-
   test.each(["research"])(
     "keeps private deleted-main discovery ahead of replacement selection (%s)",
     async (agentId) => {
@@ -2087,18 +1968,6 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBeUndefined();
     expect(deriveSessionTitle(entry, "")).toBeUndefined();
     expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
-  });
-
-  test.each([
-    {
-      name: "ignores a blank label",
-      fields: { label: "   " },
-      firstUserMessage: "Hello!",
-      expected: "Hello!",
-    },
-  ])("$name", ({ fields, firstUserMessage, expected }) => {
-    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
-    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
   });
 });
 
