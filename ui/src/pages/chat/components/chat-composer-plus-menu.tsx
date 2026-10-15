@@ -1,16 +1,16 @@
-import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, Show } from "solid-js";
-import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
+import { createMemo, createUniqueId, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import {
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+  type MenuItem,
+} from "../../../components/solid/menu.tsx";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
-import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   countSessionToolOverrides,
   nextBooleanToolOverrides,
@@ -21,463 +21,332 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
-import type { ComposerLibraryProps } from "../composer-library-session.ts";
-import "../../../components/tooltip.ts";
-import "../../../components/web-awesome.ts";
-import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerLibrarySelection,
-  renderComposerLibraryMenuSolid,
+  composerLibraryMenuItems,
 } from "./chat-composer-library-menu.tsx";
+import {
+  menuRenderInputs,
+  toolsForServer,
+  isToolDenied,
+  MCP_DISCOVERY_NOTICE_IDS,
+} from "./chat-composer-menu-inputs.ts";
 import {
   renderBackRow,
   renderCapabilityMenuState,
-  renderCapabilityToggleRow as CapabilityToggleRow,
+  renderCapabilityToggleRow,
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
+import type {
+  ChatComposerPlusMenuContentProps,
+  ChatComposerPlusMenuProps,
+  ChatComposerPlusMenuView,
+} from "./chat-composer-plus-menu.types.ts";
+import { closeOtherChatComposerPickers } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerMcpEnglish);
 
-export type ChatComposerPlusMenuView =
-  | "root"
-  | "skills"
-  | "connectors"
-  | `tools:${string}`
-  | `library:${string}`;
-
-export type ChatComposerMenuSkill = {
-  key: string;
-  name: string;
-  enabled: boolean;
-  baseEnabled: boolean;
-  missingDeps?: boolean;
-  blocked?: boolean;
-};
-
-type ChatComposerRootToggle = {
-  value: string;
-  label: string;
-  icon?: unknown;
-  checked: boolean;
-  disabled: boolean;
-  title?: string;
-  onChange: (checked: boolean) => void;
-};
-
-type ChatComposerPlusMenuProps = {
-  attachments: ChatAttachmentControlsProps;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
-  disabled: boolean;
-  open: boolean;
-  view: ChatComposerPlusMenuView;
-  toolOverrides: SessionToolOverrides | null | undefined;
-  rootToggles?: readonly ChatComposerRootToggle[];
-  onOpenChange: (open: boolean) => void;
-  onViewChange: (view: ChatComposerPlusMenuView) => void;
-};
-
-export type ChatComposerCapabilityMenuProps = {
-  basePath: string;
-  skills: readonly ChatComposerMenuSkill[] | null;
-  skillsLoading: boolean;
-  skillsError: boolean;
-  library?: ComposerLibraryProps;
-  libraryDialog?: unknown;
-  mcpServers: readonly McpServerSummary[];
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveError: boolean;
-  toolAccessMutationBlockedReason: string | null;
-  webSearchBaseEnabled: boolean;
-  mutationBlockedReason: string | null;
-  canAdmin: boolean;
-  adminBlockedReason: string | null;
-  addServerDialog?: unknown;
-  onLoadSkills: () => void;
-  onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
-  onNavigate: (
-    routeId: "mcp" | "plugins" | "skills",
-    options?: ApplicationNavigationOptions,
-  ) => void;
-  onAddServer?: () => void;
-  onOpenToolAccess?: (serverName: string) => void;
-};
-
-type ChatComposerPlusMenuContentProps = ChatComposerPlusMenuProps &
-  ChatComposerCapabilityMenuProps & { showCapabilities: boolean };
-
-// The trigger and item hosts stay direct children of Web Awesome's slot owner.
-function renderAttachmentOptions() {
-  const entries = useSingleAttachmentPicker()
-    ? [{ value: "file", icon: icons.paperclip, label: t("chat.composer.attach") }]
-    : [
-        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
-        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
-        { value: "file", icon: icons.paperclip, label: t("chat.composer.attachFileOption") },
-      ];
-  return (
-    <For keyed={(item) => item} each={entries}>
-      {(entry) => (
-        <wa-dropdown-item class="agent-chat__attach-menu-option" value={entry().value}>
-          <span slot="icon" aria-hidden="true">
-            <LitContent value={entry().icon} />
-          </span>
-          <span>{entry().label}</span>
-        </wa-dropdown-item>
-      )}
-    </For>
-  );
-}
-
-const internalLink = (href: string, label: string): JSX.Element => (
-  <a
-    class="agent-chat__capability-menu-link"
-    href={href}
-    tabindex="-1"
-    onClick={(event: MouseEvent) => event.preventDefault()}
-  >
-    {label}
-  </a>
-);
-
-function RootView(props: { menu: ChatComposerPlusMenuContentProps }) {
-  const overrideCount = () => countSessionToolOverrides(props.menu.toolOverrides);
-  const connectorCount = () =>
-    props.menu.mcpServers.filter((server) =>
+function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+  const entries: MenuEntry[] = [];
+  const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
+  if (canUpload) {
+    for (const [id, icon, label] of useSingleAttachmentPicker()
+      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
+      : ([
+          ["camera", "camera", t("chat.composer.takePhoto")],
+          ["photo", "image", t("chat.composer.attachPhoto")],
+          ["file", "paperclip", t("chat.composer.attachFileOption")],
+        ] as const)) {
+      entries.push({
+        id,
+        label,
+        class: "agent-chat__attach-menu-option",
+        icon: <Icon name={icon} />,
+      });
+    }
+  }
+  if (menu.showCapabilities || menu.rootToggles?.length) {
+    if (canUpload) {
+      entries.push(menuDivider("attachment-divider"));
+    }
+    entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
+  }
+  if (!menu.showCapabilities) {
+    return entries;
+  }
+  const counts = {
+    skills:
+      Object.keys(menu.toolOverrides?.skills ?? {}).length > 0
+        ? t("chat.composer.menu.enabledCount", {
+            count: String(menu.skills?.filter((skill) => skill.enabled).length ?? 0),
+          })
+        : null,
+    connectors: menu.mcpServers.filter((server) =>
       resolveToolOverrideState(
         server.enabled,
-        readOwnEntry(props.menu.toolOverrides?.mcpServers, server.name),
+        readOwnEntry(menu.toolOverrides?.mcpServers, server.name),
       ),
-    ).length;
-  const hasSkillOverrides = () => Object.keys(props.menu.toolOverrides?.skills ?? {}).length > 0;
-  const enabledSkillCount = () => props.menu.skills?.filter((skill) => skill.enabled).length ?? 0;
-  const webSearchEnabled = () =>
-    resolveWebSearchToolOverrideState(
-      props.menu.webSearchBaseEnabled,
-      props.menu.toolOverrides?.webSearch,
-    );
-  const staleWebSearchEnable = () =>
-    !props.menu.webSearchBaseEnabled && props.menu.toolOverrides?.webSearch === true;
-  const webSearchDisabled = () =>
-    props.menu.mutationBlockedReason !== null ||
-    (!props.menu.webSearchBaseEnabled && !staleWebSearchEnable());
-  const webSearchTitle = () =>
-    props.menu.mutationBlockedReason ??
-    (staleWebSearchEnable()
-      ? t("chat.composer.menu.webSearchClearStaleEnable")
-      : !props.menu.webSearchBaseEnabled
-        ? t("chat.composer.menu.webSearchGloballyDisabled")
-        : "");
-  const canUpload = () => uploadsEnabled(props.menu.attachments.uploadConfig);
-  return (
-    <>
-      <Show when={canUpload()}>{renderAttachmentOptions()}</Show>
-      <Show when={props.menu.showCapabilities || props.menu.rootToggles?.length}>
-        <Show when={canUpload()}>{menuDivider()}</Show>
-        <For each={props.menu.rootToggles ?? []} keyed={(toggle) => toggle.value}>
-          {(toggle) => (
-            <CapabilityToggleRow
-              value={toggle().value}
-              label={toggle().label}
-              checked={toggle().checked}
-              disabled={toggle().disabled}
-              title={toggle().title}
-              icon={toggle().icon}
-            />
-          )}
-        </For>
-      </Show>
-      <Show when={props.menu.showCapabilities}>
-        <For each={["skills", "connectors"] as const} keyed={(view) => view}>
-          {(view) => (
-            <wa-dropdown-item class="agent-chat__capability-menu-item" value={`open-${view()}`}>
-              <span slot="icon" aria-hidden="true">
-                <Icon name={view() === "skills" ? "book" : "plug"} />
-              </span>
-              <span>{t(`chat.composer.menu.${view()}`)}</span>
-              <span slot="details" class="agent-chat__capability-menu-details">
-                <Show when={view() === "connectors" || hasSkillOverrides()}>
-                  <span class="agent-chat__capability-menu-badge">
-                    {view() === "connectors"
-                      ? connectorCount()
-                      : t("chat.composer.menu.enabledCount", {
-                          count: String(enabledSkillCount()),
-                        })}
-                  </span>
-                </Show>
-                <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              </span>
-            </wa-dropdown-item>
-          )}
-        </For>
-        <CapabilityToggleRow
-          value="toggle-web-search"
-          label={t("chat.composer.menu.webSearch")}
-          checked={webSearchEnabled()}
-          disabled={webSearchDisabled()}
-          title={webSearchTitle()}
-          icon={icons.globe}
-          checkbox={true}
-        />
-        {menuDivider()}
-        <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
-          <span slot="icon" aria-hidden="true">
-            <Icon name="plug" />
+    ).length,
+  };
+  for (const view of ["skills", "connectors"] as const) {
+    entries.push({
+      id: `open-${view}`,
+      label: t(`chat.composer.menu.${view}`),
+      class: "agent-chat__capability-menu-item",
+      icon: <Icon name={view === "skills" ? "book" : "plug"} />,
+      details: (
+        <span class="agent-chat__capability-menu-details">
+          {counts[view] !== null ? (
+            <span class="agent-chat__capability-menu-badge">{counts[view]}</span>
+          ) : null}
+          <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
           </span>
-          {internalLink(
-            pathForRoute("plugins", props.menu.basePath),
-            t("chat.composer.menu.managePlugins"),
-          )}
-        </wa-dropdown-item>
-        <Show when={overrideCount() > 0}>
-          <wa-dropdown-item
-            class="agent-chat__capability-menu-item agent-chat__capability-menu-overrides"
-            value="clear-overrides"
-            disabled={props.menu.mutationBlockedReason !== null}
-            title={props.menu.mutationBlockedReason ?? ""}
-          >
-            <span slot="icon" aria-hidden="true">
-              <Icon name="settings" />
-            </span>
-            <span>
-              {t(
-                overrideCount() === 1
-                  ? "chat.composer.overrides.countOne"
-                  : "chat.composer.overrides.count",
-                { count: String(overrideCount()) },
-              )}
-            </span>
-            <span
-              slot="details"
-              class="agent-chat__capability-menu-clear-overrides"
-              aria-hidden="true"
-            >
-              <Icon name="x" />
-            </span>
-          </wa-dropdown-item>
-        </Show>
-      </Show>
-    </>
-  );
-}
-
-function SkillView(props: { menu: ChatComposerPlusMenuContentProps }) {
-  return (
-    <>
-      {renderBackRow()} {renderComposerLibraryMenuSolid(props.menu.library)}
-      {props.menu.skillsLoading
-        ? renderCapabilityMenuState(t("chat.composer.menu.loadingSkills"), "status")
-        : props.menu.skillsError
-          ? renderCapabilityMenuState(t("chat.composer.menu.skillsLoadFailed"), "alert")
-          : !props.menu.skills?.length
-            ? renderCapabilityMenuState(t("chat.composer.menu.noSkills"))
-            : null}
-      <For each={props.menu.skills ?? []} keyed={(skill) => skill.key}>
-        {(skill, index) => {
-          const title = () =>
-            skill().missingDeps
-              ? t("chat.composer.menu.depsMissing")
-              : skill().blocked
-                ? t("chat.composer.menu.skillBlocked")
-                : props.menu.mutationBlockedReason;
-          return (
-            <CapabilityToggleRow
-              value={`skill:${index()}`}
-              label={skill().name}
-              checked={skill().enabled}
-              disabled={
-                skill().missingDeps || skill().blocked || props.menu.mutationBlockedReason !== null
-              }
-              title={title()}
-              note={
-                skill().missingDeps || skill().blocked ? (
-                  <span class="agent-chat__capability-menu-note">{title()}</span>
-                ) : null
-              }
-            />
-          );
-        }}
-      </For>
-      {menuDivider()}
-      <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-skills">
-        {internalLink(
-          pathForRoute("skills", props.menu.basePath),
-          t("chat.composer.menu.manageSkills"),
-        )}
-      </wa-dropdown-item>
-    </>
-  );
-}
-
-function ConnectorView(props: { menu: ChatComposerPlusMenuContentProps }) {
-  return (
-    <>
-      {renderBackRow()}
-      <Show when={props.menu.mcpServers.length === 0}>
-        {renderCapabilityMenuState(t("chat.composer.menu.noConnectors"))}
-      </Show>
-      <For each={props.menu.mcpServers} keyed={(server) => server.name}>
-        {(server, index) => {
-          const override = () => readOwnEntry(props.menu.toolOverrides?.mcpServers, server().name);
-          const enabled = () => resolveToolOverrideState(server().enabled, override());
-          return (
-            <>
-              <CapabilityToggleRow
-                value={`connector:${index()}`}
-                label={server().name}
-                checked={enabled()}
-                disabled={props.menu.mutationBlockedReason !== null}
-                title={props.menu.mutationBlockedReason}
-                note={
-                  <span class="agent-chat__capability-menu-note">
-                    {enabled() ? t("common.enabled") : t("common.disabled")}
-                    <Show when={override() !== undefined}>
-                      <span class="agent-chat__capability-menu-session-tag">
-                        {t("chat.composer.menu.sessionTag")}
-                      </span>
-                    </Show>
-                  </span>
-                }
-              />
-              <Show when={props.menu.onOpenToolAccess}>
-                <wa-dropdown-item
-                  class="agent-chat__capability-menu-item agent-chat__capability-menu-subrow"
-                  value={`tools:${index()}`}
-                >
-                  <span slot="icon" aria-hidden="true">
-                    <Icon name="wrench" />
-                  </span>
-                  <span>{t("chat.composer.menu.toolAccess.label")}</span>
-                </wa-dropdown-item>
-              </Show>
-            </>
-          );
-        }}
-      </For>
-      {menuDivider()}
-      <Show when={props.menu.onAddServer}>
-        <wa-dropdown-item
-          class="agent-chat__capability-menu-item"
-          value="add-server"
-          disabled={!props.menu.canAdmin}
-          title={!props.menu.canAdmin ? (props.menu.adminBlockedReason ?? "") : ""}
-        >
-          <span slot="icon" aria-hidden="true">
-            <Icon name="plus" />
-          </span>
-          <span>{t("chat.composer.menu.addMcpServer")}</span>
-        </wa-dropdown-item>
-      </Show>
-    </>
-  );
-}
-
-type McpToolEntry = ToolsEffectiveEntry & { mcpServer: string; mcpToolName: string };
-
-const toolsForServer = (result: ToolsEffectiveResult | null, serverName: string): McpToolEntry[] =>
-  (result?.groups ?? [])
-    .flatMap((group) => group.tools)
-    .filter(
-      (tool): tool is McpToolEntry =>
-        tool.source === "mcp" && tool.mcpServer === serverName && Boolean(tool.mcpToolName),
-    );
-
-const MCP_DISCOVERY_NOTICE_IDS = new Set([
-  "mcp-not-yet-connected",
-  "mcp-not-yet-listed",
-  "mcp-stale-catalog",
-]);
-
-const mcpDiscoveryNotice = (result: ToolsEffectiveResult | null, serverName: string) =>
-  result?.notices?.find(
-    (notice) =>
-      MCP_DISCOVERY_NOTICE_IDS.has(notice.id) && notice.servers?.includes(serverName) === true,
-  );
-
-const isToolDenied = (props: ChatComposerPlusMenuContentProps, tool: McpToolEntry): boolean =>
-  props.toolOverrides != null
-    ? (readOwnEntry(props.toolOverrides.mcpToolsDeny, tool.mcpServer)?.includes(tool.mcpToolName) ??
-      false)
-    : tool.deniedBySession === true;
-
-function ToolAccessView(props: { menu: ChatComposerPlusMenuContentProps; serverName: string }) {
-  const tools = createMemo(() => toolsForServer(props.menu.toolsEffectiveResult, props.serverName));
-  const discoveryNotice = createMemo(() =>
-    tools().length === 0
-      ? mcpDiscoveryNotice(props.menu.toolsEffectiveResult, props.serverName)
-      : null,
-  );
-  const summary = () =>
-    t(
-      tools().length === 1
-        ? "chat.composer.menu.toolAccess.summaryOne"
-        : "chat.composer.menu.toolAccess.summary",
-      {
-        enabled: String(tools().filter((tool) => !isToolDenied(props.menu, tool)).length),
-        total: String(tools().length),
-      },
-    );
-  return (
-    <>
-      {renderBackRow()}
-      <div class="agent-chat__capability-menu-state">
-        <span class="agent-chat__capability-menu-label">
-          <strong translate="no">{props.serverName}</strong>
-          <Show when={tools().length > 0}>
-            <span class="agent-chat__capability-menu-note">{summary()}</span>
-          </Show>
         </span>
-      </div>
-      {props.menu.toolsEffectiveLoading ? (
-        renderCapabilityMenuState(t("chat.composer.menu.toolAccess.loading"), "status")
-      ) : props.menu.toolsEffectiveError ? (
-        renderCapabilityMenuState(t("chat.composer.menu.toolAccess.loadFailed"), "alert")
-      ) : (
-        <Show
-          when={discoveryNotice()}
-          fallback={
-            tools().length === 0
-              ? renderCapabilityMenuState(t("chat.composer.menu.toolAccess.noTools"))
-              : null
-          }
-        >
-          {(notice) => (
-            <>{renderCapabilityMenuState(formatUiExternalText(notice().message), "status")}</>
-          )}
-        </Show>
-      )}
-      <For each={tools()} keyed={(tool) => tool.mcpToolName}>
-        {(tool, index) => (
-          <CapabilityToggleRow
-            value={`mcp-tool:${index()}`}
-            label={tool().mcpToolName}
-            checked={!isToolDenied(props.menu, tool())}
-            disabled={props.menu.toolAccessMutationBlockedReason !== null}
-            title={props.menu.toolAccessMutationBlockedReason}
-            note={
-              tool().label?.trim() && tool().label?.trim() !== tool().mcpToolName ? (
-                <span class="agent-chat__capability-menu-note">{tool().label?.trim()}</span>
-              ) : null
-            }
-          />
-        )}
-      </For>
-    </>
+      ),
+      closeOnSelect: false,
+    });
+  }
+  const staleWebSearchEnable = !menu.webSearchBaseEnabled && menu.toolOverrides?.webSearch === true;
+  entries.push(
+    renderCapabilityToggleRow({
+      value: "toggle-web-search",
+      label: t("chat.composer.menu.webSearch"),
+      checked: resolveWebSearchToolOverrideState(
+        menu.webSearchBaseEnabled,
+        menu.toolOverrides?.webSearch,
+      ),
+      disabled:
+        menu.mutationBlockedReason !== null ||
+        (!menu.webSearchBaseEnabled && !staleWebSearchEnable),
+      title:
+        menu.mutationBlockedReason ??
+        (staleWebSearchEnable
+          ? t("chat.composer.menu.webSearchClearStaleEnable")
+          : !menu.webSearchBaseEnabled
+            ? t("chat.composer.menu.webSearchGloballyDisabled")
+            : ""),
+      icon: icons.globe,
+      checkbox: true,
+    }),
+    menuDivider("manage-divider"),
+    {
+      id: "manage-plugins",
+      label: t("chat.composer.menu.managePlugins"),
+      href: pathForRoute("plugins", menu.basePath),
+      class: "agent-chat__capability-menu-item",
+      content: (
+        <span class="agent-chat__capability-menu-link">
+          {t("chat.composer.menu.managePlugins")}
+        </span>
+      ),
+      icon: <Icon name="plug" />,
+    },
   );
+  const overrideCount = countSessionToolOverrides(menu.toolOverrides);
+  if (overrideCount > 0) {
+    entries.push({
+      id: "clear-overrides",
+      label: t(
+        overrideCount === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count",
+        { count: String(overrideCount) },
+      ),
+      class: "agent-chat__capability-menu-item agent-chat__capability-menu-overrides",
+      disabled: menu.mutationBlockedReason !== null,
+      attributes: { title: menu.mutationBlockedReason ?? "" },
+      icon: <Icon name="settings" />,
+      details: (
+        <span class="agent-chat__capability-menu-clear-overrides" aria-hidden="true">
+          <Icon name="x" />
+        </span>
+      ),
+      closeOnSelect: false,
+    });
+  }
+  return entries;
+}
+
+function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+  const header = [menuDivider("back-divider"), ...composerLibraryMenuItems(menu.library)];
+  const notice = menu.skillsLoading
+    ? (["chat.composer.menu.loadingSkills", "status"] as const)
+    : menu.skillsError
+      ? (["chat.composer.menu.skillsLoadFailed", "alert"] as const)
+      : !menu.skills?.length
+        ? (["chat.composer.menu.noSkills", undefined] as const)
+        : null;
+  if (notice) {
+    header.push(renderCapabilityMenuState("skills-notice", t(notice[0]), notice[1]));
+  }
+  const skills: MenuEntry[] = [];
+  for (const skill of menu.skills ?? []) {
+    const title = skill.missingDeps
+      ? t("chat.composer.menu.depsMissing")
+      : skill.blocked
+        ? t("chat.composer.menu.skillBlocked")
+        : menu.mutationBlockedReason;
+    skills.push(
+      renderCapabilityToggleRow({
+        value: `skill:${skill.key}`,
+        label: skill.name,
+        checked: skill.enabled,
+        disabled: skill.missingDeps || skill.blocked || menu.mutationBlockedReason !== null,
+        title,
+        note: skill.missingDeps || skill.blocked ? title : null,
+      }),
+    );
+  }
+  const manage: MenuItem = {
+    id: "manage-skills",
+    label: t("chat.composer.menu.manageSkills"),
+    href: pathForRoute("skills", menu.basePath),
+    class: "agent-chat__capability-menu-item",
+    content: (
+      <span class="agent-chat__capability-menu-link">{t("chat.composer.menu.manageSkills")}</span>
+    ),
+  };
+  return [
+    renderBackRow(),
+    { kind: "group", id: "skills-header", items: header },
+    { kind: "group", id: "skills-list", items: skills },
+    { kind: "group", id: "skills-footer", items: [menuDivider("skills-manage-divider"), manage] },
+  ];
+}
+
+function connectorItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
+  const entries: MenuEntry[] = [renderBackRow(), menuDivider("back-divider")];
+  if (!menu.mcpServers.length) {
+    entries.push(
+      renderCapabilityMenuState("connectors-empty", t("chat.composer.menu.noConnectors")),
+    );
+  }
+  for (const server of menu.mcpServers) {
+    const override = readOwnEntry(menu.toolOverrides?.mcpServers, server.name);
+    const enabled = resolveToolOverrideState(server.enabled, override);
+    entries.push(
+      renderCapabilityToggleRow({
+        value: `connector:${server.name}`,
+        label: server.name,
+        checked: enabled,
+        disabled: menu.mutationBlockedReason !== null,
+        title: menu.mutationBlockedReason,
+        note: enabled ? t("common.enabled") : t("common.disabled"),
+        sessionNote: override !== undefined ? t("chat.composer.menu.sessionTag") : undefined,
+      }),
+    );
+    if (menu.onOpenToolAccess) {
+      entries.push({
+        id: `tools:${server.name}`,
+        label: t("chat.composer.menu.toolAccess.label"),
+        class: "agent-chat__capability-menu-item agent-chat__capability-menu-subrow",
+        icon: <Icon name="wrench" />,
+        closeOnSelect: false,
+      });
+    }
+  }
+  entries.push(menuDivider("connectors-add-divider"));
+  if (menu.onAddServer) {
+    entries.push({
+      id: "add-server",
+      label: t("chat.composer.menu.addMcpServer"),
+      class: "agent-chat__capability-menu-item",
+      disabled: !menu.canAdmin,
+      attributes: { title: !menu.canAdmin ? (menu.adminBlockedReason ?? "") : "" },
+      icon: <Icon name="plus" />,
+    });
+  }
+  return entries;
+}
+
+function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): MenuEntry[] {
+  const tools = toolsForServer(menu.toolsEffectiveResult, serverName);
+  const notice = !tools.length
+    ? menu.toolsEffectiveResult?.notices?.find(
+        (entry) => MCP_DISCOVERY_NOTICE_IDS.has(entry.id) && entry.servers?.includes(serverName),
+      )
+    : undefined;
+  const entries: MenuEntry[] = [
+    renderBackRow(),
+    menuDivider("back-divider"),
+    renderCapabilityMenuState(
+      "tool-heading",
+      <span class="agent-chat__capability-menu-label">
+        <strong translate="no">{serverName}</strong>
+        {tools.length ? (
+          <span class="agent-chat__capability-menu-note">
+            {t(
+              tools.length === 1
+                ? "chat.composer.menu.toolAccess.summaryOne"
+                : "chat.composer.menu.toolAccess.summary",
+              {
+                enabled: String(tools.filter((tool) => !isToolDenied(menu, tool)).length),
+                total: String(tools.length),
+              },
+            )}
+          </span>
+        ) : null}
+      </span>,
+    ),
+  ];
+  if (menu.toolsEffectiveLoading) {
+    entries.push(
+      renderCapabilityMenuState(
+        "tools-loading",
+        t("chat.composer.menu.toolAccess.loading"),
+        "status",
+      ),
+    );
+  } else if (menu.toolsEffectiveError) {
+    entries.push(
+      renderCapabilityMenuState(
+        "tools-error",
+        t("chat.composer.menu.toolAccess.loadFailed"),
+        "alert",
+      ),
+    );
+  } else if (notice || !tools.length) {
+    entries.push(
+      renderCapabilityMenuState(
+        "tools-notice",
+        notice ? formatUiExternalText(notice.message) : t("chat.composer.menu.toolAccess.noTools"),
+        notice ? "status" : undefined,
+      ),
+    );
+  }
+  for (const tool of tools) {
+    const label = tool.label?.trim();
+    entries.push(
+      renderCapabilityToggleRow({
+        value: `mcp-tool:${tool.mcpToolName}`,
+        label: tool.mcpToolName,
+        checked: !isToolDenied(menu, tool),
+        disabled: menu.toolAccessMutationBlockedReason !== null,
+        title: menu.toolAccessMutationBlockedReason,
+        note: label !== tool.mcpToolName ? label : null,
+      }),
+    );
+  }
+  return entries;
 }
 
 function handleMenuSelection(
-  event: CustomEvent<{ item: { value?: string; checked: boolean } }>,
+  item: MenuItem,
+  event: CustomEvent<MenuItem>,
+  surface: HTMLElement,
+  pickerAnchor: HTMLElement | undefined,
   props: ChatComposerPlusMenuContentProps,
 ) {
-  const value = event.detail.item.value ?? "";
-  if (uploadsEnabled(props.attachments.uploadConfig) && handleChatAttachmentMenuSelection(event)) {
+  const value = item.id;
+  if (
+    uploadsEnabled(props.attachments.uploadConfig) &&
+    handleChatAttachmentMenuSelection(
+      { currentTarget: surface, detail: { item: { value } } },
+      pickerAnchor,
+    )
+  ) {
     return;
   }
   const rootToggle = props.rootToggles?.find((toggle) => toggle.value === value);
@@ -488,12 +357,10 @@ function handleMenuSelection(
     }
     return;
   }
-  // SAFETY: This selection handler is registered on the wa-dropdown element.
-  const menu = event.currentTarget as HTMLElement;
   const changeView = (view: ChatComposerPlusMenuView) => {
     props.onViewChange(view);
     requestAnimationFrame(() =>
-      menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus(),
+      surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus(),
     );
   };
   const toggleCapability = (
@@ -527,11 +394,6 @@ function handleMenuSelection(
   }
   if (value === "toggle-web-search") {
     event.preventDefault();
-    // Web Awesome toggles before wa-select; policy can keep the effective value unchanged.
-    event.detail.item.checked = resolveWebSearchToolOverrideState(
-      props.webSearchBaseEnabled,
-      props.toolOverrides?.webSearch,
-    );
     if (
       props.mutationBlockedReason ||
       (!props.webSearchBaseEnabled && props.toolOverrides?.webSearch !== true)
@@ -541,7 +403,11 @@ function handleMenuSelection(
     props.onPatchToolOverrides(
       nextWebSearchToolOverrides(
         props.toolOverrides,
-        props.webSearchBaseEnabled && !event.detail.item.checked,
+        props.webSearchBaseEnabled &&
+          !resolveWebSearchToolOverrideState(
+            props.webSearchBaseEnabled,
+            props.toolOverrides?.webSearch,
+          ),
         props.webSearchBaseEnabled,
       ),
     );
@@ -556,7 +422,7 @@ function handleMenuSelection(
   }
   if (value.startsWith("skill:")) {
     event.preventDefault();
-    const skill = props.skills?.[Number(value.slice("skill:".length))];
+    const skill = props.skills?.find((entry) => entry.key === value.slice("skill:".length));
     if (skill && !skill.missingDeps && !skill.blocked && !props.mutationBlockedReason) {
       toggleCapability("skills", skill.key, skill.enabled, skill.baseEnabled);
     }
@@ -564,7 +430,9 @@ function handleMenuSelection(
   }
   if (value.startsWith("connector:")) {
     event.preventDefault();
-    const server = props.mcpServers[Number(value.slice("connector:".length))];
+    const server = props.mcpServers.find(
+      (entry) => entry.name === value.slice("connector:".length),
+    );
     if (server && !props.mutationBlockedReason) {
       const enabled = resolveToolOverrideState(
         server.enabled,
@@ -576,7 +444,7 @@ function handleMenuSelection(
   }
   if (value.startsWith("tools:")) {
     event.preventDefault();
-    const server = props.mcpServers[Number(value.slice("tools:".length))];
+    const server = props.mcpServers.find((entry) => entry.name === value.slice("tools:".length));
     if (server) {
       props.onOpenToolAccess?.(server.name);
       changeView(`tools:${server.name}`);
@@ -589,9 +457,9 @@ function handleMenuSelection(
       return;
     }
     const serverName = props.view.slice("tools:".length);
-    const tool = toolsForServer(props.toolsEffectiveResult, serverName)[
-      Number(value.slice("mcp-tool:".length))
-    ];
+    const tool = toolsForServer(props.toolsEffectiveResult, serverName).find(
+      (entry) => entry.mcpToolName === value.slice("mcp-tool:".length),
+    );
     if (tool?.mcpToolName) {
       props.onPatchToolOverrides(
         nextMcpToolsDenyOverrides(
@@ -606,125 +474,127 @@ function handleMenuSelection(
   }
   if (value === "add-server") {
     props.onAddServer?.();
-    return;
-  }
-  if (value === "manage-skills") {
-    props.onNavigate("skills");
-  } else if (value === "manage-plugins") {
-    props.onNavigate("plugins");
   }
 }
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
-  const [opened, setOpened] = createSignal(props.menu.open);
-  const hasOverrides = () => countSessionToolOverrides(props.menu.toolOverrides) > 0;
-  const view = () => (props.menu.showCapabilities ? props.menu.view : "root");
+  let handle: MenuHandle | undefined;
+  let host!: HTMLDivElement;
+  const id = createUniqueId();
+  const view = createMemo(() => (props.menu.showCapabilities ? props.menu.view : "root"));
+  const inputs = createMemo(
+    () => ({ view: view(), values: menuRenderInputs(props.menu, view()) }),
+    {
+      equals: (previous, next) =>
+        previous.view === next.view &&
+        previous.values.length === next.values.length &&
+        previous.values.every((value, index) => Object.is(value, next.values[index])),
+    },
+  );
+  const items = createMemo(() => {
+    const current = inputs().view;
+    // Actions keep reading current props; only presentation owns these retained nodes.
+    return untrack(() =>
+      current === "skills"
+        ? skillItems(props.menu)
+        : current === "connectors"
+          ? connectorItems(props.menu)
+          : current.startsWith("tools:")
+            ? toolItems(props.menu, current.slice("tools:".length))
+            : current.startsWith("library:")
+              ? composerLibraryMenuItems(props.menu.library, current.slice("library:".length))
+              : rootItems(props.menu),
+    );
+  });
   return (
     <>
-      <wa-dropdown
+      <div
+        ref={(element) => {
+          host = element;
+        }}
         class="agent-chat__attach-menu agent-chat__capability-menu"
-        placement="top-start"
-        aria-label={t("chat.composer.addAttachment")}
-        prop:open={props.menu.open}
-        onWa-select={(event: Parameters<typeof handleMenuSelection>[0]) =>
-          handleMenuSelection(event, props.menu)
-        }
-        onWa-show={() => {
-          setOpened(true);
-          if (!props.menu.open) {
-            props.menu.onOpenChange(true);
-          }
-          props.menu.onLoadSkills();
-        }}
-        onWa-hide={() => {
-          if (props.menu.open) {
-            props.menu.onOpenChange(false);
-          }
-        }}
         data-view={view()}
       >
-        <button
-          slot="trigger"
-          type="button"
-          class={[
-            "agent-chat__input-btn agent-chat__input-btn--attach",
-            { "agent-chat__input-btn--has-overrides": hasOverrides() },
-          ]}
-          aria-label={t("chat.composer.addAttachment")}
+        <Menu
+          lazy
+          id={`chat-composer-plus-${id}`}
+          panelClass="agent-chat__capability-menu-panel"
+          placement="top-start"
+          pointerFocus="trigger"
+          label={t("chat.composer.addAttachment")}
+          open={props.menu.open}
           disabled={props.menu.disabled}
-          title={t("chat.composer.addAttachment")}
-        >
-          <Icon name="plus" />
-        </button>{" "}
-        <Show when={opened()}>
-          <Show when={view()} keyed>
-            {(activeView) =>
-              activeView === "skills" ? (
-                <SkillView menu={props.menu} />
-              ) : activeView === "connectors" ? (
-                <ConnectorView menu={props.menu} />
-              ) : activeView.startsWith("tools:") ? (
-                <ToolAccessView menu={props.menu} serverName={activeView.slice("tools:".length)} />
-              ) : activeView.startsWith("library:") ? (
-                <>
-                  {renderComposerLibraryMenuSolid(
-                    props.menu.library,
-                    activeView.slice("library:".length),
-                  )}
-                </>
-              ) : (
-                <RootView menu={props.menu} />
-              )
+          triggerClass={`agent-chat__input-btn agent-chat__input-btn--attach${countSessionToolOverrides(props.menu.toolOverrides) ? " agent-chat__input-btn--has-overrides" : ""}`}
+          triggerAttributes={{ title: t("chat.composer.addAttachment") }}
+          trigger={<Icon name="plus" />}
+          items={items()}
+          ref={(next) => {
+            handle = next;
+          }}
+          onSelect={(item, event) => {
+            if (handle) {
+              handleMenuSelection(
+                item,
+                event,
+                handle.overlay.surface,
+                handle.overlay.trigger,
+                props.menu,
+              );
             }
-          </Show>
-        </Show>
-      </wa-dropdown>
-      <LitContent value={props.menu.addServerDialog} />{" "}
+          }}
+          onBeforeShow={() => closeOtherChatComposerPickers(host)}
+          onNavigate={({ value }) =>
+            props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
+          }
+          onOpenChange={(open) => {
+            host.toggleAttribute("open", open);
+            if (open) {
+              props.menu.onLoadSkills();
+            }
+            if (open !== props.menu.open) {
+              props.menu.onOpenChange(open);
+            }
+          }}
+        />
+      </div>
+      <LitContent value={props.menu.addServerDialog} />
       <LitContent value={props.menu.libraryDialog} />
     </>
   );
 }
 
-function resolvePlusMenuProps(props: ChatComposerPlusMenuProps) {
-  const capabilityMenu = props.capabilityMenu;
-  if (
-    !capabilityMenu &&
-    !props.rootToggles?.length &&
-    !uploadsEnabled(props.attachments.uploadConfig)
-  ) {
-    return null;
-  }
-  return {
-    ...props,
-    ...capabilityMenu,
-    showCapabilities: capabilityMenu !== undefined,
-    basePath: capabilityMenu?.basePath ?? "",
-    skills: capabilityMenu?.skills ?? null,
-    skillsLoading: capabilityMenu?.skillsLoading ?? false,
-    skillsError: capabilityMenu?.skillsError ?? false,
-    mcpServers: capabilityMenu?.mcpServers ?? [],
-    toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
-    toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,
-    toolsEffectiveError: capabilityMenu?.toolsEffectiveError ?? false,
-    toolAccessMutationBlockedReason: capabilityMenu?.toolAccessMutationBlockedReason ?? null,
-    webSearchBaseEnabled: capabilityMenu?.webSearchBaseEnabled ?? true,
-    mutationBlockedReason: capabilityMenu?.mutationBlockedReason ?? null,
-    canAdmin: capabilityMenu?.canAdmin ?? false,
-    adminBlockedReason: capabilityMenu?.adminBlockedReason ?? null,
-    onLoadSkills: capabilityMenu?.onLoadSkills ?? (() => {}),
-    onPatchToolOverrides: capabilityMenu?.onPatchToolOverrides ?? (() => {}),
-    onNavigate: capabilityMenu?.onNavigate ?? (() => {}),
-  };
-}
-
 export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps }) {
-  return (
-    <Show when={resolvePlusMenuProps(props.menu)}>
-      {(menu) => <PlusMenuSurface menu={menu()} />}
-    </Show>
-  );
-}
-
-export function renderChatComposerPlusMenu(menu: ChatComposerPlusMenuProps) {
-  return solidTemplate(ChatComposerPlusMenu, { menu });
+  const resolved = createMemo(() => {
+    const current = props.menu;
+    const capabilityMenu = current.capabilityMenu;
+    if (
+      !capabilityMenu &&
+      !current.rootToggles?.length &&
+      !uploadsEnabled(current.attachments.uploadConfig)
+    ) {
+      return null;
+    }
+    return {
+      ...current,
+      ...capabilityMenu,
+      showCapabilities: capabilityMenu !== undefined,
+      basePath: capabilityMenu?.basePath ?? "",
+      skills: capabilityMenu?.skills ?? null,
+      skillsLoading: capabilityMenu?.skillsLoading ?? false,
+      skillsError: capabilityMenu?.skillsError ?? false,
+      mcpServers: capabilityMenu?.mcpServers ?? [],
+      toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
+      toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,
+      toolsEffectiveError: capabilityMenu?.toolsEffectiveError ?? false,
+      toolAccessMutationBlockedReason: capabilityMenu?.toolAccessMutationBlockedReason ?? null,
+      webSearchBaseEnabled: capabilityMenu?.webSearchBaseEnabled ?? true,
+      mutationBlockedReason: capabilityMenu?.mutationBlockedReason ?? null,
+      canAdmin: capabilityMenu?.canAdmin ?? false,
+      adminBlockedReason: capabilityMenu?.adminBlockedReason ?? null,
+      onLoadSkills: capabilityMenu?.onLoadSkills ?? (() => {}),
+      onPatchToolOverrides: capabilityMenu?.onPatchToolOverrides ?? (() => {}),
+      onNavigate: capabilityMenu?.onNavigate ?? (() => {}),
+    };
+  });
+  return <Show when={resolved()}>{(menu) => <PlusMenuSurface menu={menu()} />}</Show>;
 }

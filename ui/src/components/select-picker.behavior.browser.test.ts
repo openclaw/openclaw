@@ -89,6 +89,11 @@ describe("Picker", () => {
         searchable: "always",
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      expect(
+        p.picker
+          .querySelector<HTMLElement>(".picker-select__menu")!
+          .style.getPropertyValue("position-anchor"),
+      ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
       await page.elementLocator(p.trigger).click();
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
@@ -177,14 +182,6 @@ describe("Picker", () => {
       }
     },
   );
-
-  it("anchors its native popup to the mounted trigger before the first open", async () => {
-    const p = await mount();
-    const popup = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    expect(popup.style.getPropertyValue("position-anchor")).toBe(
-      p.trigger.style.getPropertyValue("anchor-name"),
-    );
-  });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();

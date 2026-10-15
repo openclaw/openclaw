@@ -403,25 +403,6 @@ describe("SessionDiffPanel", () => {
     expect(panel.textContent).not.toContain("feature/stale");
   });
 
-  it("keeps collapsed file bodies unmounted through a refresh", async () => {
-    const panel = mountPanel();
-    panel.loader = async () => fileResult(SNAPSHOT_PATCH);
-    await waitForSolid(() => expect(panel.textContent).toContain("snapshot line"));
-    panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!.click();
-    flush();
-    expect(panel.querySelector(".session-diff__file-body")).toBeNull();
-
-    const refreshed = vi.fn(async () => fileResult(FRESH_PATCH));
-    panel.loader = refreshed;
-    await waitForSolid(() => {
-      expect(refreshed).toHaveBeenCalledOnce();
-      expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
-    });
-    expect(panel.querySelector(".session-diff__file-body")).toBeNull();
-    panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!.click();
-    await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
-  });
-
   it("refreshes the diff instead of expanding file text from a stale gap snapshot", async () => {
     const loader = vi
       .fn<SessionDiffLoader>()

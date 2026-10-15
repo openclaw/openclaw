@@ -108,44 +108,6 @@ describe("SQLite trajectory runtime retention", () => {
     },
   );
 
-  it("drops old runs while retaining recent runs and session transcript receipts", async () => {
-    const now = Date.parse("2026-07-26T00:00:00.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
-      createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
-    ]);
-    await addSession("history");
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
-    const scopes = [sqliteSessionIdWriteScope("session-1"), sqliteSessionIdWriteScope("history")];
-    using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
-    const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
-    expect(token).toBeTypeOf("string");
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "history", storePath }, [
-      createTrajectoryEvent({
-        runId: "old-run",
-        sessionId: "history",
-        type: "old",
-        ts: new Date(now - 15 * 24 * 60 * 60 * 1_000).toISOString(),
-      }),
-      createTrajectoryEvent({
-        runId: "recent-run",
-        sessionId: "history",
-        type: "recent",
-        ts: new Date(now - 13 * 24 * 60 * 60 * 1_000).toISOString(),
-      }),
-    ]);
-    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
-
-    vi.advanceTimersByTime(60 * 60 * 1_000);
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
-      createTrajectoryEvent({ type: "sweep-trigger", ts: new Date(Date.now()).toISOString() }),
-    ]);
-
-    await expect(runtimeEventTypes("history")).resolves.toEqual(["recent"]);
-    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
-  });
-
   it("rejects only changed runs while draining an eviction plan under competing writes", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");
     vi.useFakeTimers();
@@ -801,6 +763,14 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "current" }),
     ]);
     await addSession("old-session");
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const scopes = [
+      sqliteSessionIdWriteScope("session-1"),
+      sqliteSessionIdWriteScope("old-session"),
+    ];
+    using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
+    const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
+    expect(token).toBeTypeOf("string");
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "old-session", storePath }, [
       createTrajectoryEvent({
         sessionId: "old-session",
@@ -812,6 +782,7 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "same-window" }),
     ]);
     await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
 
     vi.advanceTimersByTime(60 * 60 * 1_000);
     expect(() =>
@@ -830,6 +801,7 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "next-window", ts: new Date(Date.now()).toISOString() }),
     ]);
     await expect(runtimeEventTypes("old-session")).resolves.toEqual([]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
   });
 
   function withCompetingSelectionWrite(

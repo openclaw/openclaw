@@ -113,6 +113,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {
+        source.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(source);
       }
       if (entry.sources.length === 0) {

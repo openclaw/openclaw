@@ -622,6 +622,18 @@ current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
 
+## Harness execution identity
+
+The harness host's closure-bound `preparedEnvironment()` returns non-secret
+execution facts. When `hostExecutionRequired` is true, use the host's
+`createToolSurfaceAsync()` execution tools rather than a native runtime shell
+environment overlay. The host captures credential selection before plugin
+handoff and binds it privately at child launch. Tool construction overrides
+cannot replace that selection. The tools retain the host's existing approvals,
+source authority, process lifecycle, and failure handling; this fact grants no
+credential export or remote delegation authority. Hosts without a managed
+selection omit the optional fact and retain native execution defaults.
+
 ## Other top-level `api` fields
 
 Beyond `api.runtime`, the API object also provides:

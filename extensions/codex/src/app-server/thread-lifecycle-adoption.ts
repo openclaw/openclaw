@@ -312,6 +312,7 @@ function observeCodexThreadConfiguration(
   }
   const settledSystemError = thread.status.type === "systemError";
   let unloaded = thread.status.type === "notLoaded";
+  let onUnload: (() => void) | undefined;
   const dispose = params.client.addNotificationHandler((notification) => {
     if (
       notification.method === "thread/status/changed" &&
@@ -321,12 +322,33 @@ function observeCodexThreadConfiguration(
       notification.params.status.type === "notLoaded"
     ) {
       unloaded = true;
+      onUnload?.();
     }
   });
   return {
     modelProvider: thread.modelProvider,
     dispose,
     settledSystemError,
+    // Unsubscribe only acknowledges removal of our subscription. Native teardown
+    // is asynchronous, including with a zero post-unsubscribe retention delay.
+    waitForUnload: async () => {
+      assertCurrent();
+      if (!unloaded) {
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            params.signal?.removeEventListener("abort", finish);
+            onUnload = undefined;
+            resolve();
+          };
+          const timer = setTimeout(finish, 2_000);
+          onUnload = finish;
+          params.signal?.addEventListener("abort", finish, { once: true });
+        });
+      }
+      assertCurrent();
+      return unloaded;
+    },
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber

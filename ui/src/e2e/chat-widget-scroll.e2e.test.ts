@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -26,28 +26,54 @@ async function swipe(
     touchPoints: [{ ...point, id: 1 }],
     timestamp,
   });
-  for (let step = 1; step <= 8; step++) {
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ ...point, y: point.y + direction * step * 20, id: 1 }],
-      // Preserve physical gesture velocity independently of CDP round-trip latency.
-      timestamp: timestamp + step * 0.016,
+  const scrollEnd = await thread.evaluateHandle((element) => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finish = () => resolve();
     });
-    moves.push(await thread.evaluate((element) => element.scrollTop));
-  }
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-    timestamp: timestamp + 0.13,
+    element.addEventListener("scrollend", finish, { once: true });
+    return { done, dispose: () => element.removeEventListener("scrollend", finish) };
   });
-  const released = await thread.evaluate((element) => element.scrollTop);
-  await waitForChatScrollIdle(page);
-  return {
-    before,
-    moves,
-    released,
-    settled: await thread.evaluate((element) => element.scrollTop),
-  };
+  try {
+    for (let step = 1; step <= 8; step++) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ ...point, y: point.y + direction * step * 20, id: 1 }],
+        // Preserve physical gesture velocity independently of CDP round-trip latency.
+        timestamp: timestamp + step * 0.016,
+      });
+      moves.push(await thread.evaluate((element) => element.scrollTop));
+    }
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+      timestamp: timestamp + 0.13,
+    });
+    const released = await thread.evaluate((element) => element.scrollTop);
+    // A quiet timer window can occur during native inertia; wait for its actual end.
+    const completed = await page.waitForFunction(
+      async ({ done }) => {
+        await done;
+        return true;
+      },
+      scrollEnd,
+      { timeout: 10_000 },
+    );
+    await completed.dispose();
+    await waitForChatScrollIdle(page);
+    return {
+      before,
+      moves,
+      released,
+      settled: await thread.evaluate((element) => element.scrollTop),
+    };
+  } finally {
+    try {
+      await scrollEnd.evaluate(({ dispose }) => dispose());
+    } finally {
+      await scrollEnd.dispose();
+    }
+  }
 }
 
 suite.define(() => {
@@ -103,6 +129,8 @@ suite.define(() => {
           .waitFor({ state: "attached" });
         const cdp = await context.newCDPSession(page);
         const samples = [];
+        await scrollChatThreadToTop(page);
+        await waitForChatScrollIdle(page);
         for (const target of ["text", "widget"]) {
           const anchor =
             target === "text"
@@ -131,6 +159,7 @@ suite.define(() => {
             -1,
           );
           samples.push({ target, ...sample });
+          console.info("Mobile widget native scroll proof", JSON.stringify(samples));
           // A finger moving in one direction must never drive the transcript backward.
           let previous = sample.before;
           for (const offset of sample.moves) {
@@ -140,11 +169,17 @@ suite.define(() => {
           expect(sample.released - sample.before).toBeGreaterThan(120);
           expect(sample.settled - sample.released).toBeGreaterThan(20);
         }
-        console.info("Mobile widget native scroll proof", JSON.stringify(samples));
 
         // Begin at the live end, then read upward through the iframe. Native touch
         // events do not bubble across documents; native offsets must still release follow.
         await page.getByRole("button", { name: "Scroll to latest" }).click();
+        await expect
+          .poll(() =>
+            thread.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          )
+          .toBe(0);
         await waitForChatScrollIdle(page);
         const threadBox = await thread.boundingBox();
         if (!threadBox) {

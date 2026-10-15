@@ -21,7 +21,7 @@ export function makeOpenClawConfigFixture(input: OpenClawConfigInput = {}): Open
   return input as OpenClawConfig;
 }
 
-export const OPENAI_CODEX_TEMPLATE_MODEL = {
+const OPENAI_CODEX_TEMPLATE_MODEL = {
   id: "gpt-5.3-codex",
   name: "GPT-5.3 Codex",
   provider: "openai",

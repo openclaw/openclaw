@@ -1,11 +1,11 @@
 import { createEffect, createSignal } from "solid-js";
-import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import {
   createOverlay,
   findOverlayParent,
   type Overlay,
 } from "../../../components/overlay-lifecycle.ts";
+import { registryFor } from "../../../components/overlay-registry.ts";
 import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
@@ -24,11 +24,11 @@ const POINTER_OPENED_PICKER_ATTRIBUTE = "data-chat-pointer-opened-picker";
 const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
 const LEGACY_INVOCATION_MENUS =
   ".agent-chat__input > :is(.slash-menu, .skill-menu, .emoji-menu-popup:not([popover]))";
-const nativePickers = new WeakMap<HTMLDetailsElement, { overlay: Overlay; sync(): void }>();
+const nativePickers = new WeakMap<HTMLDetailsElement, Overlay>();
 let nextPickerId = 0;
 
 /** Keep native details selectors while the shared overlay owns visibility and dismissal. */
-export function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
+function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
   const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
   const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
@@ -58,7 +58,7 @@ export function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
       details.open = overlay.open;
     }
   };
-  nativePickers.set(details, { overlay, sync });
+  nativePickers.set(details, overlay);
   details.setAttribute("data-chat-native-picker", "");
   const stop = overlay.subscribe((open) => {
     details.open = open;
@@ -106,7 +106,7 @@ function openChatComposerPickers(root: ParentNode): HTMLElement[] {
 function closeComposerPicker(picker: HTMLElement): void {
   const native = picker instanceof HTMLDetailsElement ? nativePickers.get(picker) : undefined;
   if (native) {
-    native.overlay.request(false);
+    native.request(false);
     return;
   }
   pointerOpenedDropdowns.delete(picker);
@@ -193,7 +193,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     ) {
       return;
     }
-    if (ownerDocument.querySelector(".agent-chat__input details[data-chat-native-picker][open]")) {
+    if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
     if (clearChatModelSearchOnEscape(event)) {
@@ -258,13 +258,6 @@ export function closeOtherChatComposerPickers(source: HTMLElement): void {
   }
 }
 
-export function handleChatComposerDetailsToggle(event: Event): void {
-  const details = event.currentTarget;
-  if (details instanceof HTMLDetailsElement && details.open) {
-    closeOtherChatComposerPickers(details);
-  }
-}
-
 export function handleChatComposerDropdownShow(event: Event): void {
   const dropdown = event.target;
   if (dropdown instanceof HTMLElement && dropdown.localName === "wa-dropdown") {
@@ -302,20 +295,4 @@ export function restorePointerOpenedChatComposerTrigger(event: Event): void {
     trigger.addEventListener("keydown", clearPointerFocus, { once: true });
     trigger.focus({ preventScroll: true });
   }
-}
-
-export function syncChatPickerOverlay(details: HTMLDetailsElement): void {
-  const native = nativePickers.get(details);
-  if (native) {
-    native.sync();
-    return;
-  }
-  // Mobile panels span the composer, so anchor to that stable box; desktop
-  // panels stay attached to the individual trigger.
-  const composerAnchor =
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(MOBILE_COMPOSER_OVERLAY_QUERY).matches
-      ? (details.closest(".agent-chat__input") ?? undefined)
-      : undefined;
-  syncAnchoredOverlay(details, "top", { alignment: "end", anchor: composerAnchor });
 }

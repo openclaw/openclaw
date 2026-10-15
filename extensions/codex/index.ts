@@ -16,7 +16,6 @@ import {
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import codexProviderDiscovery from "./provider-discovery.js";
-import { registerCodexAccountUsage } from "./src/account-usage.js";
 import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
 import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
@@ -84,7 +83,14 @@ export default definePluginEntry({
     noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
   },
   register(api) {
-    registerCodexAccountUsage(api);
+    api.registerGatewayMethod(
+      "codex.accountUsage",
+      async (options) => {
+        const { handleCodexAccountUsage } = await import("./src/account-usage-runtime.js");
+        await handleCodexAccountUsage(options);
+      },
+      { scope: "operator.admin" },
+    );
     api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
@@ -119,7 +125,8 @@ export default definePluginEntry({
       return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    const registrationConfig = readCodexPluginConfig(api.pluginConfig);
+    const appServerConfig = registrationConfig.appServer;
     api.registerService(
       createCodexDesktopGenerationService({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
@@ -199,8 +206,7 @@ export default definePluginEntry({
           overflowPolicy: "reject-new",
         }),
     });
-    const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    const sessionCatalogEnabled = registrationConfig.sessionCatalog?.enabled !== false;
     api.registerService({
       id: "codex-session-catalog",
       start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
@@ -225,7 +231,7 @@ export default definePluginEntry({
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
-    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+    if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
         resolveCodexAppServerAuthProfileIdAtEffect,

@@ -160,3 +160,110 @@ it.each([
     }
   });
 });
+
+it.each<{ name: string; patch: OpenClawConfig; allowed: boolean }>([
+  {
+    name: "unrelated plugin settings",
+    patch: { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
+    allowed: true,
+  },
+  {
+    name: "selected model",
+    patch: {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: { model: { primary: "openai/changed" } },
+      },
+    },
+    allowed: false,
+  },
+  { name: "tool policy", patch: { tools: { deny: ["exec"] } }, allowed: false },
+  { name: "global plugin enablement", patch: { plugins: { enabled: false } }, allowed: false },
+  { name: "plugin allowlist", patch: { plugins: { allow: ["memory-core"] } }, allowed: false },
+  { name: "plugin denylist", patch: { plugins: { deny: ["openai"] } }, allowed: false },
+  {
+    name: "harness enablement",
+    patch: { plugins: { entries: { codex: { enabled: false } } } },
+    allowed: false,
+  },
+  {
+    name: "plugin slot",
+    patch: { plugins: { slots: { contextEngine: "other" } } },
+    allowed: false,
+  },
+])("rechecks prepared chat facts across a reload of $name", async ({ patch, allowed }) => {
+  await withOpenClawTestState({ label: "chat-reload-preparation" }, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+          codex: { enabled: true },
+        },
+      },
+    };
+    let currentConfig = cfg;
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const sessionKey = "agent:main:dashboard:reload-preparation";
+    const runId = "chat-reload-preparation";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey },
+      { sessionId: "reload-preparation-session", updatedAt: 1 },
+    );
+    const request = await normalizeChatSendRequest({
+      client: null,
+      params: { sessionKey, message: "Keep this turn", idempotencyKey: runId },
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    const context = createDirectChatContext({ getRuntimeConfig: () => currentConfig });
+    const prepared = await prepareChatSendSession({
+      request: request.value,
+      client: null,
+      context,
+    });
+    if (!prepared.ok) {
+      throw new Error("Session preparation failed");
+    }
+    const session = await qualifyChatSendSession(prepared.value);
+    currentConfig = {
+      ...cfg,
+      ...patch,
+      plugins: {
+        ...cfg.plugins,
+        ...patch.plugins,
+        entries: { ...cfg.plugins?.entries, ...patch.plugins?.entries },
+      },
+    };
+    setRuntimeConfigSnapshot(currentConfig, currentConfig);
+    const respond = vi.fn();
+    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+    try {
+      admitted = await admitChatSend({
+        request: request.value,
+        session,
+        client: null,
+        context,
+        respond,
+      });
+      expect(admitted.ok).toBe(allowed);
+      if (!allowed) {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            message: expect.stringContaining("Session preparation changed"),
+          }),
+        );
+      }
+    } finally {
+      if (admitted?.ok) {
+        admitted.value.cleanupAdmittedRun();
+      }
+      clearAgentRunContext(runId);
+    }
+  });
+});

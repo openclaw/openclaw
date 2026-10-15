@@ -80,7 +80,13 @@ export function GatewayCpuVital(props: GatewayVitalsProps) {
     }),
   );
   return (
-    <openclaw-tooltip class="gateway-cpu-tooltip" placement="top-start" open-on-click auto-size>
+    <openclaw-tooltip
+      class="gateway-cpu-tooltip"
+      placement="top-start"
+      open-on-click
+      auto-size
+      prop:pointerThrough={true}
+    >
       <button
         type="button"
         class="gateway-cpu-trigger"

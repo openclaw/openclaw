@@ -1,9 +1,6 @@
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import { isClawAddStateCommand } from "../claws/add-state-worker-contract.js";
-import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-} from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -226,8 +223,9 @@ function createSharedStateWorkerBackend(
     );
   const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (
     operation,
-    { receipt, transactionEnvironment, ...options } = {},
+    transactionOptions = {},
   ) => {
+    const { receipt, transactionEnvironment, ...options } = transactionOptions;
     const openedDatabase = open();
     return write(
       (database) => {
@@ -363,7 +361,6 @@ function createSharedStateWorkerBackend(
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
-        commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
         commandType === "stateLease.verify" ||
         commandType === "stateLease.renew" ||
@@ -410,13 +407,6 @@ function createSharedStateWorkerBackend(
           throw new Error("Capture worker command runtime is not prepared");
         }
         return capture.executeCaptureCommand(command, open());
-      }
-      if (command.type === "deviceIdentity.read") {
-        return loadDeviceIdentityIfPresent({
-          path: context.databasePath,
-          identityKey: command.input.identityKey,
-          env: getSqliteWorkerStateContext().environment,
-        });
       }
       if (command.type === "deviceIdentity.load") {
         try {

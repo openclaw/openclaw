@@ -274,10 +274,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       {
         from: inbound.from,
         to: self.e164 ?? "me",
-        body: enriched.body,
-        mediaPath: enriched.mediaPath,
+        messageId: inbound.id,
+        textLength: enriched.body.length,
         mediaType: enriched.mediaType,
-        mediaFileName: enriched.mediaFileName,
         timestamp,
       },
       "inbound message",

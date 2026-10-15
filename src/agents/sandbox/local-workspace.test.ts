@@ -67,6 +67,10 @@ it.runIf(process.platform !== "win32")(
         workspaceDir: root,
         workspaceCwd: root,
         checkpoint,
+        retain: () => {
+          assertCurrent();
+          return () => {};
+        },
         provision: async (run) => {
           await waitForAdmission;
           return await run();
@@ -96,8 +100,19 @@ it.runIf(process.platform !== "win32")(
         code: "ENOENT",
       });
       revoked = false;
-      await backend.finalizeExec?.({ status: "completed", exitCode: 0, timedOut: false });
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
       expect(finalized).toHaveBeenCalledOnce();
+      expect(finalized).toHaveBeenCalledWith({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: "prepared",
+      });
       expect(checkpoint).toHaveBeenCalledTimes(2);
       revokeDuringBuild = true;
       await expect(
@@ -187,17 +202,22 @@ it.runIf(process.platform !== "win32")(
       overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
     });
     sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("revoked during preparation");
+      }
+    };
     bindLocalSandboxWorkspace(sandbox, {
       [Symbol.dispose]() {},
       workspaceDir: root,
       workspaceCwd: root,
       provision: async (run) => await run(),
       checkpoint: async () => {},
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("revoked during preparation");
-        }
+      retain: () => {
+        assertCurrent();
+        return () => {};
       },
+      assertCurrent,
     });
     try {
       await expect(

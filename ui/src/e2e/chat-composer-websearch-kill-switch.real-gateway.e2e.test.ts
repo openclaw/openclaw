@@ -143,18 +143,18 @@ async function settleSelection(page: Page) {
 async function openMenu(page: Page, selector = ".agent-chat__input") {
   const composer = page.locator(selector);
   await composer.waitFor();
-  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-  if (!(await menu.evaluate((node) => (node as HTMLElement & { open: boolean }).open))) {
+  const menu = composer.locator(".agent-chat__capability-menu");
+  if (!(await menu.evaluate((node) => node.hasAttribute("open")))) {
     await composer.getByRole("button", { name: "Add attachment" }).click();
   }
-  const webSearch = menu.locator('wa-dropdown-item[value="toggle-web-search"]');
+  const webSearch = menu.locator('.oc-menu-item[data-value="toggle-web-search"]');
   await webSearch.waitFor();
   await expect.poll(() => tooltipTitleText(webSearch)).not.toBe("Loading…");
   return { composer, menu, webSearch };
 }
 
 function checked(item: Locator) {
-  return item.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked);
+  return item.evaluate((node) => node.getAttribute("aria-checked") === "true");
 }
 
 async function presentation(item: Locator) {
@@ -167,11 +167,7 @@ async function presentation(item: Locator) {
 
 async function forceSelection(item: Locator) {
   await item.evaluate((element) => {
-    const menu = element.closest("wa-dropdown");
-    if (!menu) {
-      throw new Error("Capability row has no dropdown owner");
-    }
-    menu.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: element } }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
 

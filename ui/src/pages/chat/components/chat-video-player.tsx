@@ -9,15 +9,10 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-  renderCompactAttachmentCard,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
@@ -168,17 +163,13 @@ function ChatVideoPlayerContent(
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
-        <LitContent
-          render={() =>
-            renderAttachmentCardHeader({
-              ...card(),
-              downloadPending: props.preview && !downloadHref(),
-              loading: loading(),
-              expandLabel: t("chat.mediaPlayer.openVideo", { filename: props.label }),
-              onExpand: onExpand(),
-              visualMode: "preview-with-favicon",
-            })
-          }
+        <AttachmentCardHeader
+          {...card()}
+          downloadPending={props.preview && !downloadHref()}
+          loading={loading()}
+          expandLabel={t("chat.mediaPlayer.openVideo", { filename: props.label })}
+          onExpand={onExpand()}
+          visualMode="preview-with-favicon"
         />
         <Show when={preparing()}>
           <div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -241,13 +232,7 @@ function ChatVideoPlayerContent(
   return (
     <Show
       when={sourceState().readiness !== "unavailable"}
-      fallback={
-        <LitContent
-          render={() =>
-            renderCompactAttachmentCard({ ...card(), onExpand: props.onFallbackExpand })
-          }
-        />
-      }
+      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
     >
       <Player />
     </Show>

@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  parseDateStringTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -314,14 +318,22 @@ export class TranscriptsStore {
   listReadEntries(
     options: read.TranscriptReadOptions,
   ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
-  async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
+  async listReadEntries(request: read.TranscriptReadOptions & { projection?: "public" }) {
+    const options = {
+      ...request,
+      startedAfter:
+        timestampMsToIsoString(parseDateStringTimestampMs(request.startedAfter)) ??
+        request.startedAfter,
+      startedBefore:
+        timestampMsToIsoString(parseDateStringTimestampMs(request.startedBefore)) ??
+        request.startedBefore,
+    };
     const operation = createTranscriptStoreOperation(this.databaseOptions);
     operation.assertCurrent();
     const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
     const key = JSON.stringify([
       operation.databaseOptions.path,
       operation.databaseOptions.readOnly,
-      process.env.TZ,
       options,
     ]);
     if (
@@ -357,6 +369,7 @@ export class TranscriptsStore {
     const selector = transcriptSessionSelector(session);
     const sessionValues = {
       selector,
+      started_at_ms: parseDateStringTimestampMs(session.startedAt) ?? null,
       export_key: transcriptSessionExportKey(session),
       session_slug: safeTranscriptPathSegment(session.sessionId),
       provider_id: session.source.providerId,

@@ -3,8 +3,10 @@ import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
+import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -336,12 +338,17 @@ function runSession(): void {
         // Domain code stays child-only; importing it from the host would reverse storage ownership.
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
+        const openReadOnlyDatabase: AuthProfileReadDatabaseOpener =
+          read.artifactPreserving === true
+            ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
+            : (databasePath, options) =>
+                openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
         if (stopping) {
           return;
         }
-        assertExistingDatabaseIdentity(pathname, expectedIdentity);
         const rows = readAuthProfileRowsReadOnly(
           pathname,
+          openReadOnlyDatabase,
           readSqliteAuthSchema(read.schema),
           expectedIdentity,
           read.retainReader === true,

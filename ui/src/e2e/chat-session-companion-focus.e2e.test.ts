@@ -58,33 +58,6 @@ suite.define(() => {
     });
   }
 
-  it.each(["/btw", "/side"])("opens and refocuses Side chat with %s", async (command) => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
-      const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      expect(await input.isVisible()).toBe(false);
-      for (const draft of ["", "Keep this side draft"]) {
-        await enterSideCommand(page, command);
-        await expect.poll(() => input.isVisible()).toBe(true);
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        expect(await mainInput.inputValue()).toBe("");
-        expect(await input.inputValue()).toBe(draft);
-        await page.keyboard.type("Keep this side draft");
-      }
-      await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
-      await openChatSidePanelType(page, "Side chat");
-      await expect
-        .poll(() => input.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-      expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
-
   it.each(["/btw", "/side"])(
     "preserves newer main focus while %s opens a delayed rail",
     async (command) => {

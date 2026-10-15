@@ -209,3 +209,16 @@ it.each([
     }
   },
 );
+
+it("binds standard provider credentials to the provider's own API origin", async () => {
+  const fetch = mockFetch(async () => new Response("{}"));
+  await requestEvaluation({
+    ...request,
+    baseUrl: "https://unrelated.example",
+    providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
+  });
+  expect(fetch.mock.calls[0]?.[0]).toBe("https://decision.example.com/v1/systemone");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+    "Bearer synthetic-key",
+  );
+});

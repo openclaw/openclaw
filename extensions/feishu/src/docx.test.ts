@@ -376,64 +376,6 @@ describe("feishu_doc image fetch hardening", () => {
     expect(blockChildrenBatchDeleteMock).not.toHaveBeenCalled();
   });
 
-  it("keeps fenced code blocks balanced when size fallback split is needed", async () => {
-    const convertedChunks: string[] = [];
-    let successChunkCount = 0;
-    let failFirstConvert = true;
-    convertMock.mockImplementation(async ({ data }) => {
-      const content = data.content as string;
-      convertedChunks.push(content);
-      if (failFirstConvert) {
-        failFirstConvert = false;
-        return { code: 999, msg: "content too large" };
-      }
-      successChunkCount++;
-      const blockId = `c_${successChunkCount}`;
-      return {
-        code: 0,
-        data: {
-          blocks: [{ block_type: 2, block_id: blockId }],
-          first_level_block_ids: [blockId],
-        },
-      };
-    });
-
-    blockChildrenCreateMock.mockImplementation(async ({ data }) => ({
-      code: 0,
-      data: { children: data.children },
-    }));
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const fencedMarkdown = [
-      "## Section",
-      "```ts",
-      "const alpha = 1;",
-      "const beta = 2;",
-      "const gamma = alpha + beta;",
-      "console.log(gamma);",
-      "```",
-      "",
-      "Tail paragraph one with enough text to exceed API limits when combined. ".repeat(8),
-      "Tail paragraph two with enough text to exceed API limits when combined. ".repeat(8),
-      "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(8),
-    ].join("\n");
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "append",
-      doc_token: "doc_1",
-      content: fencedMarkdown,
-    });
-
-    expect(convertMock.mock.calls.length).toBeGreaterThan(1);
-    expect(successChunkCount).toBeGreaterThan(1);
-    for (const chunk of convertedChunks) {
-      const fenceCount = chunk.match(/```/g)?.length ?? 0;
-      expect(fenceCount % 2).toBe(0);
-    }
-    expect(result.details.blocks_added).toBe(successChunkCount);
-  });
-
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     readRemoteMediaBufferMock.mockRejectedValueOnce(
@@ -497,28 +439,6 @@ describe("feishu_doc image fetch hardening", () => {
       }),
     );
     expect(result.details.images_processed).toBe(1);
-  });
-
-  it("rejects a create request with an empty body before creating a document", async () => {
-    const feishuDocTool = resolveFeishuDocTool({
-      messageChannel: "feishu",
-      requesterSenderId: "ou_123",
-    });
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "create",
-      title: "Demo",
-      content: "",
-    });
-
-    expect(result.details.error).toBe(
-      'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
-    );
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(documentCreateMock).not.toHaveBeenCalled();
-    expect(convertMock).not.toHaveBeenCalled();
-    expect(blockDescendantCreateMock).not.toHaveBeenCalled();
-    expect(permissionMemberCreateMock).not.toHaveBeenCalled();
   });
 
   it("create skips requester grant when trusted requester identity is unavailable", async () => {

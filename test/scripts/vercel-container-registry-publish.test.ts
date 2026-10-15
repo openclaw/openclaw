@@ -759,7 +759,7 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.2.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.1", vercel: "62.2.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
@@ -769,8 +769,8 @@ describe("Vercel Container Registry publishing", () => {
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
       integrity:
-        "sha512-u2hE1xn/HNxLxupbVsGQGfA+W2WYORrK18j6+x7AFRQzStkd5X2CHOUP2Zj93up8tT5lKBHmwyplVivlK9e4CQ==",
-      version: "4.6.0",
+        "sha512-B+z669tIiUuNeV/vIxpvAya/k4HwmJFv8KUAy20GkWQhrfKdYIf9RUPyPX+TIieetc8u6WXCvAbNzXPs6DDH8w==",
+      version: "4.6.1",
     });
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);

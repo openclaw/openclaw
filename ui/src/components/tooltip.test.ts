@@ -416,18 +416,22 @@ describe("openclaw-tooltip", () => {
   it.each([true])(
     "returns Escape focus from rich content to its trigger (wrapped=%s)",
     async (wrapped) => {
-      const { tooltip, trigger, card } = createRichTooltip("Focusable card");
+      const { tooltip, trigger: directTrigger, card } = createRichTooltip("Focusable card");
+      const trigger = wrapped ? document.createElement("button") : directTrigger;
       if (wrapped) {
         const wrapper = document.createElement("span");
-        trigger.replaceWith(wrapper);
+        trigger.textContent = directTrigger.textContent;
         wrapper.append(trigger);
+        directTrigger.replaceWith(wrapper);
       }
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
       document.body.append(tooltip);
-      await commitTooltip(tooltip);
+      await settleTooltip(tooltip);
       trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+      await expectOpenCount(1);
       action.focus();
       await expectOpenCount(1);
       action.dispatchEvent(

@@ -126,6 +126,24 @@ describe("check-deadcode-exports", () => {
     expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
   });
 
+  it("models release publication imports from the workflow source", () => {
+    const workflow = ".github/workflows/openclaw-release-publish.yml";
+    const source = fs.readFileSync(workflow, "utf8");
+    const compile = knipConfig.compilers.yml;
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${workflow}!`);
+    }
+    expect(compile(source, workflow)).toContain(
+      'import { prefetchPreparedPlugins } from "../../scripts/openclaw-release-ready.mjs";',
+    );
+    const withoutPrefetch = source.replace(
+      /^\s*import \{ prefetchPreparedPlugins \}[^\n]+\n/mu,
+      "",
+    );
+    expect(compile(withoutPrefetch, workflow)).not.toContain("prefetchPreparedPlugins");
+    expect(compile(source, ".github/workflows/other.yml")).toBe("");
+  });
+
   it("parses all compact export sections and expands symbol lists", () => {
     expect(
       parseKnipCompactUnusedExports(`

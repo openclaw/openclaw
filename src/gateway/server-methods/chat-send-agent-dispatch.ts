@@ -102,13 +102,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     agentId,
     cfg,
     clientRunId,
-    entry,
     expectedLeafEntryId,
     resolvedSessionModel,
     storePath,
     selectedAgent,
     sessionKey,
   } = session;
+  let { entry } = session;
   const { clientInfo, p, supportsTaskSuggestions } = request;
   const {
     accountId,
@@ -259,6 +259,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)
           ) {
             phase?.mark("worktree");
+            session.entry = entry = { ...entry };
             workspacePreparation = prepareSessionWorkspace({
               admission,
               client,
@@ -327,7 +328,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               emitSessionsChanged(
                 context,
                 { sessionKey, agentId, reason: "agent.run.started" },
-                { accessChanged: false },
+                { accessChanged: false, rowScope: "runtime" },
               );
             }
             // A bound runtime can start on a different transcript than the source chat.
@@ -352,15 +353,14 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 cfg,
                 sessionKey,
               );
-              const selectedSessionAgentId = selectedAgent.agentId;
               for (const [activeRunId, active] of context.chatAbortControllers) {
                 const sameSelectedAgent =
-                  selectedSessionAgentId !== undefined &&
+                  selectedAgent.agentId !== undefined &&
                   chatRunBelongsToSelectedAgent({
                     agentId: active.agentId,
                     sessionKey: active.sessionKey,
                     defaultAgentId: compatibilityOwnerAgentId,
-                    selectedAgentId: selectedSessionAgentId,
+                    selectedAgentId: selectedAgent.agentId,
                   });
                 const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
                 if (activeRunId !== runId && sameSession) {

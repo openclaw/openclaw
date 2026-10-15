@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -612,7 +613,7 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each(["native load error", "display load deadline"] as const)(
-    "ends the retained handoff visibly on %s without retrying or resurrecting it",
+    "ends the retained handoff on %s and recovers only after explicit retry",
     async (failure) => {
       vi.useFakeTimers();
       try {
@@ -630,13 +631,33 @@ describe("canonical image presentation handoff", () => {
           await vi.advanceTimersByTimeAsync(1);
         }
         expect(fixture.images()).toHaveLength(0);
-        expect(
-          fixture.container.querySelector(".chat-assistant-attachment-card--definitive"),
-        ).not.toBeNull();
+        const card = expectDefined(
+          fixture.container.querySelector(".chat-assistant-attachment-card--recoverable"),
+          "recoverable image failure",
+        );
+        expect(card.textContent).toContain("Could not load this image. Try again.");
+        const retry = expectDefined(
+          card.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry"),
+          "explicit Retry button",
+        );
         displayed.dispatchEvent(new Event("load"));
         fixture.renderPane();
-        await vi.advanceTimersByTimeAsync(0);
+        notifyBrowserAuthRestored();
+        await vi.advanceTimersByTimeAsync(15_000);
         expect(fixture.images()).toHaveLength(0);
+        expect(fixture.requests).toHaveLength(1);
+
+        retry.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.images()).toHaveLength(0);
+        fixture.requests[1]?.resolve(mediaMetadataResponse(true, "after-explicit-retry"));
+        await vi.advanceTimersByTimeAsync(0);
+        const recovered = expectDefined(fixture.images()[0], "retried native image");
+        expect(recovered).not.toBe(displayed);
+        expect(recovered.getAttribute("src")).toContain("mediaTicket=after-explicit-retry");
+        recovered.dispatchEvent(new Event("load"));
+        expectSameImageNodes(fixture.images(), [recovered]);
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();

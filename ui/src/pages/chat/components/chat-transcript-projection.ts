@@ -35,6 +35,7 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -253,6 +254,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     agentId: props.currentAgentId,
     gatewayClient: props.gatewayClient,
     indicator: workingIndicator,
+    activeRunId: props.runActive ? props.runId : undefined,
     row: activeSession,
     usageByRun: props.runUsageById,
   });
@@ -522,7 +524,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       appendContent(
         `work-previews:${row.key}`,
         html`<div class="chat-group tool chat-group--turn-block">
-          <div class="chat-group-messages">${previews}</div>
+          <div class="chat-group-messages">${solidContent(BrowserTabPreviews, { previews })}</div>
         </div>`,
       );
     }

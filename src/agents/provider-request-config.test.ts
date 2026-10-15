@@ -263,6 +263,14 @@ describe("provider request config", () => {
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
   });
 
+  it.each<NonNullable<ConfiguredProviderRequest["auth"]>>([
+    { mode: "authorization-bearer", token: "" },
+    { mode: "authorization-bearer", token: "   " },
+    { mode: "header", headerName: "X-Server-Key", value: "" },
+  ])("rejects empty explicitly selected auth instead of silently dropping it: %j", (auth) => {
+    expect(() => sanitizeConfiguredModelProviderRequest({ auth })).toThrow(/request.auth/);
+  });
+
   it("sanitizes configured request overrides into runtime transport overrides", () => {
     expect(
       sanitizeConfiguredProviderRequest({

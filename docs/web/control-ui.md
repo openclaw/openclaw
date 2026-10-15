@@ -85,6 +85,8 @@ Sidebar live narration pauses while the browser tab is hidden and resumes from c
 
 **My sessions** and specific-owner selections list that owner’s sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
+Owner-filtered sidebars apply live updates to loaded sessions while ownership and list membership remain unchanged. Ownership changes, new sessions, and broad invalidations still refresh the authoritative list. A completed refresh absorbs any older scheduled fallback read.
+
 In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
@@ -252,6 +254,22 @@ pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
+## Download files
+
+In the **Files** panel, hover over a file or focus its row to reveal **Download file**
+next to Preview and Copy path. The same action is available in the file preview
+toolbar. It saves the original file through your browser without opening another
+page; unsaved editor changes are not included. Files stream directly to the browser's
+download manager, with no separate download-size cap. The inline-preview limit
+still applies, but files too large to preview retain their download action.
+Folders are not downloadable. Downloads require the Control UI and its Gateway
+connection to share an origin (including a same-origin Gateway proxy).
+
+Downloads use the session's existing file-read access, including managed repository
+workspaces. Provider-backed node workspaces whose bridge only supports whole-file
+reads do not yet support downloads. Authorization errors appear in the UI; transfer
+progress and failures appear in your browser's download manager.
+
 ## Take a photo in chat
 
 Choose **Add attachment → Take photo** in chat or New Session to open a camera
@@ -379,7 +397,8 @@ Agent names and avatars follow agent and identity updates. While a configured av
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
-Profiles without an advertised avatar use initials without probing an image route. Authenticated
+Profiles with an uploaded photo or a linked email (for a Gateway-proxied Gravatar) request the
+versioned profile image; profiles with neither use initials without probing an image route. Authenticated
 misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.

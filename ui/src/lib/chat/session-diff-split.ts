@@ -1,4 +1,4 @@
-import type { DiffLine } from "./tool-call-diff.ts";
+import { visitTextDiff, type DiffLine } from "./tool-call-diff.ts";
 
 export type SessionSplitDiffRow =
   | { kind: "pair"; left?: DiffLine; right?: DiffLine }
@@ -180,42 +180,22 @@ export function diffLineChangeRanges(rows: readonly SessionSplitDiffRow[]) {
       continue;
     }
     budget -= cells;
-    const stride = newTokens.length + 1;
-    const lcs = new Uint16Array(cells);
-    for (let i = oldTokens.length - 1; i >= 0; i--) {
-      for (let j = newTokens.length - 1; j >= 0; j--) {
-        const offset = i * stride + j;
-        lcs[offset] =
-          oldTokens[i] === newTokens[j]
-            ? lcs[offset + stride + 1]! + 1
-            : Math.max(lcs[offset + stride]!, lcs[offset + 1]!);
-      }
-    }
     const oldRanges: DiffChangeRange[] = [];
     const newRanges: DiffChangeRange[] = [];
     let oldOffset = oldParts.slice(0, prefix).join("").length;
     let newOffset = oldOffset;
-    for (let i = 0, j = 0; i < oldTokens.length || j < newTokens.length;) {
-      const oldToken = oldTokens[i];
-      const newToken = newTokens[j];
-      if (oldToken !== undefined && oldToken === newToken) {
-        oldOffset += oldToken.length;
-        newOffset += newToken!.length;
-        i++;
-        j++;
-      } else if (
-        oldToken !== undefined &&
-        (newToken === undefined || lcs[(i + 1) * stride + j]! >= lcs[i * stride + j + 1]!)
-      ) {
-        appendRange(oldRanges, oldOffset, oldOffset + oldToken.length);
-        oldOffset += oldToken.length;
-        i++;
-      } else if (newToken !== undefined) {
-        appendRange(newRanges, newOffset, newOffset + newToken.length);
-        newOffset += newToken.length;
-        j++;
+    visitTextDiff(oldTokens, newTokens, (kind, text) => {
+      if (kind === "ctx") {
+        oldOffset += text.length;
+        newOffset += text.length;
+      } else if (kind === "del") {
+        appendRange(oldRanges, oldOffset, oldOffset + text.length);
+        oldOffset += text.length;
+      } else {
+        appendRange(newRanges, newOffset, newOffset + text.length);
+        newOffset += text.length;
       }
-    }
+    });
     if (oldRanges.length) {
       changes.set(left, oldRanges);
     }

@@ -22,7 +22,7 @@ vi.mock("@panzoom/panzoom", () => ({
   })),
 }));
 
-import "./image-lightbox.ts";
+import "./image-lightbox.tsx";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;

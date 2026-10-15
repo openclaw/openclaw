@@ -181,84 +181,82 @@ function runRemoteOpenRouterOAuthRedirect(redirectInput: string) {
 }
 
 describe("OpenRouter OAuth", () => {
-  it.each([false, true])(
-    "uses hosted authorization without a manual prompt or loopback when isRemote=%s",
-    async (isRemote) => {
-      const { ctx, note, text, log, openUrl } = createOpenRouterOAuthContext({ isRemote });
-      const redirectUrl = "https://gateway.example.com/auth/callback?flow=hosted-1";
-      const authorizationUrls: URL[] = [];
-      const authorize = vi.fn<NonNullable<ProviderAuthContext["oauth"]["authorize"]>>(
-        async ({ state, timeoutMs, buildAuthorizationUrl }) => {
-          expect(state).not.toBe("");
-          expect(timeoutMs).toBe(5 * 60 * 1000);
-          const authorizationUrl = new URL(buildAuthorizationUrl(redirectUrl));
-          const callbackUrl = new URL(authorizationUrl.searchParams.get("callback_url") ?? "");
-          expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(
-            "https://openrouter.ai/auth",
-          );
-          expect(callbackUrl.origin + callbackUrl.pathname).toBe(
-            "https://gateway.example.com/auth/callback",
-          );
-          expect(callbackUrl.searchParams.get("flow")).toBe("hosted-1");
-          expect(callbackUrl.searchParams.get("state")).toBe(state);
-          expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
-          authorizationUrls.push(authorizationUrl);
-          return { code: "HOSTEDCODE", state };
-        },
-      );
-      ctx.oauth.authorize = authorize;
-      const startCallback = vi.fn(async () => {
-        throw new Error("Hosted sign-in must not open a loopback listener");
-      });
-      const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "hosted-api-key" }));
+  it("uses hosted authorization without a manual prompt or loopback", async () => {
+    const { ctx, note, text, log, openUrl } = createOpenRouterOAuthContext({ isRemote: true });
+    const redirectUrl = "https://gateway.example.com/auth/callback?flow=hosted-1";
+    const authorizationUrls: URL[] = [];
+    const authorize = vi.fn<NonNullable<ProviderAuthContext["oauth"]["authorize"]>>(
+      async ({ state, timeoutMs, buildAuthorizationUrl }) => {
+        expect(state).not.toBe("");
+        expect(timeoutMs).toBe(5 * 60 * 1000);
+        const authorizationUrl = new URL(buildAuthorizationUrl(redirectUrl));
+        const callbackUrl = new URL(authorizationUrl.searchParams.get("callback_url") ?? "");
+        expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(
+          "https://openrouter.ai/auth",
+        );
+        expect(callbackUrl.origin + callbackUrl.pathname).toBe(
+          "https://gateway.example.com/auth/callback",
+        );
+        expect(callbackUrl.searchParams.get("flow")).toBe("hosted-1");
+        expect(callbackUrl.searchParams.get("state")).toBe(state);
+        expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
+        authorizationUrls.push(authorizationUrl);
+        return { code: "HOSTEDCODE", state };
+      },
+    );
+    ctx.oauth.authorize = authorize;
+    const startCallback = vi.fn(async () => {
+      throw new Error("Hosted sign-in must not open a loopback listener");
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "hosted-api-key" }));
 
-      const result = await loginOpenRouterOAuth(ctx, {
-        createState: () => "state-1",
-        fetchImpl,
-        startCallback,
-      });
+    const result = await loginOpenRouterOAuth(ctx, {
+      createState: () => "state-1",
+      fetchImpl,
+      startCallback,
+    });
 
-      expect(authorize).toHaveBeenCalledTimes(1);
-      expect(startCallback).not.toHaveBeenCalled();
-      expect(text).not.toHaveBeenCalled();
-      expect(note).not.toHaveBeenCalled();
-      expect(log).not.toHaveBeenCalled();
-      expect(openUrl).not.toHaveBeenCalled();
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(ssrfRuntime.fetchWithSsrFGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ mode: "trusted_env_proxy" }),
-      );
-      expect(releaseGuard).toHaveBeenCalledTimes(1);
-      const [exchangeUrl, exchangeInit] = fetchImpl.mock.calls[0]!;
-      expect(requestUrl(exchangeUrl)).toBe("https://openrouter.ai/api/v1/auth/keys");
-      expect(exchangeInit?.method).toBe("POST");
-      const exchangeBody = requestJsonBody(exchangeInit);
-      expect(exchangeBody).toEqual({
-        code: "HOSTEDCODE",
-        code_verifier: expect.any(String),
-        code_challenge_method: "S256",
-      });
-      const verifier = exchangeBody.code_verifier;
-      if (typeof verifier !== "string") {
-        throw new Error("Expected a PKCE verifier");
-      }
-      expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
-      expect(authorizationUrls[0]?.searchParams.get("code_challenge")).toBe(
-        createHash("sha256").update(verifier).digest("base64url"),
-      );
-      expect(result.profiles).toMatchObject([
-        {
-          profileId: "openrouter:default",
-          credential: {
-            type: "api_key",
-            provider: "openrouter",
-            key: "hosted-api-key",
-            metadata: { authFlow: "oauth-pkce" },
-          },
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(startCallback).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(ssrfRuntime.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "trusted_env_proxy" }),
+    );
+    expect(releaseGuard).toHaveBeenCalledTimes(1);
+    const [exchangeUrl, exchangeInit] = fetchImpl.mock.calls[0]!;
+    expect(requestUrl(exchangeUrl)).toBe("https://openrouter.ai/api/v1/auth/keys");
+    expect(exchangeInit?.method).toBe("POST");
+    expect(new Headers(exchangeInit?.headers).get("content-type")).toBe("application/json");
+    const exchangeBody = requestJsonBody(exchangeInit);
+    expect(exchangeBody).toEqual({
+      code: "HOSTEDCODE",
+      code_verifier: expect.any(String),
+      code_challenge_method: "S256",
+    });
+    const verifier = exchangeBody.code_verifier;
+    if (typeof verifier !== "string") {
+      throw new Error("Expected a PKCE verifier");
+    }
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    expect(authorizationUrls[0]?.searchParams.get("code_challenge")).toBe(
+      createHash("sha256").update(verifier).digest("base64url"),
+    );
+    expect(result.profiles).toMatchObject([
+      {
+        profileId: "openrouter:default",
+        credential: {
+          type: "api_key",
+          provider: "openrouter",
+          key: "hosted-api-key",
+          metadata: { authFlow: "oauth-pkce" },
         },
-      ]);
-    },
-  );
+      },
+    ]);
+  });
 
   it("keeps malformed manual input correctable in the registered OAuth method", async () => {
     const { ctx, text } = createOpenRouterOAuthContext({ isRemote: true });
@@ -284,27 +282,6 @@ describe("OpenRouter OAuth", () => {
       }),
     ).resolves.toMatchObject({ profiles: [{ credential: { key: "fixture-key" } }] });
     expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it("builds the documented PKCE authorize URL", async () => {
-    const { ctx, openUrl } = createOpenRouterOAuthContext({ isRemote: true });
-    await loginOpenRouterOAuth(ctx, {
-      createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
-      createState: () => "state-1",
-      fetchImpl: vi.fn(async () => jsonResponse({ key: "sk-or-v1-test" })),
-    });
-    const openedUrl = (openUrl as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    if (typeof openedUrl !== "string") {
-      throw new Error("expected OpenRouter OAuth authorize URL");
-    }
-    const url = new URL(openedUrl);
-    const callbackUrl = new URL(url.searchParams.get("callback_url") ?? "");
-
-    expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
-    expect(callbackUrl.origin + callbackUrl.pathname).toBe(OPENROUTER_OAUTH_REDIRECT_URI);
-    expect(callbackUrl.searchParams.get("state")).toBe("state-1");
-    expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
   it("parses state-bound OpenRouter redirect URLs and query strings", async () => {
@@ -347,38 +324,6 @@ describe("OpenRouter OAuth", () => {
     await expect(runRemoteOpenRouterOAuthRedirect("AUTHCODE")).rejects.toThrow(
       "Paste the full OpenRouter redirect URL",
     );
-  });
-
-  it("exchanges an authorization code for the issued OpenRouter API key", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-      expect(requestUrl(url)).toBe("https://openrouter.ai/api/v1/auth/keys");
-      expect(init?.method).toBe("POST");
-      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
-      expect(requestJsonBody(init)).toEqual({
-        code: "AUTHCODE",
-        code_verifier: "verifier-1",
-        code_challenge_method: "S256",
-      });
-      return jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" });
-    });
-    const { ctx } = createOpenRouterOAuthContext({ isRemote: true });
-
-    await expect(
-      loginOpenRouterOAuth(ctx, {
-        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
-        createState: () => "state-1",
-        fetchImpl,
-      }),
-    ).resolves.toMatchObject({
-      profiles: [
-        {
-          credential: {
-            key: "sk-or-v1-test",
-            metadata: { userId: "user-1" },
-          },
-        },
-      ],
-    });
   });
 
   it("bounds successful OpenRouter OAuth responses", async () => {
@@ -476,6 +421,17 @@ describe("OpenRouter OAuth", () => {
     });
 
     expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
+    const openedUrl = (openUrl as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    if (typeof openedUrl !== "string") {
+      throw new Error("expected OpenRouter OAuth authorize URL");
+    }
+    const url = new URL(openedUrl);
+    const callbackUrl = new URL(url.searchParams.get("callback_url") ?? "");
+    expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
+    expect(callbackUrl.origin + callbackUrl.pathname).toBe(OPENROUTER_OAUTH_REDIRECT_URI);
+    expect(callbackUrl.searchParams.get("state")).toBe("state-1");
+    expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("https://openrouter.ai/auth?"),
@@ -658,9 +614,5 @@ describe("OpenRouter OAuth", () => {
       }),
     ).resolves.toMatchObject({ profiles: [{ credential: { key: "fixture-key" } }] });
     expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("exposes stable auth choice metadata", () => {
-    expect(createOpenRouterOAuthAuthMethod().wizard?.choiceId).toBe("openrouter-oauth");
   });
 });

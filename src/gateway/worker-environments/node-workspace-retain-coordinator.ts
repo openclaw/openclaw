@@ -182,16 +182,25 @@ export function createNodeWorkspaceRetainCoordinator(
       (!hostBuild || !bundleRetention?.isEnvironmentOwnedNode(node.nodeId));
     const preparedManifestRefs = new Map<string, (() => readonly string[] | null) & Disposable>();
     try {
+      if (stopped) {
+        return;
+      }
       if (options.additionalManifestRefs) {
         const environmentIds = new Set(
           nodeEnvironments(options, node.nodeId).map((environment) => environment.environmentId),
         );
         for (const { placement } of preparedPlacements.values()) {
+          if (stopped) {
+            return;
+          }
           if (placement?.environmentId && environmentIds.has(placement.environmentId)) {
             const current = await options.additionalManifestRefs(placement);
             preparedManifestRefs.set(placement.sessionId, current);
           }
         }
+      }
+      if (stopped) {
+        return;
       }
       const inventory = await options.placements.prepareMaintenancePlacements();
       const placements = (() => {
@@ -384,6 +393,9 @@ export function createNodeWorkspaceRetainCoordinator(
         ),
       );
       for (const sessionId of sessionIds) {
+        if (stopped) {
+          return;
+        }
         prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
       }
       await publishPreparedSnapshot(currentTransport, node, prepared);

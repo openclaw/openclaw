@@ -39,7 +39,6 @@ import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gatew
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
 import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
@@ -107,14 +106,10 @@ class DevicesPageController {
     });
   }
   private readonly presenceTask = createPageRequest({
-    // Gateway identity invalidates same-client reconnects and source replacements.
-    args: () =>
-      [
-        this.gateway.connected ? this.gateway.gateway : null,
-        this.gateway.connected ? this.gateway.client : null,
-      ] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client ? client.request("system-presence", {}, { signal }) : undefined,
+    task: (signal) =>
+      this.gateway.connected && this.gateway.gateway
+        ? this.gateway.client?.request("system-presence", {}, { signal })
+        : undefined,
     onComplete: (response) => {
       if (Array.isArray(response)) {
         // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
@@ -130,11 +125,9 @@ class DevicesPageController {
     },
   });
   private readonly systemInfoTask = createPageRequest({
-    args: () =>
-      [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client
-        ? readSystemInfo(gateway, signal).then((sample) => sample.value)
+    task: (signal) =>
+      this.gateway.gateway && this.canLoadSystemInfo && this.gateway.client
+        ? readSystemInfo(this.gateway.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
       this.gatewaySystemInfo = result;
@@ -153,11 +146,9 @@ class DevicesPageController {
     },
   });
   private readonly environmentsTask = createPageRequest({
-    args: () =>
-      [this.gateway.gateway, this.canLoadDesktopEnvironments ? this.gateway.client : null] as const,
-    task: ([gateway, client], { signal }) =>
-      gateway && client
-        ? client.request<EnvironmentsListResult>("environments.list", {}, { signal })
+    task: (signal) =>
+      this.gateway.gateway && this.canLoadDesktopEnvironments
+        ? this.gateway.client?.request<EnvironmentsListResult>("environments.list", {}, { signal })
         : undefined,
     onComplete: (result) => {
       this.desktopEnvironments = result.environments;
@@ -270,7 +261,7 @@ class DevicesPageController {
     ) {
       const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
       this.presence = initialPresence ?? [];
-      void this.loadPresence();
+      void this.presenceTask.run();
     }
     if (change.initial || change.identityChanged || change.connectionChanged) {
       this.refreshSystemInfo();
@@ -291,7 +282,7 @@ class DevicesPageController {
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.resetServerState(snapshot);
       this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
-      void this.loadPresence();
+      void this.presenceTask.run();
       return;
     }
     this.pageState = {
@@ -304,7 +295,7 @@ class DevicesPageController {
     if (initialPresence) {
       this.presence = initialPresence;
     }
-    void this.loadPresence();
+    void this.presenceTask.run();
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
@@ -431,15 +422,6 @@ class DevicesPageController {
     this.gatewaySystemInfo = null;
     this.desktopEnvironments = [];
     this.systemInfoUnavailable = false;
-  }
-
-  private loadPresence(): Promise<void> {
-    const gateway = this.gateway.gateway;
-    const client = this.gateway.client;
-    if (!gateway || !this.gateway.connected || !client) {
-      return Promise.resolve();
-    }
-    return this.presenceTask.run([gateway, client]);
   }
 
   // A rotation always ends in a dialog: with the replacement when the Gateway issued it
@@ -609,45 +591,41 @@ class DevicesPageController {
   }
 }
 
-export const DevicesPage = defineSolidBridge<{ routeData?: DevicesRouteData }>(
-  "openclaw-devices-page",
-  (props) => {
-    const context = useApplication();
-    // This signal publishes changes from the synchronous page owner, including lifecycle effects.
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
-    controller.bindPolling();
-    controller.bindGateway();
-    controller.bindEvents();
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    createEffect(
-      () => props.routeData,
-      (data) => controller.setRouteData(data),
-    );
-    onCleanup(() => controller.dispose());
-    const view = createMemo(() => {
-      revision();
-      config.read();
-      void controller.gateway.snapshot;
-      return controller.viewProps();
-    });
-    return (
-      <>
-        <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-          <section class="content-header">
-            <div>
-              <div class="page-title">{titleForRoute("devices", t)}</div>
-              <div class="page-subtitle">
-                {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
-              </div>
+export function DevicesPage(props: { routeData?: DevicesRouteData }) {
+  const context = useApplication();
+  // This signal publishes changes from the synchronous page owner, including lifecycle effects.
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
+  controller.bindPolling();
+  controller.bindGateway();
+  controller.bindEvents();
+  const config = projectRuntimeConfig(context.runtimeConfig);
+  createEffect(
+    createMemo(() => props.routeData),
+    (data) => controller.setRouteData(data),
+  );
+  onCleanup(() => controller.dispose());
+  const view = createMemo(() => {
+    revision();
+    config.read();
+    void controller.gateway.snapshot;
+    return controller.viewProps();
+  });
+  return (
+    <openclaw-devices-page>
+      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+        <section class="content-header">
+          <div>
+            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <div class="page-subtitle">
+              {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>
-          </section>
-        </ShellLayoutBoundary>
-        <SettingsWorkspace>
-          <DevicesView {...view()} />
-        </SettingsWorkspace>
-      </>
-    );
-  },
-  { properties: { routeData: { default: undefined, attribute: false } } },
-);
+          </div>
+        </section>
+      </ShellLayoutBoundary>
+      <SettingsWorkspace>
+        <DevicesView {...view()} />
+      </SettingsWorkspace>
+    </openclaw-devices-page>
+  );
+}

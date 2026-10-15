@@ -103,6 +103,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
+| `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
+| `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
@@ -254,6 +256,28 @@ scope does not describe the authorized result. No agent, session, profile,
 connection, user-agent, or display-name values are exported. Each observed label
 combination uses one sample in the existing shared cap. The method-only request
 counter and timing histograms retain their existing labels.
+
+`openclaw_sessions_list_requests_total` uses the same `client_kind` and `source`
+attribution for session reads. `caller_source` records the protocol's bounded
+caller tag (`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`,
+`agent-roster`, `command-palette`, or `skill-workshop`); missing or unknown tags
+become `unspecified`. `row_mode` is `full` when omitted, `compact`, `dashboard`,
+`sidebar`, or `other` for an invalid value. `filter` records the first matching
+primary filter family: `search`, `children` (`spawnedBy`), `owner` (`ownerId`),
+`involving` (`involvingMe=true`, `involvingProfileId`, or `profileRelation`),
+`active` (`activeOnly=true` or `activeMinutes`), or `general` when none applies.
+Other selection and presentation options do not add labels. Counts include
+later-rejected requests and export no filter values, limits, offsets, or revision
+tokens. Each observed combination uses one sample in the existing shared cap.
+
+`openclaw_cron_list_requests_total` uses the same `client_kind` and `source`
+attribution for cron reads. `scope` records parameter presence: `session` when
+`sessionKey` is supplied, then `agent` for `agentId`, otherwise `global`.
+`compact` records whether the parameter is exactly `true`; `page` is `append`
+for a positive numeric offset and `first` otherwise. Counts include
+later-rejected requests; scope does not describe the authorized result. No
+session, agent, query, or offset values are exported. Each observed combination
+uses one sample in the existing shared cap.
 
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
@@ -642,6 +666,13 @@ reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
 `weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
+The `reason` label maps Node's `detail.flags` to `none`, `forced`,
+`synchronous_phantom_processing`, `all_available_garbage`, `all_external_memory`,
+`schedule_idle`, or `construct_retained`. Combined flags, unknown flags, and
+SDK producers without flags use `other`. These are Node GC callback flags,
+not V8's complete internal reason for starting a collection; `none` means no
+callback flags were set, not that no collection occurred.
+
 Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
 The worker registry holds a slot until native worker exit, including pending
 retirement, then makes it available for reuse. Concurrent workers beyond 64
@@ -649,7 +680,7 @@ retain script-level attribution without a slot; other worker scripts also retain
 script-level attribution. Slots are not thread IDs or session identities.
 Counters accumulate across occupants of a slot, so a rate window can span more
 than one worker. Older SDK
-producers that omit attribution use `kind="unknown",thread="main"`. SDK-provided
+producers that omit attribution use `kind="unknown",reason="other",thread="main"`. SDK-provided
 unknown kinds and worker names fold into `unknown` and `other` at event emission.
 Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
@@ -678,7 +709,7 @@ that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.
 
 The histogram's `_count` and `_sum` are the collection count and total elapsed
-seconds for each label pair. Existing queries that need a single total should
+seconds for each label set. Existing queries that need a single total should
 aggregate the new labels; select `thread="main"` to retain main-isolate scope:
 
 ```promql
@@ -690,7 +721,9 @@ To locate a busy Code Mode isolate and compare its latest used heap with its
 actual V8 limit:
 
 ```promql
-60 * rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+60 * sum by (slot, reason) (
+  rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+)
 openclaw_code_mode_worker_heap_bytes{kind="used"}
   / ignoring(kind) openclaw_code_mode_worker_heap_bytes{kind="limit"}
 ```
@@ -740,6 +773,14 @@ sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
 # Model catalog calls per minute by caller and request shape over ten minutes
 60 * sum by (client_kind, source, view, scope, refresh, prepared_only)
   (rate(openclaw_models_list_requests_total[10m]))
+
+# Session list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, caller_source, row_mode, filter)
+  (rate(openclaw_sessions_list_requests_total[10m]))
+
+# Cron list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, scope, compact, page)
+  (rate(openclaw_cron_list_requests_total[10m]))
 
 # 95th percentile first-response latency by method
 histogram_quantile(

@@ -1,16 +1,33 @@
 /* @vitest-environment jsdom */
 
+import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
+import {
+  afterModalHidden,
+  getRenderedModalDialog,
+  installDialogPolyfill,
+} from "../../../test-helpers/modal-dialog.ts";
+import { settleWebAwesome } from "../../../test-helpers/web-awesome.ts";
+import "../../../components/modal-dialog.ts";
 import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
-  bindChatPickerOverlay,
+  createChatPickerOverlay,
   installChatComposerPickerDismissal,
-  handleChatComposerDetailsToggle,
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
+
+function bindPicker(details: HTMLDetailsElement): void {
+  const bind = createRoot((dispose) => {
+    onTestFinished(dispose);
+    return createChatPickerOverlay();
+  });
+  bind(details);
+  flush();
+}
 
 describe("chat picker overlay", () => {
   afterEach(() => {
@@ -83,6 +100,77 @@ describe("chat picker overlay", () => {
     }
   });
 
+  it.each([
+    [
+      "context",
+      '<div class="context-usage"><details data-picker data-chat-native-picker><summary>Context</summary><div popover="manual"><input></div></details></div>',
+    ],
+    [
+      "Plus",
+      '<div class="agent-chat__attach-menu" data-picker><button>Plus</button><div popover="manual"><input></div></div>',
+    ],
+    [
+      "emoji",
+      '<button>Emoji</button><div class="emoji-menu-popup" data-picker popover="manual"><input></div>',
+    ],
+  ])(
+    "leaves %s Escape to its native owner before another composer's invocation menu",
+    (_, markup) => {
+      const invocationComposer = document.createElement("div");
+      invocationComposer.className = "agent-chat__input";
+      invocationComposer.innerHTML = '<div class="slash-menu"></div>';
+      const nativeComposer = document.createElement("div");
+      nativeComposer.className = "agent-chat__input";
+      nativeComposer.innerHTML = markup;
+      document.body.append(invocationComposer, nativeComposer);
+      const dismissInvocations = vi.fn();
+      invocationComposer.addEventListener(
+        "openclaw-composer-dismiss-invocations",
+        dismissInvocations,
+      );
+      const dismissPaneDetails = (event: KeyboardEvent) => {
+        if (
+          !event.defaultPrevented &&
+          event.key === "Escape" &&
+          closeChatPaneDetails(nativeComposer)
+        ) {
+          event.preventDefault();
+        }
+      };
+      document.addEventListener("keydown", dismissPaneDetails, true);
+      onTestFinished(() => document.removeEventListener("keydown", dismissPaneDetails, true));
+      onTestFinished(installChatComposerPickerDismissal(document));
+      const surface = nativeComposer.querySelector<HTMLElement>("[popover]")!;
+      const trigger = nativeComposer.querySelector<HTMLElement>("summary, button")!;
+      const picker = nativeComposer.querySelector<HTMLElement>("[data-picker]")!;
+      const overlay = createOverlay("composer-escape-test");
+      onTestFinished(() => overlay.dispose());
+      overlay.bindSurface(surface);
+      overlay.bindTrigger(trigger);
+      overlay.subscribe((open) => picker.toggleAttribute("open", open));
+      expect(overlay.request(true)).toBe(true);
+      const field = surface.querySelector("input")!;
+      field.focus();
+
+      const escape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      field.dispatchEvent(escape);
+      expect(surface.matches(":popover-open")).toBe(false);
+      expect(picker.hasAttribute("open")).toBe(false);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+      expect(dismissInvocations).not.toHaveBeenCalled();
+
+      invocationComposer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(dismissInvocations).toHaveBeenCalledOnce();
+    },
+  );
+
   it("lets the native owner clear search before closing and returning focus", () => {
     const composer = document.createElement("div");
     composer.className = "agent-chat__input";
@@ -106,7 +194,7 @@ describe("chat picker overlay", () => {
     document.addEventListener("keydown", dismissLegacyDetails, true);
     onTestFinished(() => document.removeEventListener("keydown", dismissLegacyDetails, true));
     onTestFinished(installChatComposerPickerDismissal(document));
-    onTestFinished(bindChatPickerOverlay(picker));
+    bindPicker(picker);
     const trigger = picker.querySelector("summary")!;
     const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
@@ -132,6 +220,50 @@ describe("chat picker overlay", () => {
     expect(picker.open).toBe(false);
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("leaves Escape to an open native modal before dismissing retained invocations", async () => {
+    onTestFinished(installDialogPolyfill());
+    onTestFinished(installChatComposerPickerDismissal(document));
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__input";
+    composer.innerHTML =
+      '<div class="agent-chat__composer-combobox"><textarea></textarea></div><div class="slash-menu"></div>';
+    document.body.append(composer);
+    const textarea = composer.querySelector("textarea")!;
+    textarea.focus();
+    const dismissInvocations = vi.fn();
+    composer.addEventListener("openclaw-composer-dismiss-invocations", dismissInvocations);
+
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.label = "Keyboard shortcuts";
+    modal.innerHTML = "<button>Close</button>";
+    document.body.append(modal);
+    const { dialog } = await getRenderedModalDialog(document.body);
+    expect(dialog.open).toBe(true);
+    const modalEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialog.dispatchEvent(modalEscape);
+    expect(modalEscape.defaultPrevented).toBe(false);
+    expect(dismissInvocations).not.toHaveBeenCalled();
+
+    // jsdom does not synthesize the native cancel event from Escape.
+    const hidden = afterModalHidden(modal);
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await hidden;
+    expect(dialog.open).toBe(false);
+    const invocationEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(invocationEscape);
+    expect(invocationEscape.defaultPrevented).toBe(true);
+    expect(dismissInvocations).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(textarea);
   });
 
   it("shares dismissal until the final owner releases it and can reconnect", () => {
@@ -258,16 +390,17 @@ describe("chat picker overlay", () => {
     effortPicker.className = "chat-controls__effort-picker";
     const effortTrigger = document.createElement("summary");
     const effortControl = document.createElement("input");
-    effortPicker.append(effortTrigger, effortControl);
+    const effortSurface = document.createElement("div");
+    effortSurface.setAttribute("data-anchored-overlay", "");
+    effortSurface.setAttribute("popover", "manual");
+    effortSurface.append(effortControl);
+    effortPicker.append(effortTrigger, effortSurface);
     settings.append(modelPicker, effortPicker);
     composer.append(settings);
     document.body.append(composer);
 
     effortPicker.open = true;
-    effortPicker.addEventListener("toggle", handleChatComposerDetailsToggle);
-    onTestFinished(() =>
-      effortPicker.removeEventListener("toggle", handleChatComposerDetailsToggle),
-    );
+    bindPicker(effortPicker);
     effortPicker.dispatchEvent(new Event("toggle"));
     effortControl.focus();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -276,7 +409,7 @@ describe("chat picker overlay", () => {
     expect(document.activeElement).toBe(effortTrigger);
   });
 
-  it("keeps ancestor pickers open and dismisses nested menus from the inside out", () => {
+  it("keeps ancestor pickers open and dismisses nested menus from the inside out", async () => {
     onTestFinished(installChatComposerPickerDismissal(document));
     const composer = document.createElement("div");
     composer.className = "agent-chat__input";
@@ -295,6 +428,7 @@ describe("chat picker overlay", () => {
     dropdown.addEventListener("wa-show", handleChatComposerDropdownShow);
     dropdown.dispatchEvent(new Event("wa-show"));
 
+    await settleWebAwesome(composer);
     expect(model.open).toBe(true);
     expect(peer.open).toBe(false);
     accountTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

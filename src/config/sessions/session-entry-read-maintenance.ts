@@ -5,6 +5,23 @@ import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js"
 import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 
+/** Discover saved-input candidates without opening every session's history. */
+export async function readPendingInputRecoveryEntriesInWorker(input: SessionStoreWorkerReadScope) {
+  return withSessionStoreReaderInWorker(
+    input,
+    async ({ reader, database }) => {
+      const { entries } = await reader.readEntries({
+        agentId: database.agentId,
+        storePath: database.path,
+        env: database.env,
+        pendingInputRecovery: true,
+      });
+      return entries;
+    },
+    { lane: maintenanceLane, dataOnly: true },
+  );
+}
+
 /** Keep the physical reader owner through a registry maintenance consumer and its commit guard. */
 export function withSessionRegistryEntriesInWorker(
   input: SessionStoreWorkerReadScope,

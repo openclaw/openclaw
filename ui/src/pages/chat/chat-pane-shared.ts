@@ -153,7 +153,7 @@ export type ChatPaneConnectionScope = {
   sessions: ApplicationContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open]:not([data-chat-native-picker]), .context-usage details[open], .agent-chat__attach-menu[open]";
+  ".chat-controls__inline-select[open]:not([data-chat-native-picker]), .context-usage details[open]:not([data-chat-native-picker])";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.

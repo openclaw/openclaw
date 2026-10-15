@@ -11,7 +11,7 @@ import type {
 } from "../infra/state-migrations.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
   createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,

@@ -65,10 +65,11 @@ describe("transcript mounted-row measurement", () => {
     { kind: "overscan", scrolling: true, indexes: [6, 7, 8] },
     { kind: "cold idle", scrolling: false, indexes: [0, 1, 2] },
     { kind: "cold scrolling", scrolling: true, indexes: [0, 1, 2] },
+    { kind: "re-stamped", scrolling: false, indexes: [0, 1, 2], restamped: true },
     { kind: "later microtask", scrolling: true, indexes: [0, 1], deferred: true },
   ])(
     "defers $kind row measurement to observers without layout reads",
-    async ({ kind, scrolling, indexes, deferred }) => {
+    async ({ kind, scrolling, indexes, deferred, restamped }) => {
       const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
       const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));
       let height = deferred ? 160 : 80;
@@ -79,6 +80,9 @@ describe("transcript mounted-row measurement", () => {
           Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
           if (kind === "cached") {
             virtualizer.resizeItem(index, 80);
+          }
+          if (restamped) {
+            refs.forKey(String(index))();
           }
           if (deferred && index === 1) {
             queueMicrotask(() => {

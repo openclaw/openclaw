@@ -661,7 +661,7 @@ export class ModelProvidersController extends ModelPageController {
       installedAgents: undefined,
       providerQuery: this.state.providerQuery,
       onProviderQueryChange: (value) => this.setState("providerQuery", value),
-      onConnectProvider: () => void this.login.open(undefined, undefined, { allowSetup: true }),
+      onConnectProvider: () => void this.login.connectProvider(values.configuredModels),
       usageClient: !this.mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
       usageAgentId: this.state.selectedAgentId,
       connected: gatewaySnapshot.phase === "connected",

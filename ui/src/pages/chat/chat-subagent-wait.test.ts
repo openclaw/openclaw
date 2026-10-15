@@ -7,10 +7,9 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
 import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
-import {
-  ChatWorkingIndicator,
-  type ChatWorkingIndicatorOptions,
-} from "./components/chat-working-indicator.tsx";
+import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
+
+type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
 function resolveChatSubagentWait(input: Parameters<typeof projectSubagentStatus>[0]) {
   return projectSubagentStatus(input, false).wait;

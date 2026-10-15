@@ -416,44 +416,36 @@ function TimeSeriesChart(props: {
       {renderUsageRefreshStatus(props.status, "usage.details.usageOverTime", "timeline")}
       <div class="timeseries-chart-wrapper">
         <svg viewBox={`0 0 ${model().width} ${model().height + 18}`} class="timeseries-svg">
-          <For
-            each={[
-              {
-                x1: model().padding.left,
-                y1: model().padding.top,
-                x2: model().padding.left,
-                y2: model().padding.top + model().chartHeight,
-              },
-              {
-                x1: model().padding.left,
-                y1: model().padding.top + model().chartHeight,
-                x2: model().width - model().padding.right,
-                y2: model().padding.top + model().chartHeight,
-              },
-            ]}
+          <line
+            x1={model().padding.left}
+            y1={model().padding.top}
+            x2={model().padding.left}
+            y2={model().padding.top + model().chartHeight}
+            stroke="var(--border)"
+          />
+          <line
+            x1={model().padding.left}
+            y1={model().padding.top + model().chartHeight}
+            x2={model().width - model().padding.right}
+            y2={model().padding.top + model().chartHeight}
+            stroke="var(--border)"
+          />
+          <text
+            x={model().padding.left - 4}
+            y={model().padding.top + 5}
+            text-anchor="end"
+            class="ts-axis-label"
           >
-            {({ x1, y1, x2, y2 }) => (
-              <>
-                {" "}
-                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--border)" />{" "}
-              </>
-            )}
-          </For>
-          <For
-            each={[
-              { y: model().padding.top + 5, text: formatUsageTokens(model().maxValue) },
-              { y: model().padding.top + model().chartHeight, text: "0" },
-            ]}
+            {formatUsageTokens(model().maxValue)}
+          </text>
+          <text
+            x={model().padding.left - 4}
+            y={model().padding.top + model().chartHeight}
+            text-anchor="end"
+            class="ts-axis-label"
           >
-            {({ y, text }) => (
-              <>
-                {" "}
-                <text x={model().padding.left - 4} y={y} text-anchor="end" class="ts-axis-label">
-                  {text}
-                </text>{" "}
-              </>
-            )}
-          </For>
+            0
+          </text>
           <text
             x={model().padding.left}
             y={model().padding.top + model().chartHeight + 10}
@@ -522,18 +514,15 @@ function TimeSeriesChart(props: {
                 />
                 <For each={[-HANDLE_GRIP_OFFSET, HANDLE_GRIP_OFFSET]}>
                   {(offset) => (
-                    <>
-                      {" "}
-                      <line
-                        x1={handleX + offset}
-                        y1={model().padding.top + model().chartHeight / 2 - HANDLE_HEIGHT / 5}
-                        x2={handleX + offset}
-                        y2={model().padding.top + model().chartHeight / 2 + HANDLE_HEIGHT / 5}
-                        stroke="var(--bg)"
-                        stroke-width="0.4"
-                        pointer-events="none"
-                      />{" "}
-                    </>
+                    <line
+                      x1={handleX + offset}
+                      y1={model().padding.top + model().chartHeight / 2 - HANDLE_HEIGHT / 5}
+                      x2={handleX + offset}
+                      y2={model().padding.top + model().chartHeight / 2 + HANDLE_HEIGHT / 5}
+                      stroke="var(--bg)"
+                      stroke-width="0.4"
+                      pointer-events="none"
+                    />
                   )}
                 </For>
               </>

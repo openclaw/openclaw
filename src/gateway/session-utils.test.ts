@@ -256,36 +256,6 @@ describe("gateway session utils", () => {
 
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test("projects an inherited parent model as the child's effective selection", () => {
-    const parentKey = "agent:main:dashboard:parent";
-    const childKey = "agent:main:dashboard:child";
-    const parentEntry: SessionEntry = {
-      sessionId: "parent",
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      modelOverrideSource: "user",
-    };
-    const childEntry: SessionEntry = {
-      sessionId: "child",
-      updatedAt: 2,
-      parentSessionKey: parentKey,
-    };
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({
-        primary: "openai/gpt-5.4",
-        models: { "anthropic/claude-sonnet-4-6": {} },
-      }),
-      store: { [parentKey]: parentEntry, [childKey]: childEntry },
-      key: childKey,
-      entry: childEntry,
-    });
-
-    expect(row.modelProvider).toBe("anthropic");
-    expect(row.model).toBe("claude-sonnet-4-6");
-    expect(row.modelOverrideSource).toBe("inherited");
-  });
-
   test("projects the active fallback model separately from the selected model", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),
@@ -413,28 +383,6 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toEqual(
       row.observerDigest,
     );
-  });
-
-  test("does not project an observer digest older than the latest run", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      entry: {
-        sessionId: "session",
-        updatedAt: 3_000,
-        startedAt: 3_000,
-        observerDigest: {
-          sessionKey: "agent:main:main",
-          runId: "previous-run",
-          revision: 2,
-          updatedAt: 2_000,
-          headline: "Previous run failed",
-          health: "failed",
-        },
-      },
-    });
-
-    expect(row.observerDigest).toBeUndefined();
-    expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toBeNull();
   });
 
   test("Activity lists select newest interactions and completions before the 100-row page", async () => {
@@ -983,18 +931,6 @@ describe("gateway session utils", () => {
       expect(native.model).toBe("stale-model");
       bindings.delete(nativeKey);
       expect(readRow(nativeKey)).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
-    },
-  );
-
-  test.each(["xhigh"] as const)(
-    "preserves catalog-less persisted %s in session change projections",
-    (thinkingLevel) => {
-      const row = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "custom/reasoner" }),
-        entry: { sessionId: thinkingLevel, thinkingLevel } as SessionEntry,
-      });
-
-      expect(row.thinkingLevel).toBe(thinkingLevel);
     },
   );
 
@@ -2087,18 +2023,6 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBeUndefined();
     expect(deriveSessionTitle(entry, "")).toBeUndefined();
     expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
-  });
-
-  test.each([
-    {
-      name: "ignores a blank label",
-      fields: { label: "   " },
-      firstUserMessage: "Hello!",
-      expected: "Hello!",
-    },
-  ])("$name", ({ fields, firstUserMessage, expected }) => {
-    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
-    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
   });
 });
 

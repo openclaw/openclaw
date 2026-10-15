@@ -191,8 +191,10 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/openclaw-bun.json
 scripts/lib/package-dist-inventory-contract.mts
 scripts/lib/package-lifecycle-marker.mjs
+scripts/lib/pinned-bun.mts
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -230,6 +232,7 @@ scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/run-vitest.mts
+scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
 scripts/tsx.mjs
 scripts/verify-pr-hosted-gates.mjs
@@ -355,6 +358,7 @@ src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/context.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
@@ -628,6 +632,7 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/group-display.ts
@@ -842,6 +847,7 @@ src/infra/agent-run-approval-leases.ts
 src/infra/agent-run-projection.ts
 src/infra/agent-run-registry-state.ts
 src/infra/agent-run-registry.ts
+src/infra/agent-run-terminal-writes.ts
 src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
@@ -1856,6 +1862,7 @@ src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
+src/state/openclaw-state-db-meeting-chronology-migration.ts
 src/state/openclaw-state-db-open.ts
 src/state/openclaw-state-db-operator-approval-migration.ts
 src/state/openclaw-state-db-permissions.ts
@@ -1875,6 +1882,7 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
+src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -1907,6 +1915,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-pool.ts
@@ -2209,6 +2218,8 @@ packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
+packages/markdown-core/src/fences.ts
+packages/markdown-core/src/image-code-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts

@@ -64,8 +64,8 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 ## Rejected Experiments
 
 - **Declaration-fixture owner selection (2026-10-02):**
-  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
-  path, so product PRs that edit one do not select the four declaration suites
+  `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
+  entrypoint closures, so product PRs that edit one do not select the four declaration suites
   built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
   broke `write-unified-entry-dts` that way; hourly scheduled CI
   ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))
@@ -604,6 +604,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The isolated LLM-boundary cache-stability file also qualifies when it is the
+  group's only file, under the same serial, worker, and preparation guards.
+  Its complete current-source replay passed all 19 tests with four CPUs,
+  12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
+  including siblings in the same job, retain their planned capacity.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

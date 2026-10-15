@@ -66,7 +66,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  toolResultWarningDedupe.promptPressure.clear();
   toolResultWarningDedupe.sessionRecovery.clear();
   clearEmbeddedSessionPromptStates([
     "session-99495",
@@ -126,11 +125,8 @@ async function preparePromptProjectionStateForTest(params: {
 describe("tool-result warning dedupe", () => {
   const warningDedupeLimit = 1_024;
 
-  it.each([
-    ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
-    ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
-  ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
-    const cache = getCache();
+  it("bounds and evicts the oldest session recovery warning keys", () => {
+    const cache = toolResultWarningDedupe.sessionRecovery;
 
     for (let index = 0; index <= warningDedupeLimit; index += 1) {
       expect(cache.check(`session-${index}`)).toBe(false);

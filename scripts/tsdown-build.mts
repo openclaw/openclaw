@@ -87,6 +87,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
   "tsconfig.json",
+  "tsconfig.packages.json",
   "scripts/tsdown-build.mts",
   "scripts/build-all.mts",
   "scripts/lib/build-artifact-cache.mts",
