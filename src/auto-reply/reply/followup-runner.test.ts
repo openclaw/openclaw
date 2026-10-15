@@ -651,7 +651,6 @@ describe("createFollowupRunner", () => {
       ) => {
         expect(params.decision).toEqual(decision);
         order.push("delivered");
-        await params.onObservedReplyDelivery?.();
         return { kind: "completed", payloads: decision.payloads };
       },
     );
@@ -688,10 +687,7 @@ describe("createFollowupRunner", () => {
     }
     await run;
 
-    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
-      visibleReplySent: true,
-      failed: true,
-    });
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith(undefined);
 
     expect(order).toEqual([
       "progress-drained",
@@ -839,24 +835,33 @@ describe("createFollowupRunner", () => {
     );
   });
 
-  it("reports a completed message-tool source delivery before final projection", async () => {
-    const typing = createTypingController();
-    const onObservedReplyDelivery = vi.fn(async () => {});
-    const turn = createTurn();
-    const execution = createSettledExecution();
-    state.completedSourceDelivery = true;
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
-    state.account.mockResolvedValue({});
-    state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
+  it.each([true, false])(
+    "settles source delivery correlations with visible=%s",
+    async (visible) => {
+      const typing = createTypingController();
+      const onObservedReplyDelivery = vi.fn(async () => {});
+      const turn = createTurn();
+      const endCorrelation = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
+      const execution = createSettledExecution();
+      state.completedSourceDelivery = visible;
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(execution);
+      state.account.mockResolvedValue({});
+      state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
 
-    await createFollowupRunner({
-      typing,
-      typingMode: "instant",
-      defaultModel: "claude",
-      opts: { onObservedReplyDelivery },
-    })(turn.queued);
+      await createFollowupRunner({
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onObservedReplyDelivery },
+      })(turn.queued);
 
-    expect(onObservedReplyDelivery).toHaveBeenCalledOnce();
-  });
+      expect(onObservedReplyDelivery).toHaveBeenCalledTimes(visible ? 1 : 0);
+      expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+        visibleReplySent: visible,
+        failed: false,
+      });
+    },
+  );
 });

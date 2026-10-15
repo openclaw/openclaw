@@ -386,7 +386,11 @@ export function createFollowupRunner(
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
           end(
-            disposition.kind === "consumed" && admittedTurn && !sourceRetry
+            // Source-owned batches settle through their own owner, whose void callback is not a receipt.
+            disposition.kind === "consumed" &&
+              admittedTurn &&
+              !sourceRetry &&
+              sourceDisposition?.kind !== "deliver"
               ? { visibleReplySent, failed: completion.kind === "failed" }
               : undefined,
           );

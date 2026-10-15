@@ -430,7 +430,8 @@ when initialization must finish before the child runs.
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its `begin()` cleanup receives an optional settlement with
       `visibleReplySent` and `failed` after delivery and presentation cleanup finish.
-      An omitted settlement means the attempt deferred or retained retry ownership.
+      An omitted settlement means the attempt deferred, retained retry ownership,
+      or uses a separate source-owned delivery outcome (such as a Gateway reply batch).
       Use the settlement for delivery-dependent completion UI; an agent's successful
       execution callback can arrive before any reply is sent.
 
