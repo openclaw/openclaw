@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { readAuthProfileRowsReadOnly } from "./sqlite-json.js";
 import { acquireAuthProfileReadDatabase, closeAuthProfileReadPool } from "./sqlite-read-pool.js";
@@ -12,6 +13,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function read(databasePath: string) {
   return readAuthProfileRowsReadOnly(
     databasePath,
+    openSqliteReadOnlyDatabase,
     undefined,
     readDatabasePathIdentitySync(databasePath).key,
   );
@@ -29,6 +31,7 @@ it("keeps the auth reader alive across committed writes until owner disposal", (
     `);
     const acquired = acquireAuthProfileReadDatabase(
       databasePath,
+      openSqliteReadOnlyDatabase,
       undefined,
       readDatabasePathIdentitySync(databasePath).key,
     );
@@ -50,7 +53,7 @@ it("keeps the auth reader alive across committed writes until owner disposal", (
       status: "readable",
       raw: { lastGood: { fixture: "fixture:default" } },
     });
-    expect(acquireAuthProfileReadDatabase(databasePath)).toEqual({
+    expect(acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase)).toEqual({
       status: "readable",
       db: reader,
     });

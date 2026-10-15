@@ -10,6 +10,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -191,7 +192,7 @@ function resolveAuthProfileDatabaseKind(
 /** Validate selected-agent ownership without requiring a current session schema. */
 export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
-  const acquired = acquireAuthProfileReadDatabase(pathname);
+  const acquired = acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase);
   if (acquired.status === "missing") {
     return;
   }
@@ -223,7 +224,11 @@ export function inspectAuthProfileJsonCellReadOnly(
         : { status: "unreadable" };
     }
   }
-  return inspectAgentAuthProfileJsonCellReadOnly(databaseTarget.path, target);
+  return inspectAgentAuthProfileJsonCellReadOnly(
+    databaseTarget.path,
+    target,
+    openSqliteReadOnlyDatabase,
+  );
 }
 
 /** Doctor retains opaque rotation-state bytes while repairing independently readable credentials. */
@@ -236,7 +241,7 @@ export function readAuthProfileStateJsonTextReadOnly(
       { path: target.path, ...(target.env ? { env: target.env } : {}) },
     );
   }
-  const acquired = acquireAuthProfileReadDatabase(target.path);
+  const acquired = acquireAuthProfileReadDatabase(target.path, openSqliteReadOnlyDatabase);
   if (acquired.status !== "readable") {
     throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
   }

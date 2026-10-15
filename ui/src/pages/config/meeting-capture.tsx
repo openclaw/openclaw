@@ -20,7 +20,6 @@ import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 registerEnglishCatalog(registerTranscriptsEnglish);
@@ -38,11 +37,11 @@ function supportsAutoStartSetup(provider: SourceProvider | undefined): boolean {
 }
 
 type SettingsProps = {
-  mutationDisabled: boolean;
-  buildEditor: (() => JSX.Element) | undefined;
-  advancedExpanded: boolean;
+  mutationDisabled?: boolean;
+  buildEditor?: () => JSX.Element;
+  advancedExpanded?: boolean;
 };
-function MeetingCaptureSettingsContent(props: SettingsProps) {
+export function MeetingCaptureSettings(props: SettingsProps) {
   const context = useApplication();
   const {
     client,
@@ -410,7 +409,7 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
       );
     });
   return (
-    <>
+    <openclaw-meeting-capture-settings>
       <SettingsPage>
         <div class="settings-stack" id={COMMUNICATION_SETTINGS_TARGET_IDS.meetingCapture}>
           <SettingsSection
@@ -584,18 +583,6 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
           {props.buildEditor?.()}
         </details>
       </ShellLayoutBoundary>
-    </>
+    </openclaw-meeting-capture-settings>
   );
 }
-
-export const MeetingCaptureSettings = defineSolidBridge<SettingsProps>(
-  "openclaw-meeting-capture-settings",
-  (props) => <MeetingCaptureSettingsContent {...props} />,
-  {
-    properties: {
-      mutationDisabled: { default: false, type: Boolean },
-      buildEditor: { default: undefined, attribute: false },
-      advancedExpanded: { default: false, type: Boolean },
-    },
-  },
-);

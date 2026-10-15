@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat composer redesign",
 });
 const pickerPopup = (kind: "model" | "effort") =>
-  `.chat-controls__${kind}-picker > wa-popup[data-anchored-overlay] > [part="popup"]`;
+  `.chat-controls__${kind}-picker > [data-anchored-overlay]`;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
@@ -259,8 +259,22 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => effort.evaluate((node) => node === document.activeElement))
-        .toBe(true);
+        .poll(() =>
+          effort.evaluate((node) =>
+            node === document.activeElement
+              ? "effort trigger"
+              : JSON.stringify({
+                  activeTag: document.activeElement?.tagName ?? null,
+                  activeClass: document.activeElement?.getAttribute("class") ?? null,
+                  activeRole: document.activeElement?.getAttribute("role") ?? null,
+                  openPickers: [
+                    ...document.querySelectorAll("details[data-chat-native-picker][open]"),
+                  ].map((picker) => picker.className),
+                  openTooltips: document.querySelectorAll("openclaw-tooltip[open]").length,
+                }),
+          ),
+        )
+        .toBe("effort trigger");
     });
   });
 
@@ -778,10 +792,10 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         state: "delta",
       });
-      // The working row stays attached with elapsed/token telemetry throughout streaming.
+      // Answer publication ends visual activity while queue and Stop stay owned.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.isVisible()).toBe(true);
-      await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
+      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => announcement.textContent()).toBe("");
       await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => model.isVisible()).toBe(true);
       await textarea.fill("Steer this queued follow-up");
@@ -860,7 +874,7 @@ suite.define(() => {
         .toBe(true);
       await captureMobileState(
         "mobile-composer-permissions-open.png",
-        composer.locator('.chat-controls__permission-picker [part="menu"]'),
+        composer.locator(".chat-controls__permission-menu"),
         [composer.locator(".chat-controls__permission-option").first()],
       );
       await page.keyboard.press("Escape");

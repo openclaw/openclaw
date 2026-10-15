@@ -134,8 +134,17 @@ function attach(directory: Directory) {
           // A renamed directory's watcher can remain bound to its retired inode.
           // Child-file renames do not retire the directory or its queued events.
           if (event === "rename") {
-            const renamedRoot = !filename || filename === path.basename(candidate);
-            const readmit = affected.filter((entry) => renamedRoot || entry.path !== candidate);
+            const renamed = filename?.toString();
+            const renamedRoot = !renamed || renamed === path.basename(candidate);
+            // An absent directory waits on its nearest ancestor. Only the next segment
+            // toward it can move that attach point; closing a native watch for other
+            // children (SQLite sidecars) can block the main thread for seconds on macOS.
+            const readmit = affected.filter(
+              (entry) =>
+                renamedRoot ||
+                (entry.path !== candidate &&
+                  path.relative(candidate, entry.path).split(path.sep, 1)[0] === renamed),
+            );
             for (const entry of readmit) {
               detach(entry);
             }

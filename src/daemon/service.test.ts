@@ -180,7 +180,7 @@ describe("readGatewayServiceState", () => {
           sourcePath: registered,
         })),
         isLoaded: vi.fn<GatewayService["isLoaded"]>(
-          async ({ env } = {}) => env?.OPENCLAW_TASK_SCRIPT === expected,
+          async (options = {}) => options.env?.OPENCLAW_TASK_SCRIPT === expected,
         ),
         readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
           status: env?.OPENCLAW_TASK_SCRIPT === expected ? "running" : "unknown",

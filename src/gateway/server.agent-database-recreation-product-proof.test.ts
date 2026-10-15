@@ -26,6 +26,7 @@ import {
 import { decodeAgentDatabaseReaderRequest } from "../infra/agent-database-readers.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import type {
   ResourceFixtureInput,
@@ -229,7 +230,10 @@ describe("agent database recreation product proof", () => {
           const survivorInput = {
             database: { agentId: AGENT_ID, path: survivorPath, readAuthStore: true },
           };
-          const parentReader = acquireAuthProfileReadDatabase(survivorPath);
+          const parentReader = acquireAuthProfileReadDatabase(
+            survivorPath,
+            openSqliteReadOnlyDatabase,
+          );
           expect(parentReader.status).toBe("readable");
           if (parentReader.status !== "readable") {
             throw new Error("Expected the surviving agent's retained auth reader");
