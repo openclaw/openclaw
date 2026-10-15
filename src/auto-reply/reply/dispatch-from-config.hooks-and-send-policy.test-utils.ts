@@ -14,7 +14,6 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerFastAutoProgressCases } from "./dispatch-from-config.fast-progress.cases.js";
-import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
 import { registerQueuedFollowupNoticeCases } from "./dispatch-from-config.queue-notices.test-support.js";
 import {
   createDispatcher,

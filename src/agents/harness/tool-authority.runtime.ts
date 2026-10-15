@@ -373,6 +373,9 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             ...(!turn ? { detached: true as const } : {}),
             source: operation ? "reply" : "attempt",
             sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
+            get requesterPrincipalKey() {
+              return operation?.requesterPrincipalKey ?? direct?.requesterPrincipalKey;
+            },
             assertActive: assertRegistered,
             acceptsRequesterOrigin: (incoming) => {
               assertRegistered();

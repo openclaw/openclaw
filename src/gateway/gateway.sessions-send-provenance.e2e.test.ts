@@ -20,6 +20,7 @@ import {
   runHuman,
   runProofIngress,
   updateSenderPolicies,
+  waitForProofRun,
   type RunResult,
   type ProofCase,
   type ProofModelRequest,
@@ -108,10 +109,7 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
             targetDisposition: "queued",
             runId: expect.any(String),
           });
-          incumbent = gateway.client.request<RunResult>("agent.wait", {
-            runId: scenario.bootstrapAccepted?.runId,
-            timeoutMs: 30_000,
-          });
+          incumbent = waitForProofRun(scenario.bootstrapAccepted?.runId);
         } else {
           incumbent = runProofIngress({
             abortSignal: signal,
@@ -216,10 +214,7 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
       await withinTest(scenario.targetStarted.promise, signal);
       scenario.releaseTarget.resolve();
       if (!spec.bootstrap) {
-        const terminal = await gateway.client.request<RunResult>("agent.wait", {
-          runId: scenario.accepted?.runId,
-          timeoutMs: 30_000,
-        });
+        const terminal = await waitForProofRun(scenario.accepted?.runId);
         expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
       }
       await waitForGatewayActiveWork(30_000);
@@ -376,12 +371,7 @@ async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean)
       targetDisposition: "steered",
     });
     releaseChild.resolve();
-    expect(
-      await gateway.client.request<RunResult>("agent.wait", {
-        runId: spawnResult?.runId,
-        timeoutMs: 30_000,
-      }),
-    ).toMatchObject({ status: "ok" });
+    expect(await waitForProofRun(spawnResult?.runId)).toMatchObject({ status: "ok" });
     await waitForGatewayActiveWork(30_000);
     expect(steeringAfterSourceCompletion).toEqual([true]);
     expect(providerErrors).toEqual([]);
@@ -510,10 +500,7 @@ async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
     expect(blockerRequests.every((request) => request.tools.includes("exec"))).toBe(true);
     expect(queuedRequests).toEqual([]);
     await updateSenderPolicies({ [`id:${marker}`]: { deny: ["exec"] } });
-    queuedCompletion = gateway.client.request<RunResult>("agent.wait", {
-      runId: queuedResult?.runId,
-      timeoutMs: 30_000,
-    });
+    queuedCompletion = waitForProofRun(queuedResult?.runId);
     releaseBlocker.resolve();
     await withinTest(
       awaitGateBeforeSettlement(
@@ -531,12 +518,7 @@ async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
     });
     releaseQueued.resolve();
     expect(await queuedCompletion).toMatchObject({ status: "ok" });
-    expect(
-      await gateway.client.request<RunResult>("agent.wait", {
-        runId: blockerResult?.runId,
-        timeoutMs: 30_000,
-      }),
-    ).toMatchObject({ status: "ok" });
+    expect(await waitForProofRun(blockerResult?.runId)).toMatchObject({ status: "ok" });
     await waitForGatewayActiveWork(30_000);
     expect(queuedRequests.some((request) => request.prompt.includes(steerInput))).toBe(true);
     expect(queuedRequests.every((request) => !request.tools.includes("exec"))).toBe(true);
@@ -629,10 +611,7 @@ async function verifyCompletedChildFollowup(signal: AbortSignal) {
       childSessionKey: expect.any(String),
       runId: expect.any(String),
     });
-    const initialCompletion = await gateway.client.request<RunResult>("agent.wait", {
-      runId: spawnResult?.runId,
-      timeoutMs: 30_000,
-    });
+    const initialCompletion = await waitForProofRun(spawnResult?.runId);
     expect(
       initialCompletion,
       JSON.stringify({ initialCompletion, spawnResult, providerErrors }),
@@ -651,12 +630,7 @@ async function verifyCompletedChildFollowup(signal: AbortSignal) {
         followupRequests: followupRequests.length,
       }),
     ).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-    expect(
-      await gateway.client.request<RunResult>("agent.wait", {
-        runId: followupResult?.runId,
-        timeoutMs: 30_000,
-      }),
-    ).toMatchObject({ status: "ok" });
+    expect(await waitForProofRun(followupResult?.runId)).toMatchObject({ status: "ok" });
     await waitForGatewayActiveWork(30_000);
     expect(followupRequests.length).toBeGreaterThan(0);
     expect(followupRequests.map((request) => request.tools.includes("exec"))).toEqual(
@@ -797,7 +771,7 @@ async function verifyCrossHumanAdmission(
   const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
   const scenario = createScenario(
     {
-      name: `cross-human ${collaborative ? "steer" : "followup"}`,
+      name: `cross-human ${collaborative ? "steer" : "explicit followup"}`,
       id,
       sender: "bob",
       agent: "main",
@@ -905,6 +879,13 @@ async function verifyCrossHumanAdmission(
         awaitGateBeforeSettlement(steering.admitted, bob, "Bob settled before steering admission"),
         signal,
       );
+    } else if (allowCollaborativeSteering === false) {
+      expect(await bob).toMatchObject({ collaborativeSteeringRefused: true });
+      expect(scenario.sourceRequests).toEqual([]);
+      expect(scenario.incumbentCompleted).toBe(false);
+      stage = "Bob explicit followup admission";
+      bob = runHuman(scenario, "bob", `/followup ${scenario.sourcePrompt}`, "steer", signal);
+      expect((await bob).deferredToActiveRun).toBe("followup");
     } else {
       expect((await bob).deferredToActiveRun).toBe("followup");
     }
@@ -912,6 +893,14 @@ async function verifyCrossHumanAdmission(
       collaborative
         ? []
         : [
+            ...(allowCollaborativeSteering === false
+              ? [
+                  {
+                    sender: "bob",
+                    text: "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+                  },
+                ]
+              : []),
             {
               sender: "bob",
               text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",

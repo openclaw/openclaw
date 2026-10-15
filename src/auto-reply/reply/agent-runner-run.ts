@@ -33,6 +33,8 @@ import {
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
 } from "../../sessions/session-controller.session-reader.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -66,6 +68,7 @@ import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
 } from "./queue.js";
+import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import * as replyRunState from "./reply-operation-run-state.js";
@@ -150,8 +153,22 @@ export async function runReplyAgent(
         cfg: followupRun.run.config,
         isHeartbeat,
       }));
+    const explicitFollowup = isExplicitFollowupCommandTurn(sessionCtx);
+    if (explicitFollowup) {
+      followupRun.disableCollectBatching = true;
+    }
+    const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
     const { runOptions: runOpts, hasVisiblePartialReply } = prepareReplyRunOptions({
-      opts,
+      opts: explicitFollowup
+        ? {
+            ...opts,
+            ...observeAgentRunStart(opts, () => {
+              if (replyOperationRunState) {
+                replyOperationRunState.explicitFollowupStarted = true;
+              }
+            }),
+          }
+        : opts,
       runId: controllerInput.protocolRunId ?? runId,
       abortSignal: followupRun.abortSignal,
       onVisiblePartialReply: () =>
@@ -160,7 +177,6 @@ export async function runReplyAgent(
           "reply:partial_delivered",
         ),
     });
-    const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
     if (replyOperationRunState && !isHeartbeat && isRequiredReplyExpectation(replyExpectation)) {
       // Preparation has not transferred the accepted input into an executable turn yet.
       replyOperationRunState.continueStalledTurn = () => false;
@@ -248,9 +264,14 @@ export async function runReplyAgent(
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
       isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
-    let shouldQueueRequesterMismatch =
-      steeringRequesterMismatch &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering === false;
+    if (messageInjectionDisposition === "collaborative-steering-disabled") {
+      try {
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState);
+      } finally {
+        typing.cleanup();
+      }
+      return undefined;
+    }
     // A rejected or vanished target leaves input with the follow-up queue,
     // independently of whether the incoming requester could collaborate.
     const shouldQueueUnavailableSteer =
@@ -290,7 +311,6 @@ export async function runReplyAgent(
     }
 
     const questionRequesterMismatch = questionInput.requesterMismatch === true;
-    shouldQueueRequesterMismatch ||= questionRequesterMismatch;
 
     const toolResultOptions = {
       getVerboseLevel: () =>
@@ -337,7 +357,7 @@ export async function runReplyAgent(
     if (
       isActiveSteer &&
       !shouldQueueUnavailableSteer &&
-      !shouldQueueRequesterMismatch &&
+      !questionRequesterMismatch &&
       !shouldQueueTerminalReceiptSteer &&
       messageInjectionDisposition === "none"
     ) {
@@ -367,7 +387,7 @@ export async function runReplyAgent(
       interrupt: resolvedQueue.mode === "interrupt",
       isActive: isActive || questionRequesterMismatch,
       isHeartbeat,
-      shouldFollowup: shouldFollowup || shouldQueueUnavailableSteer || shouldQueueRequesterMismatch,
+      shouldFollowup: shouldFollowup || shouldQueueUnavailableSteer || questionRequesterMismatch,
       resetTriggered,
     });
     if (activeRunQueueAction === "drop") {
@@ -419,15 +439,17 @@ export async function runReplyAgent(
         replyOperationRunState.admission = {
           status: "accepted",
           mode: "followup",
-          ...(shouldQueueRequesterMismatch
-            ? { reason: "requester-mismatch" as const }
-            : effectiveShouldSteer &&
-                (isActive || messageInjectionDisposition === "rejected") &&
-                followupRun.currentInboundEventKind !== "room_event" &&
-                (!followupRun.run.inputProvenance ||
-                  followupRun.run.inputProvenance.kind === "external_user")
-              ? { reason: "steering-unavailable" as const }
-              : {}),
+          ...(explicitFollowup
+            ? { reason: "explicit-followup" as const }
+            : questionRequesterMismatch
+              ? { reason: "requester-mismatch" as const }
+              : effectiveShouldSteer &&
+                  (isActive || messageInjectionDisposition === "rejected") &&
+                  followupRun.currentInboundEventKind !== "room_event" &&
+                  (!followupRun.run.inputProvenance ||
+                    followupRun.run.inputProvenance.kind === "external_user")
+                ? { reason: "steering-unavailable" as const }
+                : {}),
         };
       }
       // The queue must stay dormant while the active owner can still collect

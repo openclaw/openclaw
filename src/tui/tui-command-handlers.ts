@@ -613,6 +613,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
     },
     queue: async (_args, raw) => await sendMessage(raw),
+    followup: async (_args, raw) => await sendMessage(raw),
     openclaw: (args) => {
       chatLog.addSystem(
         args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
@@ -879,6 +880,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           consumeCompletedRunForPendingSend?.(acceptedRunId);
         }
         return;
+      }
+      if (
+        opts.local &&
+        sendResult.status === "queued" &&
+        resolveTextCommand(text)?.command.key === "followup"
+      ) {
+        chatLog.addSystem(
+          "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+        );
       }
       if (isBtw && terminalAck) {
         forgetLocalBtwRunId?.(runId);

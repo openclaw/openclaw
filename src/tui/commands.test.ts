@@ -18,11 +18,16 @@ describe("parseCommand", () => {
     ["/ELEV full", "elevated", "full"],
     ["/t high", "think", "high"],
     ["/side check this", "btw", "check this"],
+    ["/followup first\nsecond", "followup", "first\nsecond"],
     ["/compact: focus on decisions", "compact", "focus on decisions"],
     ["/gwstatus", "gateway-status", ""],
     ["   ", "", ""],
   ])("parses %s", (input, name, args) => {
     expect(parseCommand(input)).toEqual({ name, args });
+  });
+  it.each([false, true])("discovers explicit followup with local=%s", (local) => {
+    expect(helpText({ local })).toContain("/followup <message>");
+    expect(getSlashCommands({ local }).some((command) => command.name === "followup")).toBe(true);
   });
   it("accepts but does not advertise the retired alias", () => {
     expect(parseCommand("/crestodian repair gateway")).toEqual({

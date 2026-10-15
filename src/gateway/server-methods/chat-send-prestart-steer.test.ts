@@ -53,6 +53,28 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
   executeAgentTurn: runtime.execute,
 }));
 
+function createControlUiRequestClient() {
+  const profile = ensureGatewayOwnerProfile("Gateway Owner");
+  return {
+    ...createOperatorWsClient({
+      connId: "prestart-owner",
+      clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
+      scopes: ["operator.write"],
+    }),
+    usesSharedGatewayAuth: true,
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+    internal: {
+      authenticatedOperator: true as const,
+      operatorRoleActor: { kind: "system" as const },
+    },
+  };
+}
+
 test.for(["accepted", "unavailable", "rejected"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
@@ -117,27 +139,9 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         }
       }),
     };
-    const profile = ensureGatewayOwnerProfile("Gateway Owner");
     const requestOptions = {
       context,
-      client: {
-        ...createOperatorWsClient({
-          connId: "prestart-owner",
-          clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
-          scopes: ["operator.write"],
-        }),
-        usesSharedGatewayAuth: true,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        },
-        internal: {
-          authenticatedOperator: true as const,
-          operatorRoleActor: { kind: "system" as const },
-        },
-      },
+      client: createControlUiRequestClient(),
     };
     clients.add(requestOptions.client);
     // Read through the public handler with the same live custody and physical session.
@@ -443,7 +447,12 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
   let stopping: ReturnType<typeof directSessionReq> | undefined;
   let sessionKey: string | undefined;
   const consumed: string[] = [];
+  const clients = new Set<GatewayClient & { connId: string }>();
   const context = {
+    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+      new Set(
+        [...clients].filter((client) => !filter || filter(client)).map((client) => client.connId),
+      ),
     broadcast: vi.fn((event: string, payload: unknown) => {
       if (
         event === "chat" &&
@@ -455,7 +464,8 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
       }
     }),
   };
-  const requestOptions = { ...controlUiClient, context };
+  const requestOptions = { client: createControlUiRequestClient(), context };
+  clients.add(requestOptions.client);
   runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
     const runId = expectDefined(opts?.runId, "runtime run ID");
     if (!initialOperation) {
@@ -553,6 +563,7 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
       );
     }
     await Promise.all([released, stopping]);
+    clients.clear();
     dispatchInboundMessageMock.mockReset();
     runtime.execute.mockReset();
     testState.agentConfig = undefined;

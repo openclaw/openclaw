@@ -17,11 +17,15 @@ import {
 } from "./gateway.sessions-send-provenance.test-support.js";
 
 export async function verifyCollaborativeCancellation(signal: AbortSignal) {
-  const { replyRunRegistry } = await import("../auto-reply/reply/reply-run-registry.registry.js");
-  const injection = await import("../auto-reply/reply/reply-run-registry.message-injection.js");
+  const { getSessionControllerOperation, captureReplyMessageInjectionTarget } =
+    await import("../sessions/session-controller.js");
+  const { captureSessionTarget } = await import("../sessions/session-controller.target.js");
+  const { resolveGatewaySessionStoreTargetInWorker } =
+    await import("./session-utils-store-worker.js");
+  const injection = await import("../sessions/session-controller.message-injection.js");
   const { enqueueMessageInjection } =
     await import("../auto-reply/reply/message-injection-authority.js");
-  const contracts = await import("../auto-reply/reply/reply-run-registry.contracts.js");
+  const contracts = await import("../sessions/session-controller.contracts.js");
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   try {
     await patchProofConfig(
@@ -61,14 +65,27 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             ),
             signal,
           );
+          const loaded = await resolveGatewaySessionStoreTargetInWorker({
+            cfg: getRuntimeConfig(),
+            key: scenario.sourceKey,
+            readOnly: true,
+            signal,
+          });
+          const target = captureSessionTarget({
+            storeScope: loaded.storePath,
+            sessionKey: loaded.canonicalKey,
+            agentId: loaded.agentId,
+            incarnation: expectDefined(loaded.store[loaded.canonicalKey], "Alice's session")
+              .sessionId,
+          });
           const operation = expectDefined(
-            replyRunRegistry.get(scenario.sourceKey),
+            getSessionControllerOperation(loaded.canonicalKey, target),
             "Alice's owner",
           );
           const queuedTarget =
             phase === "queued"
               ? expectDefined(
-                  replyRunRegistry.resolveCurrentMessageInjectionTarget(scenario.sourceKey),
+                  captureReplyMessageInjectionTarget(operation),
                   "Alice's injection target",
                 )
               : undefined;

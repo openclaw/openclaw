@@ -23,6 +23,7 @@ import {
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
+  COLLABORATIVE_STEERING_DISABLED_TEXT,
   createFinalDispatchPayloadDedupeKey,
   QUEUE_CAP_REJECTION_TEXT,
   shouldDeliverDespiteSourceReplySuppression,
@@ -76,11 +77,31 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const replies =
     explicitSilence && !heartbeatReply ? retainSilentFinalPayloads(finalReplies) : finalReplies;
   const queueAdmission = state.replyOperationRunState.admission;
+  if (state.replyOperationRunState.explicitFollowupStarted) {
+    replies.unshift(
+      markReplyPayloadForSourceSuppressionDelivery({
+        text: "Your followup has started.",
+        isStatusNotice: true,
+      }),
+    );
+  }
+  const collaborativeSteeringRefused =
+    queueAdmission?.status === "skipped" &&
+    queueAdmission.reason === "collaborative-steering-disabled";
+  if (collaborativeSteeringRefused) {
+    const refusalNotice = markReplyPayloadForSourceSuppressionDelivery({
+      text: COLLABORATIVE_STEERING_DISABLED_TEXT,
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(refusalNotice, { queueAdmissionNotice: true });
+    replies.push(refusalNotice);
+  }
   let queuedRequesterNotice: ReplyPayload | undefined;
   if (
     queueAdmission?.status === "accepted" &&
     queueAdmission.mode === "followup" &&
     (queueAdmission.reason === "requester-mismatch" ||
+      queueAdmission.reason === "explicit-followup" ||
       queueAdmission.reason === "steering-unavailable")
   ) {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
@@ -405,7 +426,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
       owned?.expectation ?? "required",
-      beforeAgentRunBlocked || sendPolicyDenied || owned?.outcome === "blocked"
+      collaborativeSteeringRefused ||
+        beforeAgentRunBlocked ||
+        sendPolicyDenied ||
+        owned?.outcome === "blocked"
         ? "blocked"
         : owned?.outcome === "silent"
           ? "silent"
@@ -546,11 +570,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const dispatchOutcome =
     agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
-      : queueCapRejected || messageInjectionAborted || preRunRejection
+      : queueCapRejected ||
+          collaborativeSteeringRefused ||
+          messageInjectionAborted ||
+          preRunRejection
         ? "skipped"
         : "completed";
   const dispatchReason =
     questionFailure ??
+    (collaborativeSteeringRefused ? "collaborative-steering-disabled" : undefined) ??
     (queueCapRejected
       ? "queue-cap"
       : messageInjectionAborted
@@ -585,6 +613,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const result = state.attachSourceReplyDeliveryMode({
     queuedFinal,
     counts,
+    ...(collaborativeSteeringRefused ? { collaborativeSteeringRefused: true as const } : {}),
     ...(state.routeState.sessionMetadataChangesForResult
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),

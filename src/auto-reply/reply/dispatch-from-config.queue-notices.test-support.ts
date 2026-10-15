@@ -17,6 +17,37 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: string): void {
+  it("reports strict steering refusal without claiming queueing or cancellation", async () => {
+    setNoAbort();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:steer-refusal", Body: "stop" }),
+      cfg: {},
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        const state = resolveReplyOperationRunState(opts);
+        if (!state) {
+          throw new Error("expected reply operation state");
+        }
+        state.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        return undefined;
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliveredTexts).toEqual([
+      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+    ]);
+    expect(result.collaborativeSteeringRefused).toBe(true);
+    expect(result.deferredToActiveRun).toBeUndefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
   it("reports queue-cap rejection instead of a temporary model failure", async () => {
     setNoAbort();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();
@@ -57,9 +88,9 @@ export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: st
   });
 
   it.each([
-    { phase: "still queued", reason: "requester-mismatch" },
+    { phase: "still queued", reason: "explicit-followup" },
     { phase: "still queued", reason: "steering-unavailable" },
-    { phase: "evicted before finalization", reason: "requester-mismatch" },
+    { phase: "evicted before finalization", reason: "explicit-followup" },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
   ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
     setNoAbort();

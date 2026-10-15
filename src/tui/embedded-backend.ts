@@ -293,14 +293,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.preparedModelRuntime.waitUntilReady();
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
+  async sendChat(options: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     this.scheduler.signal.throwIfAborted();
-    const runId = opts.runId ?? randomUUID();
+    const runId = options.runId ?? randomUUID();
+    const command = resolveTextCommand(options.message);
+    const explicitFollowup = command?.command.key === "followup";
+    let opts = options;
+    if (explicitFollowup) {
+      if (!command.args) {
+        throw new Error("Usage: /followup <message>");
+      }
+      opts = { ...options, message: command.args };
+    }
     const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
-    const question = sideCommand?.[1]?.trim() || undefined;
-    const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
+    const question = !explicitFollowup ? sideCommand?.[1]?.trim() || undefined : undefined;
+    const isQueueCommand = !explicitFollowup && command?.command.key === "queue";
     const agentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,
       config: getRuntimeConfig(),
@@ -313,7 +322,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     // Readiness awaits follow synchronous run registration, so the same owned
     // promise determines both stop admission and the next turn's queue predecessor.
     const sessionRun = this.findQueuedSessionRunPromise(runScope);
-    const stopCommand = sessionRun !== undefined && isAbortRequestText(opts.message);
+    const stopCommand =
+      !explicitFollowup && sessionRun !== undefined && isAbortRequestText(opts.message);
     const queuedAfter = question || stopCommand || isQueueCommand ? undefined : sessionRun;
     if (stopCommand) {
       this.abortSessionRuns(runScope);
@@ -344,7 +354,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           incarnation: entry?.sessionId,
         }),
       );
-      if (activeOperation) {
+      if (activeOperation && !explicitFollowup) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
           activeOperation,
           opts.message,
@@ -358,6 +368,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
+        ...(explicitFollowup ? { inlineMode: "followup" as const } : {}),
       });
       if (queueSettings.mode === "steer") {
         if (activeOperation) {
@@ -389,8 +400,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
           runScope,
           message: opts.message,
           settings: queueSettings,
-          fallbackRunId: queuedAfter.runId,
         });
+        if (queued.kind === "rejected") {
+          if (explicitFollowup) {
+            throw new Error("Your followup was not queued because the session queue is full.");
+          }
+          return { runId: queuedAfter.runId };
+        }
         if (queued.kind === "handled") {
           return { runId: queued.runId };
         }
@@ -401,6 +417,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId,
       question,
+      ...(explicitFollowup ? { explicitFollowup: true as const } : {}),
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
     });
@@ -414,7 +431,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       await runPromise;
     }
 
-    return { runId };
+    return { runId, ...(explicitFollowup && queuedAfter ? { status: "queued" } : {}) };
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
@@ -841,9 +858,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     runScope: { sessionKey: string; agentId?: string };
     message: string;
     settings: QueueSettings;
-    fallbackRunId: string;
   }):
     | { kind: "handled"; runId: string }
+    | { kind: "rejected" }
     | { kind: "enqueue"; queue: NonNullable<LocalRunState["pendingQueue"]> } {
     const pendingMessages: LocalPendingMessage[] = [];
     for (const run of this.runs.values()) {
@@ -865,7 +882,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       summarize: (item) => item.message,
     });
     if (!admitted) {
-      return { kind: "handled", runId: params.fallbackRunId };
+      return { kind: "rejected" };
     }
 
     const retained = new Set(overflowQueue.items);
@@ -1140,9 +1157,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.ensureRunRegistered(evt.runId, run);
     }
 
+    const explicitFollowupStarted = run.explicitFollowup && lifecyclePhase === "start";
+    if (explicitFollowupStarted) {
+      delete run.explicitFollowup;
+    }
     this.emitRun("agent", evt.runId, run, {
       stream: evt.stream,
-      data: evt.data,
+      data: explicitFollowupStarted ? { ...evt.data, explicitFollowup: true } : evt.data,
     });
 
     if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {

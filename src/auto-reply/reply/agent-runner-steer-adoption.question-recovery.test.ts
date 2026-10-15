@@ -98,7 +98,11 @@ describe("question response custody through reply adoption", () => {
         ]) {
           const state: ReplyOperationRunState = {};
           await startSteer(key, run, operation, followup, state);
-          expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
+          expect(state.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
+          });
         }
         expect(queueMessage).not.toHaveBeenCalled();
         operation.complete();

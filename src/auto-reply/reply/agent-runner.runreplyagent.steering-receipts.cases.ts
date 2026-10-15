@@ -63,6 +63,67 @@ export function registerSteeringReceiptCases({
   makeSessionFixture,
   state,
 }: SteeringReceiptFixture): void {
+  it.each([false, true])(
+    "refuses another human's steer without leaving drainable work (explicit command: %s)",
+    async (explicitCommand) => {
+      const runState: ReplyOperationRunState = {};
+      const onAdopted = vi.fn();
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const active = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      const candidate = createMinimalRun({
+        isActive: true,
+        shouldSteer: true,
+        resolvedQueueMode: "steer",
+        bindActiveAuthority: false,
+        sessionCtx: {
+          Provider: "telegram",
+          SenderId: "bob",
+          ...(explicitCommand
+            ? { CommandSource: "text" as const, CommandAuthorized: true, Body: "/steer stop" }
+            : {}),
+        },
+        runOverrides: {
+          messageProvider: "telegram",
+          config: { messages: { queue: { allowCollaborativeSteering: false } } },
+        },
+        opts: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { onAdopted, onAbandoned, onSettled },
+        },
+      });
+      await active.bindToolAuthoritySnapshotAsync(
+        prepareReplyToolAuthority({
+          ...candidate.followupRun,
+          run: { ...candidate.followupRun.run, senderId: "alice" },
+        }),
+      );
+      active.setPhase("running");
+      try {
+        await candidate.run();
+        expect(runState.admission).toEqual({
+          status: "skipped",
+          reason: "collaborative-steering-disabled",
+        });
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(onAdopted).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        expect(onAbandoned).not.toHaveBeenCalled();
+        expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
+        active.complete();
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      } finally {
+        active.complete();
+        clearSessionQueues(["main"]);
+      }
+    },
+  );
+
   it("queues instead of steering when privilege facts differ on the active route", async ({
     signal,
   }) => {

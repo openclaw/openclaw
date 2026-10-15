@@ -472,13 +472,17 @@ describe("ordinary steering into automatic model fallback", () => {
         typingMode: "never",
       });
       await incoming;
-      expect(resultState.admission).toEqual({
-        status: "accepted",
-        mode: shouldSteer ? "steer" : "followup",
-        ...(shouldSteer
-          ? {}
-          : { reason: crossProfile ? "requester-mismatch" : "steering-unavailable" }),
-      });
+      expect(resultState.admission).toEqual(
+        crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering === false
+          ? { status: "skipped", reason: "collaborative-steering-disabled" }
+          : {
+              status: "accepted",
+              mode: shouldSteer ? "steer" : "followup",
+              ...(shouldSteer
+                ? {}
+                : { reason: crossProfile ? "requester-mismatch" : "steering-unavailable" }),
+            },
+      );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);

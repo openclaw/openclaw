@@ -93,6 +93,7 @@ export type ReplyMessageInjectionResolution =
 type ReplyMessageInjectionOwner = {
   readonly backendIdentity: object;
   readonly toolAuthorityFingerprint?: string;
+  readonly requesterPrincipalKey?: string;
   /** One concrete attachment lifetime; reusing a backend handle cannot revive its receipts. */
   readonly admissionIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
@@ -144,6 +145,7 @@ export type ReplyMessageInjectionRejectionReason =
   | "guarded_injection_unsupported"
   | "requester_origin_mismatch"
   | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
@@ -679,7 +681,7 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch" | "steering-unavailable";
+      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
     }
   | {
       status: "skipped";
@@ -688,6 +690,7 @@ type ReplyOperationAdmissionSnapshot =
         | "aborted"
         | "lifecycle-invalidated"
         | "queue-cap"
+        | "collaborative-steering-disabled"
         | "question-response-indeterminate"
         | "question-response-refused"
         | "question-response-rejected";
@@ -717,6 +720,8 @@ export type ReplyOperationRunState = {
     }>;
   };
   admission?: ReplyOperationAdmissionSnapshot;
+  /** Set only when an explicit followup reaches the execution owner's start callback. */
+  explicitFollowupStarted?: true;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
   /** The Gateway accepted this question answer or rejected its values before commitment. */
@@ -814,6 +819,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   detached?: true;
   operation?: ReplyOperation;
   sourceTurnId?: string;
+  readonly requesterPrincipalKey?: string;
   acceptsRequesterOrigin: (origin: RequesterOrigin) => boolean;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;

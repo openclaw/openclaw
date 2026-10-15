@@ -248,7 +248,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     expect(followupRuns).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
     expect(session.getSteeringMessages()).toEqual([]);
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({ status: "accepted", mode: "followup", reason: "steering-unavailable" });
     expect(settled).not.toHaveBeenCalled();
     expect(lifecycleEvents).toContain("agent_handoff");
     expect(lifecycleEvents).not.toContain("agent_settled");

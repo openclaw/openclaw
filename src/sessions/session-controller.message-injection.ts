@@ -6,6 +6,7 @@ import {
   bindPreparedToolAuthority,
   createLegacyToolAuthorityQueuePreflight,
 } from "../agents/harness/tool-authority-preparation.js";
+import { resolveRequesterPrincipalKey } from "../agents/requester-origin.js";
 import { hasInboundAudio } from "../auto-reply/reply/inbound-media.js";
 import {
   createMessageInjectionAuthority,
@@ -75,6 +76,11 @@ export function captureReplyMessageInjectionTarget(
         return "handle" in attachment
           ? backend.toolAuthorityFingerprint
           : (backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint);
+      },
+      get requesterPrincipalKey() {
+        return "handle" in attachment
+          ? toolAuthority?.requesterPrincipalKey
+          : operation.requesterPrincipalKey;
       },
       acceptParticipant: (overlay) => participants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
@@ -515,6 +521,42 @@ async function beginPreparedReplyMessageInjectionTarget(
     inboundAudio,
     ...backendOptions
   } = options ?? {};
+  const incomingRequester =
+    allowCollaborativeSteering === false && incomingOverlay
+      ? resolveRequesterPrincipalKey({
+          ...incomingOverlay,
+          messageChannel: incomingOverlay.originatingChannel,
+        })
+      : undefined;
+  if (
+    !requesterToolAuthority &&
+    allowCollaborativeSteering === false &&
+    backendOptions.isInboundUserMessage &&
+    (!incomingOverlay?.inputProvenance ||
+      incomingOverlay.inputProvenance.kind === "external_user") &&
+    incomingRequester &&
+    owner.requesterPrincipalKey &&
+    incomingRequester !== owner.requesterPrincipalKey
+  ) {
+    assertSourceCurrent?.();
+    // Refusal belongs to this live target. A vanished or unavailable backend still
+    // returns its existing fallback decision, without lending another turn's identity.
+    const availability =
+      canAdmit?.() === false
+        ? { reason: "injection_unavailable" as const }
+        : owner.resolve({ inboundAudio, assertCurrent: assertSourceCurrent });
+    const acceptance = Promise.resolve(false);
+    void acceptance.then((accepted) => backendOptions.onQueueAccepted?.(accepted));
+    return {
+      targetRunId: target.runId,
+      acceptance,
+      outcome: Promise.resolve({
+        status: "rejected",
+        reason:
+          "injection" in availability ? "collaborative_steering_disabled" : availability.reason,
+      }),
+    };
+  }
   let selectedOverlay = incomingOverlay;
   let allowPendingUserInputAnswer = requestedPendingUserInputAnswer;
   let projectedToolAuthorityFingerprint = requesterToolAuthority

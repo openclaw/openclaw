@@ -17,6 +17,7 @@ export type LocalRunState = {
   lastBroadcastText?: string;
   textUpdates?: ReturnType<typeof createDraftStreamLoop<boolean>>;
   question?: string;
+  explicitFollowup?: true;
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;
@@ -50,7 +51,7 @@ export function createLocalRunState(
   runId: string,
   initial: Pick<
     LocalRunState,
-    "sessionKey" | "agentId" | "question" | "pendingQueue" | "queuedAfter"
+    "sessionKey" | "agentId" | "question" | "explicitFollowup" | "pendingQueue" | "queuedAfter"
   >,
 ): LocalRunState {
   const controller = new AbortController();

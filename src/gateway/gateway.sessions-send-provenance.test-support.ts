@@ -74,7 +74,7 @@ export function registerProofModelScript(
 }
 
 export async function observeProofSteeringAdmission(prompt: string) {
-  const injection = await import("../auto-reply/reply/reply-run-registry.message-injection.js");
+  const injection = await import("../sessions/session-controller.message-injection.js");
   const admitted = createDeferred();
   const begin = injection.beginReplyMessageInjectionTarget;
   const observer = vi
@@ -125,6 +125,10 @@ export let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
 let gatewayKernel: Awaited<ReturnType<typeof import("./server-kernel.js").createGatewayKernel>>;
 let gatewayContext: GatewayRequestContext;
 let workspace: string;
+
+export function waitForProofRun(runId: unknown): Promise<RunResult> {
+  return gateway.client.request<RunResult>("agent.wait", { runId, timeoutMs: 30_000 });
+}
 
 function resetGatewayState() {
   resetConfigOverrides();

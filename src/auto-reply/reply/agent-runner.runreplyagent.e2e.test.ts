@@ -23,6 +23,7 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
@@ -475,7 +476,7 @@ describe("runReplyAgent active steering", () => {
                 expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
               } else {
                 expect(dispatch).not.toHaveBeenCalled();
-                expect(question.isResolving()).toBe(false);
+                await expectPendingQuestionAnswerClaimable("main", true);
                 if (outcome === "queued") {
                   expect(result).toBeUndefined();
                   expect(runState.admission).toEqual({
