@@ -1,19 +1,17 @@
 // Latest selection per voter for recorded WhatsApp polls; no change history is kept.
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   buildWhatsAppKeyPrefixRange,
-  buildWhatsAppPollAccountPrefix,
+  buildWhatsAppPollTallyPrefix,
   normalizeWhatsAppPollJids,
   normalizeWhatsAppPollMessageId,
   openWhatsAppPollStore,
+  resolveWhatsAppPollScope,
   resolveWhatsAppPollTtlMs,
   runWhatsAppPollStoreOperation,
   truncateUtf8,
-  WHATSAPP_POLL_TTL_MS,
-  type WhatsAppPollOrigin,
+  WHATSAPP_POLL_TALLY_STORES,
+  type WhatsAppPollAccount,
   type WhatsAppPollRecord,
   type WhatsAppPollStoreErrorMode,
 } from "./poll-vote-store.js";
@@ -43,18 +41,6 @@ export type WhatsAppPollTallyVoter = {
   votedAtMs: number;
 };
 
-export const WHATSAPP_POLL_TALLY_STORES: Record<WhatsAppPollOrigin, OpenKeyedStoreOptions> = {
-  sent: {
-    namespace: "whatsapp.poll-tally-sent",
-    maxEntries: 20_000,
-    defaultTtlMs: WHATSAPP_POLL_TTL_MS,
-  },
-  received: {
-    namespace: "whatsapp.poll-tally-received",
-    maxEntries: 20_000,
-    defaultTtlMs: WHATSAPP_POLL_TTL_MS,
-  },
-};
 const TALLY_READ_LIMIT = 1100;
 const NAME_MAX_BYTES = 128;
 
@@ -88,10 +74,6 @@ function toPositiveFiniteNumber(value: unknown): number | undefined {
 
 function resolveVoterKey(voterJids: readonly string[]): string | undefined {
   return voterJids.find((jid) => jid.endsWith("@s.whatsapp.net")) ?? voterJids[0];
-}
-
-function tallyPrefix(accountId: string, pollMessageId: string): string {
-  return `${buildWhatsAppPollAccountPrefix(accountId)}${pollMessageId}:`;
 }
 
 function isTallyValue(value: unknown): value is WhatsAppPollTallyValue {
@@ -158,7 +140,7 @@ export type WhatsAppPollVoteApplyResult = "applied" | "stale" | "skipped";
  */
 export async function applyWhatsAppPollVote(params: {
   record: WhatsAppPollRecord;
-  accountId: string;
+  account: WhatsAppPollAccount;
   pollMessageId: string;
   voter: WhatsAppPollVoter;
   selected: string[];
@@ -166,10 +148,10 @@ export async function applyWhatsAppPollVote(params: {
   errors?: WhatsAppPollStoreErrorMode;
 }): Promise<WhatsAppPollVoteApplyResult> {
   const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
-  const accountId = params.accountId.trim();
+  const scope = resolveWhatsAppPollScope(params.account);
   const voterJids = normalizeWhatsAppPollJids(params.voter.jids);
   const voterKey = resolveVoterKey(voterJids);
-  if (!pollMessageId || !accountId || !voterKey) {
+  if (!pollMessageId || !scope || !voterKey) {
     return "skipped";
   }
   return await runWhatsAppPollStoreOperation<WhatsAppPollVoteApplyResult>({
@@ -184,7 +166,7 @@ export async function applyWhatsAppPollVote(params: {
       if (!store) {
         return "skipped";
       }
-      const prefix = tallyPrefix(accountId, pollMessageId);
+      const prefix = buildWhatsAppPollTallyPrefix(scope, pollMessageId);
       const existing = await findVoterRows(store, prefix, voterJids);
       if (existing.some(({ value }) => value.votedAtMs > params.votedAtMs)) {
         return "stale";
@@ -228,13 +210,13 @@ export async function applyWhatsAppPollVote(params: {
 /** Latest selection per voter; rows that share a JID collapse to the newest one. */
 export async function readWhatsAppPollTally(params: {
   record: WhatsAppPollRecord;
-  accountId: string;
+  account: WhatsAppPollAccount;
   pollMessageId: string;
   errors?: WhatsAppPollStoreErrorMode;
 }): Promise<WhatsAppPollTallyVoter[] | undefined> {
   const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
-  const accountId = params.accountId.trim();
-  if (!pollMessageId || !accountId) {
+  const scope = resolveWhatsAppPollScope(params.account);
+  if (!pollMessageId || !scope) {
     return undefined;
   }
   return await runWhatsAppPollStoreOperation<WhatsAppPollTallyVoter[] | undefined>({
@@ -248,7 +230,7 @@ export async function readWhatsAppPollTally(params: {
       if (typeof store?.entriesInKeyRange !== "function") {
         return undefined;
       }
-      const prefix = tallyPrefix(accountId, pollMessageId);
+      const prefix = buildWhatsAppPollTallyPrefix(scope, pollMessageId);
       const rows = await store.entriesInKeyRange(
         buildWhatsAppKeyPrefixRange(prefix, TALLY_READ_LIMIT),
       );

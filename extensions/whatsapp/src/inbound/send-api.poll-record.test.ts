@@ -14,6 +14,8 @@ import { createWebSendApi } from "./send-api.js";
 const SELF_PN = "15550000001@s.whatsapp.net";
 const SELF_LID = "11110000001@lid";
 const GROUP = "120363000000000001@g.us";
+const SELF = { jid: SELF_PN, lid: SELF_LID };
+const ACCOUNT = { accountId: "default", self: SELF };
 
 let env: WhatsAppPollStateRuntimeForTest;
 const sendMessage =
@@ -23,7 +25,7 @@ function createApi() {
   return createWebSendApi({
     sock: { sendMessage, sendPresenceUpdate: vi.fn(async () => {}) },
     defaultAccountId: "default",
-    selfJids: () => [SELF_PN, SELF_LID],
+    self: () => SELF,
   });
 }
 
@@ -58,7 +60,7 @@ describe("sendPoll records the sent poll", () => {
       maxSelections: 1,
     });
     expect(result.messageId).toBe("POLL1");
-    const record = await readWhatsAppPollRecord("default", "POLL1");
+    const record = await readWhatsAppPollRecord(ACCOUNT, "POLL1");
     expect(record).toMatchObject({
       origin: "sent",
       chatJids: [GROUP],
@@ -69,7 +71,7 @@ describe("sendPoll records the sent poll", () => {
     });
     expect(Buffer.from(record?.secret ?? "", "base64").equals(sentSecret())).toBe(true);
     expect(
-      await listWhatsAppChatPollIds({ accountId: "default", chatJids: [GROUP], limit: 3 }),
+      await listWhatsAppChatPollIds({ account: ACCOUNT, chatJids: [GROUP], limit: 3 }),
     ).toEqual([expect.objectContaining({ pollMessageId: "POLL1", origin: "sent" })]);
   });
 
@@ -78,7 +80,7 @@ describe("sendPoll records the sent poll", () => {
       key: { id: "POLL2", remoteJid: "99990000002@lid", fromMe: true },
     } as WAMessage);
     await createApi().sendPoll("+15550000002", { question: "Q?", options: ["a", "b"] });
-    expect((await readWhatsAppPollRecord("default", "POLL2"))?.chatJids).toEqual([
+    expect((await readWhatsAppPollRecord(ACCOUNT, "POLL2"))?.chatJids).toEqual([
       "15550000002@s.whatsapp.net",
       "99990000002@lid",
     ]);

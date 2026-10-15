@@ -3,6 +3,7 @@
 import type { proto, WAMessage } from "baileys";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { WhatsAppSelfIdentity } from "../identity.js";
 import { decodeWhatsAppPollVote } from "../poll-vote-decode.js";
 import {
   isTransientWhatsAppPollStoreError,
@@ -27,8 +28,11 @@ export type WhatsAppPollVoteResolution =
 
 export type WhatsAppPollVoteDeps = {
   accountId: string;
-  /** The account's own PN/LID JIDs: the voter of a fromMe vote, a creator candidate otherwise. */
-  selfJids: readonly (string | null | undefined)[];
+  /**
+   * The linked phone: owns the polls the vote may land on; its PN/LID JIDs are the
+   * voter of a fromMe vote and a creator candidate otherwise.
+   */
+  self: WhatsAppSelfIdentity | null | undefined;
   resolveInboundJid?: (jid: string) => Promise<string | null | undefined>;
 };
 
@@ -116,7 +120,9 @@ export async function resolveWhatsAppPollVote(
   if (!pollMessageId) {
     return { kind: "completed" };
   }
-  const record = await readWhatsAppPollRecord(deps.accountId, pollMessageId);
+  const account = { accountId: deps.accountId, self: deps.self };
+  const selfJids = [deps.self?.jid, deps.self?.lid];
+  const record = await readWhatsAppPollRecord(account, pollMessageId);
   if (!record) {
     logVerbose("whatsapp poll vote for an unknown poll; ignored");
     return { kind: "completed" };
@@ -126,7 +132,7 @@ export async function resolveWhatsAppPollVote(
   const fromMe = Boolean(key.fromMe);
   const voterJids = normalizeWhatsAppPollJids(
     fromMe
-      ? [key.participant, key.participantAlt, ...deps.selfJids]
+      ? [key.participant, key.participantAlt, ...selfJids]
       : group
         ? [key.participant, key.participantAlt]
         : [key.remoteJid, key.remoteJidAlt],
@@ -138,7 +144,7 @@ export async function resolveWhatsAppPollVote(
     creatorJids: [
       creationKey?.participant,
       (creationKey as WAMessageKeyWithAlt | undefined)?.participantAlt,
-      ...deps.selfJids,
+      ...selfJids,
     ],
     voterJids,
     chat: {
@@ -162,7 +168,7 @@ export async function resolveWhatsAppPollVote(
   try {
     applied = await applyWhatsAppPollVote({
       record,
-      accountId: deps.accountId,
+      account,
       pollMessageId,
       voter: {
         jids: voterJids,
@@ -191,6 +197,6 @@ export async function resolveWhatsAppPollVote(
   }
   return {
     kind: "deliver",
-    message: buildDerivedVoteMessage(msg, pollMessageId, record, decoded.selected, deps.selfJids),
+    message: buildDerivedVoteMessage(msg, pollMessageId, record, decoded.selected, selfJids),
   };
 }

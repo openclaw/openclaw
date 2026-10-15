@@ -4,12 +4,15 @@ import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
 } from "./inbound/durable-payload.js";
-import { WHATSAPP_POLL_TTL_MS, type WhatsAppPollRecord } from "./poll-vote-store.js";
+import {
+  WHATSAPP_POLL_TALLY_STORES,
+  WHATSAPP_POLL_TTL_MS,
+  type WhatsAppPollRecord,
+} from "./poll-vote-store.js";
 import {
   applyWhatsAppPollVote,
   normalizeWhatsAppPollVoteTimestampMs,
   readWhatsAppPollTally,
-  WHATSAPP_POLL_TALLY_STORES,
 } from "./poll-vote-tally-store.js";
 import {
   installWhatsAppPollStateRuntimeForTest,
@@ -18,10 +21,13 @@ import {
 
 const PN = "15550003333@s.whatsapp.net";
 const LID = "88880003333@lid";
+const ACCOUNT = { accountId: "default", self: { jid: "15550001111@s.whatsapp.net" } };
+const PREFIX = "default:+15550001111:";
 
 function pollRecord(overrides: Partial<WhatsAppPollRecord> = {}): WhatsAppPollRecord {
   return {
-    v: 1,
+    v: 2,
+    owner: { e164: "+15550001111" },
     origin: "sent",
     chatJids: ["120363000000000001@g.us"],
     creatorJids: [],
@@ -55,7 +61,7 @@ async function vote(params: {
 }) {
   return await applyWhatsAppPollVote({
     record: params.record ?? pollRecord(),
-    accountId: "default",
+    account: ACCOUNT,
     pollMessageId: params.pollMessageId ?? "POLL1",
     voter: { jids: params.jids, name: params.name },
     selected: params.selected,
@@ -64,7 +70,7 @@ async function vote(params: {
 }
 
 async function tally(record = pollRecord(), pollMessageId = "POLL1") {
-  return await readWhatsAppPollTally({ record, accountId: "default", pollMessageId });
+  return await readWhatsAppPollTally({ record, account: ACCOUNT, pollMessageId });
 }
 
 async function storedRows() {
@@ -96,7 +102,7 @@ describe("WhatsApp poll tally store", () => {
     expect(await tally()).toEqual([]);
     expect(await storedRows()).toEqual([
       {
-        key: `default:POLL1:${PN}`,
+        key: `${PREFIX}POLL1:${PN}`,
         value: { v: 1, voterJids: [PN], selected: [], votedAtMs: 3000 },
       },
     ]);
@@ -117,7 +123,7 @@ describe("WhatsApp poll tally store", () => {
     expect(await tally()).toEqual([]);
     expect(await storedRows()).toEqual([
       {
-        key: `default:POLL1:${PN}`,
+        key: `${PREFIX}POLL1:${PN}`,
         value: { v: 1, voterJids: [PN], selected: [], votedAtMs: 3000 },
       },
     ]);
@@ -156,7 +162,7 @@ describe("WhatsApp poll tally store", () => {
       votedAtMs: 2000,
     });
     const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
-    expect(rows.map((row) => row.key)).toEqual([`default:POLL1:${PN}`]);
+    expect(rows.map((row) => row.key)).toEqual([`${PREFIX}POLL1:${PN}`]);
     expect(await tally()).toEqual([
       expect.objectContaining({ voterKey: PN, voterJids: [PN, LID], selected: ["Sushi"] }),
     ]);
@@ -168,7 +174,7 @@ describe("WhatsApp poll tally store", () => {
     expect(await tally()).toEqual([]);
     expect(await storedRows()).toEqual([
       {
-        key: `default:POLL1:${PN}`,
+        key: `${PREFIX}POLL1:${PN}`,
         value: { v: 1, voterJids: [LID, PN], selected: [], votedAtMs: 2000 },
       },
     ]);
@@ -178,7 +184,7 @@ describe("WhatsApp poll tally store", () => {
     await vote({ jids: [PN, LID], selected: ["Sushi"], votedAtMs: 2000 });
     expect(await vote({ jids: [LID], selected: ["Pizza"], votedAtMs: 1000 })).toBe("stale");
     const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
-    expect(rows.map((row) => row.key)).toEqual([`default:POLL1:${PN}`]);
+    expect(rows.map((row) => row.key)).toEqual([`${PREFIX}POLL1:${PN}`]);
 
     expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe("applied");
     expect(await tally()).toEqual([]);
@@ -197,13 +203,13 @@ describe("WhatsApp poll tally store", () => {
 
   it("collapses older duplicate rows on read", async () => {
     const store = env.openStore(WHATSAPP_POLL_TALLY_STORES.sent);
-    await store.register(`default:POLL1:${LID}`, {
+    await store.register(`${PREFIX}POLL1:${LID}`, {
       v: 1,
       voterJids: [LID],
       selected: ["Pizza"],
       votedAtMs: 1000,
     });
-    await store.register(`default:POLL1:${PN}`, {
+    await store.register(`${PREFIX}POLL1:${PN}`, {
       v: 1,
       voterJids: [PN, LID],
       selected: ["Salad"],
@@ -221,7 +227,7 @@ describe("WhatsApp poll tally store", () => {
     const writeWindowMs = Date.now() - writeStartedAt;
     expect(await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries()).toEqual([]);
     const [row] = await env.openStore(WHATSAPP_POLL_TALLY_STORES.received).entries();
-    expect(row?.key).toBe(`default:POLL1:${PN}`);
+    expect(row?.key).toBe(`${PREFIX}POLL1:${PN}`);
     const drift = (row?.expiresAt ?? 0) - (recordedAt + WHATSAPP_POLL_TTL_MS);
     expect(drift).toBeGreaterThanOrEqual(0);
     expect(drift).toBeLessThanOrEqual(writeWindowMs);

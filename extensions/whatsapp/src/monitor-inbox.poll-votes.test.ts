@@ -6,6 +6,7 @@ import type { WebInboundMessage } from "./inbound/types.js";
 import {
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   startInboxMonitor,
@@ -14,13 +15,14 @@ import {
   waitForMessageCalls,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
+import { readWhatsAppPollResultsContext } from "./poll-results-context.js";
 import {
   readWhatsAppPollRecord,
   recordWhatsAppPoll,
   WHATSAPP_POLL_RECORD_STORES,
+  WHATSAPP_POLL_TALLY_STORES,
   type WhatsAppPollOrigin,
 } from "./poll-vote-store.js";
-import { WHATSAPP_POLL_TALLY_STORES } from "./poll-vote-tally-store.js";
 import {
   buildWhatsAppPollVoteMessageForTest,
   createWhatsAppPollStateForTest,
@@ -28,6 +30,9 @@ import {
 import { getOptionalWhatsAppRuntime, setWhatsAppRuntime } from "./runtime.js";
 
 const SELF = "123@s.whatsapp.net";
+// The harness socket is linked as SELF; poll state lives under its number.
+const ACCOUNT = { accountId: DEFAULT_ACCOUNT_ID, self: { jid: SELF } };
+const PREFIX = "default:+123:";
 const DM = "15550002222@s.whatsapp.net";
 const GROUP = "120363000000000001@g.us";
 const MEMBER = "15550003333@s.whatsapp.net";
@@ -73,7 +78,7 @@ async function addPoll(params: {
 }) {
   await recordWhatsAppPoll(
     {
-      accountId: DEFAULT_ACCOUNT_ID,
+      account: ACCOUNT,
       pollMessageId: params.id ?? "POLL1",
       origin: params.origin,
       chatJids: [params.chatJid],
@@ -148,7 +153,7 @@ describe("web monitor inbox poll votes", () => {
     expect(inbound.platform.chatJid).toBe(DM);
     expect(inbound.quote?.id).toBe("POLL1");
     expect(inbound.quote?.body).toBe("Pizza or sushi?\n- Pizza\n- Sushi");
-    expect(await tallyKeys("sent")).toEqual([`default:POLL1:${DM}`]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${DM}`]);
     await listener.close();
   });
 
@@ -158,7 +163,7 @@ describe("web monitor inbox poll votes", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     await emit(sock, groupVote());
     expect(onMessage).not.toHaveBeenCalled();
-    expect(await tallyKeys("sent")).toEqual([`default:POLL1:${MEMBER}`]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${MEMBER}`]);
     await listener.close();
   });
 
@@ -171,7 +176,7 @@ describe("web monitor inbox poll votes", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sock.sendMessage).not.toHaveBeenCalled();
-    expect(await tallyKeys("sent")).toEqual([`default:POLL1:${MEMBER}`]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${MEMBER}`]);
     await listener.close();
   });
 
@@ -181,7 +186,7 @@ describe("web monitor inbox poll votes", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     await emit(sock, vote({ pollCreatorJid: DM }));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(await tallyKeys("received")).toEqual([`default:POLL1:${DM}`]);
+    expect(await tallyKeys("received")).toEqual([`${PREFIX}POLL1:${DM}`]);
     await listener.close();
   });
 
@@ -215,7 +220,7 @@ describe("web monitor inbox poll votes", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     await emit(sock, groupVote({ participant: lid, voterJid: lid }));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(await tallyKeys("sent")).toEqual([`default:POLL1:${lid}`]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${lid}`]);
     await listener.close();
   });
 
@@ -237,8 +242,34 @@ describe("web monitor inbox poll votes", () => {
     });
     await emit(restarted.sock, message);
     expect(second).not.toHaveBeenCalled();
-    expect(await tallyKeys("sent")).toEqual([`default:POLL1:${DM}`]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${DM}`]);
     await restarted.listener.close();
+  });
+
+  it("(h2) ignores the old phone's polls after a different phone is linked under the same account", async () => {
+    await addPoll({ origin: "sent", chatJid: DM });
+    const first = vi.fn();
+    const linkedA = await startInboxMonitor(first as InboxOnMessage);
+    await emit(linkedA.sock, vote());
+    await waitForMessageCalls(first, 1);
+    await linkedA.listener.close();
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${DM}`]);
+
+    getSock().user = { id: "999@s.whatsapp.net" };
+    const second = vi.fn();
+    const linkedB = await startInboxMonitor(second as InboxOnMessage);
+    await emit(linkedB.sock, vote({ selectedOptions: ["Pizza"] }), textMessage(DM, "after"));
+    await waitForMessageCalls(second, 1);
+    expect(bodies(second)).toEqual(["after"]);
+    expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${DM}`]);
+    const relinked = { accountId: DEFAULT_ACCOUNT_ID, self: { jid: "999@s.whatsapp.net" } };
+    expect(
+      await readWhatsAppPollResultsContext({ account: relinked, chatJids: [DM] }),
+    ).toBeUndefined();
+    expect(
+      (await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [DM] }))?.payload.polls,
+    ).toMatchObject([{ poll_id: "POLL1", options: [{ votes: 0 }, { votes: 1 }] }]);
+    await linkedB.listener.close();
   });
 
   it("(i) replays a vote after a transient record read failure and delivers it exactly once", async () => {
@@ -282,7 +313,7 @@ describe("web monitor inbox poll votes", () => {
       expect(onMessage).toHaveBeenCalledTimes(1);
       expect(bodies(onMessage)).toEqual(["Poll vote: Sushi"]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await tallyKeys("sent")).toEqual([`default:POLL1:${DM}`]);
+      expect(await tallyKeys("sent")).toEqual([`${PREFIX}POLL1:${DM}`]);
       await listener.close();
     } finally {
       vi.useRealTimers();
@@ -378,7 +409,7 @@ describe("web monitor inbox incoming poll records", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     await emit(sock, pollMessage({ id: "INPOLL", remoteJid: DM }));
     await waitForMessageCalls(onMessage, 1);
-    expect(await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "INPOLL")).toMatchObject({
+    expect(await readWhatsAppPollRecord(ACCOUNT, "INPOLL")).toMatchObject({
       origin: "received",
       chatJids: [DM],
       creatorJids: [DM],
@@ -386,7 +417,7 @@ describe("web monitor inbox incoming poll records", () => {
     });
     await emit(sock, vote({ pollMsgId: "INPOLL", pollCreatorJid: DM }));
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(await tallyKeys("received")).toEqual([`default:INPOLL:${DM}`]);
+    expect(await tallyKeys("received")).toEqual([`${PREFIX}INPOLL:${DM}`]);
     await listener.close();
   });
 
@@ -404,8 +435,8 @@ describe("web monitor inbox incoming poll records", () => {
       pollMessage({ id: "DMPOLL", remoteJid: DM }),
       pollMessage({ id: "GRPOLL", remoteJid: GROUP, participant: MEMBER }),
     );
-    expect(await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "DMPOLL")).toBeUndefined();
-    expect(await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "GRPOLL")).toBeUndefined();
+    expect(await readWhatsAppPollRecord(ACCOUNT, "DMPOLL")).toBeUndefined();
+    expect(await readWhatsAppPollRecord(ACCOUNT, "GRPOLL")).toBeUndefined();
     await listener.close();
   });
 
@@ -413,11 +444,11 @@ describe("web monitor inbox incoming poll records", () => {
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     await emit(sock, pollMessage({ id: "TWICE", remoteJid: DM }));
-    const first = await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "TWICE");
+    const first = await readWhatsAppPollRecord(ACCOUNT, "TWICE");
     await emit(sock, { ...pollMessage({ id: "TWICE", remoteJid: DM }), pushName: "Other" });
     const rows = await pollState.openStore(WHATSAPP_POLL_RECORD_STORES.received).entries();
     expect(rows).toHaveLength(1);
-    expect(await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "TWICE")).toEqual(first);
+    expect(await readWhatsAppPollRecord(ACCOUNT, "TWICE")).toEqual(first);
     await listener.close();
   });
 
@@ -445,7 +476,7 @@ describe("web monitor inbox incoming poll records", () => {
     await waitForMessageCalls(onMessage, 1);
     expect(pollState.logger.warn).toHaveBeenCalledTimes(1);
     expect(pollState.logger.warn).toHaveBeenCalledWith("whatsapp inbound poll missing secret", {});
-    expect(await readWhatsAppPollRecord(DEFAULT_ACCOUNT_ID, "NOSECRET")).toBeUndefined();
+    expect(await readWhatsAppPollRecord(ACCOUNT, "NOSECRET")).toBeUndefined();
     await listener.close();
   });
 

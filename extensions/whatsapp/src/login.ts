@@ -98,6 +98,7 @@ export async function loginWeb(
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
     const result = await waitForWhatsAppLoginResult({
+      accountId: account.accountId,
       sock,
       authDir: account.authDir,
       isLegacyAuthDir: account.isLegacyAuthDir,

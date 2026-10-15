@@ -511,6 +511,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/whatsapp/src/monitor-inbox.poll-votes.test.ts",
   "extensions/whatsapp/src/poll-results-context.test.ts",
   "extensions/whatsapp/src/poll-vote-store.test.ts",
+  "extensions/whatsapp/src/poll-vote-store.retire.test.ts",
   "extensions/whatsapp/src/poll-vote-tally-store.test.ts",
   "extensions/whatsapp/src/send.delivery-recovery.test.ts",
   "extensions/zalo/src/monitor.polling-lifecycle.test.ts",

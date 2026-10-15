@@ -1,6 +1,7 @@
 // Extracts what a later vote needs from an incoming WhatsApp poll, and records it.
 import { isJidGroup, type WAMessage } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { WhatsAppSelfIdentity } from "../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import {
   normalizeWhatsAppPollJids,
@@ -111,6 +112,8 @@ export function extractWhatsAppInboundPollRecord(
 export async function recordWhatsAppInboundPoll(params: {
   cfg: OpenClawConfig;
   accountId: string;
+  /** The linked phone; the record belongs to it. */
+  self: WhatsAppSelfIdentity | null | undefined;
   msg: Pick<WAMessage, "key" | "message" | "pushName">;
   group: boolean;
   remoteJid: string;
@@ -136,7 +139,7 @@ export async function recordWhatsAppInboundPoll(params: {
     }
     await recordWhatsAppPoll(
       {
-        accountId: params.accountId,
+        account: { accountId: params.accountId, self: params.self },
         pollMessageId: params.msg.key?.id ?? "",
         origin: "received",
         ...extracted,

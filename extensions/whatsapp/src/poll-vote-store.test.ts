@@ -17,10 +17,13 @@ import * as runtimeModule from "./runtime.js";
 
 const HOME = "120363000000000001@g.us";
 const OTHER = "120363000000000002@g.us";
+const SELF = { jid: "15550001111@s.whatsapp.net" };
+const ACCOUNT = { accountId: "default", self: SELF };
+const PREFIX = "default:+15550001111:";
 
 function pollInput(overrides: Partial<WhatsAppPollRecordInput> = {}): WhatsAppPollRecordInput {
   return {
-    accountId: "default",
+    account: ACCOUNT,
     pollMessageId: "POLL1",
     origin: "sent",
     chatJids: [HOME],
@@ -61,8 +64,9 @@ describe("WhatsApp poll record store", () => {
       ),
     ).toBe(true);
 
-    expect(await readWhatsAppPollRecord("default", "POLL1")).toEqual({
-      v: 1,
+    expect(await readWhatsAppPollRecord(ACCOUNT, "POLL1")).toEqual({
+      v: 2,
+      owner: { e164: "+15550001111", jid: "15550001111@s.whatsapp.net" },
       origin: "sent",
       chatJids: [HOME],
       creatorJids: ["15550001111@s.whatsapp.net"],
@@ -72,15 +76,15 @@ describe("WhatsApp poll record store", () => {
       selectableCount: 1,
       recordedAt,
     });
-    expect(await readWhatsAppPollRecord("default", "POLL2")).toMatchObject({
+    expect(await readWhatsAppPollRecord(ACCOUNT, "POLL2")).toMatchObject({
       origin: "received",
       creatorName: "Dana",
     });
 
     const sentRows = await env.openStore(WHATSAPP_POLL_RECORD_STORES.sent).entries();
     const receivedRows = await env.openStore(WHATSAPP_POLL_RECORD_STORES.received).entries();
-    expect(sentRows.map((row) => row.key)).toEqual(["default:POLL1"]);
-    expect(receivedRows.map((row) => row.key)).toEqual(["default:POLL2"]);
+    expect(sentRows.map((row) => row.key)).toEqual([`${PREFIX}POLL1`]);
+    expect(receivedRows.map((row) => row.key)).toEqual([`${PREFIX}POLL2`]);
   });
 
   it("(a) keeps an old sent poll readable after 2001 incoming polls", async () => {
@@ -90,10 +94,10 @@ describe("WhatsApp poll record store", () => {
     });
     const received = env.openStore(WHATSAPP_POLL_RECORD_STORES.received);
     for (let index = 0; index < 2001; index++) {
-      await received.register(`default:IN${index}`, { flood: index });
+      await received.register(`${PREFIX}IN${index}`, { flood: index });
     }
     expect(await received.count()).toBe(2000);
-    expect(await readWhatsAppPollRecord("default", "OURS")).toMatchObject({ origin: "sent" });
+    expect(await readWhatsAppPollRecord(ACCOUNT, "OURS")).toMatchObject({ origin: "sent" });
   });
 
   it("(a) keeps the agent's poll in the chat index after more than 8000 incoming index rows", async () => {
@@ -103,24 +107,76 @@ describe("WhatsApp poll record store", () => {
     });
     const receivedIndex = env.openStore(WHATSAPP_POLL_CHAT_INDEX_STORES.received);
     for (let index = 0; index < 8001; index++) {
-      await receivedIndex.register(`default:${OTHER}:${String(now).padStart(13, "0")}:IN${index}`, {
-        v: 1,
-        pollMessageId: `IN${index}`,
-        origin: "received",
-      });
+      await receivedIndex.register(
+        `${PREFIX}${OTHER}:${String(now).padStart(13, "0")}:IN${index}`,
+        {
+          v: 1,
+          pollMessageId: `IN${index}`,
+          origin: "received",
+        },
+      );
     }
     expect(await receivedIndex.count()).toBe(8000);
-    expect(
-      await listWhatsAppChatPollIds({ accountId: "default", chatJids: [HOME], limit: 3 }),
-    ).toEqual([{ pollMessageId: "OURS", origin: "sent", recordedAt: now - 1000 }]);
+    expect(await listWhatsAppChatPollIds({ account: ACCOUNT, chatJids: [HOME], limit: 3 })).toEqual(
+      [{ pollMessageId: "OURS", origin: "sent", recordedAt: now - 1000 }],
+    );
   }, 120_000);
+
+  it("binds polls to the linked phone: another number under the same account sees nothing", async () => {
+    await recordWhatsAppPoll(pollInput(), { mode: "overwrite" });
+    const relinked = { accountId: "default", self: { jid: "15550009999@s.whatsapp.net" } };
+    expect(await readWhatsAppPollRecord(relinked, "POLL1")).toBeUndefined();
+    expect(
+      await listWhatsAppChatPollIds({ account: relinked, chatJids: [HOME], limit: 3 }),
+    ).toEqual([]);
+
+    // Same number after a restart: another device suffix and a newly learned LID.
+    const restarted = {
+      accountId: "default",
+      self: { jid: "15550001111:7@s.whatsapp.net", lid: "88880001111@lid" },
+    };
+    expect(await readWhatsAppPollRecord(restarted, "POLL1")).toMatchObject({ origin: "sent" });
+    expect(
+      await listWhatsAppChatPollIds({ account: restarted, chatJids: [HOME], limit: 3 }),
+    ).toHaveLength(1);
+  });
+
+  it("records and reads nothing without a linked phone identity", async () => {
+    const unlinked = { accountId: "default", self: null };
+    expect(await recordWhatsAppPoll(pollInput({ account: unlinked }), { mode: "overwrite" })).toBe(
+      false,
+    );
+    expect(env.opened.size).toBe(0);
+    await recordWhatsAppPoll(pollInput(), { mode: "overwrite" });
+    expect(await readWhatsAppPollRecord(unlinked, "POLL1")).toBeUndefined();
+  });
+
+  it("drops a stored record whose owner is not the reading phone", async () => {
+    await env.openStore(WHATSAPP_POLL_RECORD_STORES.sent).register(`${PREFIX}POLL1`, {
+      v: 2,
+      owner: { e164: "+15550009999" },
+      origin: "sent",
+      chatJids: [HOME],
+      creatorJids: [],
+      question: "Pizza or sushi?",
+      secret: Buffer.from(new Uint8Array(32).fill(7)).toString("base64"),
+      options: ["Pizza", "Sushi"],
+      selectableCount: 1,
+      recordedAt: Date.now(),
+    });
+    expect(await readWhatsAppPollRecord(ACCOUNT, "POLL1")).toBeUndefined();
+    expect(env.logger.warn).toHaveBeenCalledWith("whatsapp poll record skipped", {
+      code: "owner-mismatch",
+    });
+  });
 
   it("isolates accounts and does not overwrite in ifAbsent mode", async () => {
     await recordWhatsAppPoll(pollInput(), { mode: "overwrite" });
-    expect(await readWhatsAppPollRecord("work", "POLL1")).toBeUndefined();
-    expect(
-      await listWhatsAppChatPollIds({ accountId: "work", chatJids: [HOME], limit: 3 }),
-    ).toEqual([]);
+    const work = { accountId: "work", self: SELF };
+    expect(await readWhatsAppPollRecord(work, "POLL1")).toBeUndefined();
+    expect(await listWhatsAppChatPollIds({ account: work, chatJids: [HOME], limit: 3 })).toEqual(
+      [],
+    );
 
     await recordWhatsAppPoll(pollInput({ origin: "received", pollMessageId: "IN1" }), {
       mode: "ifAbsent",
@@ -131,7 +187,7 @@ describe("WhatsApp poll record store", () => {
         { mode: "ifAbsent" },
       ),
     ).toBe(false);
-    expect(await readWhatsAppPollRecord("default", "IN1")).toMatchObject({
+    expect(await readWhatsAppPollRecord(ACCOUNT, "IN1")).toMatchObject({
       question: "Pizza or sushi?",
     });
   });
@@ -166,13 +222,13 @@ describe("WhatsApp poll record store", () => {
     const indexRows = await env.openStore(WHATSAPP_POLL_CHAT_INDEX_STORES.sent).entries();
     expect(indexRows.map((row) => row.key).toSorted()).toEqual(
       [
-        `default:15550002222@s.whatsapp.net:${String(base).padStart(13, "0")}:A`,
-        `default:777@lid:${String(base).padStart(13, "0")}:A`,
-        `default:777@lid:${String(base + 2).padStart(13, "0")}:C`,
+        `${PREFIX}15550002222@s.whatsapp.net:${String(base).padStart(13, "0")}:A`,
+        `${PREFIX}777@lid:${String(base).padStart(13, "0")}:A`,
+        `${PREFIX}777@lid:${String(base + 2).padStart(13, "0")}:C`,
       ].toSorted(),
     );
     const listed = await listWhatsAppChatPollIds({
-      accountId: "default",
+      account: ACCOUNT,
       chatJids: ["15550002222@s.whatsapp.net", "777@lid"],
       limit: 3,
     });
@@ -180,7 +236,7 @@ describe("WhatsApp poll record store", () => {
     expect(
       (
         await listWhatsAppChatPollIds({
-          accountId: "default",
+          account: ACCOUNT,
           chatJids: ["15550002222@s.whatsapp.net", "777@lid"],
           limit: 2,
         })
@@ -204,7 +260,7 @@ describe("WhatsApp poll record store", () => {
     expect(
       await recordWhatsAppPoll(pollInput({ chatJids: [longChat] }), { mode: "overwrite" }),
     ).toBe(true);
-    expect(await readWhatsAppPollRecord("default", "POLL1")).toBeDefined();
+    expect(await readWhatsAppPollRecord(ACCOUNT, "POLL1")).toBeDefined();
     expect(await env.openStore(WHATSAPP_POLL_CHAT_INDEX_STORES.sent).entries()).toEqual([]);
   });
 
@@ -218,9 +274,7 @@ describe("WhatsApp poll record store", () => {
       method: "lookup",
       code,
     });
-    const error = await readWhatsAppPollRecord("default", "POLL1").catch(
-      (caught: unknown) => caught,
-    );
+    const error = await readWhatsAppPollRecord(ACCOUNT, "POLL1").catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code });
     expect(error).not.toBeInstanceOf(WhatsAppIngressPermanentError);
     expect(env.logger.warn).not.toHaveBeenCalled();
@@ -234,7 +288,7 @@ describe("WhatsApp poll record store", () => {
         method: "lookup",
         code,
       });
-      expect(await readWhatsAppPollRecord("default", "POLL1")).toBeUndefined();
+      expect(await readWhatsAppPollRecord(ACCOUNT, "POLL1")).toBeUndefined();
       expect(env.logger.warn).toHaveBeenCalledTimes(1);
       expect(env.logger.warn).toHaveBeenCalledWith("whatsapp poll store read failed", {
         code: code ?? "unknown",
@@ -244,7 +298,9 @@ describe("WhatsApp poll record store", () => {
 
   it("(b) classifies a real store PLUGIN_STATE_INVALID_INPUT as permanent", async () => {
     // A 600-byte account id makes the real store reject the 512-byte key limit itself.
-    expect(await readWhatsAppPollRecord("a".repeat(600), "POLL1")).toBeUndefined();
+    expect(
+      await readWhatsAppPollRecord({ accountId: "a".repeat(600), self: SELF }, "POLL1"),
+    ).toBeUndefined();
     expect(env.logger.warn).toHaveBeenCalledTimes(1);
     expect(env.logger.warn).toHaveBeenCalledWith("whatsapp poll store read failed", {
       code: "PLUGIN_STATE_INVALID_INPUT",
@@ -253,7 +309,7 @@ describe("WhatsApp poll record store", () => {
 
   it("(c) keeps empty and over-128-byte poll ids away from storage", async () => {
     for (const id of ["x".repeat(600), "x".repeat(129), "   ", ""]) {
-      expect(await readWhatsAppPollRecord("default", id)).toBeUndefined();
+      expect(await readWhatsAppPollRecord(ACCOUNT, id)).toBeUndefined();
       expect(
         await recordWhatsAppPoll(pollInput({ pollMessageId: id }), { mode: "overwrite" }),
       ).toBe(false);
@@ -264,36 +320,38 @@ describe("WhatsApp poll record store", () => {
     expect(
       await recordWhatsAppPoll(pollInput({ pollMessageId: id128 }), { mode: "overwrite" }),
     ).toBe(true);
-    expect(await readWhatsAppPollRecord("default", id128)).toBeDefined();
+    expect(await readWhatsAppPollRecord(ACCOUNT, id128)).toBeDefined();
   });
 
   it("(c) keeps a peer-chosen poll id from reaching another account's keys", async () => {
-    await recordWhatsAppPoll(pollInput({ accountId: "a:b", pollMessageId: "X" }), {
+    const a = { accountId: "a", self: SELF };
+    const ab = { accountId: "a:b", self: SELF };
+    await recordWhatsAppPoll(pollInput({ account: ab, pollMessageId: "X" }), {
       mode: "overwrite",
     });
-    expect(await readWhatsAppPollRecord("a", "b:X")).toBeUndefined();
+    expect(await readWhatsAppPollRecord(a, "b:X")).toBeUndefined();
     expect(
-      await recordWhatsAppPoll(pollInput({ accountId: "a", pollMessageId: "b:Y" }), {
+      await recordWhatsAppPoll(pollInput({ account: a, pollMessageId: "b:Y" }), {
         mode: "overwrite",
       }),
     ).toBe(false);
-    expect(await readWhatsAppPollRecord("a:b", "Y")).toBeUndefined();
+    expect(await readWhatsAppPollRecord(ab, "Y")).toBeUndefined();
     const rows = await env.openStore(WHATSAPP_POLL_RECORD_STORES.sent).entries();
-    expect(rows.map((row) => row.key)).toEqual(["a%3Ab:X"]);
+    expect(rows.map((row) => row.key)).toEqual(["a%3Ab:+15550001111:X"]);
   });
 
   it("returns undefined or false when the runtime is missing", async () => {
     vi.spyOn(runtimeModule, "getOptionalWhatsAppRuntime").mockReturnValue(null);
     expect(await recordWhatsAppPoll(pollInput(), { mode: "overwrite" })).toBe(false);
-    expect(await readWhatsAppPollRecord("default", "POLL1")).toBeUndefined();
-    expect(
-      await listWhatsAppChatPollIds({ accountId: "default", chatJids: [HOME], limit: 3 }),
-    ).toEqual([]);
+    expect(await readWhatsAppPollRecord(ACCOUNT, "POLL1")).toBeUndefined();
+    expect(await listWhatsAppChatPollIds({ account: ACCOUNT, chatJids: [HOME], limit: 3 })).toEqual(
+      [],
+    );
   });
 
   it("truncates the question at a character boundary", async () => {
     await recordWhatsAppPoll(pollInput({ question: "ש".repeat(600) }), { mode: "overwrite" });
-    const record = await readWhatsAppPollRecord("default", "POLL1");
+    const record = await readWhatsAppPollRecord(ACCOUNT, "POLL1");
     expect(record?.question).toBe("ש".repeat(512));
   });
 });

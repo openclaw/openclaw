@@ -305,8 +305,23 @@ async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirO
   return { kind: "owned", authDir: resolvedAuthDir };
 }
 
+async function retireWebPollState(accountId: string, runtime: RuntimeEnv): Promise<void> {
+  // Poll secrets and voter names belong to the phone whose credentials were just removed.
+  try {
+    const { retireWhatsAppPollState } = await import("./poll-vote-store.js");
+    if (await retireWhatsAppPollState({ accountId })) {
+      return;
+    }
+  } catch {
+    // Fall through: logout already succeeded, and the rows still expire.
+  }
+  runtime.log(info("WhatsApp poll state was not cleared here; it expires within 30 days."));
+}
+
 export async function logoutWeb(params: {
   authDir?: string;
+  /** Also retires this account's stored poll state once the credentials are gone. */
+  accountId?: string;
   isLegacyAuthDir?: boolean;
   runtime?: RuntimeEnv;
   beforeCredentialPersistence?: () => Promise<void>;
@@ -351,6 +366,9 @@ export async function logoutWeb(params: {
     }
   }
   runtime.log(success("Cleared WhatsApp Web credentials."));
+  if (params.accountId) {
+    await retireWebPollState(params.accountId, runtime);
+  }
   return true;
 }
 

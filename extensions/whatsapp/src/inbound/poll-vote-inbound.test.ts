@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordWhatsAppPoll,
   WHATSAPP_POLL_RECORD_STORES,
+  WHATSAPP_POLL_TALLY_STORES,
   type WhatsAppPollOrigin,
 } from "../poll-vote-store.js";
-import { readWhatsAppPollTally, WHATSAPP_POLL_TALLY_STORES } from "../poll-vote-tally-store.js";
+import { readWhatsAppPollTally } from "../poll-vote-tally-store.js";
 import {
   buildWhatsAppPollVoteMessageForTest,
   hashWhatsAppPollOptionForTest,
@@ -21,7 +22,10 @@ const GROUP = "120363000000000001@g.us";
 const DM = "15550002222@s.whatsapp.net";
 const MEMBER = "15550003333@s.whatsapp.net";
 const SECRET = new Uint8Array(32).fill(7);
-const deps = { accountId: "default", selfJids: [SELF_PN, SELF_LID] };
+const SELF = { jid: SELF_PN, lid: SELF_LID };
+const ACCOUNT = { accountId: "default", self: SELF };
+const PREFIX = "default:+15550000001:";
+const deps = { accountId: "default", self: SELF };
 
 let env: WhatsAppPollStateRuntimeForTest;
 
@@ -42,7 +46,7 @@ async function addPoll(params: {
 }) {
   await recordWhatsAppPoll(
     {
-      accountId: "default",
+      account: ACCOUNT,
       pollMessageId: params.id ?? "POLL1",
       origin: params.origin,
       chatJids: [params.chatJid],
@@ -100,7 +104,7 @@ describe("resolveWhatsAppPollVote", () => {
       const msg = groupVote({ pollCreatorJid: origin === "sent" ? SELF_PN : MEMBER });
       expect(await resolveWhatsAppPollVote(msg, deps)).toEqual({ kind: "completed" });
       const rows = await tallyRows(origin);
-      expect(rows.map((row) => row.key)).toEqual([`default:POLL1:${MEMBER}`]);
+      expect(rows.map((row) => row.key)).toEqual([`${PREFIX}POLL1:${MEMBER}`]);
       expect(rows[0]?.value).toMatchObject({ name: "Dana", selected: ["Sushi"] });
       expect(env.logger.warn).not.toHaveBeenCalled();
     },
@@ -130,7 +134,7 @@ describe("resolveWhatsAppPollVote", () => {
     expect(reply?.body).toBe("Pizza or sushi?\n- Pizza\n- Sushi");
     expect(getWhatsAppPollVoteMeta(derived)).toEqual({ pollMessageId: "POLL1" });
     expect(getWhatsAppPollVoteMeta(msg)).toBeUndefined();
-    expect((await tallyRows("sent")).map((row) => row.key)).toEqual([`default:POLL1:${DM}`]);
+    expect((await tallyRows("sent")).map((row) => row.key)).toEqual([`${PREFIX}POLL1:${DM}`]);
   });
 
   it("delivers a retraction as Poll vote removed and deletes the voter", async () => {
@@ -197,7 +201,7 @@ describe("resolveWhatsAppPollVote", () => {
     await addPoll({ origin: "sent", chatJid: DM });
     const msg = voteMessage({ fromMe: true, voterJid: SELF_PN });
     expect(await resolveWhatsAppPollVote(msg, deps)).toEqual({ kind: "completed" });
-    expect((await tallyRows("sent")).map((row) => row.key)).toEqual([`default:POLL1:${SELF_PN}`]);
+    expect((await tallyRows("sent")).map((row) => row.key)).toEqual([`${PREFIX}POLL1:${SELF_PN}`]);
   });
 
   it("decodes a vote on a linked-phone poll whose record has no creator JID", async () => {
@@ -210,6 +214,15 @@ describe("resolveWhatsAppPollVote", () => {
 
   it("completes a vote on an unknown poll silently, without a tally row", async () => {
     expect(await resolveWhatsAppPollVote(voteMessage(), deps)).toEqual({ kind: "completed" });
+    expect(await tallyRows("sent")).toEqual([]);
+    expect(env.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("ignores a vote on a poll another phone recorded under the same account", async () => {
+    await addPoll({ origin: "sent", chatJid: DM });
+    const relinked = { accountId: "default", self: { jid: "15550009999@s.whatsapp.net" } };
+    // Encrypted for the old phone's poll; the new phone must neither decode nor count it.
+    expect(await resolveWhatsAppPollVote(voteMessage(), relinked)).toEqual({ kind: "completed" });
     expect(await tallyRows("sent")).toEqual([]);
     expect(env.logger.warn).not.toHaveBeenCalled();
   });
@@ -310,7 +323,7 @@ describe("resolveWhatsAppPollVote", () => {
     const [voter] =
       (await readWhatsAppPollTally({
         record: (record as { value: never }).value,
-        accountId: "default",
+        account: ACCOUNT,
         pollMessageId: "POLL1",
       })) ?? [];
     expect(voter).toMatchObject({ e164: "+15550003333", name: "Dana" });

@@ -13,7 +13,8 @@ const VOTER_LID = "11110000002@lid";
 
 function record(overrides: Partial<WhatsAppPollRecord> = {}): WhatsAppPollRecord {
   return {
-    v: 1,
+    v: 2,
+    owner: { jid: AGENT_PN, lid: AGENT_LID },
     origin: "sent",
     chatJids: [GROUP],
     creatorJids: [AGENT_PN, AGENT_LID],

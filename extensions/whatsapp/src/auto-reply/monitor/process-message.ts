@@ -404,6 +404,7 @@ export async function processMessage(params: {
     groupSystemPrompt: conversationSystemPrompt,
     // Stored poll results for this chat only; a copy, so broadcast agents never stack blocks.
     msg: await attachWhatsAppPollResultsContext(params.msg, {
+      self,
       filterVoters: (voters) => resolveVisibleWhatsAppPollVoters({ ...pollVisibility, voters }),
       isCreatorVisible: (record) =>
         isWhatsAppPollCreatorVisible({ ...pollVisibility, creatorJids: record.creatorJids }),

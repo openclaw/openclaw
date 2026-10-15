@@ -1,4 +1,5 @@
 // Builds the stored poll results block for one chat, attached when the agent is woken there.
+import type { WhatsAppSelfIdentity } from "./identity.js";
 import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import {
@@ -7,6 +8,7 @@ import {
   readPluginStateErrorCode,
   readWhatsAppPollRecord,
   warnWhatsAppPollState,
+  type WhatsAppPollAccount,
   type WhatsAppPollRecord,
 } from "./poll-vote-store.js";
 import { readWhatsAppPollTally, type WhatsAppPollTallyVoter } from "./poll-vote-tally-store.js";
@@ -137,12 +139,13 @@ function fitPayload(polls: WhatsAppPollResultsPoll[]): WhatsAppPollResultsPoll[]
 }
 
 /**
- * Reads only the queued message's own chat and account; nothing the model
- * controls selects the chat, so voter names never cross into another chat.
+ * Reads only the queued message's own chat, account and linked phone; nothing
+ * the model controls selects the chat, so voter names never cross into another
+ * chat, and polls recorded by a previously linked phone never reach this one.
  * Never throws: any failure yields no block and one warning carrying the code.
  */
 export async function readWhatsAppPollResultsContext(params: {
-  accountId: string;
+  account: WhatsAppPollAccount;
   chatJids: readonly (string | null | undefined)[];
   filterVoters?: WhatsAppPollVoterFilter;
   isCreatorVisible?: WhatsAppPollCreatorFilter;
@@ -150,7 +153,7 @@ export async function readWhatsAppPollResultsContext(params: {
   try {
     const chatJids = new Set(normalizeWhatsAppPollJids(params.chatJids));
     const ids = await listWhatsAppChatPollIds({
-      accountId: params.accountId,
+      account: params.account,
       chatJids: [...chatJids],
       limit: INDEX_READ_LIMIT,
       errors: "throw",
@@ -160,19 +163,20 @@ export async function readWhatsAppPollResultsContext(params: {
       if (polls.length >= MAX_POLLS) {
         break;
       }
-      const record = await readWhatsAppPollRecord(params.accountId, pollMessageId, {
+      const record = await readWhatsAppPollRecord(params.account, pollMessageId, {
         errors: "throw",
       });
       if (!record || !record.chatJids.some((jid) => chatJids.has(jid))) {
         continue;
       }
-      // A hidden creator takes the whole poll with them; the assistant's own polls always show.
+      // A hidden creator takes the whole poll with them. A sent poll was read under the
+      // linked phone's own keys, so it is this assistant's and always shows.
       if (record.origin === "received" && params.isCreatorVisible?.(record) === false) {
         continue;
       }
       const tally = await readWhatsAppPollTally({
         record,
-        accountId: params.accountId,
+        account: params.account,
         pollMessageId,
         errors: "throw",
       });
@@ -201,16 +205,18 @@ export async function readWhatsAppPollResultsContext(params: {
  * message itself when there is none. Broadcast agents share the original
  * object, so it is never mutated. Direct chats also look up the PN JID derived
  * from the conversation's E.164, since the chat may arrive under a LID.
- * Callers pass the voter and creator filters for the chat's context visibility policy.
+ * Callers pass the linked phone, and the voter and creator filters for the
+ * chat's context visibility policy.
  */
 export async function attachWhatsAppPollResultsContext(
   msg: AdmittedWebInboundMessage,
-  visibility: WhatsAppPollVisibility,
+  params: WhatsAppPollVisibility & { self: WhatsAppSelfIdentity | null | undefined },
 ): Promise<AdmittedWebInboundMessage> {
   const admission = requireWhatsAppInboundAdmission(msg);
   const digits = /^\+(\d+)$/.exec(admission.conversation.id)?.[1];
+  const { self, ...visibility } = params;
   const entry = await readWhatsAppPollResultsContext({
-    accountId: admission.accountId,
+    account: { accountId: admission.accountId, self },
     chatJids: [
       msg.platform.chatJid,
       admission.conversation.kind === "direct" && digits ? `${digits}@s.whatsapp.net` : undefined,

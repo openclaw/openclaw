@@ -5,12 +5,31 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  identitiesOverlap,
+  resolveComparableIdentity,
+  type WhatsAppSelfIdentity,
+} from "./identity.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 export type WhatsAppPollOrigin = "sent" | "received";
 
+/** The linked phone a poll was recorded under; never the reusable account slot. */
+export type WhatsAppPollOwner = { e164?: string; jid?: string; lid?: string };
+
+/**
+ * Where poll state lives: the configured account plus the phone currently
+ * linked to it. A different phone relinked under the same account id reads
+ * and writes a disjoint key space.
+ */
+export type WhatsAppPollAccount = {
+  accountId: string;
+  self: WhatsAppSelfIdentity | null | undefined;
+};
+
 export type WhatsAppPollRecord = {
-  v: 1;
+  v: 2;
+  owner: WhatsAppPollOwner;
   origin: WhatsAppPollOrigin;
   chatJids: string[];
   creatorJids: string[];
@@ -24,7 +43,7 @@ export type WhatsAppPollRecord = {
 };
 
 export type WhatsAppPollRecordInput = {
-  accountId: string;
+  account: WhatsAppPollAccount;
   pollMessageId: string;
   origin: WhatsAppPollOrigin;
   chatJids: readonly (string | null | undefined)[];
@@ -82,6 +101,20 @@ export const WHATSAPP_POLL_CHAT_INDEX_STORES: Record<WhatsAppPollOrigin, OpenKey
     defaultTtlMs: WHATSAPP_POLL_TTL_MS,
   },
 };
+
+export const WHATSAPP_POLL_TALLY_STORES: Record<WhatsAppPollOrigin, OpenKeyedStoreOptions> = {
+  sent: {
+    namespace: "whatsapp.poll-tally-sent",
+    maxEntries: 20_000,
+    defaultTtlMs: WHATSAPP_POLL_TTL_MS,
+  },
+  received: {
+    namespace: "whatsapp.poll-tally-received",
+    maxEntries: 20_000,
+    defaultTtlMs: WHATSAPP_POLL_TTL_MS,
+  },
+};
+const RETIRE_PAGE_SIZE = 500;
 
 // Only storage-availability failures are worth replaying; everything else is permanent.
 const TRANSIENT_READ_CODES = new Set([
@@ -238,18 +271,69 @@ export function buildWhatsAppPollAccountPrefix(accountId: string): string {
   return `${encodeURIComponent(accountId)}:`;
 }
 
-function buildRecordKey(accountId: string, pollMessageId: string): string {
-  return `${buildWhatsAppPollAccountPrefix(accountId)}${pollMessageId}`;
+/**
+ * E.164 first: it survives device suffixes and a newly learned LID, so the same
+ * phone keeps its polls across restarts and reconnects.
+ */
+export function resolveWhatsAppPollOwnerKey(
+  self: WhatsAppSelfIdentity | null | undefined,
+): string | undefined {
+  const identity = resolveComparableIdentity(self);
+  const key = identity.e164 ?? identity.jid ?? identity.lid ?? undefined;
+  return key && !key.includes(":") ? key : undefined;
 }
 
-function buildChatIndexPrefix(accountId: string, chatJid: string): string {
-  return `${buildWhatsAppPollAccountPrefix(accountId)}${chatJid}:`;
+export type WhatsAppPollScope = {
+  /** `${account}:${ownerKey}:`, the prefix of every key this phone owns. */
+  prefix: string;
+  owner: WhatsAppPollOwner;
+};
+
+/** Fails closed: without a linked identity nothing is recorded or read. */
+export function resolveWhatsAppPollScope(
+  account: WhatsAppPollAccount,
+): WhatsAppPollScope | undefined {
+  const accountId = account.accountId.trim();
+  const ownerKey = resolveWhatsAppPollOwnerKey(account.self);
+  if (!accountId) {
+    return undefined;
+  }
+  if (!ownerKey) {
+    logVerbose("whatsapp poll state skipped: no linked phone identity");
+    return undefined;
+  }
+  const { e164, jid, lid } = resolveComparableIdentity(account.self);
+  return {
+    prefix: `${buildWhatsAppPollAccountPrefix(accountId)}${ownerKey}:`,
+    owner: { ...(e164 ? { e164 } : {}), ...(jid ? { jid } : {}), ...(lid ? { lid } : {}) },
+  };
+}
+
+function buildChatIndexPrefix(scope: WhatsAppPollScope, chatJid: string): string {
+  return `${scope.prefix}${chatJid}:`;
+}
+
+export function buildWhatsAppPollTallyPrefix(
+  scope: WhatsAppPollScope,
+  pollMessageId: string,
+): string {
+  return `${scope.prefix}${pollMessageId}:`;
+}
+
+function isPollOwner(value: unknown): value is WhatsAppPollOwner {
+  const owner = value as Record<string, unknown> | null | undefined;
+  return (
+    typeof owner === "object" &&
+    owner !== null &&
+    ["e164", "jid", "lid"].every((field) => ["string", "undefined"].includes(typeof owner[field]))
+  );
 }
 
 function isPollRecord(value: unknown): value is WhatsAppPollRecord {
   const record = value as Partial<WhatsAppPollRecord> | null | undefined;
   return (
-    record?.v === 1 &&
+    record?.v === 2 &&
+    isPollOwner(record.owner) &&
     (record.origin === "sent" || record.origin === "received") &&
     Array.isArray(record.chatJids) &&
     Array.isArray(record.creatorJids) &&
@@ -267,14 +351,15 @@ export async function recordWhatsAppPoll(
   opts: { mode: "overwrite" | "ifAbsent" },
 ): Promise<boolean> {
   const pollMessageId = normalizeWhatsAppPollMessageId(input.pollMessageId);
-  const accountId = input.accountId.trim();
-  if (!pollMessageId || !accountId) {
+  const scope = pollMessageId ? resolveWhatsAppPollScope(input.account) : undefined;
+  if (!pollMessageId || !scope) {
     return false;
   }
   const recordedAt = input.recordedAt ?? Date.now();
   const chatJids = normalizeWhatsAppPollJids(input.chatJids).slice(0, MAX_CHAT_JIDS);
   const record: WhatsAppPollRecord = {
-    v: 1,
+    v: 2,
+    owner: scope.owner,
     origin: input.origin,
     chatJids,
     creatorJids: normalizeWhatsAppPollJids(input.creatorJids),
@@ -299,7 +384,7 @@ export async function recordWhatsAppPoll(
       if (!recordStore) {
         return false;
       }
-      const key = buildRecordKey(accountId, pollMessageId);
+      const key = `${scope.prefix}${pollMessageId}`;
       if (opts.mode === "ifAbsent") {
         return await recordStore.registerIfAbsent(key, record, { ttlMs });
       }
@@ -312,7 +397,7 @@ export async function recordWhatsAppPoll(
   }
   const stamp = String(recordedAt).padStart(13, "0");
   const indexKeys = chatJids
-    .map((chatJid) => `${buildChatIndexPrefix(accountId, chatJid)}${stamp}:${pollMessageId}`)
+    .map((chatJid) => `${buildChatIndexPrefix(scope, chatJid)}${stamp}:${pollMessageId}`)
     .filter((key) => {
       if (utf8ByteLength(key) <= STORE_KEY_MAX_BYTES) {
         return true;
@@ -336,18 +421,21 @@ export async function recordWhatsAppPoll(
   return true;
 }
 
-/** Looks in the agent's own polls first, then in recorded incoming polls. */
+/**
+ * Looks in the agent's own polls first, then in recorded incoming polls. Only
+ * the linked phone that recorded a poll can read it back.
+ */
 export async function readWhatsAppPollRecord(
-  accountIdInput: string,
+  account: WhatsAppPollAccount,
   pollMessageIdInput: string | null | undefined,
   opts?: { errors?: WhatsAppPollStoreErrorMode },
 ): Promise<WhatsAppPollRecord | undefined> {
   const pollMessageId = normalizeWhatsAppPollMessageId(pollMessageIdInput);
-  const accountId = accountIdInput.trim();
-  if (!pollMessageId || !accountId) {
+  const scope = pollMessageId ? resolveWhatsAppPollScope(account) : undefined;
+  if (!pollMessageId || !scope) {
     return undefined;
   }
-  return await runWhatsAppPollStoreOperation({
+  const record = await runWhatsAppPollStoreOperation({
     operation: "read",
     fallback: undefined,
     errors: opts?.errors,
@@ -356,7 +444,7 @@ export async function readWhatsAppPollRecord(
         const store = openWhatsAppPollStore<WhatsAppPollRecord>(
           WHATSAPP_POLL_RECORD_STORES[origin],
         );
-        const value = await store?.lookup(buildRecordKey(accountId, pollMessageId));
+        const value = await store?.lookup(`${scope.prefix}${pollMessageId}`);
         if (value !== undefined) {
           return isPollRecord(value) ? value : undefined;
         }
@@ -364,18 +452,24 @@ export async function readWhatsAppPollRecord(
       return undefined;
     },
   });
+  if (record && !identitiesOverlap(record.owner, account.self)) {
+    warnWhatsAppPollState("whatsapp poll record skipped", { code: "owner-mismatch" });
+    return undefined;
+  }
+  return record;
 }
 
 /** Newest first, merged across both origins; ids may outlive their record and must be re-read. */
 export async function listWhatsAppChatPollIds(params: {
-  accountId: string;
+  account: WhatsAppPollAccount;
   chatJids: readonly (string | null | undefined)[];
   limit: number;
   errors?: WhatsAppPollStoreErrorMode;
 }): Promise<WhatsAppChatPollIndexEntry[]> {
-  const accountId = params.accountId.trim();
   const chatJids = normalizeWhatsAppPollJids(params.chatJids);
-  if (!accountId || chatJids.length === 0 || params.limit < 1) {
+  const scope =
+    chatJids.length > 0 && params.limit >= 1 ? resolveWhatsAppPollScope(params.account) : undefined;
+  if (!scope) {
     return [];
   }
   return await runWhatsAppPollStoreOperation({
@@ -392,7 +486,7 @@ export async function listWhatsAppChatPollIds(params: {
           continue;
         }
         for (const chatJid of chatJids) {
-          const prefix = buildChatIndexPrefix(accountId, chatJid);
+          const prefix = buildChatIndexPrefix(scope, chatJid);
           const rows = await store.entriesInKeyRange({
             ...buildWhatsAppKeyPrefixRange(prefix, params.limit),
             order: "desc",
@@ -418,4 +512,58 @@ export async function listWhatsAppChatPollIds(params: {
         .slice(0, params.limit);
     },
   });
+}
+
+/**
+ * Removes every poll record, chat index row and tally row of one account, for
+ * whichever phone was linked. Called when its credentials are retired; never
+ * throws, since logout must not fail on poll state. Undefined when this process
+ * has no plugin state (a CLI outside the Gateway); the rows then expire by TTL.
+ */
+export async function retireWhatsAppPollState(params: {
+  accountId: string;
+}): Promise<{ deleted: number } | undefined> {
+  const accountId = params.accountId.trim();
+  if (typeof getOptionalWhatsAppRuntime()?.state?.openKeyedStoreV2 !== "function") {
+    return undefined;
+  }
+  if (!accountId) {
+    return { deleted: 0 };
+  }
+  const prefix = buildWhatsAppPollAccountPrefix(accountId);
+  let deleted = 0;
+  for (const options of [
+    ...Object.values(WHATSAPP_POLL_RECORD_STORES),
+    ...Object.values(WHATSAPP_POLL_CHAT_INDEX_STORES),
+    ...Object.values(WHATSAPP_POLL_TALLY_STORES),
+  ]) {
+    deleted += await runWhatsAppPollStoreOperation({
+      operation: "retire",
+      fallback: 0,
+      transient: "none",
+      run: async () => {
+        const store = openWhatsAppPollStore<unknown>(options);
+        if (!store) {
+          return 0;
+        }
+        let count = 0;
+        // Each page is deleted before the next read; maxEntries bounds the loop.
+        for (let page = 0; page * RETIRE_PAGE_SIZE <= options.maxEntries; page++) {
+          const rows = await store.entriesInKeyRange(
+            buildWhatsAppKeyPrefixRange(prefix, RETIRE_PAGE_SIZE),
+          );
+          if (rows.length === 0) {
+            break;
+          }
+          for (const row of rows) {
+            if (await store.delete(row.key)) {
+              count++;
+            }
+          }
+        }
+        return count;
+      },
+    });
+  }
+  return { deleted };
 }

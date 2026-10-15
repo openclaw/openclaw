@@ -13,6 +13,7 @@ const {
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
+  selfIdentityMock,
 } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
@@ -26,6 +27,9 @@ const {
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
+  selfIdentityMock: vi.fn((): { e164?: string; jid?: string; lid?: string } => ({
+    e164: "+15550001111",
+  })),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -91,7 +95,7 @@ vi.mock("../../identity.js", async (importOriginal) => {
   return {
     ...actual,
     getPrimaryIdentityId: () => null,
-    getSelfIdentity: () => ({ e164: "+15550001111" }),
+    getSelfIdentity: () => selfIdentityMock(),
     getSenderIdentity: () => ({ name: "Alice", e164: "+15550002222" }),
   };
 });
@@ -188,6 +192,8 @@ const GROUP_JID = "120363000000000001@g.us";
 const PEER_E164 = "+15550002222";
 const PEER_PN = "15550002222@s.whatsapp.net";
 const PEER_LID = "88880002222@lid";
+// getSelfIdentity is mocked to this number above; poll state lives under it.
+const ACCOUNT = { accountId: "default", self: { e164: "+15550001111" } };
 
 let env: WhatsAppPollStateRuntimeForTest;
 
@@ -279,13 +285,13 @@ function preparedEntries(callIndex = 0) {
 }
 
 async function addVote(voter: { jids: string[]; name: string; e164?: string }, selected: string[]) {
-  const record = await readWhatsAppPollRecord("default", "POLL1");
+  const record = await readWhatsAppPollRecord(ACCOUNT, "POLL1");
   if (!record) {
     throw new Error("expected poll record");
   }
   await applyWhatsAppPollVote({
     record,
-    accountId: "default",
+    account: ACCOUNT,
     pollMessageId: "POLL1",
     voter,
     selected,
@@ -296,7 +302,7 @@ async function addVote(voter: { jids: string[]; name: string; e164?: string }, s
 async function addPoll(chatJid: string) {
   await recordWhatsAppPoll(
     {
-      accountId: "default",
+      account: ACCOUNT,
       pollMessageId: "POLL1",
       origin: "sent",
       chatJids: [chatJid],
@@ -308,13 +314,13 @@ async function addPoll(chatJid: string) {
     },
     { mode: "overwrite" },
   );
-  const record = await readWhatsAppPollRecord("default", "POLL1");
+  const record = await readWhatsAppPollRecord(ACCOUNT, "POLL1");
   if (!record) {
     throw new Error("expected poll record");
   }
   await applyWhatsAppPollVote({
     record,
-    accountId: "default",
+    account: ACCOUNT,
     pollMessageId: "POLL1",
     voter: { jids: [PEER_PN], name: "Alice" },
     selected: ["Sushi"],
@@ -329,6 +335,8 @@ describe("processMessage poll results context", () => {
     buildContextMock.mockImplementation(() => ({ Body: "hi" }));
     resolvePolicyMock.mockReset();
     resolvePolicyMock.mockReturnValue(makePolicy());
+    selfIdentityMock.mockReset();
+    selfIdentityMock.mockReturnValue({ e164: "+15550001111" });
     isControlCommandMessageMock.mockReturnValue(false);
     shouldComputeCommandAuthorizedMock.mockReturnValue(false);
   });
@@ -381,6 +389,28 @@ describe("processMessage poll results context", () => {
     });
   });
 
+  it("attaches another phone's polls only to that phone, after a relink under the same account", async () => {
+    await addPoll(GROUP_JID);
+    selfIdentityMock.mockReturnValue({ jid: "15550009999@s.whatsapp.net" });
+    await callProcessMessage(makeMsg({ kind: "group" }));
+    expect(preparedEntries(0)).toEqual([]);
+
+    // The same number back with another device suffix and a newly learned LID.
+    selfIdentityMock.mockReturnValue({
+      jid: "15550001111:3@s.whatsapp.net",
+      lid: "77770001111@lid",
+    });
+    await callProcessMessage(makeMsg({ kind: "group" }));
+    expect(preparedPollPayload(1)?.polls[0]).toMatchObject({
+      poll_id: "POLL1",
+      created_by: "assistant",
+      options: [
+        { option: "Pizza", votes: 0, voters: [] },
+        { option: "Sushi", votes: 1, voters: ["Alice"] },
+      ],
+    });
+  });
+
   it("attaches nothing when the chat has no polls", async () => {
     await addPoll("120363000000000002@g.us");
     await callProcessMessage(makeMsg({ kind: "group" }));
@@ -419,7 +449,7 @@ describe("processMessage poll results context", () => {
     async function addReceivedPoll(creatorJids: string[], creatorName: string) {
       await recordWhatsAppPoll(
         {
-          accountId: "default",
+          account: ACCOUNT,
           pollMessageId: "POLL2",
           origin: "received",
           chatJids: [GROUP_JID],

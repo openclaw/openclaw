@@ -239,6 +239,8 @@ function throwIfCredentialPersistenceFailed(
 }
 
 export async function waitForWhatsAppLoginResult(params: {
+  /** Retires this account's poll state when WhatsApp logs the device out. */
+  accountId?: string;
   sock: WaSocket;
   authDir: string;
   isLegacyAuthDir: boolean;
@@ -340,6 +342,7 @@ export async function waitForWhatsAppLoginResult(params: {
         closeWaSocket(currentSock);
         const cleared = await logoutWeb({
           authDir: params.authDir,
+          accountId: params.accountId,
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
           beforeCredentialPersistence: params.beforeCredentialPersistence,
