@@ -486,7 +486,7 @@ describe("exact-state retirement admission and recovery", () => {
     }
   });
 
-  it.each(["restore-receipt"] as const)(
+  it.each(["retained-source", "restore-receipt"] as const)(
     "recovers %s expiry interrupted after retiring recovery refs",
     async (kind) => {
       const f = await fixture();

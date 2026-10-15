@@ -22,6 +22,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as worktreeGit from "./git.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -282,6 +284,42 @@ describe("Exact removed worktree snapshot retirement", () => {
       ).rows,
     ).toEqual([{ owner: "synthetic-consumer" }]);
   });
+
+  it.each(["missing ledger", "provisioned ledger"])(
+    "preserves %s instead of assuming the Git tree contains all recovery data",
+    async (kind) => {
+      const chunk = { worktreeId: record.id, path: "local.env", chunkIndex: 0 };
+      const bytes = Buffer.from("private provisioned content");
+      if (kind === "missing ledger") {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
+                .updateTable("worktrees")
+                .set({ provisioned_paths_json: null })
+                .where("id", "=", record.id),
+            );
+          },
+          { env },
+        );
+      } else {
+        await updateRegistryWorktree(env, record.id, {
+          provisionedState: [{ path: chunk.path, mode: 0o600, chunks: 1 }],
+        });
+        await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+      }
+      await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
+        /retains provisioned data/,
+      );
+      await expectPreserved(record);
+      if (kind === "provisioned ledger") {
+        expect(Buffer.from((await getRegistryWorktreeProvisionedChunk(env, chunk))!)).toEqual(
+          bytes,
+        );
+      }
+    },
+  );
 
   it.each(["pending removal", "symbolic snapshot"])("preserves %s ref custody", async (kind) => {
     const pending = `refs/openclaw/removals/${record.id}`;

@@ -1022,33 +1022,37 @@ async function createSlowWidgetHarness() {
   return harness;
 }
 
-test("widget sync coalesces six structure and geometry frames into initial and latest state", async () => {
-  const harness = await createSlowWidgetHarness();
-  // Six distinct RAF batches including the initial in-flight state.
-  for (let frame = 1; frame <= 5; frame += 1) {
-    updateWidgetKeys(harness, frame === 2 ? [] : [`widget-${frame}`]);
-    if (frame !== 2) {
-      harness.resizeWidget(52 + frame);
+for (const kind of ["geometry", "structure"] as const) {
+  test(`widget sync coalesces six ${kind} frames into initial and latest state`, async () => {
+    const harness = await createSlowWidgetHarness();
+    // Six distinct RAF batches including the initial in-flight state.
+    for (let frame = 1; frame <= 5; frame += 1) {
+      if (kind === "structure") {
+        updateWidgetKeys(harness, frame === 2 ? [] : [`widget-${frame}`]);
+      }
+      if (kind === "geometry" || frame !== 2) {
+        harness.resizeWidget(52 + frame);
+      }
+      await harness.drain();
     }
+    assert.equal(harness.widgetSyncs().length, 1);
+    assert.equal(harness.activeWidgetSyncs(), 1);
+    harness.resolveWidgetSync(0);
     await harness.drain();
-  }
-  assert.equal(harness.widgetSyncs().length, 1);
-  assert.equal(harness.activeWidgetSyncs(), 1);
-  harness.resolveWidgetSync(0);
-  await harness.drain();
-  const latest = harness.widgetSyncs()[1];
-  assert.equal(latest.widgets[0].x, 57);
-  assert.equal(latest.widgets[0].key, "widget-5");
-  assert.equal(latest.hasWidgets, true);
-  assert.equal(latest.expanded, true);
-  assert.equal(latest.sessionId, harness.widgetSyncs()[0].sessionId);
-  assert.equal(latest.rendererEpoch, harness.widgetSyncs()[0].rendererEpoch);
-  harness.resolveWidgetSync(1);
-  await harness.drain();
-  assert.equal(harness.widgetSyncs().length, 2);
-  assert.equal(harness.activeWidgetSyncs(), 0);
-  assert.equal(harness.maxActiveWidgetSyncs(), 1);
-});
+    const latest = harness.widgetSyncs()[1];
+    assert.equal(latest.widgets[0].x, 57);
+    assert.equal(latest.widgets[0].key, kind === "geometry" ? "first" : "widget-5");
+    assert.equal(latest.hasWidgets, true);
+    assert.equal(latest.expanded, true);
+    assert.equal(latest.sessionId, harness.widgetSyncs()[0].sessionId);
+    assert.equal(latest.rendererEpoch, harness.widgetSyncs()[0].rendererEpoch);
+    harness.resolveWidgetSync(1);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs().length, 2);
+    assert.equal(harness.activeWidgetSyncs(), 0);
+    assert.equal(harness.maxActiveWidgetSyncs(), 1);
+  });
+}
 
 test("widget sync retains a latest empty compact state", async () => {
   const harness = await createSlowWidgetHarness();

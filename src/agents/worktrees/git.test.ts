@@ -34,6 +34,7 @@ describe("Git ref mutation ownership", () => {
   const snapshotRef = "refs/openclaw/snapshots/held";
   const queuedRef = "refs/openclaw/snapshots/queued";
   const transports = [
+    ["text", runGit],
     ["bytes", runGitBytes],
     ["buffered", runGitBuffered],
   ] as const;
