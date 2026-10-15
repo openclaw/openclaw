@@ -222,7 +222,7 @@ echo built >> "$FIXTURE_BUILDS"
               "ios-cache-inputs": { outputs: { xcode: "xcode" } },
               "ios-packages-cache": { outputs: { "cache-hit": "false" } },
               "watch-rtc-cache": { outputs: { "cache-hit": "false" } },
-              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" },
+              "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
             },
           };
           for (const step of saves) {
