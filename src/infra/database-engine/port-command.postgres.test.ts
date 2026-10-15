@@ -8,10 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { runWorkboardPortTask } from "./port-command.worker.js";
+import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
 import { readPostgresPortCapabilities } from "./port.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
-import { loadWorkboardPortDescriptor } from "./workboard-port.js";
+import { workboardPortProvider } from "./workboard-port.js";
+const loadWorkboardPortDescriptor = () => workboardPortProvider.loadDescriptor();
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;

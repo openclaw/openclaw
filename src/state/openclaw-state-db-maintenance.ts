@@ -28,6 +28,7 @@ import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { migrateCronDeliveryAttemptState } from "./openclaw-state-db-cron-delivery-migration.js";
 import {
@@ -35,6 +36,7 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
+import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import {
   classifySqliteTableReadError,
   ensureColumn,
@@ -436,12 +438,21 @@ const statePortableIdentityMigration = {
   applied: "Promoted portable ACP resume keys and cursor identities (v22)",
 };
 
+const stateMeetingChronologyMigration = {
+  version: MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
+  tables: ["meeting_transcript_sessions"],
+  columns: ["meeting_transcript_sessions.started_at_ms"],
+  migrate: migrateMeetingTranscriptStartTime,
+  applied: "Persisted normalized meeting transcript start times",
+};
+
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
   applied: string;
 }> = [
   statePortableIdentityMigration,
+  stateMeetingChronologyMigration,
   { migrate: migrateJsonCanonicalWideRowsV13, applied: "Consolidated shared state tables (v13)" },
   {
     migrate: migrateCronCreatorNamespaces,
@@ -470,7 +481,11 @@ export function migrateBoundedStateSchema(
   db: DatabaseSync,
   previousVersion: number,
 ): string[] | undefined {
-  const migrations = [statePredicateColumnMigration, statePortableIdentityMigration];
+  const migrations = [
+    statePredicateColumnMigration,
+    statePortableIdentityMigration,
+    stateMeetingChronologyMigration,
+  ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
   if (
