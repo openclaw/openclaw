@@ -310,7 +310,7 @@ export function ContextNotice(props: ContextNoticeProps) {
   };
   return (
     <Show when={Boolean(model() || currentGroup())}>
-      {() => {
+      {(_visible) => {
         const pickerRef = createChatPickerOverlay();
         return (
           <div class="context-usage" style={colors()}>

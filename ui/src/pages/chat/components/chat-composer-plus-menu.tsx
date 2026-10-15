@@ -234,11 +234,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
 }
 
 function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
-  const entries: MenuEntry[] = [
-    renderBackRow(),
-    menuDivider("back-divider"),
-    ...composerLibraryMenuItems(menu.library),
-  ];
+  const header = [menuDivider("back-divider"), ...composerLibraryMenuItems(menu.library)];
   const notice = menu.skillsLoading
     ? (["chat.composer.menu.loadingSkills", "status"] as const)
     : menu.skillsError
@@ -247,15 +243,16 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
         ? (["chat.composer.menu.noSkills", undefined] as const)
         : null;
   if (notice) {
-    entries.push(renderCapabilityMenuState("skills-notice", t(notice[0]), notice[1]));
+    header.push(renderCapabilityMenuState("skills-notice", t(notice[0]), notice[1]));
   }
+  const skills: MenuEntry[] = [];
   for (const skill of menu.skills ?? []) {
     const title = skill.missingDeps
       ? t("chat.composer.menu.depsMissing")
       : skill.blocked
         ? t("chat.composer.menu.skillBlocked")
         : menu.mutationBlockedReason;
-    entries.push(
+    skills.push(
       renderCapabilityToggleRow({
         value: `skill:${skill.key}`,
         label: skill.name,
@@ -269,7 +266,7 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       }),
     );
   }
-  entries.push(menuDivider("skills-manage-divider"), {
+  const manage: MenuItem = {
     id: "manage-skills",
     label: t("chat.composer.menu.manageSkills"),
     href: pathForRoute("skills", menu.basePath),
@@ -277,8 +274,13 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     content: (
       <span class="agent-chat__capability-menu-link">{t("chat.composer.menu.manageSkills")}</span>
     ),
-  });
-  return entries;
+  };
+  return [
+    renderBackRow(),
+    { kind: "group", id: "skills-header", items: header },
+    { kind: "group", id: "skills-list", items: skills },
+    { kind: "group", id: "skills-footer", items: [menuDivider("skills-manage-divider"), manage] },
+  ];
 }
 
 function connectorItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {

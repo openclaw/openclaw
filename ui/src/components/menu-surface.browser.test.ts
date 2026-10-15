@@ -9,7 +9,6 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { Menu } from "./solid/menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";

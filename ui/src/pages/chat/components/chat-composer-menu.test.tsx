@@ -89,7 +89,10 @@ it("retains the focused capability row and management link through catalog refre
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
-  await waitForSolid(() => expect(row.isConnected).toBe(true));
+  await waitForSolid(() =>
+    expect(row.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
+  );
+  expect(row.closest("[data-menu-content]")?.matches(":popover-open")).toBe(true);
   row.focus();
   expect(document.activeElement).toBe(row);
 
@@ -124,7 +127,7 @@ it("retains the focused capability row and management link through catalog refre
   expect(row.getAttribute("aria-checked")).toBe("false");
   expect(document.activeElement).toBe(row);
 
-  const manage = view.getByRole("menuitem", { name: "Manage skills" });
+  const manage = view.getByRole("menuitem", { name: "Manage skills", hidden: true });
   expect(manage.getAttribute("href")).toBe("/control/skills");
   const modifiedClick = new MouseEvent("click", {
     bubbles: true,
