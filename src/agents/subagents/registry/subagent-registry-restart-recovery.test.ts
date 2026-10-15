@@ -481,6 +481,27 @@ describe("subagent registry restart recovery", () => {
     );
   });
 
+  it.each(["attempted", "consumed", "accepted", "abandoned"] as const)(
+    "settles a persisted %s launch receipt without dispatch",
+    async (phase) => {
+      const entry = run();
+      entry.execution.restartRecovery = {
+        phase,
+        sessionId: "session-id",
+        sessionMarker: "session-id:1",
+        idempotencyKey: "old-recovery-run",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      rotateAgentEventLifecycleGeneration();
+      expect(await recover(entry)).toMatchObject({
+        status: "terminal",
+        suppressSessionEffects: true,
+      });
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(true);
+    },
+  );
+
   it.each(["sessions_yield", "steer-restart", "terminal", "queued", "non-aborted"])(
     "leaves %s ownership unchanged",
     async (owner) => {

@@ -1872,6 +1872,74 @@ export const single = {
     );
   });
 
+  it.each<[string[], string[]]>([
+    [
+      [
+        "scripts/e2e/mcp-channels-docker.sh",
+        "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+        "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+        "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
+        "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+        "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+        "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+        "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+        "scripts/mcp-code-mode-gateway-e2e.ts",
+        "scripts/e2e/cron-cli-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-observability.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "src/agents/agent-bundle-mcp-runtime.test.ts",
+        "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+        "src/gateway/server.cron.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/cron/isolated-agent/run.fast-mode.test.ts",
+        "src/cron/active-jobs-manual-run.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/openai-image-auth-docker.sh",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/openai-image-auth-docker-client.test.ts",
+        "extensions/openai/image-generation-provider.test.ts",
+        "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/codex-media-path-docker.sh",
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        "scripts/e2e/codex-on-demand-docker.sh",
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        "scripts/e2e/qr-import-docker.sh",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
+        "test/scripts/plugin-binding-command-escape-docker.test.ts",
+      ],
+    ],
+  ])("routes Docker E2E targets %j to their semantic owners", (targets, owners) => {
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expectChangedTargets(targets, owners);
+  });
+
   it.each([
     ["chunks the broad shell helper tooling shard after isolated targets", "test/scripts"],
     ["chunks broad shell helper globs after isolated targets", "test/scripts/*.test.ts"],

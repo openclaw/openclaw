@@ -15,6 +15,7 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import {
+  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   recordInboundSessionMeta,
   replaceSessionEntry,
@@ -48,7 +49,10 @@ import {
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import {
   listAgentsForGateway,
   loadGatewaySessionEntryReadOnlyAsync,
@@ -1466,6 +1470,57 @@ describe("gateway session utils", () => {
 
       expect(first.entry?.sessionId).toBe("session-before");
       expect(second.entry?.sessionId).toBe("session-after");
+    });
+  });
+
+  test("worker history reads only the selected row and direct children", async () => {
+    await withConfiguredStateDir("session-utils-exact-read-only-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: { entries: { main: {} } },
+      } as OpenClawConfig;
+      const parentKey = "agent:main:main";
+      const childKey = "agent:main:child";
+      const now = Date.now();
+      seedSessionEntries(storePath, {
+        [parentKey]: { sessionId: "parent", updatedAt: now },
+        [childKey]: { sessionId: "child", spawnedBy: parentKey, updatedAt: now + 1 },
+        ...Object.fromEntries(
+          Array.from({ length: 40 }, (_, index) => [
+            `agent:main:unrelated-${index}`,
+            { sessionId: `unrelated-${index}`, updatedAt: now + index + 2 },
+          ]),
+        ),
+      });
+      setRuntimeConfigSnapshot(cfg, cfg);
+      expect(
+        listSessionEntriesReadOnly({ agentId: "main", storePath }).map((item) => item.sessionKey),
+      ).toContain(childKey);
+      expect(
+        (await loadGatewaySessionEntryReadOnlyAsync(childKey, { clone: false })).entry,
+      ).toMatchObject({
+        sessionId: "child",
+        spawnedBy: parentKey,
+      });
+      expect(
+        (
+          await listSessionChildEntriesReadOnly({
+            agentId: "main",
+            clone: false,
+            sessionKey: parentKey,
+            storePath,
+          })
+        ).map((item) => item.sessionKey),
+      ).toEqual([childKey]);
+      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        key: "main",
+        includeStoreChildEntries: true,
+      });
+
+      expect(loaded.entry?.sessionId).toBe("parent");
+      expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
     });
   });
 

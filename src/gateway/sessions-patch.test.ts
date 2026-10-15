@@ -386,22 +386,22 @@ describe("gateway sessions patch", () => {
     expect(restored.archiveReason).toBeUndefined();
   });
 
-  test.each([{ action: "archive", archived: true, sessionId: undefined }])(
-    "rejects $action for a provisional session identity",
-    async ({ archived, sessionId }) => {
-      const entry = { sessionId, updatedAt: 1 } as SessionEntry;
-      const store = { [MAIN_SESSION_KEY]: entry };
+  test.each([
+    { action: "archive", archived: true, sessionId: undefined },
+    { action: "restore", archived: false, sessionId: "" },
+  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
+    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+    const store = { [MAIN_SESSION_KEY]: entry };
 
-      expectPatchError(
-        await runPatch({
-          store,
-          patch: { key: MAIN_SESSION_KEY, archived },
-        }),
-        `session not found: ${MAIN_SESSION_KEY}`,
-      );
-      expect(store[MAIN_SESSION_KEY]).toBe(entry);
-    },
-  );
+    expectPatchError(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, archived },
+      }),
+      `session not found: ${MAIN_SESSION_KEY}`,
+    );
+    expect(store[MAIN_SESSION_KEY]).toBe(entry);
+  });
 
   test("requires the caller-observed durable identity for lifecycle patches", async () => {
     expectPatchError(
@@ -938,20 +938,23 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY]).toEqual(before);
   });
 
-  test.each(["placeholder", "existing"] as const)(
+  test.each(["fresh", "placeholder", "existing"] as const)(
     "queues model switches only for existing sessions (%s)",
     async (sessionState) => {
-      const store = mainStoreEntry({
-        sessionId: sessionState === "existing" ? "sess-live" : undefined,
-        providerOverride: "openai",
-        modelOverride: OPENAI_GPT_ID,
-        modelFallback: {
-          prevModel: OPENAI_GPT_ID,
-          prevProvider: "openai",
-          ts: 1,
-          source: "agent-patch",
-        },
-      });
+      const store =
+        sessionState === "fresh"
+          ? undefined
+          : mainStoreEntry({
+              sessionId: sessionState === "existing" ? "sess-live" : undefined,
+              providerOverride: "openai",
+              modelOverride: OPENAI_GPT_ID,
+              modelFallback: {
+                prevModel: OPENAI_GPT_ID,
+                prevProvider: "openai",
+                ts: 1,
+                source: "agent-patch",
+              },
+            });
       const entry = await applyMainModelPatch({
         store,
         cfg: createAllowlistedAnthropicModelCfg(),
@@ -1346,7 +1349,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
-  test.each(["placeholder", "existing"] as const)(
+  test.each(["fresh", "placeholder", "existing"] as const)(
     "validates context-window initialization without queuing fresh-session switches (%s)",
     async (sessionState) => {
       const cfg = {
@@ -1369,10 +1372,13 @@ describe("gateway sessions patch", () => {
       const entry = expectPatchOk(
         await runPatch({
           cfg,
-          store: mainStoreEntry({
-            sessionId: sessionState === "existing" ? "sess-context" : undefined,
-            contextBudgetStatus: contextBudgetStatusFixture(),
-          }),
+          store:
+            sessionState === "fresh"
+              ? undefined
+              : mainStoreEntry({
+                  sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                  contextBudgetStatus: contextBudgetStatusFixture(),
+                }),
           patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
           loadGatewayModelCatalog,
         }),
