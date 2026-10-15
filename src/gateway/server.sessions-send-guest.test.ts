@@ -1,51 +1,95 @@
+// Real tool, Gateway admission, and input persistence with a controlled agent command.
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import * as preparedRuntime from "../agents/prepared-model-runtime.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  drainSessionToolsFixture,
-  withSessionToolsFixture,
-} from "./local-request-context.session-tools.test-support.js";
+import { writeConfigFile } from "../config/io.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
-import { roleClient } from "./session-sharing.test-utils.js";
+import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
-const createAgentTurnService = vi.hoisted(() =>
-  vi.fn<typeof import("./agent-turn/agent-turn-service.js").createAgentTurnService>(),
-);
-// Tool preparation, scope projection, authorization, and source identity retain their real owners.
-// mock-isolation: Stop before model inference and isolate its execution state.
-vi.mock("./agent-turn/agent-turn-service.js", () => ({ createAgentTurnService }));
+const MESSAGE = "Continue the retained review.";
 
-const PARENT = "agent:main:dashboard:followup-parent";
-const CHILD = "agent:main:dashboard:followup-child";
-const FOREIGN = "agent:main:dashboard:followup-foreign";
+describe("guest session followup admission", () => {
+  let harness: GatewayServerHarness;
+  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  installGatewayTestHooks({
+    scope: "suite",
+    setup: async () => {
+      const cfg = rolePolicyConfig();
+      const role = expectDefined(cfg.gateway?.roles?.definitions?.view, "guest role");
+      role.scopes = ["operator.sessions.read", "operator.sessions.write"];
+      role.sandbox = "required";
+      cfg.tools = { sessions: { visibility: "all" } };
+      await writeConfigFile(cfg);
+      const module = await import("./server-kernel.js");
+      const create = module.createGatewayKernel;
+      const capture = vi
+        .spyOn(module, "createGatewayKernel")
+        .mockImplementation(async (...args) => {
+          kernel = await create(...args);
+          return kernel;
+        });
+      try {
+        harness = await startGatewayServerHarness();
+      } finally {
+        capture.mockRestore();
+      }
+    },
+    cleanup: async () => harness?.close(),
+  });
 
-async function withFollowup(
-  run: (fixture: {
-    send: (sessionKey?: string) => Promise<unknown>;
-    revoke: () => void;
-    profileId: string;
-  }) => Promise<void>,
-) {
-  await withSessionToolsFixture(async (cfg) => {
+  async function withFollowup(
+    run: (fixture: {
+      send: (sessionKey?: string) => Promise<unknown>;
+      revoke: () => void;
+      profileId: string;
+      child: string;
+      foreign: string;
+      runId: string;
+      readInput: (sessionKey?: string) => Promise<{ pending: unknown; transcript: unknown }>;
+      waitForCompletion: (signal: AbortSignal) => Promise<void>;
+    }) => Promise<void>,
+  ) {
+    const context = kernel.gatewayRequestContext;
+    const cfg = context.getRuntimeConfig();
     const role = expectDefined(cfg.gateway?.roles?.definitions?.view, "guest role");
-    role.scopes = ["operator.sessions.read", "operator.sessions.write"];
-    role.sandbox = "required";
-    const client = roleClient("view", "followup-owner");
+    await prepareGatewayReplyRuntimeForTest({ force: true, config: cfg });
+    agentCommandMock.mockReset();
+    const runId = randomUUID();
+    const parent = `agent:main:dashboard:followup-parent-${runId}`;
+    const child = `agent:main:dashboard:followup-child-${runId}`;
+    const foreign = `agent:main:dashboard:followup-foreign-${runId}`;
+    const client = roleClient("view", `followup-owner-${runId}`);
     client.connect.scopes = [...role.scopes];
     const profileId = expectDefined(client.authenticatedUserProfile, "original person").profileId;
-    for (const [sessionKey, sessionId, creatorId] of [
-      [PARENT, "followup-parent-session", profileId],
-      [CHILD, "followup-child-session", profileId],
-      [FOREIGN, "followup-foreign-session", "another-person"],
+    for (const [sessionKey, creatorId] of [
+      [parent, profileId],
+      [child, profileId],
+      [foreign, "another-person"],
     ] as const) {
-      await upsertSessionEntryCore(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
-          sessionId,
+          sessionId: sessionKey,
           lifecycleRevision: "retained-generation",
           updatedAt: 1,
           visibility: "shared",
@@ -53,13 +97,22 @@ async function withFollowup(
           createdVia: "operator",
           createdActor: { type: "human", source: "profile", id: creatorId },
           sandbox: "required",
-          ...(sessionKey === CHILD
-            ? { spawnedBy: PARENT, parentSessionId: "followup-parent-session" }
-            : {}),
+          ...(sessionKey === child ? { spawnedBy: parent, parentSessionId: parent } : {}),
         },
       );
     }
-    const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+    const readInput = async (sessionKey = child) => {
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        sessionId: sessionKey,
+        storePath: (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
+      };
+      return {
+        pending: await pendingInputs.listSessionPendingInputs(scope),
+        transcript: await sessionAccessor.loadTranscriptEvents(scope),
+      };
+    };
     const source = new AbortController();
     const captured = expectDefined(
       await captureGatewayOperatorRunAuthority({
@@ -72,106 +125,158 @@ async function withFollowup(
       }),
       "guest authority",
     );
+    const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
+    const execute = executionModule.startAgentRunExecution;
+    const completed = createDeferred();
+    const executions: Promise<void>[] = [];
+    const execution = vi
+      .spyOn(executionModule, "startAgentRunExecution")
+      .mockImplementation((params) => {
+        const pending = execute(params);
+        executions.push(pending);
+        if (params.runId === runId) {
+          completed.resolve(pending);
+        }
+        return pending;
+      });
     try {
-      await withPersonalToolTurn(
-        {
-          owner: {
-            profileId,
-            senderId: "followup-owner",
-            name: "Followup owner",
-            operatorAuthority: captured.authority,
-          },
-          sessionKey: PARENT,
-          sessionId: "followup-parent-session",
-        },
-        async () => {
-          const tool = createSessionsSendTool({
-            config: cfg,
-            agentSessionKey: PARENT,
-            completionOwner: "caller",
-          });
-          await run({
-            send: (sessionKey = CHILD) =>
-              tool.execute("followup-child", {
-                sessionKey,
-                mode: "followup",
-                message: "Continue the retained review.",
-                timeoutSeconds: 0,
-              }),
-            revoke: () => source.abort(new Error("followup source revoked")),
-            profileId,
-          });
-        },
+      await withPluginRuntimeGatewayRequestScope(
+        { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+        () =>
+          withPersonalToolTurn(
+            {
+              owner: {
+                profileId,
+                senderId: "followup-owner",
+                name: "Followup owner",
+                operatorAuthority: captured.authority,
+              },
+              sessionKey: parent,
+              sessionId: parent,
+            },
+            async () => {
+              const tool = createSessionsSendTool({
+                config: cfg,
+                agentSessionKey: parent,
+                completionOwner: "caller",
+                idempotencyKey: runId,
+              });
+              await run({
+                send: (sessionKey = child) =>
+                  tool.execute("followup-child", {
+                    sessionKey,
+                    mode: "followup",
+                    message: MESSAGE,
+                    timeoutSeconds: 0,
+                  }),
+                revoke: () => source.abort(new Error("followup source revoked")),
+                profileId,
+                child,
+                foreign,
+                runId,
+                readInput,
+                waitForCompletion: (signal) => withinTest(completed.promise, signal),
+              });
+            },
+          ),
       );
     } finally {
+      await Promise.allSettled(executions);
+      execution.mockRestore();
       captured.release();
     }
-  });
-}
+  }
 
-describe("guest session followup admission", () => {
-  afterEach(async () => {
-    createAgentTurnService.mockReset();
-    await drainSessionToolsFixture();
-  });
-
-  it("continues the owned child with the original narrow authority while raw agent calls stay denied", async () => {
-    await withFollowup(async ({ send, profileId }) => {
-      const started = vi.fn();
-      createAgentTurnService.mockReturnValue({
-        startTurn: async ({ principal, preflight, io, assertAdmissionCurrent }) => {
-          assertAdmissionCurrent?.();
-          expect(principal?.connect.scopes).toEqual(["operator.sessions.write"]);
-          expect(principal?.internal?.operatorRoleActor).toEqual({ kind: "operator", profileId });
-          expect(preflight.request).toMatchObject({
-            sessionKey: CHILD,
-            expectedExistingSessionId: "followup-child-session",
-            expectedExistingSessionLifecycleRevision: "retained-generation",
-          });
-          started();
-          io.emitAcceptance([true, { status: "accepted", runId: "child-followup-run" }, undefined]);
-        },
-        prepareWaitForTurn: vi.fn(),
-        waitForTurn: vi.fn(),
+  it("persists and executes the owned child input under narrow authority while raw agent calls stay denied", async ({
+    signal,
+  }) => {
+    await withFollowup(async ({ send, profileId, child, runId, readInput, waitForCompletion }) => {
+      agentCommandMock.mockImplementation(async (input) => {
+        const command = input as AgentCommandGatewayIngressOpts;
+        await expectDefined(
+          command.userTurnTranscriptRecorder,
+          "real input recorder",
+        ).persistApproved();
+        return { payloads: [], meta: { durationMs: 1 } };
       });
-      await expect(send()).resolves.toMatchObject({
-        details: { status: "accepted", runId: "child-followup-run" },
+      await expect(send()).resolves.toMatchObject({ details: { status: "accepted", runId } });
+      await waitForCompletion(signal);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      await expect(agentCommandMock.mock.results[0]?.value).resolves.toMatchObject({
+        meta: { durationMs: 1 },
       });
-      expect(started).toHaveBeenCalledOnce();
+      const command = agentCommandMock.mock.calls[0]?.[0] as AgentCommandGatewayIngressOpts;
+      expect(command.sessionKey).toBe(child);
+      expect(command.sessionId).toBe(child);
+      expect(command.operatorAuthority?.profileId).toBe(profileId);
+      expect(command.operatorAuthority?.scopes).toContain("operator.sessions.write");
+      expect(command.operatorAuthority?.scopes).not.toContain("operator.write");
+      expect(command.operatorAuthority?.rolePolicy?.sandboxRequired).toBe(true);
+      const accepted = await readInput();
+      expect(JSON.stringify(accepted.transcript)).toContain(MESSAGE);
       await expect(
         dispatchGatewayMethodInProcess("agent", {
-          sessionKey: CHILD,
-          expectedExistingSessionId: "followup-child-session",
+          sessionKey: child,
+          expectedExistingSessionId: child,
           expectedExistingSessionLifecycleRevision: "retained-generation",
           message: "Unbound input",
           idempotencyKey: "unbound-run",
         }),
       ).rejects.toThrow("missing scope: operator.write");
-      expect(started).toHaveBeenCalledOnce();
+      expect(await readInput()).toEqual(accepted);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
     });
   });
 
-  it("rejects an unrelated target before starting a turn", async () => {
-    await withFollowup(async ({ send }) => {
-      await expect(send(FOREIGN)).resolves.toMatchObject({ details: { status: "forbidden" } });
-      expect(createAgentTurnService).not.toHaveBeenCalled();
+  it("rejects an unrelated target without persisting or executing input", async () => {
+    await withFollowup(async ({ send, foreign, readInput }) => {
+      const before = await readInput(foreign);
+      await expect(send(foreign)).resolves.toMatchObject({ details: { status: "forbidden" } });
+      expect(await readInput(foreign)).toEqual(before);
+      expect(agentCommandMock).not.toHaveBeenCalled();
     });
   });
 
-  it("keeps the source authority fence before turn execution", async () => {
-    await withFollowup(async ({ send, revoke }) => {
-      const started = vi.fn();
-      createAgentTurnService.mockReturnValue({
-        startTurn: async ({ assertAdmissionCurrent }) => {
-          revoke();
-          assertAdmissionCurrent?.();
-          started();
-        },
-        prepareWaitForTurn: vi.fn(),
-        waitForTurn: vi.fn(),
-      });
-      await expect(send()).rejects.toThrow("Followup owner's access changed; ask them again");
-      expect(started).not.toHaveBeenCalled();
+  it("rejects source revocation during real turn preparation before input persistence or execution", async ({
+    signal,
+  }) => {
+    await withFollowup(async ({ send, revoke, readInput }) => {
+      const before = await readInput();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const load = preparedRuntime.loadPublishedGatewayReplyDispatchRuntime;
+      const held = vi
+        .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+        .mockImplementationOnce(async (params) => {
+          const runtime = await load(params);
+          entered.resolve();
+          await release.promise;
+          return runtime;
+        });
+      const stage = vi.spyOn(pendingInputs, "stageSessionPendingInput");
+      const sending = send();
+      const settled = sending.catch(() => undefined);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            settled,
+            "Followup ended before real runtime preparation",
+          ),
+          signal,
+        );
+        revoke();
+        release.resolve();
+        await expect(sending).rejects.toThrow("Followup owner's access changed; ask them again");
+        expect(stage).not.toHaveBeenCalled();
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect(await readInput()).toEqual(before);
+      } finally {
+        release.resolve();
+        await settled;
+        held.mockRestore();
+        stage.mockRestore();
+      }
     });
   });
 });
