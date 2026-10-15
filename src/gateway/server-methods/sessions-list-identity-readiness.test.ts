@@ -28,7 +28,7 @@ it("searches configured assistant names without waiting for workspace presentati
     await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
     const client = identifiedClient("search-viewer");
-    const entered = createDeferredCore<void>();
+    const entered = createDeferredCore();
     const workspace = createDeferredCore<identityFiles.AgentIdentityFile | null>();
     const read = vi
       .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
