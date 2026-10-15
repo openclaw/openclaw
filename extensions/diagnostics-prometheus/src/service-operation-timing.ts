@@ -168,6 +168,20 @@ export function recordOperationTimingEvent(
             },
           );
         }
+        if (evt.method === "sessions.list" && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_requests_total",
+            "Session list requests by client kind and bounded request shape.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+            },
+          );
+        }
         return;
       }
       if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {

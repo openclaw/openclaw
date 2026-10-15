@@ -183,6 +183,18 @@ describe("authenticated Gateway RPC diagnostics", () => {
     );
     await fixture.finished;
     expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      sessionsList: {
+        clientKind: fixture.client.connect.client.id,
+        source: "wire",
+        callerSource: query.rowMode ? "dashboard" : "unspecified",
+        rowMode: query.rowMode ?? "full",
+        filter: "search",
+      },
+    });
+    expect(JSON.stringify(fixture.events)).not.toMatch(
+      /synthetic-private|arbitrary-private-caller/,
+    );
     const log = output.mock.calls.flat().join("\n");
     expect(log).toContain("sessions.list");
     expect(log).toContain(`source=${query.rowMode ? "dashboard" : "unspecified"}`);
@@ -190,6 +202,36 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(log).toContain("limit=60 offset=120 filterKind=ownerId+search");
     expect(log).toContain(`bytes=${query.bytes}`);
     expect(log).not.toMatch(/synthetic-private|arbitrary-private-caller/);
+  });
+
+  it.each([
+    { params: { spawnedBy: "private-parent", ownerId: "private-owner" }, filter: "children" },
+    { params: { ownerId: "private-owner", involvingMe: true }, filter: "owner" },
+    { params: { involvingProfileId: "private-profile", activeOnly: true }, filter: "involving" },
+    { params: { activeMinutes: 15 }, filter: "active" },
+    { params: { activeOnly: false, agentId: "private-agent" }, filter: "general" },
+  ])("bounds session list filter attribution ($filter)", async ({ params, filter }) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "sessions.list");
+    await fixture.dispatcher.dispatch(
+      {
+        type: "req",
+        id: "private-request",
+        method: "sessions.list",
+        params: { ...params, source: "sidebar", rowMode: "private-invalid-mode" },
+      },
+      fixture.client,
+    );
+    await fixture.finished;
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      sessionsList: {
+        clientKind: fixture.client.connect.client.id,
+        source: "wire",
+        callerSource: "sidebar",
+        rowMode: "other",
+        filter,
+      },
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
   });
 
   it.each([true, false])(
@@ -731,6 +773,22 @@ describe("authenticated Gateway RPC diagnostics", () => {
     const unsubscribe = onInternalDiagnosticEvent(() => {}, { include: ["gateway.rpc"] });
     setDiagnosticsEnabledForProcess(false);
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
+    const readParams = vi.fn();
+    expect(
+      createGatewayRpcDiagnostics(
+        "sessions.list",
+        registry,
+        {},
+        {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          get params() {
+            return readParams();
+          },
+        },
+      ),
+    ).toBeUndefined();
+    expect(readParams).not.toHaveBeenCalled();
     unsubscribe();
     expect(clock).not.toHaveBeenCalled();
     expect(memory).not.toHaveBeenCalled();
