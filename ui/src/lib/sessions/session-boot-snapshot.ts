@@ -106,6 +106,7 @@ export function createSessionBootSnapshot(
         nextScope !== cachedScope ||
         gateway.connectionRevision !== cachedRevision ||
         (snapshot.phase === "connected" &&
+          snapshot.selfUser !== undefined &&
           cachedProfileId !== undefined &&
           cachedProfileId !== (snapshot.selfUser?.id ?? null))
       ) {

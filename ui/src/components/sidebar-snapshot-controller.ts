@@ -141,7 +141,11 @@ export class SidebarSnapshotController {
         ? {
             gatewayScope: gatewayCredentialScope(gateway.connection.gatewayUrl),
             recoveryScope,
-            profileId: snapshot.selfUser?.id ?? null,
+            // Undefined means users.self is still pending, not profileless.
+            profileId:
+              snapshot.selfUser === undefined && this.scope?.recoveryScope === recoveryScope
+                ? this.scope.profileId
+                : (snapshot.selfUser?.id ?? null),
           }
         : null;
       if (JSON.stringify(next) !== JSON.stringify(this.scope)) {

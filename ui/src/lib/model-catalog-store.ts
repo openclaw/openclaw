@@ -1,9 +1,6 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import { sleepWithAbort } from "@openclaw/retry";
-import type {
-  ModelsListParams,
-  ModelsSnapshotEvent,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
@@ -257,15 +254,6 @@ export function subscribeModelCatalogChanges(
     const invalidation = modelCatalogEventInvalidation(event, scope);
     if (invalidation) {
       listener(invalidation);
-    } else if (event.event === "models.snapshot" && scope) {
-      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
-      const publication = event.payload as ModelsSnapshotEvent;
-      if (
-        modelCatalogKey(modelCatalogParams(scope)) ===
-        modelCatalogKey(modelCatalogParams(publication.scope))
-      ) {
-        listener("refresh");
-      }
     }
   });
 }

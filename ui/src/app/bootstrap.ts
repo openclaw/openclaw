@@ -42,7 +42,6 @@ import { readBootRecord } from "./boot-record.ts";
 import {
   createInitialApplicationLocationResolver,
   normalizeInitialApplicationLocation,
-  resolveBootstrapModelCatalogTarget,
   resolveInitialApplicationLocation,
   subscribeForegroundChatBootstrap,
 } from "./bootstrap-location.ts";
@@ -172,8 +171,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       persistDefaultConnectionSettings: documentMode === null,
       ownsWarmBoot,
       resourceBasePath,
-      getModelCatalogTarget: (gatewayUrl) =>
-        resolveBootstrapModelCatalogTarget(history.location(), basePath, gatewayUrl),
       ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),

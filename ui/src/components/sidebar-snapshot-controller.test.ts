@@ -248,6 +248,9 @@ describe("sidebar snapshot lifecycle", () => {
     expect(sessions.state.resultCached).toBe(true);
     expect(test.host.sidebarSnapshot).toEqual(saved);
     expect(read).toHaveBeenCalledOnce();
+    test.publish({ selfUser: undefined });
+    expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
+    expect(test.host.sidebarSnapshot).toEqual(saved);
     await deleteStoredChatSnapshot(sessionKey);
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(sessions.state.result).toBeNull();
@@ -390,6 +393,14 @@ describe("sidebar snapshot lifecycle", () => {
     ).toEqual(live);
   });
 
+  it("retains the admitted snapshot while hello awaits the viewer profile", async () => {
+    const test = await warmFixture();
+    test.publish({ selfUser: undefined });
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    test.publish();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+  });
+
   it("does not report an unchanged model saved while its write is pending", async () => {
     const test = fixture();
     const issued = createDeferred();
@@ -438,14 +449,20 @@ describe("sidebar snapshot lifecycle", () => {
     await saved;
   });
 
-  it.each(["profile", "connection"] as const)(
+  it.each(["profile", "profileless", "connection"] as const)(
     "clears cached display when the %s changes even with the same recovery scope",
     async (change) => {
       const test = await warmFixture();
       if (change === "connection") {
         test.gateway.connectionRevision += 1;
       }
-      test.publish(change === "profile" ? { selfUser: { id: "profile-b" } } : {});
+      test.publish(
+        change === "profile"
+          ? { selfUser: { id: "profile-b" } }
+          : change === "profileless"
+            ? { selfUser: null }
+            : {},
+      );
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.controller.saved).toBe(false);
     },

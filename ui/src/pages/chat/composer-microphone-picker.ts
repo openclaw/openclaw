@@ -23,6 +23,10 @@ export class ComposerMicrophonePicker {
   private catalogConnected = false;
   private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
+  private catalogPending: {
+    hello: GatewayBrowserClient["hello"];
+    generation: number;
+  } | null = null;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
@@ -45,6 +49,7 @@ export class ComposerMicrophonePicker {
     this.catalogConnected = catalogConnected;
     this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
+    this.catalogPending = null;
     this.realtimeStatus = canRead ? "unknown" : "unavailable";
     this.dictationStatus = canRead ? "unknown" : "unavailable";
     if (!client || !catalogConnected) {
@@ -128,10 +133,18 @@ export class ComposerMicrophonePicker {
 
   private loadCatalog(notify = true): void {
     const client = this.catalogClient;
-    if (!client || !this.catalogConnected || !hasOperatorReadAccess(client.auth)) {
+    if (
+      !client ||
+      !this.catalogConnected ||
+      !hasOperatorReadAccess(client.auth) ||
+      (this.catalogPending !== null &&
+        this.catalogPending.hello === client.hello &&
+        this.catalogPending.generation === client.connectionGeneration)
+    ) {
       return;
     }
     const request = ++this.catalogRequest;
+    this.catalogPending = { hello: client.hello, generation: client.connectionGeneration };
     this.setCatalogChecking(true);
     if (notify) {
       this.requestUpdate();
@@ -182,6 +195,7 @@ export class ComposerMicrophonePicker {
       })
       .finally(() => {
         if (request === this.catalogRequest) {
+          this.catalogPending = null;
           this.requestUpdate();
         }
       });

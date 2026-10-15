@@ -62,6 +62,43 @@ describe("composer voice readiness", () => {
     expect(readCatalog).toHaveBeenCalledTimes(3);
   });
 
+  it("shares pending readiness with picker opens and focus refreshes", async () => {
+    const pending = createDeferred<ReturnType<typeof catalog>>();
+    const request = vi.fn((method: string) =>
+      method === "talk.config" ? Promise.resolve({}) : pending.promise,
+    );
+    picker = new ComposerMicrophonePicker(vi.fn());
+    picker.syncCatalog({ request } as unknown as GatewayBrowserClient, true);
+    window.dispatchEvent(new Event("focus"));
+    picker.handleOpen();
+    expect(request).toHaveBeenCalledTimes(2);
+    pending.resolve(catalog(true));
+    await vi.waitFor(() => expect(picker.dictationStatus).toBe("ready"));
+    window.dispatchEvent(new Event("focus"));
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not coalesce a login refresh with the previous connection's pending readiness", async () => {
+    const stale = createDeferred<ReturnType<typeof catalog>>();
+    const readCatalog = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValue(catalog(true));
+    const client = {
+      connectionGeneration: 0,
+      request: vi.fn((method: string) =>
+        method === "talk.config" ? Promise.resolve({}) : readCatalog(),
+      ),
+    };
+    picker = new ComposerMicrophonePicker(vi.fn());
+    picker.syncCatalog(client as unknown as GatewayBrowserClient, true);
+    client.connectionGeneration++;
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(picker.dictationStatus).toBe("ready"));
+    expect(readCatalog).toHaveBeenCalledTimes(2);
+    stale.resolve(catalog(false));
+    await stale.promise;
+    await Promise.resolve();
+    expect(picker.dictationStatus).toBe("ready");
+  });
+
   it("refreshes after returning from login on the same Gateway connection", async () => {
     let ready = false;
     const request = vi.fn(async (method: string) =>

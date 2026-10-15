@@ -414,7 +414,9 @@ export function createConfigWriteCoordinator({
       if (state.connected && state.client) {
         if (reconciliation.interrupted) {
           reconciliation.refreshInterrupted();
-        } else if (state.configSnapshot || state.configFormDirty || !state.bootstrapConfig) {
+        } else if (state.configSnapshot || state.configFormDirty) {
+          // Reconcile an owned editor, not initial display preferences: the
+          // authenticated bootstrap may still be loading when hello arrives.
           void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
         }
       }

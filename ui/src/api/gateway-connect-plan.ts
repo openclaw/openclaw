@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   resolveGatewayConnectScopes,
-  resolveModelCatalogConnect,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type ConnectParams,
@@ -42,7 +41,6 @@ export type GatewayBrowserConnectOptions = {
   mode?: GatewayClientMode;
   instanceId?: string;
   scopes?: string[];
-  modelCatalog?: ConnectParams["modelCatalog"];
 };
 
 export const CONTROL_UI_OPERATOR_ROLE = "operator";
@@ -77,7 +75,6 @@ export async function buildBrowserGatewayConnectPlan({
   connectNonce,
   connectChallengeTs,
   generation,
-  serverCapabilities,
   nativeSignal,
   selectAuth,
 }: {
@@ -85,7 +82,6 @@ export async function buildBrowserGatewayConnectPlan({
   connectNonce: string | null;
   connectChallengeTs: number | null | undefined;
   generation: number;
-  serverCapabilities: readonly string[];
   nativeSignal: AbortSignal;
   selectAuth: (input: { role: string; deviceId: string }) => GatewayConnectAuthSelection;
 }): Promise<ConnectPlan> {
@@ -203,26 +199,22 @@ export async function buildBrowserGatewayConnectPlan({
       scopes,
       device,
       // Tests bind these compact wire literals to the canonical capability registry.
-      ...resolveModelCatalogConnect({
-        modelCatalog: opts.modelCatalog,
-        serverCapabilities,
-        caps: [
-          "agent-kind",
-          "approvals",
-          "task-suggestions",
-          "terminal-offset-seq",
-          "terminal-session-metadata",
-          "terminal-upload-path-style",
-          "tool-events",
-          "chat-only-assistant-text",
-          "session-scoped-events",
-          "inline-widgets",
-          "model-selection-policy",
-          "ui-commands",
-          "ultrafast",
-          "usage-refreshing",
-        ],
-      }),
+      caps: [
+        "agent-kind",
+        "approvals",
+        "task-suggestions",
+        "terminal-offset-seq",
+        "terminal-session-metadata",
+        "terminal-upload-path-style",
+        "tool-events",
+        "chat-only-assistant-text",
+        "session-scoped-events",
+        "inline-widgets",
+        "model-selection-policy",
+        "ui-commands",
+        "ultrafast",
+        "usage-refreshing",
+      ],
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
       locale: i18n.getRequestedLocale(),

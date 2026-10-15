@@ -455,6 +455,76 @@ suite.define(() => {
     });
   });
 
+  it("refreshes only the presented composer after navigating to New Session", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
+        methodResponses: {
+          "talk.catalog": {
+            transcription: { ready: false, providers: [] },
+            realtime: { ready: false, providers: [] },
+            speech: { providers: [] },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const chat = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      await chat.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
+      await chat.getByRole("button", { name: "Start voice input", exact: true }).click();
+      await chat
+        .locator('[data-chat-talk-capability="dictation"][data-status="unavailable"]')
+        .waitFor({ state: "attached" });
+      await page.keyboard.press("Escape");
+      await chat.locator(".agent-chat__composer-combobox textarea").fill("Retained voice draft");
+      await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+      const draft = page.locator("openclaw-new-session-page");
+      await draft.locator(".new-session-page__message").waitFor();
+      await draft.getByRole("button", { name: "Dictate", exact: true }).click();
+      await draft
+        .locator('[data-chat-talk-capability="dictation"][data-status="unavailable"]')
+        .waitFor({ state: "attached" });
+      await page.keyboard.press("Escape");
+      expect(await page.locator('openclaw-chat-pane[aria-hidden="true"]').count()).toBeGreaterThan(
+        0,
+      );
+      const expectOneFocusRefresh = async () => {
+        // Capability status can render before the discovery promise's finalizer.
+        // Focus during that request should coalesce; measure a fresh focus after paint.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        const catalogBefore = (await gateway.getRequests("talk.catalog")).length;
+        const configBefore = (await gateway.getRequests("talk.config")).length;
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect
+          .poll(async () => (await gateway.getRequests("talk.catalog")).length)
+          .toBeGreaterThan(catalogBefore);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        expect(await gateway.getRequests("talk.catalog")).toHaveLength(catalogBefore + 1);
+        expect(await gateway.getRequests("talk.config")).toHaveLength(configBefore + 1);
+      };
+      await expectOneFocusRefresh();
+      await page.goBack();
+      await expect
+        .poll(() => chat.locator(".agent-chat__composer-combobox textarea").inputValue())
+        .toBe("Retained voice draft");
+      await chat.getByRole("button", { name: "Start voice input", exact: true }).click();
+      await chat
+        .locator('[data-chat-talk-capability="dictation"][data-status="unavailable"]')
+        .waitFor({ state: "attached" });
+      await page.keyboard.press("Escape");
+      await expectOneFocusRefresh();
+    });
+  });
+
   it("gates unavailable voice capabilities in the microphone picker", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -478,6 +548,8 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await gateway.waitForRequest("talk.catalog");
       await page.getByRole("button", { name: "Start voice input" }).click();
+      expect(await gateway.getRequests("talk.catalog")).toHaveLength(1);
+      expect(await gateway.getRequests("talk.config")).toHaveLength(1);
       await gateway.resolveDeferred("talk.catalog");
       await gateway.resolveDeferred("chat.startup");
       await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
@@ -535,19 +607,23 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(suite.artifactDir, "voice-controls/dictation-latched-after-release.png"),
         });
-        const composerBox = await composer.boundingBox();
-        expect(composerBox).not.toBeNull();
-        if (!composerBox) {
-          throw new Error("expected active dictation composer layout box");
-        }
         for (const control of [phase, stop, send]) {
-          const box = await control.boundingBox();
-          expect(box, control.toString()).not.toBeNull();
-          if (!box) {
-            throw new Error("expected visible dictation control layout box");
-          }
-          expect(box.x).toBeGreaterThanOrEqual(composerBox.x);
-          expect(box.x + box.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
+          // Screenshot animation settling can overlap a retained-composer render.
+          // Read fresh boxes together instead of asserting against a detached frame.
+          await expect
+            .poll(async () => {
+              const [box, composerBox] = await Promise.all([
+                control.boundingBox(),
+                composer.boundingBox(),
+              ]);
+              return box && composerBox
+                ? {
+                    leftInside: box.x >= composerBox.x,
+                    rightInside: box.x + box.width <= composerBox.x + composerBox.width,
+                  }
+                : null;
+            })
+            .toEqual({ leftInside: true, rightInside: true });
         }
 
         await stop.click();

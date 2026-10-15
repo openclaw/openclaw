@@ -16,6 +16,12 @@ export class DraftRestoredFolderValidation {
   private state: "none" | "checking" | "failed" = "none";
   private requestToken = 0;
   private approvedRoots: string[] = [];
+  private validation: {
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+    hello: ApplicationContext["gateway"]["snapshot"]["hello"];
+    generation: number;
+    folder: string;
+  } | null = null;
 
   constructor(
     private readonly read: () => {
@@ -62,11 +68,12 @@ export class DraftRestoredFolderValidation {
 
   cancel() {
     this.requestToken += 1;
+    this.validation = null;
     this.state = "none";
   }
 
   private restore() {
-    this.state = "none";
+    this.cancel();
     this.callbacks.onMissing();
   }
 
@@ -77,12 +84,29 @@ export class DraftRestoredFolderValidation {
       this.restore();
       return;
     }
+    const hello = snapshot.hello;
+    const generation = client.connectionGeneration;
+    if (
+      this.validation?.client === client &&
+      this.validation.hello === hello &&
+      this.validation.generation === generation &&
+      this.validation.folder === folder
+    ) {
+      return;
+    }
+    this.validation = { client, hello, generation, folder };
     const requestId = ++this.requestToken;
     this.state = "checking";
     const isCurrent = () => {
       const current = this.read();
       return (
-        requestId === this.requestToken && !current.selectedByUser && current.folder === folder
+        requestId === this.requestToken &&
+        !current.selectedByUser &&
+        current.folder === folder &&
+        current.gateway?.phase === "connected" &&
+        current.gateway.client === client &&
+        current.gateway.hello === hello &&
+        client.connectionGeneration === generation
       );
     };
     void client
@@ -103,6 +127,7 @@ export class DraftRestoredFolderValidation {
           this.restore();
           return;
         }
+        this.validation = null;
         this.state = "failed";
         this.callbacks.onFailed();
       });

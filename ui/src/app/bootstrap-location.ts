@@ -1,14 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import type {
-  ModelCatalogTarget,
-  SessionsResolveResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
@@ -20,12 +16,9 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
-import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
 import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
-import { loadGatewaySessionSelection } from "./settings.ts";
 
 // Saved selection only fills an implicit landing. Agent paths and plugin slug
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
@@ -111,50 +104,6 @@ export function normalizeInitialApplicationLocation(
   const search = new URLSearchParams(location.search);
   new URLSearchParams(options.search).forEach((value, key) => search.set(key, value));
   return { ...location, pathname: options.pathname, search: search.size ? `?${search}` : "" };
-}
-
-export function resolveBootstrapModelCatalogTarget(
-  location: RouteLocation,
-  basePath: string,
-  gatewayUrl: string,
-): ModelCatalogTarget | undefined {
-  if (routeIdFromPath(location.pathname, basePath) === "new-session") {
-    const agentId = newSessionLocationFromSearch(location.search).agentId;
-    return agentId ? { agentId } : {};
-  }
-  const selection = loadGatewaySessionSelection(gatewayUrl);
-  if (routeIdFromPath(location.pathname, basePath) === "model-providers") {
-    return selection.selectedAgentId ? { agentId: selection.selectedAgentId } : {};
-  }
-  const initial = normalizeInitialApplicationLocation(
-    location,
-    basePath,
-    selection.sessionKey,
-    selection.selectedAgentId ?? "",
-  );
-  const target = sessionRefFromPath(initial.pathname, basePath);
-  if (target?.kind === "literal") {
-    return { agentId: target.agentId, sessionKey: target.sessionKey };
-  }
-  if (target?.kind === "main") {
-    return {
-      agentId: target.agentId,
-      sessionKey: buildAgentMainSessionKey({ agentId: target.agentId }),
-    };
-  }
-  if (target?.kind === "short") {
-    return {
-      agentId: target.agentId,
-      shortId: target.shortId,
-      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
-    };
-  }
-  if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
-    const agentId =
-      parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
-    return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
-  }
-  return undefined;
 }
 
 export function createInitialApplicationLocationResolver(params: {

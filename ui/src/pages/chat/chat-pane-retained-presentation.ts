@@ -496,6 +496,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      getChatComposerState(this.presentationId).microphonePicker?.dispose();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
       this.syncSessionCompanionPresentation(false);

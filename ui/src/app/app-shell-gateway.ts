@@ -463,20 +463,29 @@ export class ShellGatewayOwner {
     });
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
-    this.runtimeConfigReady = (
-      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
-    ).then(async () => {
-      if (
-        this.host.context !== context ||
-        this.runtimeConfigClient !== snapshot.client ||
-        this.runtimeConfigSource !== runtimeConfig ||
-        this.runtimeConfigProfileId !== profileId ||
-        this.preferenceGeneration !== generation
-      ) {
-        return;
+    const isCurrent = () =>
+      this.host.context === context &&
+      this.runtimeConfigClient === snapshot.client &&
+      this.runtimeConfigSource === runtimeConfig &&
+      this.runtimeConfigProfileId === profileId &&
+      this.preferenceGeneration === generation;
+    this.runtimeConfigReady = (async () => {
+      if (!runtimeConfig.state.bootstrapConfig && !runtimeConfig.state.configSnapshot) {
+        await Promise.all([
+          context?.config.refresh({ ifNeeded: true }),
+          snapshot.selfUser === undefined ? context?.gateway.loadSelfProfile() : undefined,
+        ]);
+        if (!isCurrent()) {
+          return;
+        }
+        if (!runtimeConfig.state.bootstrapConfig) {
+          await runtimeConfig.ensureLoaded();
+        }
       }
-      await this.reconcileServerUiPrefs(runtimeConfig);
-    });
+      if (isCurrent()) {
+        await this.reconcileServerUiPrefs(runtimeConfig);
+      }
+    })();
     return this.runtimeConfigReady;
   }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
@@ -37,6 +38,62 @@ function fixture(error: GatewayRequestError) {
 }
 
 describe("restored new-session folder validation", () => {
+  it("reuses pending and verified folders until cancellation or a connection change", async () => {
+    const listing = { path: "/saved/project", parent: "/saved", home: "/home", entries: [] };
+    const pending = createDeferred<typeof listing>();
+    const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(listing);
+    const client = createTestGatewayClient(request);
+    const gateway = {
+      client,
+      phase: "connected" as const,
+      hello: null,
+      offlineStable: false,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: null,
+      sessionKey: "",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    const callbacks = {
+      onApprovedRootsChange: vi.fn(),
+      onVerified: vi.fn(),
+      onMissing: vi.fn(),
+      onFailed: vi.fn(),
+    };
+    const validation = new DraftRestoredFolderValidation(
+      () => ({ gateway, folder: listing.path, selectedByUser: false, isAdmin: true }),
+      callbacks,
+    );
+    validation.validate(listing.path);
+    validation.validate(listing.path);
+    expect(request).toHaveBeenCalledOnce();
+    expect(validation.blocked).toBe(true);
+    pending.resolve(listing);
+    await vi.waitFor(() => expect(callbacks.onVerified).toHaveBeenCalledOnce());
+    validation.validate(listing.path);
+    expect(request).toHaveBeenCalledOnce();
+    expect(validation.blocked).toBe(false);
+
+    validation.cancel();
+    validation.validate(listing.path);
+    await vi.waitFor(() => expect(callbacks.onVerified).toHaveBeenCalledTimes(2));
+    gateway.client = createTestGatewayClient(request);
+    validation.validate(listing.path);
+    await vi.waitFor(() => expect(callbacks.onVerified).toHaveBeenCalledTimes(3));
+    expect(request).toHaveBeenCalledTimes(3);
+
+    const retired = createDeferred<typeof listing>();
+    request.mockReturnValueOnce(retired.promise);
+    validation.cancel();
+    validation.validate(listing.path);
+    validation.cancel();
+    retired.resolve(listing);
+    await retired.promise;
+    await Promise.resolve();
+    expect(callbacks.onVerified).toHaveBeenCalledTimes(3);
+    expect(validation.blocked).toBe(false);
+  });
+
   it("retains approved roots on cancellation and clears them at a draft boundary", () => {
     let isAdmin = false;
     const onApprovedRootsChange = vi.fn();
@@ -88,5 +145,7 @@ describe("restored new-session folder validation", () => {
     await vi.waitFor(() => expect(callbacks.onFailed).toHaveBeenCalledOnce());
     expect(validation.blocked).toBe(true);
     expect(callbacks.onMissing).not.toHaveBeenCalled();
+    validation.validate("/saved/project");
+    await vi.waitFor(() => expect(callbacks.onFailed).toHaveBeenCalledTimes(2));
   });
 });

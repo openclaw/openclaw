@@ -6,7 +6,6 @@ import {
   type ConnectParams,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -311,26 +310,17 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { advertised: false, modelCatalog: { agentId: "alpha" } },
-    { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
-  ])("connects with only advertised catalog input: %j", async ({ advertised, modelCatalog }) => {
-    const client = createClient({ modelCatalog });
+  it("uses ordinary catalog reads even when connect snapshots are advertised", async () => {
+    const client = createClient();
     client.start();
     const { connectFrame } = await continueConnect(
       getLatestWebSocket(),
       "catalog-challenge",
       1_800_000_000_000,
-      advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : undefined,
+      [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
     );
-    if (advertised) {
-      expect(connectFrame.params?.modelCatalog).toEqual(modelCatalog);
-      expect(connectFrame.params?.caps).toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
-    } else {
-      expect(validatePreviousConnectParams(connectFrame.params)).toBe(true);
-      expect(connectFrame.params).not.toHaveProperty("modelCatalog");
-      expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
-    }
+    expect(connectFrame.params).not.toHaveProperty("modelCatalog");
+    expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
   });
 
   it("clears advertised capabilities before connecting to another Gateway", async () => {

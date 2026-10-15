@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -36,9 +38,11 @@ function createBrowser(
     browser?.resetProjects(reset);
   });
   const hello = {
+    type: "hello-ok",
+    protocol: 4,
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
-  };
+  } satisfies GatewayHelloOk;
   const eventListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
   const context = {
     gateway: {
@@ -592,6 +596,18 @@ describe("DraftGatewayState", () => {
     expect(fixture.browser.projectId).toBe("");
   });
 
+  it("reuses the shared system sample when discovering the draft Gateway name", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Shared Gateway" },
+    );
+    const fixture = createBrowser(request);
+    fixture.hello.features.methods.push("system.info");
+    await readSystemInfo(fixture.context.gateway);
+    fixture.update();
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Shared Gateway"));
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1);
+  });
+
   it("resumes a background-opened Gateway name when the page becomes visible", async () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     onTestFinished(() => visibility.mockRestore());
@@ -686,6 +702,8 @@ describe("DraftGatewayState", () => {
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
       fixture.hello.auth.scopes = scopes;
       fixture.context.gateway.snapshot.phase = "connected";
+      // A real reconnect replaces hello, retiring the shared system sample.
+      fixture.context.gateway.snapshot.hello = { ...fixture.hello };
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");
       pending.resolve(response);

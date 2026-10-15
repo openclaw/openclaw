@@ -5,7 +5,6 @@ import {
   readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ModelCatalogTarget } from "../../../packages/gateway-protocol/src/index.js";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
@@ -78,7 +77,6 @@ export function createApplicationGateway(
     ownsWarmBoot?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
-    getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       | "clientName"
@@ -411,13 +409,6 @@ export function createApplicationGateway(
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
       nativeConnectAuth: options.clientOptions?.nativeConnectAuth,
-      get modelCatalog() {
-        return client === nextClient
-          ? metadataObserver.captureTarget(
-              options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
-            )
-          : undefined;
-      },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
