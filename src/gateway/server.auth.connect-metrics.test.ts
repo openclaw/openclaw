@@ -144,28 +144,26 @@ test("measures connect delivery and closed admission without payloads", async ()
           expect(JSON.stringify(events)).not.toContain("private-");
           const responseLog = responses.at(-1);
           if (outcome !== "unavailable") {
-            expect(responseLog).toMatchObject({
-              ...(rejected
-                ? {}
-                : {
-                    authMs: expect.any(Number),
-                    attachMs: expect.any(Number),
-                    deviceAuthorizationMs: expect.any(Number),
-                    deviceLookupMs: expect.any(Number),
-                    deviceMetadataMs: expect.any(Number),
-                    deviceTokensMs: expect.any(Number),
-                    nodePreparationMs: expect.any(Number),
-                    identityMs: expect.any(Number),
-                    profileEnsureMs: expect.any(Number),
-                    profileAuthorityMs: expect.any(Number),
-                    scopeGrantMs: expect.any(Number),
-                    operatorDeviceMs: expect.any(Number),
-                    sessionRegistrationMs: expect.any(Number),
-                  }),
-            });
+            expect(responseLog).toBeDefined();
             if (rejected) {
               expect(responseLog).not.toHaveProperty("identityMs");
               expect(responseLog).not.toHaveProperty("deviceAuthorizationMs");
+            } else {
+              expect(responseLog).toMatchObject({
+                authMs: expect.any(Number),
+                attachMs: expect.any(Number),
+                deviceAuthorizationMs: expect.any(Number),
+                deviceLookupMs: expect.any(Number),
+                deviceMetadataMs: expect.any(Number),
+                deviceTokensMs: expect.any(Number),
+                nodePreparationMs: expect.any(Number),
+                identityMs: expect.any(Number),
+                profileEnsureMs: expect.any(Number),
+                profileAuthorityMs: expect.any(Number),
+                scopeGrantMs: expect.any(Number),
+                operatorDeviceMs: expect.any(Number),
+                sessionRegistrationMs: expect.any(Number),
+              });
             }
           }
         } finally {
