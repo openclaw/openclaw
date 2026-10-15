@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
+import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { createLitTestRenderer } from "../../../test-helpers/lit-render.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
@@ -18,13 +20,15 @@ import {
 } from "./chat-message-media.ts";
 
 const subscribers = new Set<() => void>();
+const { render, cleanup } = createLitTestRenderer();
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-28T00:00:00.000Z"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
   }
@@ -56,15 +60,16 @@ function managedImageResourceKey(source: string): string {
 function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`) {
   const NativeUrl = URL;
   let blobIndex = 0;
+  const createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
   const revokeObjectURL = vi.fn<(url: string) => void>();
   vi.stubGlobal(
     "URL",
     class extends NativeUrl {
-      static override createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
+      static override createObjectURL = createObjectURL;
       static override revokeObjectURL = revokeObjectURL;
     },
   );
-  return { blobUrl: `blob:${prefix}-0`, revokeObjectURL };
+  return { blobUrl: `blob:${prefix}-0`, createObjectURL, revokeObjectURL };
 }
 
 function imageResponse() {
@@ -132,6 +137,25 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
 }
 
 describe("chat media resource lifecycle", () => {
+  it("does not restart a failed fixture image after its root is cleaned up", async () => {
+    const source = managedImageSource();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, rerender } = createManagedImagePane(source);
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.textContent).toContain("Retry");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await cleanup();
+    releaseChatMediaResourceSubscriber(rerender);
+    registerEnglishCatalog(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([false, true])(
     "discards late transcript images and reauthorizes changed sessions or connections (HTTP: %s)",
     async (http) => {
@@ -167,10 +191,7 @@ describe("chat media resource lifecycle", () => {
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
       oldImage.resolve({ url: "data:image/png;base64,b2xk" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 1);
-      if (!http) {
-        expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(http ? [] : [imageSource]);
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
 
       options.connectionEpoch = 2;
@@ -181,10 +202,9 @@ describe("chat media resource lifecycle", () => {
         { sessionKey: "second-session", artifactId, variant: "thumbnail" },
         { sessionKey: "second-session", artifactId, variant: "thumbnail" },
       ]);
-      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 2);
-      if (!http) {
-        expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
-      }
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+        http ? [] : [imageSource, imageSource],
+      );
       render(null, container);
     },
   );
@@ -789,18 +809,13 @@ describe("chat media resource lifecycle", () => {
 
   it("replaces an old auth scope without accepting its late image", async () => {
     const source = managedImageSource();
-    const { blobUrl } = installManagedImageUrls();
+    const { blobUrl, createObjectURL } = installManagedImageUrls();
+    const previousImage = createDeferred<ReturnType<typeof imageResponse>>();
     let previousSignal: AbortSignal | undefined;
     const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
       if (new Headers(init?.headers).get("Authorization") === "Bearer old-token") {
-        return new Promise<Response>((_resolve, reject) => {
-          previousSignal = init?.signal ?? undefined;
-          previousSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("auth changed", "AbortError")),
-            { once: true },
-          );
-        });
+        previousSignal = init?.signal ?? undefined;
+        return previousImage.promise;
       }
       return Promise.resolve(imageResponse());
     });
@@ -816,6 +831,15 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(previousSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(blobUrl);
+
+    // A transport can finish despite cancellation; the old scope cannot publish its bytes.
+    previousImage.resolve(imageResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createObjectURL).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),

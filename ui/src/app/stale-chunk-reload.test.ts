@@ -85,7 +85,10 @@ beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Removing the stylesheet banner leaves its document recovery waiting for browser events.
+  cancelStaleChunkRecovery();
+  await vi.advanceTimersByTimeAsync(0);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();

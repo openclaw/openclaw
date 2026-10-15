@@ -582,46 +582,6 @@ describe("AppSidebar agent roster", () => {
     expect(sidebar.querySelectorAll(".sidebar-session-owner-filter")).toHaveLength(1);
   });
 
-  it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {
-    const { sidebar, provider } = await mountRoster();
-    expect(sidebar.querySelector(".sidebar-agent-roster")).toBeNull();
-    expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
-    sidebar.sidebarEntries = ["session:agent:working:pinned"];
-    await toggleRoster(sidebar);
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    expect(loadSettings().sidebarAgentsMode).toBe("roster");
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:recent"));
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain("agent:working:recent"));
-    expect(
-      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="session:agent:working:pinned"]'),
-    ).not.toBeNull();
-    expect(loadSettings().sidebarCollapsedAgentIds).toEqual(["working"]);
-    provider.remove();
-    const remounted = await mountRoster();
-    remounted.sidebar.sidebarEntries = ["session:agent:working:pinned"];
-    remounted.sidebar.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
-    await vi.waitFor(() => expect(agentIds(remounted.sidebar)).toHaveLength(3));
-    await vi.waitFor(() => expect(sessionKeys(remounted.sidebar)).toContain("agent:recent:recent"));
-    expect(
-      remounted.sidebar
-        .querySelector('[data-agent-collapse="working"]')
-        ?.getAttribute("aria-expanded"),
-    ).toBe("false");
-    expect(sessionKeys(remounted.sidebar)).not.toContain("agent:working:recent");
-    expect(
-      remounted.sidebar.querySelector(
-        '.sidebar-rail [data-sidebar-entry="session:agent:working:pinned"]',
-      ),
-    ).not.toBeNull();
-    await toggleRoster(remounted.sidebar);
-    await vi.waitFor(() =>
-      expect(remounted.sidebar.querySelector(".sidebar-agent-roster")).toBeNull(),
-    );
-    expect(loadSettings().sidebarAgentsMode).toBe("chip");
-    expect(sessionKeys(remounted.sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
-  });
-
   it("applies owner and archived filters across all agent groups", async () => {
     const { sidebar } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";

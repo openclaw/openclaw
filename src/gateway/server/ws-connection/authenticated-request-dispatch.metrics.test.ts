@@ -101,6 +101,41 @@ describe("authenticated Gateway RPC diagnostics", () => {
   it.each([
     {
       clientKind: "openclaw-control-ui",
+      params: { sessionKey: "private-session", agentId: "private-agent", compact: true },
+      shape: { scope: "session", compact: true, page: "first" },
+    },
+    {
+      clientKind: "openclaw-macos",
+      params: { agentId: "private-agent", offset: 50 },
+      shape: { scope: "agent", compact: false, page: "append" },
+    },
+    {
+      clientKind: "gateway-client",
+      params: { compact: "private-invalid", offset: "private-invalid", query: "private-query" },
+      shape: { scope: "global", compact: false, page: "first" },
+    },
+  ])("attributes cron list receipt without private values ($clientKind)", async (query) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "cron.list");
+    const client = createOperatorWsClient({
+      clientInfo: { id: query.clientKind, mode: "backend" },
+    });
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "cron.list", params: query.params },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.filter((event) => event.phase === "received")).toEqual([
+      expect.objectContaining({
+        method: "cron.list",
+        cronList: { clientKind: query.clientKind, source: "wire", ...query.shape },
+      }),
+    ]);
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
+  it.each([
+    {
+      clientKind: "openclaw-control-ui",
       params: { view: "configured", agentId: "private-agent", preparedOnly: true },
       shape: { view: "configured", scope: "agent", preparedOnly: true, refresh: false },
     },
@@ -183,6 +218,18 @@ describe("authenticated Gateway RPC diagnostics", () => {
     );
     await fixture.finished;
     expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      sessionsList: {
+        clientKind: fixture.client.connect.client.id,
+        source: "wire",
+        callerSource: query.rowMode ? "dashboard" : "unspecified",
+        rowMode: query.rowMode ?? "full",
+        filter: "search",
+      },
+    });
+    expect(JSON.stringify(fixture.events)).not.toMatch(
+      /synthetic-private|arbitrary-private-caller/,
+    );
     const log = output.mock.calls.flat().join("\n");
     expect(log).toContain("sessions.list");
     expect(log).toContain(`source=${query.rowMode ? "dashboard" : "unspecified"}`);
@@ -190,6 +237,36 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(log).toContain("limit=60 offset=120 filterKind=ownerId+search");
     expect(log).toContain(`bytes=${query.bytes}`);
     expect(log).not.toMatch(/synthetic-private|arbitrary-private-caller/);
+  });
+
+  it.each([
+    { params: { spawnedBy: "private-parent", ownerId: "private-owner" }, filter: "children" },
+    { params: { ownerId: "private-owner", involvingMe: true }, filter: "owner" },
+    { params: { involvingProfileId: "private-profile", activeOnly: true }, filter: "involving" },
+    { params: { activeMinutes: 15 }, filter: "active" },
+    { params: { activeOnly: false, agentId: "private-agent" }, filter: "general" },
+  ])("bounds session list filter attribution ($filter)", async ({ params, filter }) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "sessions.list");
+    await fixture.dispatcher.dispatch(
+      {
+        type: "req",
+        id: "private-request",
+        method: "sessions.list",
+        params: { ...params, source: "sidebar", rowMode: "private-invalid-mode" },
+      },
+      fixture.client,
+    );
+    await fixture.finished;
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      sessionsList: {
+        clientKind: fixture.client.connect.client.id,
+        source: "wire",
+        callerSource: "sidebar",
+        rowMode: "other",
+        filter,
+      },
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
   });
 
   it.each([true, false])(
@@ -731,6 +808,22 @@ describe("authenticated Gateway RPC diagnostics", () => {
     const unsubscribe = onInternalDiagnosticEvent(() => {}, { include: ["gateway.rpc"] });
     setDiagnosticsEnabledForProcess(false);
     expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
+    const readParams = vi.fn();
+    expect(
+      createGatewayRpcDiagnostics(
+        "sessions.list",
+        registry,
+        {},
+        {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          get params() {
+            return readParams();
+          },
+        },
+      ),
+    ).toBeUndefined();
+    expect(readParams).not.toHaveBeenCalled();
     unsubscribe();
     expect(clock).not.toHaveBeenCalled();
     expect(memory).not.toHaveBeenCalled();

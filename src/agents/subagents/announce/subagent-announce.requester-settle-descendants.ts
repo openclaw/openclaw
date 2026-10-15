@@ -1,9 +1,8 @@
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { resolveRecordedRequester } from "../registry/subagent-child-owner-match.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
-import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { collectSubagentSessionReadKeys } from "../registry/subagent-session-read-scope.js";
 
 export function createRequesterDescendantReader(params: {
@@ -21,12 +20,12 @@ export function createRequesterDescendantReader(params: {
     if (params.signal?.aborted || !params.isSourceCurrent()) {
       return false;
     }
-    const current = listSubagentRunsForRequester(params.requesterSessionKey, {
-      requesterAgentId: params.requesterAgentId,
-      requesterStorePath: params.requesterStorePath,
-    }).find((entry) => isSameSubagentRunOwner(entry, params.settledEntry));
+    const current = getCurrentSubagentRunOwner(subagentRuns, params.settledEntry);
     return (
       current?.requesterSettleWake !== undefined &&
+      current.requesterSessionKey === params.requesterSessionKey.trim() &&
+      (!params.requesterAgentId || resolveRecordedRequester(current) === params.requesterAgentId) &&
+      (current.requesterStorePath ?? null) === params.requesterStorePath &&
       current.requesterSettleWake.rearmGeneration === rearmGeneration
     );
   };

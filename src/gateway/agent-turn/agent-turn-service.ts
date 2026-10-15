@@ -230,6 +230,7 @@ export function createAgentTurnService(
           | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
           | undefined;
         let cfgForAgent: OpenClawConfig | undefined;
+        let freshChild = false;
         let sessionStorePath: string | undefined;
         let resolvedSessionKey = requestedSessionKey;
         let resolvedSessionAgentId: string | undefined;
@@ -329,6 +330,7 @@ export function createAgentTurnService(
             touchInteraction,
           } = preparedSession;
           cfgForAgent = cfgLocal;
+          freshChild = preparedSession.freshChild;
           sessionStorePath = storePath;
           // Authorize the canonical session the run will actually target — covering
           // keyless requests whose default/effective session is resolved only here —
@@ -499,6 +501,7 @@ export function createAgentTurnService(
           ...runFacts,
           ...session,
           cfgForAgent,
+          freshChild,
           resolvedSessionKey,
           requestedSessionKey,
           activeSessionAgentId,

@@ -1,8 +1,9 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   projectMessageMedia,
@@ -471,7 +472,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
           html`<div class="chat-group ${role}">
             <div class="chat-group-messages">
               ${renderMessageImages(images, { sessionKey: "unavailable-geometry", agentId: "main", onRequestUpdate: draw })}
-              ${withDocument ? renderCompactAttachmentCard({ kind: "document", label: "notes.pdf" }) : nothing}
+              ${withDocument ? solidContent(CompactAttachmentCard, { kind: "document", label: "notes.pdf" }) : nothing}
               <p data-next-message>Next message</p>
             </div>
           </div>`,
@@ -487,7 +488,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
       const reference = withDocument ? container : mount(400);
       if (!withDocument) {
-        render(renderCompactAttachmentCard({ kind: "document", label: "notes.pdf" }), reference);
+        render(
+          solidContent(CompactAttachmentCard, { kind: "document", label: "notes.pdf" }),
+          reference,
+        );
       }
       const file = reference.querySelector<HTMLElement>(
         ".chat-assistant-attachment-card--compact",

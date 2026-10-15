@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -221,12 +220,6 @@ describe("chat pane session menu boundary", () => {
     await Promise.all([ledger, verifier].map(refreshPane));
     const container = document.body.appendChild(document.createElement("div"));
     const title = (pane: TestChatPane) => {
-      const presentation = sessions.presentation.result?.sessions.find(
-        (row) => row.key === pane.sessionKey,
-      );
-      pane.presentationTitle = presentation
-        ? resolveSessionDisplayName(pane.sessionKey, presentation)
-        : undefined;
       render(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(pane.state),
@@ -279,13 +272,56 @@ describe("chat pane session menu boundary", () => {
     expect(menu?.session.label).toBe("Reviewed ledger");
   });
 
-  it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
+  it("resolves cached titles for Home aliases using the current hello defaults", () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
+      sessions: createSessionCapabilityFixture({
+        presentation: {
+          agentId: "dev",
+          result: sessionsResult([{ key: "agent:dev:main", kind: "direct", label: "Dev desk" }], 1),
+        },
+      }),
+    });
+    state.sessionKey = "main";
+    state.hello = {
+      ...state.hello!,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "dev",
+          mainKey: "main",
+          mainSessionKey: "agent:dev:main",
+        },
+      },
+    };
+    const container = document.createElement("div");
+    render(
+      pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(state),
+        undefined,
+        false,
+        undefined,
+        false,
+        null,
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-pane__session-title-text")?.textContent?.trim()).toBe(
+      "Dev desk",
+    );
+  });
+
+  it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
+    const presentation = {
+      result: sessionsResult(
+        [{ key: "agent:main:current", kind: "direct", label: "Retained conversation" }],
+        1,
+      ),
+    };
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture({ state: presentation }),
     });
     state.connected = false;
-    pane.presentationTitle = "Retained conversation";
     const container = document.createElement("div");
     const row = {
       key: "agent:main:dashboard:retained",
@@ -322,7 +358,7 @@ describe("chat pane session menu boundary", () => {
       canArchive: true,
     };
     expect(draw(row, true)).toBe("Imported conversation");
-    pane.presentationTitle = undefined;
+    presentation.result = sessionsResult([], 2);
     expect(draw(row)).toBe("Partial reconnect metadata");
   });
 

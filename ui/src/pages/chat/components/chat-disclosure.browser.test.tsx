@@ -1,13 +1,14 @@
-import { html, nothing, render } from "lit";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { mountSolid as mountView } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
-import { renderWorkGroupSummary } from "./chat-message-stream.test-support.ts";
+import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { ChatToolRawOutput } from "./chat-tool-content.solid.tsx";
-import { settleToolBridges, renderToolCard } from "./chat-tool-render.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -20,7 +21,6 @@ beforeAll(async () => {
 afterEach(() => {
   window.getSelection()?.removeAllRanges();
   if (container) {
-    render(nothing, container);
     container.remove();
   }
 });
@@ -30,7 +30,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
     "toggles on rapid clicks without selecting labels and retains keyboard access (%s)",
     async (kind) => {
       container = document.body.appendChild(document.createElement("div"));
-      const groups: MessageGroup[] = [
+      const groups: MessageGroupData[] = [
         {
           kind: "group",
           key: "activity",
@@ -68,7 +68,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           ],
         },
       ];
-      const output: MessageGroup = {
+      const output: MessageGroupData = {
         kind: "group",
         key: "output",
         role: "tool",
@@ -93,37 +93,38 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
         expanded = !expanded;
         draw();
       };
-      const draw = () => {
-        const options = {
+      function Disclosure(props: { expanded: boolean }) {
+        const options = () => ({
           showToolCalls: true,
           showReasoning: false,
-          isToolMessageExpanded: () => expanded,
+          isToolMessageExpanded: () => props.expanded,
           onToggleToolMessageExpanded: toggle,
-        };
-        render(
-          kind === "work"
-            ? renderWorkGroupSummary(
-                { key: "work", durationMs: null, groups },
-                { expanded, onToggle: toggle },
-              )
-            : kind === "activity"
-              ? renderActivityGroup(groups, options)
-              : kind === "tool"
-                ? renderToolCard(
-                    {
-                      id: "search",
-                      name: "web_search",
-                      args: { query: "disclosures" },
-                      completed: true,
-                    },
-                    { messageKey: "tool", expanded, onToggleExpanded: toggle },
-                  )
-                : kind === "tool-output"
-                  ? renderMessageGroup(output, options)
-                  : solidContent(ChatToolRawOutput, { text: "Copyable output" }),
-          container,
+        });
+        return kind === "work" ? (
+          <WorkGroupSummary
+            item={{ key: "work", durationMs: null, groups }}
+            options={{ expanded: props.expanded, onToggle: toggle }}
+          />
+        ) : kind === "activity" ? (
+          <ActivityGroup groups={groups} options={options()} presentation="standalone" />
+        ) : kind === "tool" ? (
+          <ChatToolCard
+            card={{
+              id: "search",
+              name: "web_search",
+              args: { query: "disclosures" },
+              completed: true,
+            }}
+            options={{ messageKey: "tool", expanded: props.expanded, onToggleExpanded: toggle }}
+          />
+        ) : kind === "tool-output" ? (
+          <MessageGroup group={output} options={options()} />
+        ) : (
+          <ChatToolRawOutput text="Copyable output" />
         );
-      };
+      }
+      const view = mountSolid(Disclosure, { expanded }, container);
+      const draw = () => view.update({ expanded });
       draw();
       await settleToolBridges(container);
       const button = container.querySelector<HTMLButtonElement>(".chat-inline-disclosure")!;
@@ -148,29 +149,31 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
 
   it("keeps message prose and expanded output selectable", async () => {
     container = document.body.appendChild(document.createElement("div"));
-    render(
-      html`
-        ${renderMessageGroup(
-          {
-            kind: "group",
-            key: "answer",
-            role: "assistant",
-            timestamp: 1000,
-            isStreaming: false,
-            visibleContent: "text",
-            messages: [
-              {
-                key: "answer",
-                hasVisibleContent: true,
-                message: { role: "assistant", content: "Copyable explanation." },
-              },
-            ],
-          },
-          { showReasoning: false },
-        )}
-        ${solidContent(ChatToolRawOutput, { text: "Copyable output" })}
-      `,
-      container,
+    mountView(
+      () => (
+        <>
+          <MessageGroup
+            group={{
+              kind: "group",
+              key: "answer",
+              role: "assistant",
+              timestamp: 1000,
+              isStreaming: false,
+              visibleContent: "text",
+              messages: [
+                {
+                  key: "answer",
+                  hasVisibleContent: true,
+                  message: { role: "assistant", content: "Copyable explanation." },
+                },
+              ],
+            }}
+            options={{ showReasoning: false }}
+          />
+          <ChatToolRawOutput text="Copyable output" />
+        </>
+      ),
+      { container },
     );
     await settleToolBridges(container);
     const prose = container.querySelector<HTMLElement>(".chat-text p")!;

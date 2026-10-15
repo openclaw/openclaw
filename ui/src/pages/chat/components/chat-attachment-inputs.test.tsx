@@ -1,13 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import {
-  handleChatAttachmentMenuSelection,
-  renderChatAttachmentInputs,
-} from "./chat-attachment-inputs.ts";
+import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
+import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 
 let host: HTMLDivElement;
 let restoreDialog: () => void;
@@ -21,6 +20,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   const camera = host.querySelector("openclaw-chat-camera-capture");
+  cleanupSolid();
   host.remove();
   await camera?.updateComplete;
   await Promise.resolve();
@@ -29,27 +29,50 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: string) {
+  let update!: (props: ChatAttachmentControlsProps) => void;
+  mountSolid(
+    () => {
+      const [props, setProps] = createSignal(initial);
+      update = (next) => {
+        setProps(next);
+        flush();
+      };
+      return composerClass ? (
+        <div class={composerClass}>
+          <ChatAttachmentInputs {...props()} />
+          <div class="attachment-menu" onWa-select={handleChatAttachmentMenuSelection} />
+        </div>
+      ) : (
+        <ChatAttachmentInputs {...props()} />
+      );
+    },
+    { container: host },
+  );
+  return update;
+}
+
 it("keeps the camera idle across unchanged input renders while retaining reactive disabled and read scopes", async () => {
   const props: ChatAttachmentControlsProps = {
     readSignal: new AbortController().signal,
     onAttachmentsChange: vi.fn(),
   };
-  render(renderChatAttachmentInputs(props), host);
+  const draw = mountInputs(props);
   const camera = host.querySelector("openclaw-chat-camera-capture")!;
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
 
-  render(renderChatAttachmentInputs(props), host);
+  draw(props);
   await camera.updateComplete;
   expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
   expect(camera.childElementCount).toBe(0);
 
-  render(renderChatAttachmentInputs({ ...props, draft: "A new draft" }), host);
+  draw({ ...props, draft: "A new draft" });
   await camera.updateComplete;
   expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
   expect(camera.childElementCount).toBe(0);
 
-  render(renderChatAttachmentInputs({ ...props, disabled: true }), host);
+  draw({ ...props, disabled: true });
   await camera.updateComplete;
   expect(camera.disabled).toBe(true);
   camera.show();
@@ -57,14 +80,7 @@ it("keeps the camera idle across unchanged input renders while retaining reactiv
   expect(camera.childElementCount).toBe(0);
 
   const readSignal = new AbortController().signal;
-  render(
-    renderChatAttachmentInputs({
-      ...props,
-      disabled: true,
-      readSignal,
-    }),
-    host,
-  );
+  draw({ ...props, disabled: true, readSignal });
   await camera.updateComplete;
   expect(camera.readSignal).toBe(readSignal);
   expect(camera.childElementCount).toBe(0);
@@ -83,15 +99,7 @@ it.each(
       );
     }
     const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
-    const draw = (props: ChatAttachmentControlsProps) =>
-      render(
-        html`<div class=${composerClass}>
-          ${renderChatAttachmentInputs(props)}
-          <div class="attachment-menu" @wa-select=${handleChatAttachmentMenuSelection}></div>
-        </div>`,
-        host,
-      );
-    draw(initialProps);
+    const draw = mountInputs(initialProps, composerClass);
     const camera = host.querySelector("openclaw-chat-camera-capture");
     const menu = host.querySelector(".attachment-menu");
     const nativeInput = host.querySelector<HTMLInputElement>(".agent-chat__camera-input");
@@ -142,7 +150,7 @@ it.each(
 );
 
 it("leaves the general file picker unrestricted while photo and camera stay image-only", () => {
-  render(renderChatAttachmentInputs({ onAttachmentsChange: vi.fn() }), host);
+  mountInputs({ onAttachmentsChange: vi.fn() });
   const input = (kind: string) =>
     host.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`);
   // General files share chat admission; Android greys out anything outside an accept list.

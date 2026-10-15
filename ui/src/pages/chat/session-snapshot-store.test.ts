@@ -192,6 +192,57 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
+  it.each(["direct", "prewarmed"])(
+    "restores and rewrites pre-sanitizer snapshots without pairing credentials (%s)",
+    async (mode) => {
+      const ordinaryKey = key("agent:main:ordinary");
+      const sessionKey = key("agent:main:pairing-upgrade");
+      const writer = new SessionSnapshotStore();
+      writer.write(ordinaryKey, snapshot("ordinary"));
+      await writer.flush();
+      const safeContent = [
+        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+        { type: "image", url: "https://example.com/photo.png" },
+      ];
+      const content = [
+        ...safeContent,
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+          expiresAtMs: Date.now() + 60_000,
+          sensitive: true,
+        },
+      ];
+      const message = {
+        role: "assistant",
+        content,
+        openclawDisplayContent: content,
+        __openclaw: { id: "pairing-reply", seq: 1 },
+      };
+      await putRawRecord({
+        projectionVersion: 2,
+        sessionKey,
+        savedAt: 1,
+        sessionId: "session-1",
+        snapshot: snapshot(message),
+      });
+      if (mode === "prewarmed") {
+        prewarmChatSnapshot(sessionKey);
+      }
+      const reader = new SessionSnapshotStore();
+      const expected = snapshot({
+        ...message,
+        content: safeContent,
+        openclawDisplayContent: safeContent,
+      });
+
+      expect(await reader.read(sessionKey)).toEqual(expected);
+      await reader.flush();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({ snapshot: expected });
+      expect(await reader.read(ordinaryKey)).toEqual(snapshot("ordinary"));
+    },
+  );
+
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
     const privateKey = "agent:main:dashboard:incognito-old";
     const orphanedKey = "agent:main:subagent:incognito-metadata-only";

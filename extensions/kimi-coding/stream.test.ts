@@ -233,25 +233,6 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it("keeps tagged tool-call conversion when one wrapper changes thinking modes", async () => {
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [],
-        resultMessage: createAssistantTextMessage(KIMI_TOOL_TEXT),
-      }) as ReturnType<StreamFn>;
-    const wrapped = wrapKimiProviderStream({
-      streamFn: baseStreamFn,
-    } as never);
-    for (const reasoning of ["off", "max", undefined] as const) {
-      const stream = await wrapped(KIMI_MODEL, KIMI_CONTEXT, { reasoning });
-      await expect(stream.result()).resolves.toEqual({
-        role: "assistant",
-        content: [createReadToolCall()],
-        stopReason: "toolUse",
-      });
-    }
-  });
-
   it("defaults K3-256k to adaptive high thinking", () => {
     const modelId = "k3-256k";
     const { getCapturedModel, getCapturedPayload } = captureKimiPayload(

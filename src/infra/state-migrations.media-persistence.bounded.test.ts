@@ -152,6 +152,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   expect(result).toEqual({
     changes: [
       `Upgraded agent database schema in ${pathname}: v25 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+      expect.stringMatching(/^Saved pre-repair SQLite backup: /),
       `Migrated historical transcript directives in ${currentPath}: 1 active session(s), 0 archived transcript(s).`,
     ],
     warnings: [],
