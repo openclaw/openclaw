@@ -2,12 +2,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import {
-  hasSqliteWorkerOutcomeUnknown,
-  retainSqliteWorkerErrorCode,
-  SqliteWorkerError,
-} from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -42,7 +41,15 @@ import type {
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  acceptSessionSourceValidation,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+  type SessionSourceValidation,
+} from "./session-source-authority.js";
 import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
+import { throwSessionWorkerOutcomeUnknown } from "./session-worker-receipt.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
@@ -54,15 +61,6 @@ export type SessionEntryWorkerPreparation = (
   beforeWrite: () => void;
   release: () => Promise<void>;
 };
-
-function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
-  if (hasSqliteWorkerOutcomeUnknown(cause)) {
-    throw cause;
-  }
-  const error = new SqliteWorkerError(message, "outcome-unknown");
-  error.cause = cause;
-  throw error;
-}
 
 export async function withSessionEntryWorker<T>(
   options: ReplacementDatabaseOptions,
@@ -90,6 +88,7 @@ export async function withSessionEntryWorker<T>(
   ) => boolean,
   releaseSource?: () => void | Promise<void>,
   operationMode: "write" | "prepared-read" = "write",
+  expectedCreationIdentity?: DatabasePathIdentity,
 ): Promise<T> {
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
@@ -99,25 +98,24 @@ export async function withSessionEntryWorker<T>(
     }
     env = Object.freeze({ ...(options.env ?? process.env) });
     const targetIdentity =
-      !retainedExecution && !databaseIdentity
+      !retainedExecution && !databaseIdentity && !expectedCreationIdentity
         ? readDatabasePathIdentitySync(options.path)
         : undefined;
     execution =
       retainedExecution ??
-      captureOpenClawAgentDatabaseExecution(
-        options,
-        databaseIdentity
+      captureOpenClawAgentDatabaseExecution(options, {
+        expectedCreationIdentity: databaseIdentity
+          ? undefined
+          : (expectedCreationIdentity ??
+            (targetIdentity?.key.startsWith("path:") ? targetIdentity : undefined)),
+        expectedIdentity: databaseIdentity
           ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: databaseIdentity,
-                nativeLocation: options.path,
-              },
+              kind: "file",
+              physicalIdentity: databaseIdentity,
+              nativeLocation: options.path,
             }
-          : targetIdentity?.key.startsWith("path:")
-            ? { expectedCreationIdentity: targetIdentity }
-            : {},
-      );
+          : undefined,
+      });
   } catch (error) {
     try {
       await releaseSource?.();
@@ -403,7 +401,7 @@ export async function initializeSessionTranscriptInWorker(
           publication.settle(receipt, unknown);
         }
         if (unknown) {
-          rejectUnknownSessionEntryOutcome(
+          throwSessionWorkerOutcomeUnknown(
             "Session transcript initialization has no confirmed native completion and commit receipt",
             outcome.ok ? undefined : outcome.error,
           );
@@ -453,6 +451,7 @@ export async function runSessionEntryWorkerMutation<T>(
   lifecycle: {
     identityAgentId: string;
     onResult?: (value: T | undefined) => void;
+    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
@@ -460,6 +459,7 @@ export async function runSessionEntryWorkerMutation<T>(
     retainedExecution?: OpenClawAgentDatabaseExecution;
     signal?: AbortSignal;
     prepare?: SessionEntryWorkerPreparation;
+    onTransaction?: (facts: unknown) => void;
     errors?: { identity: string; unknown: string; missing: string; publication: string };
   } = {},
 ): Promise<T> {
@@ -518,7 +518,7 @@ export async function runSessionEntryWorkerMutation<T>(
       }
     } catch (error) {
       if (unknown) {
-        rejectUnknownSessionEntryOutcome(unknownMessage, error);
+        throwSessionWorkerOutcomeUnknown(unknownMessage, error);
       }
       throw error;
     }
@@ -553,7 +553,7 @@ export async function runSessionEntryWorkerMutation<T>(
           // Keep the executing scope and FIFO writer through native publication settlement.
           // Close joins this callback; a delayed result cannot borrow a successor owner.
           if (await settle(publication, identity)) {
-            rejectUnknownSessionEntryOutcome(
+            throwSessionWorkerOutcomeUnknown(
               unknownMessage,
               outcome.ok ? undefined : outcome.error,
             );
@@ -586,9 +586,10 @@ export async function runSessionEntryWorkerMutation<T>(
             "Session entry mutation commit omitted its publication keys",
         );
       }
-      admitted = { admission, retained };
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
+      lifecycle.beforeCommit?.(committed);
+      admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
         committed.membershipInvalidatedKeys,
@@ -605,6 +606,7 @@ export async function runSessionEntryWorkerMutation<T>(
     executionOptions.retainedExecution,
     executionOptions.signal,
     executionOptions.prepare,
+    executionOptions.onTransaction,
   );
 }
 
@@ -612,7 +614,7 @@ export async function commitSessionEntryReplacementsInWorker(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
   input: AgentDatabaseOperations["session.entries.replace"]["input"],
-  assertCurrent: () => void,
+  assertCurrent: SessionSourceAssertion,
   lifecycle: {
     identityAgentId: string;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
@@ -621,57 +623,95 @@ export async function commitSessionEntryReplacementsInWorker(
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
 ): Promise<SessionEntryReplacementCommitted> {
-  if (nativeDeletion) {
-    const { runSessionNativeBindingWorkerOperation } = await import("./session-native-binding.js");
-    return runSessionNativeBindingWorkerOperation<
-      SessionEntryReplacementCandidate,
-      SessionEntryReplacementCommitted
-    >({
-      database: options,
-      databaseIdentity,
-      agentId: lifecycle.identityAgentId,
-      retainedExecution,
-      assertCurrent,
-      captured: nativeDeletion,
-      entries: nativeDeletion.participants.map(({ sessionKey, entry }) => ({ sessionKey, entry })),
-      candidateKind: "session-entry-replacements",
-      execute: (worker, nativeBindings) =>
-        worker.execute({ type: "session.entries.replace", input: { ...input, nativeBindings } }),
-      async onCommitted(candidate, published, identity, context) {
-        try {
-          lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
-        } finally {
-          if (published) {
-            publishCommittedSessionIdentity(
-              lifecycle.identityAgentId,
-              identity,
-              published.previous,
-              published.current,
-              published.prepared,
-            );
-          }
-        }
-        await lifecycle.afterCommitted?.(context);
-        return candidate.result;
-      },
-    });
-  }
-  return runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
-    options,
-    databaseIdentity,
-    assertCurrent,
-    async (worker) => {
-      const value = await worker.execute({ type: "session.entries.replace", input });
-      if ("kind" in value) {
-        throw new Error("Session replacement returned an unexpected native binding receipt");
-      }
-      return {
-        kind: "committed",
-        value,
-        publication: value.publication,
-      };
-    },
-    lifecycle,
-    { retainedExecution },
+  const source = await prepareSessionSourceAuthority(assertCurrent);
+  const sameStore = source.checks.every(
+    ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
   );
+  const guardedInput = sameStore
+    ? { ...input, sources: source.checks.map(({ predicate }) => predicate) }
+    : input;
+  const acceptValidation = (facts: unknown) => {
+    if (isRecord(facts) && facts.kind === "session-entry-replacements-validated") {
+      // SAFETY: The paired replacement kernel supplies this transaction's source comparison.
+      acceptSessionSourceValidation(source, facts.sourceValidation as SessionSourceValidation);
+      source.assertCurrent();
+      return true;
+    }
+    return false;
+  };
+  const failures: unknown[] = [];
+  try {
+    if (nativeDeletion) {
+      const { runSessionNativeBindingWorkerOperation } =
+        await import("./session-native-binding.js");
+      return await runSessionNativeBindingWorkerOperation<
+        SessionEntryReplacementCandidate,
+        SessionEntryReplacementCommitted
+      >({
+        database: options,
+        databaseIdentity,
+        agentId: lifecycle.identityAgentId,
+        retainedExecution,
+        assertCurrent: source.assertCurrent,
+        captured: nativeDeletion,
+        entries: nativeDeletion.participants.map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry,
+        })),
+        candidateKind: "session-entry-replacements",
+        execute: (worker, nativeBindings) =>
+          worker.execute({
+            type: "session.entries.replace",
+            input: { ...guardedInput, nativeBindings },
+          }),
+        onTransactionFacts: acceptValidation,
+        async onCommitted(candidate, published, identity, context) {
+          try {
+            lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
+          } finally {
+            if (published) {
+              publishCommittedSessionIdentity(
+                lifecycle.identityAgentId,
+                identity,
+                published.previous,
+                published.current,
+                published.prepared,
+              );
+            }
+          }
+          await lifecycle.afterCommitted?.(context);
+          return candidate.result;
+        },
+      });
+    }
+    return await runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
+      options,
+      databaseIdentity,
+      source.assertCurrent,
+      async (worker) => {
+        const value = await worker.execute({
+          type: "session.entries.replace",
+          input: guardedInput,
+        });
+        if ("kind" in value) {
+          throw new Error("Session replacement returned an unexpected native binding receipt");
+        }
+        return { kind: "committed", value, publication: value.publication };
+      },
+      lifecycle,
+      {
+        retainedExecution,
+        onTransaction: (facts) => {
+          if (isRecord(facts)) {
+            acceptValidation(facts.publication);
+          }
+        },
+      },
+    );
+  } catch (error) {
+    failures.push(error);
+    throw error;
+  } finally {
+    await releaseSessionSourceAuthorities([source], failures);
+  }
 }

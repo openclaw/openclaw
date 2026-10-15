@@ -8,6 +8,8 @@ import {
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import { readSessionRowDatabaseFacts } from "../config/sessions/session-entry-read.worker.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -20,10 +22,11 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
-import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.worker.js";
+import { backfillSessionRowTranscriptFieldsInDatabase } from "./session-row-transcript-backfill.worker.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -56,35 +59,20 @@ async function withColdStore(params: BackfillParams, read: () => Promise<void>) 
   await waitForSessionTranscriptIndexReconcile(options);
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   expect(getOpenClawAgentDatabaseIfOpen(options) === undefined).toBe(true);
-  const opened: Array<{
-    database: ReturnType<typeof nodeSqlite.openNodeSqliteDatabase>;
-    readOnly: boolean;
-  }> = [];
-  const actualOpen = nodeSqlite.openNodeSqliteDatabase;
-  const observe = vi
-    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-    .mockImplementation((location, opts) => {
-      const database = actualOpen(location, opts);
-      if (
-        nodeSqlite.resolveSqliteFilesystemPath(database.location() ?? "") ===
-        nodeSqlite.resolveSqliteFilesystemPath(options.path)
-      ) {
-        opened.push({ database, readOnly: opts?.readOnly === true });
-      }
-      return database;
-    });
   try {
     await read();
-    expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(false);
     expect(getOpenClawAgentDatabaseIfOpen(options) === undefined).toBe(true);
-    expect(opened.every(({ readOnly }) => readOnly)).toBe(true);
   } finally {
-    observe.mockRestore();
-    // Failed pre-fix assertions must still join any accidentally admitted rebuild.
     await waitForSessionTranscriptIndexReconcile(options);
     await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   }
-  expect(opened.every(({ database }) => !database.isOpen)).toBe(true);
+}
+
+function backfillInDatabase(params: BackfillParams) {
+  return runOpenClawAgentWriteTransaction(
+    (database) => backfillSessionRowTranscriptFieldsInDatabase(database, params),
+    sessionDatabaseOptions(params),
+  );
 }
 
 async function withSession(
@@ -125,7 +113,7 @@ async function withSession(
 }
 
 describe("session row transcript backfill", () => {
-  it("reads a cold preview without admitting a writer or changing legacy metadata", async () => {
+  it("backfills a cold preview off the host thread without changing legacy metadata", async () => {
     await withSession(
       async (params) => {
         await withColdStore(params, async () => {
@@ -152,11 +140,27 @@ describe("session row transcript backfill", () => {
     );
   });
 
-  it.each(["current", "unavailable", "absent", "runtime alias"] as const)(
-    "reads optional terminal fallback fields without writer admission (%s)",
+  it.each([
+    "current",
+    "unavailable",
+    "absent",
+    "runtime alias",
+    "media-only rewrite",
+    "hidden rewrite",
+    "silent rewrite",
+  ] as const)(
+    "backfills optional terminal fallback fields off the host thread (%s)",
     async (storage) => {
       const alias = storage === "runtime alias";
-      const preview = alias ? "Finished on equivalent runtime" : "Finished with fallback";
+      const mediaRewrite = storage === "media-only rewrite" || storage === "hidden rewrite";
+      const silentRewrite = storage === "silent rewrite";
+      const preview = alias
+        ? "Finished on equivalent runtime"
+        : mediaRewrite
+          ? "MEDIA:./proof.png"
+          : silentRewrite
+            ? "NO_REPLY"
+            : "Finished with fallback";
       await withSession(
         async (seeded) => {
           if (alias) {
@@ -196,14 +200,16 @@ describe("session row transcript backfill", () => {
               const hostSql = observeHostDataSql();
               try {
                 await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
-                  storage === "current"
-                    ? {
-                        lastMessagePreview: "Finished with fallback",
-                        fallbackModel: { provider: "unit-test", model: "fallback" },
-                      }
-                    : alias
-                      ? { lastMessagePreview: preview }
-                      : {},
+                  storage === "media-only rewrite"
+                    ? { fallbackModel: { provider: "unit-test", model: "fallback" } }
+                    : storage === "current"
+                      ? {
+                          lastMessagePreview: "Finished with fallback",
+                          fallbackModel: { provider: "unit-test", model: "fallback" },
+                        }
+                      : alias
+                        ? { lastMessagePreview: preview }
+                        : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -239,6 +245,18 @@ describe("session row transcript backfill", () => {
           {
             role: "assistant",
             content: preview,
+            ...(mediaRewrite || silentRewrite
+              ? {
+                  openclawDisplayContent: [
+                    {
+                      type: "image",
+                      url: "/api/chat/media/outgoing/proof.png",
+                      mimeType: "image/png",
+                    },
+                  ],
+                }
+              : {}),
+            ...(storage === "hidden rewrite" ? { display: false } : {}),
             provider: "unit-test",
             model: alias ? "same" : "fallback",
             stopReason: "stop",
@@ -263,7 +281,7 @@ describe("session row transcript backfill", () => {
         const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
         const read = () => {
           reads.queries.length = 0;
-          const fields = readSessionRowTranscriptFields({ ...params, includeTerminalModel: true });
+          const fields = backfillInDatabase(params);
           expect(
             reads.queries.filter((sql) => sql.includes('from "transcript_events" as "event"')),
           ).toHaveLength(1);
@@ -277,9 +295,9 @@ describe("session row transcript backfill", () => {
           return fields;
         };
         try {
-          expect(read()).toEqual({
+          expect(read()).toMatchObject({
             lastMessagePreview: "First terminal reply",
-            terminalModel: { modelProvider: "unit-test", model: "fallback" },
+            terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
           });
           await sessionAccessor.persistSessionTranscriptTurn(params, {
             messages: [
@@ -296,9 +314,28 @@ describe("session row transcript backfill", () => {
             ],
             touchSessionEntry: false,
           });
-          expect(read()).toEqual({
+          expect(
+            readSessionRowDatabaseFacts({
+              kind: "session-row-facts",
+              database: sessionDatabaseOptions(params),
+              env: process.env,
+              sessionKeys: [params.sessionKey],
+            }).rows[0],
+          ).toMatchObject({
+            transcriptPreview: "Next terminal reply",
+            transcriptTerminalModel: {
+              runId: "terminal-run",
+              modelProvider: "unit-test",
+              model: "next-fallback",
+            },
+          });
+          expect(read()).toMatchObject({
             lastMessagePreview: "Next terminal reply",
-            terminalModel: { modelProvider: "unit-test", model: "next-fallback" },
+            terminalModel: {
+              runId: "terminal-run",
+              modelProvider: "unit-test",
+              model: "next-fallback",
+            },
           });
         } finally {
           reads.restore();
@@ -325,11 +362,84 @@ describe("session row transcript backfill", () => {
     );
   });
 
+  it("reuses a completed backfill after reopening and invalidates an equal-mtime legacy import", async () => {
+    await withSession(async (params) => {
+      const options = sessionDatabaseOptions(params);
+      const readFacts = () =>
+        readSessionRowDatabaseFacts({
+          kind: "session-row-facts",
+          database: options,
+          env: process.env,
+          sessionKeys: [params.sessionKey],
+        }).rows[0];
+      const transcriptMtimeMs = runOpenClawAgentWriteTransaction(({ db }) => {
+        db.prepare(
+          "UPDATE session_windows SET row_transcript_json = NULL, row_transcript_updated_at = NULL WHERE session_id = ?",
+        ).run(params.sessionId);
+        const row = db
+          .prepare("SELECT transcript_updated_at FROM session_windows WHERE session_id = ?")
+          .get(params.sessionId);
+        if (typeof row?.transcript_updated_at !== "number") {
+          throw new Error("Seeded transcript has no mutation timestamp");
+        }
+        return row.transcript_updated_at;
+      }, options);
+      expect(readFacts()?.transcriptPreview).toBeUndefined();
+      await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        lastMessagePreview: "Found the slow query",
+      });
+
+      await withColdStore(params, async () => {
+        const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+        try {
+          expect(readFacts()).toMatchObject({
+            transcriptPreview: "Found the slow query",
+            transcriptTerminalModel: null,
+          });
+          expect(
+            reads.queries.filter(
+              (sql) =>
+                sql.includes('from "transcript_events" as "event"') ||
+                sql.includes('from "session_transcript_active_events" as "active"'),
+            ),
+          ).toEqual([]);
+        } finally {
+          reads.restore();
+        }
+      });
+
+      await importSqliteSessionRowsBatch([
+        {
+          ...params,
+          entry: params.sessionEntry,
+          transcriptMtimeMs,
+          readTranscriptEvents: (append) => {
+            append({
+              type: "message",
+              message: { role: "assistant", content: "Imported next" },
+            });
+          },
+        },
+      ]);
+      expect(
+        openOpenClawAgentDatabase(options)
+          .db.prepare("SELECT transcript_updated_at FROM session_windows WHERE session_id = ?")
+          .get(params.sessionId),
+      ).toEqual({ transcript_updated_at: transcriptMtimeMs });
+      expect(readFacts()?.transcriptPreview).toBeUndefined();
+      await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        lastMessagePreview: "Imported next",
+      });
+      expect(readFacts()?.transcriptPreview).toBe("Imported next");
+    });
+  });
+
   it("reads terminal facts beyond the preview budget without showing an older preview", async () => {
     await withSession(
       async (params) => {
-        expect(readSessionRowTranscriptFields({ ...params, includeTerminalModel: true })).toEqual({
-          terminalModel: { modelProvider: "unit-test", model: "fallback" },
+        expect(backfillInDatabase(params)).toMatchObject({
+          lastMessagePreview: null,
+          terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
         });
       },
       [
@@ -366,7 +476,7 @@ describe("session row transcript backfill", () => {
           }
           return parse(text, reviver);
         });
-        expect(readSessionRowTranscriptFields(params)).toEqual({
+        expect(backfillInDatabase(params)).toMatchObject({
           lastMessagePreview: "Latest reply",
         });
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();

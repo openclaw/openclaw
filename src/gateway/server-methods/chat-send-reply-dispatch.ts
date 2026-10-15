@@ -17,6 +17,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
@@ -123,7 +124,12 @@ export function createChatSendReplyDispatch(params: {
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   const commentaryMedia = createAssistantCommentaryMediaCustody({
     requesterContext: params.requesterContext,
-    session,
+    session: {
+      ...session,
+      storePath:
+        session.storePath ??
+        resolveSessionStorePathCore(cfg.session?.store, { agentId: session.agentId }),
+    },
     accountId,
     getRunId: () => agentRunId,
     isCurrent: () => isAgentRunStarted() && params.isRunCurrent?.() === true,
@@ -365,6 +371,7 @@ export function createChatSendReplyDispatch(params: {
         mediaMessage,
         assistantContent,
         persistedAssistantContent,
+        mediaBySource,
       } = await prepareWebchatReplyMediaForDisplay({
         scope: mediaScope,
         storePath: latestStorePath,
@@ -425,6 +432,7 @@ export function createChatSendReplyDispatch(params: {
         // identity so media materialization cannot append a parallel reply.
         rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
           content: persistedContentForAppend,
+          mediaBySource,
           idempotencyKey: ownedTranscriptIdempotencyKey,
           managedMediaUrls: sourceMediaUrls,
           scope: transcriptScope,
@@ -445,6 +453,7 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: assistantTranscriptRewriteState.afterSeq,
           assistantMessageIndex,
           content: persistedContentForAppend,
+          mediaBySource,
           expectedGeneration: assistantTranscriptRewriteState.generation,
           mediaUrls: sourceMediaUrls,
           rejectedMediaCount: mediaFailures.filter(

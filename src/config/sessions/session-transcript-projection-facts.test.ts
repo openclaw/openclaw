@@ -9,6 +9,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "../../trajectory/runtime-store.sqlite.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   readCurrentProjectionSnapshot,
@@ -31,12 +32,14 @@ import {
 import { withSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
@@ -59,7 +62,7 @@ const assistant = {
   message: { role: "assistant", content: "answer" },
 };
 
-function fixture() {
+function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   const { database, scope: originalScope } = createSessionCompoundWorkerFixture();
   const scope = { ...originalScope, path: database.path };
   const options = { agentId: database.agentId, path: database.path };
@@ -68,7 +71,7 @@ function fixture() {
     appendTranscriptEventsInTransaction(database, scope, events, {
       scheduleProjectionReconcile: false,
     });
-  write(() => append([user, assistant]));
+  write(() => append(initialEvents));
   const identity = readOpenClawAgentDatabaseIdentity(database);
   if (typeof identity.identity !== "string") {
     throw new Error("Projection receipt proof requires a physical database");
@@ -140,7 +143,7 @@ it("carries a retained actor projection into the history reader and rejects it a
       sessionId: f.scope.sessionId,
     };
     try {
-      expect(replica.beginRead().install(f.hydrate().hot)).toBe(true);
+      expect(replica.beginRead()(f.hydrate().hot)).toBe(true);
       const receipt = readSessionActorProjectionReceipt(locator);
       if (!receipt) {
         throw new Error("Installed actor projection was not available to the history reader");
@@ -408,6 +411,112 @@ it("does not let a snapshot consumer mutate the next reader's retained facts", a
         kind: "value",
         value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
       });
+    });
+  });
+});
+
+it("covers the first append after hydrating an empty actor", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture([]);
+    const actor = f.hydrate();
+    f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([user])));
+    const receipt = f.receipt(actor);
+    expect(receipt.facts.contextMetadata).toBeUndefined();
+    expect(
+      withSessionTranscriptProjectionReceipt(receipt, () =>
+        readSessionTranscriptBoundedActiveContextCore(f.scope, {
+          maxBytes: 1_000_000,
+          maxEvents: 100,
+        }),
+      ),
+    ).toMatchObject({
+      events: [user],
+      serializedBytes: Buffer.byteLength(JSON.stringify(user)) + 1,
+    });
+  });
+});
+
+it("preserves bounded context and accounting with compact committed receipts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const actor = f.hydrate();
+    const readContext = (receipt?: SessionTranscriptProjectionReceipt, maxEvents = 100) =>
+      withSessionTranscriptProjectionReceipt(receipt, () =>
+        readSessionTranscriptBoundedActiveContextCore(f.scope, { maxBytes: 1_000_000, maxEvents }),
+      );
+    const readAccounting = (receipt?: SessionTranscriptProjectionReceipt) =>
+      withSessionTranscriptProjectionReceipt(receipt && { ...receipt, contextOnly: true }, () =>
+        readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
+          readSessionTranscriptAccountingFromProjection(projection, {
+            includeByteSize: true,
+            includeUsage: true,
+            includeTurnTaint: true,
+          }),
+        ),
+      );
+    const receipt = f.receipt(actor);
+    expect(readContext(receipt)).toEqual(readContext());
+    expect(readAccounting(receipt)).toEqual(readAccounting());
+    expect(readContext(receipt, 1)).toMatchObject({ events: [assistant], truncated: true });
+
+    const next = {
+      ...user,
+      id: "next",
+      parentId: "assistant",
+      message: { role: "user", content: "é🦞" },
+    };
+    f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([next])));
+    const committed = f.receipt(actor);
+    expect(readContext(committed).events).toEqual([user, assistant, next]);
+    expect(readAccounting(committed)).toMatchObject({
+      kind: "value",
+      value: {
+        eventCount: 3,
+        byteSize: [user, assistant, next].reduce(
+          (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+          0,
+        ),
+      },
+    });
+  });
+});
+
+it("keeps stored header bytes, event limits and admitted-turn fences in the covered reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const header = { type: "session", version: 3, id: "header", cwd: "/synthetic/é" };
+    const f = fixture([header, user, assistant]);
+    const receipt = f.receipt();
+    const headerBytes = Buffer.byteLength(JSON.stringify(header)) + 1;
+    const answerBytes = Buffer.byteLength(JSON.stringify(assistant)) + 1;
+    const read = (maxBytes: number) =>
+      withSessionTranscriptProjectionReceipt(receipt, () =>
+        readSessionTranscriptBoundedActiveContextCore(f.scope, { maxBytes, maxEvents: 100 }),
+      );
+    expect(read(headerBytes + answerBytes)).toMatchObject({
+      events: [header, assistant],
+      serializedBytes: headerBytes + answerBytes,
+      truncated: true,
+    });
+    expect(() => read(headerBytes - 1)).toThrow("header exceeds");
+    if (!receipt.facts.generation) {
+      throw new Error("Transcript fixture requires a generation");
+    }
+    const fence = {
+      agentId: f.database.agentId,
+      sessionKey: f.scope.sessionKey,
+      sessionId: f.scope.sessionId,
+      storePath: f.database.path,
+      role: "user" as const,
+      entryId: "user",
+      logicalTurnId: "user-turn",
+      rawSeq: 1,
+      activeMessagePosition: 0,
+      effectiveParentId: null,
+      generation: receipt.facts.generation,
+    };
+    expect(runWithSessionTranscriptReadFence(fence, () => read(1_000_000))).toMatchObject({
+      events: [header],
+      serializedBytes: headerBytes,
     });
   });
 });

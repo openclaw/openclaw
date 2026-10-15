@@ -243,6 +243,14 @@ External supervisor implementations should also apply these acceptance rules:
 - Session projection warming overlaps transport setup after session admission and request-context preparation. Readiness still waits for initial session materialization and interrupted-turn recovery; a listener can be live while those gates remain pending. Update canaries continue to defer session catalogs until activation.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
 
+For persistent startup tracing, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the
+global `~/.openclaw/.env` file (`%USERPROFILE%\.openclaw\.env` on Windows),
+or use the config `env.vars` block. See [Environment variables](/help/environment).
+An existing startup-trace assignment in the service definition, including
+`set "OPENCLAW_GATEWAY_STARTUP_TRACE=1"` in Windows `gateway.cmd`, also survives
+`openclaw gateway install --force` and service repair. Generated service values
+remain authoritative; arbitrary `OPENCLAW_*` script edits are not preserved.
+
 Without tracing, stops and restarts report nonzero active-work category counts at
 the first drain snapshot and at most once every 30 seconds while still pending.
 These reports omit task identities and request origins; categories can overlap.

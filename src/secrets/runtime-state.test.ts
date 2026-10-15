@@ -10,6 +10,7 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "../agents/auth-profiles/credential-observation.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -150,6 +151,7 @@ describe("secrets runtime state", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
   });
 
   afterEach(() => {

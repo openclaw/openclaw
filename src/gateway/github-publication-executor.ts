@@ -83,8 +83,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
     return undefined;
   }
   let worktreeOwner: Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>;
-  using _ = { [Symbol.dispose]: () => worktreeOwner?.release() };
-
+  let releaseWorktree: (() => void) | undefined;
   const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
@@ -96,6 +95,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   let url: string | undefined;
   try {
     worktreeOwner = await readLocalGitHubPublicationWorktreeOwner(row);
+    releaseWorktree = worktreeOwner.release;
     const { worktree } = worktreeOwner;
     assertCurrent();
     const target = await prepareGitHubPublicationTarget({
@@ -133,6 +133,8 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
       "GitHub publication is unconfirmed; restore read access to the original target and retry recovery. Recorded effects are retained.",
       { cause: error },
     );
+  } finally {
+    releaseWorktree?.();
   }
   if (!url) {
     return undefined;
@@ -275,9 +277,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         );
       }
     }
-    let headCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
-      cwd: worktree.path,
-    });
     let identity = await refreshIdentity();
     const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } =
       await prepareGitHubPublicationTarget({
@@ -343,6 +342,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     }
     const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
     const pullRequestMarker = `<!-- openclaw-publication:${row.request_id} -->`;
+    const head = await command(
+      ["git", "show", "-s", "--no-show-signature", "--format=%H%n%T%n%P%n%B", "HEAD"],
+      {
+        cwd: worktree.path,
+      },
+    );
+    const [initialHead, currentTree, parents, ...message] = head.split("\n");
+    let headCommit = initialHead!;
+    const currentMessage = message.join("\n").trim();
     const findPullRequest = () =>
       findGitHubPublicationPullRequest({
         repository,
@@ -359,16 +367,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
         assertCurrent: assertAuthority,
       });
-    const currentMessage = await command(["git", "show", "-s", "--format=%B", "HEAD"], {
-      cwd: worktree.path,
-    });
     const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
-    const currentTree = await command(["git", "rev-parse", "HEAD^{tree}"], {
-      cwd: worktree.path,
-    });
     if (markerPresent) {
-      const markerParent = await command(["git", "rev-parse", "HEAD^"], { cwd: worktree.path });
-      if (markerParent !== sourceHeadCommit || currentTree !== workspaceTree) {
+      if (parents!.split(" ", 1)[0] !== sourceHeadCommit || currentTree !== workspaceTree) {
         throw new GitHubPublicationWorkspaceChangedError(
           "GitHub publication workspace changed after its accepted snapshot.",
         );
@@ -718,5 +719,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       throw error;
     }
     return result;
+  } finally {
+    worktreeOwner?.release();
   }
 }

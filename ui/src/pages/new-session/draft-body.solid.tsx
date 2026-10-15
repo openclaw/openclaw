@@ -28,7 +28,7 @@ import { hasUserFileAttachments } from "../chat/components/chat-message-attachme
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
-import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 
 registerEnglishCatalog(registerNewSessionSetupEnglish);
@@ -50,7 +50,7 @@ export type NewSessionBodyProps = {
   onOpenImage: (item: ImageLightboxItem) => void;
 };
 
-export function newSessionAnnouncement(
+function newSessionAnnouncement(
   props: Pick<NewSessionBodyProps, "pendingMessage" | "completion" | "statusLabel">,
 ) {
   return props.pendingMessage
@@ -230,11 +230,9 @@ function NewSessionSubmission(props: {
           <Show
             when={props.completion}
             fallback={
-              <LitContent
-                value={renderChatWorkingIndicator(
-                  { kind: "reading-indicator", key, startedAt: props.message.timestamp },
-                  { startupLabel: props.statusLabel ?? t("newSession.starting") },
-                )}
+              <ChatWorkingIndicator
+                part={{ kind: "reading-indicator", key, startedAt: props.message.timestamp }}
+                options={{ startupLabel: props.statusLabel ?? t("newSession.starting") }}
               />
             }
           >

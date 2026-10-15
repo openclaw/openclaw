@@ -137,6 +137,7 @@ export class NewSessionPageOwner extends ControllerHost {
           restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         closeTransientUi: () => {
           this.closeAttachmentPanel();
+          this.draft.browser.close();
           closeSessionMenus(this.host);
         },
         takePreparedTitle: () => this.titlePreparation.takePreparedTitle(),

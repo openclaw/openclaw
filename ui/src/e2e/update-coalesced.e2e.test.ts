@@ -85,7 +85,7 @@ suite.define(() => {
         const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         await tooltipHost.evaluate((element) => {
           element.addEventListener(
-            "wa-after-show",
+            "overlay-after-show",
             () => element.setAttribute("data-e2e-after-show", ""),
             { once: true },
           );

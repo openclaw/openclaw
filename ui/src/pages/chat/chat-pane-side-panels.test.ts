@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
+import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -39,36 +39,39 @@ function createPane() {
   return { ...fixture, parent, child, roster };
 }
 
-it("reveals a batch once, honors its dismissal, and keeps settled results open", () => {
+it("keeps Subagents closed through hydration, new batches, and session identity changes", () => {
   const { pane, state, parent, child, roster } = createPane();
   pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+  const layout = state.sidebarLayout;
 
   roster.rows = [child];
   parent.hasActiveSubagentRun = true;
   pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
-
-  state.updateSidebarLayout(closeSlot(state.sidebarLayout, "subagents"));
-  pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+  expect(state.sidebarLayout).toEqual(layout);
 
   delete parent.sessionId;
   pane.render();
-  parent.sessionId = "parent-session";
+  parent.sessionId = "replacement-session";
   pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+  expect(state.sidebarLayout).toEqual(layout);
 
   child.hasActiveRun = false;
   child.status = "done";
   parent.hasActiveSubagentRun = false;
   pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-
   child.hasActiveRun = true;
   child.status = "running";
   parent.hasActiveSubagentRun = true;
   pane.render();
+  expect(state.sidebarLayout).toEqual(layout);
+});
+
+it("preserves a manually opened panel and never reopens it after dismissal", () => {
+  const { pane, state, parent, child, roster } = createPane();
+  parent.hasActiveSubagentRun = true;
+  roster.rows = [child];
+  pane.requestSubagentsPanel("open");
+  pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
   child.hasActiveRun = false;
@@ -77,85 +80,23 @@ it("reveals a batch once, honors its dismissal, and keeps settled results open",
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
-  const next = createRefreshChatPane();
-  next.state.sessionKey = "agent:main:next";
-  next.state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [{ key: next.state.sessionKey, kind: "direct" }],
-  };
-  next.pane.render();
-  expect(isSidebarSlotVisible(next.state.sidebarLayout, "subagents")).toBe(false);
-});
-
-it("does not mistake an overlapping roster read for settlement after a pane close", () => {
-  const { pane, state, parent, child, roster } = createPane();
-  parent.hasActiveSubagentRun = true;
-  roster.rows = [child];
+  pane.requestSubagentsPanel("toggle");
   pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
-  state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, false));
-
-  parent.hasActiveSubagentRun = false;
-  roster.rows = [];
-  roster.pendingChildRead = true;
-  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+  child.hasActiveRun = true;
+  child.status = "running";
   parent.hasActiveSubagentRun = true;
-  roster.rows = [child];
-  roster.pendingChildRead = false;
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
 });
 
-it.each([{ label: "embedded subagent transcript", sessionKey: "agent:main:subagent:parent" }])(
-  "does not automatically reveal a listed running child in a $label pane",
-  ({ sessionKey }) => {
-    const { pane, state, parent, child, roster } = createPane();
-    pane.compact = true;
-    parent.key = sessionKey;
-    parent.hasActiveSubagentRun = true;
-    child.spawnedBy = sessionKey;
-    state.sessionKey = sessionKey;
-    roster.rows = [child];
-
-    pane.render();
-    expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-  },
-);
-
-it("reveals listed subagents even when an ACP sibling cannot be shown in the panel", () => {
+it("leaves the selected panel unchanged when running children are discovered", () => {
   const { pane, state, parent, child, roster } = createPane();
-  parent.hasActiveSubagentRun = true;
-  roster.rows = [{ ...child, key: "agent:main:acp:coder" }, child];
-  pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
-});
-
-it("adds a running batch without replacing the user's selected panel during hydration or settlement", () => {
-  const { pane, state, parent, child, roster } = createPane();
-  pane.render();
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "processes"));
-  const selected = state.sidebarLayout.columns[0]!.activePanelId;
-
+  const layout = state.sidebarLayout;
   parent.hasActiveSubagentRun = true;
   roster.rows = [child];
   pane.render();
+  expect(state.sidebarLayout).toEqual(layout);
   expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(true);
-  expect(state.sidebarLayout.columns[0]!.activePanelId).toBe(selected);
-  expect(state.sidebarLayout.columns[0]!.panels.some((panel) => panel.slot === "subagents")).toBe(
-    true,
-  );
-
-  delete parent.sessionId;
-  pane.render();
-  parent.sessionId = "parent-session";
-  pane.render();
-  child.hasActiveRun = false;
-  child.status = "done";
-  parent.hasActiveSubagentRun = false;
-  pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(true);
-  expect(state.sidebarLayout.columns[0]!.activePanelId).toBe(selected);
 });

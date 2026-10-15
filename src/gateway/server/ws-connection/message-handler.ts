@@ -206,7 +206,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       return;
     }
 
-    const text = rawDataToString(data);
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(rawDataToString(data));
+    } catch (err) {
+      setHandshakeState("failed");
+      setCloseCause("parse-error", { error: formatForLog(err) });
+      logGateway.error(`parse error: ${formatForLog(err)}`);
+      logWs("out", "parse-error", { connId, error: formatForLog(err) });
+      close(1007, "invalid JSON");
+      return;
+    }
+    const parsed = decoded;
+    let helloDelivered = false;
     // Connect phases share cleanup ownership; the outer catch must release
     // any claim installed before a later phase fails.
     const pendingNodePairingCleanup: { value?: NodePairingCleanupClaim } = {};
@@ -247,7 +259,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     const client = getClient();
     try {
-      const parsed: unknown = JSON.parse(text);
       const frameRecord = asOptionalObjectRecord(parsed);
       if (!client && claimsWorkerConnectionIdentity(frameRecord?.params)) {
         setHandshakeState("failed");
@@ -364,7 +375,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
-          onHelloDelivered: flushQueuedHandshakeFrames,
+          onHelloDelivered: () => {
+            helloDelivered = true;
+            flushQueuedHandshakeFrames();
+          },
           onPairingWait: () => {
             waitingForPairing = true;
             params.clearHandshakeTimer();
@@ -399,11 +413,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       );
     } catch (err) {
       await releasePendingNodePairingCleanup();
-      logGateway.error(`parse/handle error: ${String(err)}`);
-      logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      // Failed connect frames close even after registration.
-      if (!client) {
-        close();
+      logGateway.error(`frame handler failed conn=${connId}: ${formatForLog(err)}`);
+      logWs("out", "handler-error", { connId, error: formatForLog(err) });
+      if (!helloDelivered && validateRequestFrame(parsed) && !isClosed()) {
+        send({
+          type: "res",
+          id: parsed.id,
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+        });
       }
     }
   };

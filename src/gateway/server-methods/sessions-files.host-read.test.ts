@@ -36,8 +36,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (original) => ({
   ...(await original<typeof import("../session-utils.js")>()),
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({

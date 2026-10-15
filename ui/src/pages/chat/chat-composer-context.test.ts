@@ -53,7 +53,10 @@ describe("renderChatComposer context usage", () => {
         contextBudgetStatus: contextBudgetStatusFixture(),
       }),
     });
-    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("Context");
+    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("");
+    expect(container.querySelector(".context-ring")?.getAttribute("title")).toBe(
+      "Open context usage details",
+    );
     expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
     expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
     expect(

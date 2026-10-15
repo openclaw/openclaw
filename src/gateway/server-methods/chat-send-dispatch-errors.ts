@@ -18,7 +18,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatError } from "./chat-broadcast.js";
+import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -101,11 +101,17 @@ export async function handleChatSendSetupError(params: {
   }
   const errorMessage = formatChatSendError(params.error);
   const errorKind = resolveStateContentionPresentation(params.error)?.errorKind;
-  const failureDisposition = classifyAcceptedChatSendFailure({
-    error: params.error,
-    phase: "pre-ack",
-  });
-  if (restartSafeAdmission) {
+  const restart =
+    resolveAgentRunErrorLifecycleFields(params.error, undefined).stopReason === "restart";
+  // Before acknowledgment the browser still owns retry. Do not manufacture a
+  // terminal receipt or retire a committed recovery claim for an expected restart.
+  const failureDisposition = restart
+    ? "client-retry"
+    : classifyAcceptedChatSendFailure({
+        error: params.error,
+        phase: "pre-ack",
+      });
+  if (restartSafeAdmission && !restart) {
     const terminalized = await params
       .terminalizeRestartSafeAdmission({
         error: errorMessage,
@@ -217,14 +223,26 @@ export function createChatSendDispatchErrorLifecycle(params: {
       !hidden &&
       (params.isReplyDispatchRun?.() || activeRunAbort.entry?.terminalOutcomeObserved !== true)
     ) {
-      broadcastChatError({
-        terminalEntry: jobSessionBinding,
-        context,
-        runId: clientRunId,
-        sessionKey,
-        agentId,
-        ...error,
-      });
+      if (error.stopReason === "restart") {
+        broadcastChatTerminal({
+          terminalEntry: jobSessionBinding,
+          context,
+          runId: clientRunId,
+          sessionKey,
+          agentId,
+          state: "aborted",
+          stopReason: "restart",
+        });
+      } else {
+        broadcastChatError({
+          terminalEntry: jobSessionBinding,
+          context,
+          runId: clientRunId,
+          sessionKey,
+          agentId,
+          ...error,
+        });
+      }
     }
   };
 
@@ -288,7 +306,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
     activeRunAbort.cleanup();
 
     let restartSafeDispatchFailureTerminalized = false;
-    if (restartSafeAdmission && !agentTerminalOwnedAtDispatchReject) {
+    if (
+      restartSafeAdmission &&
+      !agentTerminalOwnedAtDispatchReject &&
+      terminationFields.stopReason !== "restart"
+    ) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         error: errorMessage,
         errorKind,
@@ -335,6 +357,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       // Native lifecycle owns its replay result; dispatched runtimes leave
       // failure projection to this owner, including transcript-write failures.
       const publish = () => {
+        const restart = terminationFields.stopReason === "restart";
         const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err, { message: errorMessage });
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
@@ -342,14 +365,20 @@ export function createChatSendDispatchErrorLifecycle(params: {
           session: captureAgentJobSession(jobSessionBinding),
           entry: {
             ts: Date.now(),
-            ok: false,
-            payload: {
-              runId: clientRunId,
-              status: "error" as const,
-              summary: errorMessage,
-              ...terminationFields,
-            },
-            error,
+            ok: restart,
+            payload: restart
+              ? buildAbortedChatSendPayload({
+                  runId: clientRunId,
+                  stopReason: "restart",
+                  endedAt: pendingDispatchLifecycleError?.endedAt ?? Date.now(),
+                })
+              : {
+                  runId: clientRunId,
+                  status: "error" as const,
+                  summary: errorMessage,
+                  ...terminationFields,
+                },
+            ...(restart ? {} : { error }),
           },
         });
         broadcastError({ errorMessage, errorKind, stopReason: terminationFields.stopReason });

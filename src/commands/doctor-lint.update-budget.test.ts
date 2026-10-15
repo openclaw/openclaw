@@ -2,11 +2,16 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDoctorUpdateBudget } from "../flows/doctor-update-budget.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { DoctorHealthCheck } from "../flows/health-check-runner-types.js";
 import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { createUpdateRun, recordUpdateRunPhase } from "../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -73,7 +78,18 @@ afterEach(() => {
   clearHealthChecksForTest();
 });
 
-async function runLintFixture(agentCount: number, options: DoctorLintCliOptions = {}) {
+type DriverFixture = {
+  /** Drivers since 2026.10.1 record this receipt before copying private state. */
+  snapshotReceipt?: boolean;
+  /** Time since `validating` started, including snapshot and earlier commands. */
+  validationElapsedMs?: number;
+};
+
+async function runLintFixture(
+  agentCount: number,
+  options: DoctorLintCliOptions = {},
+  { snapshotReceipt = false, validationElapsedMs = 20_000 }: DriverFixture = {},
+) {
   const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -106,6 +122,13 @@ async function runLintFixture(agentCount: number, options: DoctorLintCliOptions 
       { env },
     );
     recordUpdateRunPhase(run.runId, "validating", {}, { env });
+    if (snapshotReceipt) {
+      recordUpdateRunStep(
+        run.runId,
+        { step: "candidate-state-snapshot", status: "in_progress", startedAtMs: Date.now() },
+        { env },
+      );
+    }
     closeOpenClawStateDatabaseForTest();
     // Emulate the child's rehearsal env without moving the process-lived broker
     // socket into state that this fixture removes after each case.
@@ -116,13 +139,17 @@ async function runLintFixture(agentCount: number, options: DoctorLintCliOptions 
         vi.stubEnv(key, value);
       }
     }
-    observed.now = startedAt + 20_000;
+    observed.now = startedAt + validationElapsedMs;
     vi.spyOn(Date, "now").mockImplementation(() => observed.now);
+    // This lint command's process started one second before it inspects.
+    vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(observed.now - 1_000);
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => {
       observed.reports += 1;
       return true;
     });
     try {
+      const budget = await resolveDoctorUpdateBudget({ cfg, env: process.env });
+      const budgetResolvedAt = observed.now;
       const exitCode = await runDoctorLintCli(createTestRuntime(), {
         json: true,
         severityMin: "error",
@@ -132,6 +159,8 @@ async function runLintFixture(agentCount: number, options: DoctorLintCliOptions 
         exitCode,
         stdout: String(stdout.mock.calls.at(-1)?.[0]),
         elapsedMs: observed.now - startedAt,
+        budget,
+        budgetResolvedAt,
       };
     } finally {
       stdout.mockRestore();
@@ -166,6 +195,42 @@ it.each([3, 480])(
             fixHint: expect.stringContaining("openclaw doctor"),
           }),
     ]);
+  },
+);
+
+it.each([
+  { driver: "2026.10.1+ (snapshot receipt)", snapshotReceipt: true },
+  { driver: "older (validating only)", snapshotReceipt: false },
+])(
+  "anchors lint after a slow snapshot and Doctor for $driver drivers",
+  async ({ snapshotReceipt }) => {
+    // #170333: snapshot 122s + candidate-doctor 153s before lint started. The
+    // copied ledger has no candidate-doctor-lint step; it ends at the snapshot.
+    const result = await runLintFixture(3, {}, { snapshotReceipt, validationElapsedMs: 280_000 });
+    const report = parseReleasedDoctorLintReport(result.stdout);
+    expect(result.exitCode, result.stdout).toBe(0);
+    expect(report.ok).toBe(true);
+    const deferred = report.warnings.filter(
+      (finding) => finding.errorCode === "update-inspection-deferred",
+    );
+    if (snapshotReceipt) {
+      expect(result.budget).toMatchObject({ source: "validation-command" });
+      expect(result.budget?.commandStartedAtMs).toBe(result.budgetResolvedAt - 1_000);
+      // Disposal keeps nearly the full fresh command budget, not a ms-scale clamp.
+      expect(result.budget!.disposalDeadlineMs! - result.budgetResolvedAt).toBe(287_000);
+      expect(deferred).toEqual([]);
+      expect(report.checksRun).toBe(2);
+    } else {
+      expect(result.budget).toMatchObject({ source: "validation-ledger" });
+      expect(result.budget?.commandStartedAtMs).toBeUndefined();
+      expect(deferred).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/lint-inspection",
+          message: expect.stringContaining("(validation-ledger)"),
+        }),
+      ]);
+      expect(report.checksRun).toBe(0);
+    }
   },
 );
 

@@ -249,14 +249,15 @@ export async function probeWorkspaceGitMode(params: {
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }
+  const commandOptions = {
+    ...params.commandOptions,
+    env: { ...params.commandOptions.env, GIT_NO_LAZY_FETCH: "1" },
+  };
   const [gitRootResult, gitBaseResult] = await Promise.all([
-    params.runTask(
-      ["git", "-C", params.localPath, "rev-parse", "--show-toplevel"],
-      params.commandOptions,
-    ),
+    params.runTask(["git", "-C", params.localPath, "rev-parse", "--show-toplevel"], commandOptions),
     params.runTask(
       ["git", "-C", params.localPath, "rev-parse", "--verify", "--quiet", "HEAD"],
-      params.commandOptions,
+      commandOptions,
     ),
   ]);
   if (!workerWorkspaceCommandSucceeded(gitRootResult)) {
@@ -277,11 +278,11 @@ export async function probeWorkspaceGitMode(params: {
 
 export async function resolveWorkerWorkspaceGitAuthor(
   request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
-  runTask: (argv: string[]) => Promise<SpawnResult>,
+  runTask: (argv: string[], options: Pick<CommandOptions, "env">) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
   const read = async (key: "name" | "email") => {
-    const result = await runTask([...git, `user.${key}`]);
+    const result = await runTask([...git, `user.${key}`], { env: { GIT_NO_LAZY_FETCH: "1" } });
     return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
   };
   const [name, email] = await Promise.all([

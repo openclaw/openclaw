@@ -11,34 +11,24 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
   maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 
 const tempDirs: string[] = [];
-let originalHome: string | undefined;
-let originalStateDir: string | undefined;
+let savedEnv: ReturnType<typeof captureEnv>;
 
 beforeEach(() => {
-  originalHome = process.env.HOME;
-  originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  savedEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
-  if (originalHome === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = originalHome;
-  }
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
+  savedEnv.restore();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 

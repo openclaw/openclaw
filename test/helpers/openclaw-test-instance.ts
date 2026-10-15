@@ -55,6 +55,7 @@ type OpenClawTestInstanceOptions = {
   gatewayCommandPrefix?: string[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
+  gracefulShutdownTimeoutMs?: number;
   signal?: AbortSignal;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
 };
@@ -1024,6 +1025,7 @@ export async function createOpenClawTestInstance(
         cwd,
         env,
         signal,
+        gracefulShutdownTimeoutMs: options.gracefulShutdownTimeoutMs,
         onError,
         onSpawnCleanup: (cleanup) => {
           constructionCleanup = cleanup;

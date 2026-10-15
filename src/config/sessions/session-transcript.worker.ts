@@ -1,4 +1,3 @@
-import { threadId } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
@@ -148,12 +147,15 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "prewarm") {
-        await Promise.all([
-          import("../../gateway/session-history-worker-reader.js"),
-          import("../../gateway/server-methods/chat-history-page-kernel.js"),
-          import("../../gateway/server-methods/chat-history-response-page.js"),
-          import("../../gateway/session-history-snapshot.js"),
-        ]);
+        // Maintenance needs database admission, not a second resident chat presentation graph.
+        if (request.history) {
+          await Promise.all([
+            import("../../gateway/session-history-worker-reader.js"),
+            import("../../gateway/server-methods/chat-history-page-kernel.js"),
+            import("../../gateway/server-methods/chat-history-response-page.js"),
+            import("../../gateway/session-history-snapshot.js"),
+          ]);
+        }
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -336,33 +338,10 @@ serveOwnedWorkerTasks(
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return readSessionRowDatabaseFacts(request);
       }
-      if (request.kind === "session-maintenance-read") {
-        const { readSessionMaintenanceInWorker } =
-          await import("./session-accessor.sqlite-maintenance-transaction.js");
-        return {
-          kind: "session-maintenance-read" as const,
-          result: readSessionMaintenanceInWorker({
-            ...request.plan,
-            databaseOptions: {
-              ...request.database,
-              env: cloneEnvWithPlatformSemantics(request.env),
-            },
-          }),
-          workerThreadId: threadId,
-        };
-      }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } =
           await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
-      }
-      if (request.kind === "session-row-backfill") {
-        const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.worker.js");
-        return {
-          kind: "session-row-backfill" as const,
-          fields: readSessionRowTranscriptFields(request.params),
-        };
       }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =

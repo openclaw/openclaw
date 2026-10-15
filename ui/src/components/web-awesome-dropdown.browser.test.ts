@@ -909,8 +909,14 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       const surface = await secondarySurface(f.host, f.outside, kind);
       let shown = false;
       let hidden = false;
-      onPhase(surface.element, "after-show", () => (shown = true));
-      onPhase(surface.element, "after-hide", () => (hidden = true));
+      surface.element.addEventListener(
+        surface.kind === "tooltip" ? "overlay-after-show" : "wa-after-show",
+        () => (shown = true),
+      );
+      surface.element.addEventListener(
+        surface.kind === "tooltip" ? "overlay-after-hide" : "wa-after-hide",
+        () => (hidden = true),
+      );
       await duringSecondaryOpening(surface, () => expect(shown).toBe(false));
       await expect.poll(() => shown).toBe(true);
       if (surface.kind === "tooltip") {

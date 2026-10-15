@@ -6,6 +6,7 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import "../../lib/toast-host.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DefaultsDraft } from "./data.ts";
@@ -94,6 +95,26 @@ describe("ModelProvidersPage agent scope", () => {
 
     await vi.waitFor(() => expect(requestCount(request, "usage.status")).toBe(2));
     await waitForSolid(() => expect(page.state.data?.providerUsage).toMatchObject({ ok: true }));
+  });
+
+  it("does not readopt an old route snapshot when only loader pending changes", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const data = page.state.data;
+    const reads = request.mock.calls.length;
+    const row = page.querySelector("[data-provider-id]");
+
+    page.loaderPending = true;
+    await page.updateComplete;
+    expect(page.state.data).toBe(data);
+    expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
+    expect(page.querySelector("[data-provider-id]")).toBe(row);
+
+    page.loaderPending = false;
+    await page.updateComplete;
+    expect(page.state.data).toBe(data);
+    expect(request.mock.calls).toHaveLength(reads);
   });
 
   it("keeps direct data visible while a same-client reconnect replaces it", async () => {

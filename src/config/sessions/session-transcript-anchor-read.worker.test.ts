@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   observeHostDataSql,
@@ -9,9 +9,9 @@ import {
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
@@ -26,15 +26,19 @@ import {
 import { readActiveTranscriptEntryAnchorFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
 } from "./session-transcript-anchor-read.js";
 import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
+import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+
+afterEach(() => memorySessionActorOwners.reset());
 
 const events = [
   { type: "session", id: "anchors", version: 3 },
@@ -459,6 +463,75 @@ it("returns a reply tail and its current watermark from one projection snapshot"
   });
 });
 
+it("reuses bounded message payloads for presence without treating an omitted message as absent", async () => {
+  await withOpenClawTestState({ label: "bounded-transcript-message-presence" }, async (state) => {
+    const scope = transcriptScope(state);
+    const metadata = {
+      type: "custom",
+      id: "metadata",
+      parentId: null,
+      customType: "fixture",
+      data: {},
+      message: { role: "user", content: "metadata is not a message event" },
+    };
+    await replaceTranscriptEvents(scope, [events[0], metadata]);
+    const read = async (maxBytes = 4096) => {
+      const sql = observeHostDataSql();
+      try {
+        const result = await readSessionTranscriptHydrationRequest(
+          {
+            kind: "transcript-hydration",
+            database: { agentId: scope.agentId, path: scope.storePath },
+            target: scope,
+            resolvedScope: { ...scope, path: scope.storePath },
+            limits: { maxBytes, maxEvents: 10 },
+            transcript: {
+              sessionKey: scope.sessionKey,
+              entryIds: [],
+              includeMessagePresence: true,
+            },
+          },
+          undefined,
+          { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+        );
+        if (result.kind !== "bounded") {
+          throw new Error("Expected bounded transcript hydration");
+        }
+        return {
+          result,
+          probed: sql.queries.some((query) =>
+            query.startsWith('select "seq" from "transcript_event_identities"'),
+          ),
+        };
+      } finally {
+        sql.restore();
+      }
+    };
+    expect((await read()).result.transcript?.messagePresence).toBe(false);
+    await replaceTranscriptEvents(scope, [
+      events[0],
+      metadata,
+      {
+        type: "message",
+        id: "question",
+        parentId: "metadata",
+        message: { role: "user", content: "message ".repeat(128) },
+      },
+    ]);
+    const included = await read();
+    expect(included.result.transcript?.messagePresence).toBe(true);
+    expect(included.probed).toBe(false);
+    const omitted = await read(256);
+    expect(omitted.result.snapshot.events).not.toContainEqual(
+      expect.objectContaining({ type: "message" }),
+    );
+    expect(omitted.result.transcript?.messagePresence).toBe(true);
+    expect(omitted.probed).toBe(true);
+    await replaceTranscriptEvents(scope, [events[0]]);
+    expect((await read()).result.transcript?.messagePresence).toBe(false);
+  });
+});
+
 it("borrows one ready projection for anchors and payloads without extending its source or snapshot", async () => {
   await withOpenClawTestState({ label: "transcript-anchor-projection-borrow" }, async (state) => {
     const scope = transcriptScope(state);
@@ -603,7 +676,9 @@ it("rejects a physical replacement while target discovery is suspended", async (
       await fs.rename(scope.storePath, originalPath);
       await fs.copyFile(originalPath, scope.storePath);
       release.resolve();
-      await expect(pending).rejects.toThrow("captured database owner");
+      await expect(pending).rejects.toThrow(
+        "SQLite database file identity changed before existing-only open",
+      );
     } finally {
       release.resolve();
       await pending.catch(() => undefined);
@@ -641,22 +716,23 @@ it("joins the retained anchor reader when closing its original logical store pat
   });
 });
 
-it("keeps incognito anchors with their native owner without creating durable state", async () => {
+it("keeps incognito anchors with their memory owner without creating durable state", async () => {
   await withOpenClawTestState({ label: "transcript-anchors-incognito" }, async (state) => {
     const scope = {
       ...transcriptScope(state),
       sessionKey: "agent:main:dashboard:incognito-anchors",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
       entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
+      transcriptEvents: events,
     }));
-    await replaceTranscriptEvents(scope, events);
     await expect(
       readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" }),
     ).resolves.toMatchObject({ entryId: "question", rawSeq: 1 });
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
-    await closeOpenClawAgentDatabasesAsync(state.root);
+    memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(
       readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" }),
     ).resolves.toBeUndefined();
@@ -664,29 +740,33 @@ it("keeps incognito anchors with their native owner without creating durable sta
   });
 });
 
-it("rejects native owner replacement while display policy is preparing", async () => {
-  await withOpenClawTestState({ label: "transcript-native-anchors-replaced" }, async (state) => {
+it("rejects memory owner replacement while acquiring transcript read custody", async () => {
+  await withOpenClawTestState({ label: "transcript-memory-anchors-replaced" }, async (state) => {
     const scope = {
       ...transcriptScope(state),
       sessionKey: "agent:main:dashboard:incognito-anchors",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     const initialize = async () => {
       await createSessionEntryWithTranscript(scope, () => ({
         ok: true,
         entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
+        transcriptEvents: events,
       }));
-      await replaceTranscriptEvents(scope, events);
     };
     await initialize();
     const held = createDeferred();
     const release = createDeferred();
-    const prepare = anchorKernel.prepareSessionTranscriptAnchorMessageReader;
+    const database = { agentId: scope.agentId, path: scope.storePath };
+    const owner = memorySessionActorOwners.read(database)!;
+    const acquire = owner.acquireExisting.bind(owner);
     const observation = vi
-      .spyOn(anchorKernel, "prepareSessionTranscriptAnchorMessageReader")
-      .mockImplementation(async (selection) => {
+      .spyOn(owner, "acquireExisting")
+      .mockImplementationOnce(async (...args) => {
+        const actor = await acquire(...args);
         held.resolve();
         await release.promise;
-        return prepare(selection);
+        return actor;
       });
     const pending = readSessionTranscriptAnchorsAsync(scope, {
       entryIds: ["question"],
@@ -694,11 +774,15 @@ it("rejects native owner replacement while display policy is preparing", async (
       includeMessagesForRunId: "answer-run",
     });
     try {
-      await awaitGateBeforeSettlement(held.promise, pending, "Display policy was not prepared");
-      await closeOpenClawAgentDatabasesAsync(state.root);
+      await awaitGateBeforeSettlement(
+        held.promise,
+        pending,
+        "Transcript read custody was not acquired",
+      );
+      memorySessionActorOwners.closeDatabase(database);
       await initialize();
       release.resolve();
-      await expect(pending).rejects.toThrow("captured native database owner");
+      await expect(pending).rejects.toThrow("closed");
     } finally {
       release.resolve();
       await pending.catch(() => undefined);

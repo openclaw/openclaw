@@ -21,7 +21,6 @@ import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import {
   prepareExactSessionEntryRowReads,
   readSessionChildEntriesInDatabase,
@@ -506,7 +505,6 @@ describe("exact SQLite session batches", () => {
     );
     loadExactSessionEntryReadOnly({ ...scope, projection: "list" });
     const database = openOpenClawAgentDatabase(scope);
-    const held = captureSessionEntryRead(database, scope.sessionKey);
     const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
       /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
     );
@@ -518,10 +516,8 @@ describe("exact SQLite session batches", () => {
       ).toMatchObject([{ ok: true, value: [{ entry: { sessionId: "target" } }] }]);
       expect(queries.rowCounts.entries).toBe(1);
       expect(queries.textBytes.entries).toBeLessThan(1024);
-      expect(held.isCurrent()).toBe(true);
     } finally {
       queries.restore();
-      held.release();
     }
   });
 

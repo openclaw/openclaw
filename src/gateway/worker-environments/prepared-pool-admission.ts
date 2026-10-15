@@ -1,7 +1,10 @@
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerProvider } from "../../plugins/types.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import {
+  readWorkerPreparation,
+  workerPreparationSourceKey,
+} from "./preparation-identity.schema.js";
 import {
   type createPreparedPoolPresence,
   isSupersededPresenceReserve,
@@ -39,8 +42,8 @@ export type PoolOptions = Omit<PreparedPoolPresenceOptions, "schedule" | "prepar
   warn: (message: string) => void;
 };
 export const groupKey = (record: Environment) => {
-  const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
-  return project ? JSON.stringify([record.providerId, record.profileId, project.key]) : undefined;
+  const sourceKey = workerPreparationSourceKey(record.profileSnapshot);
+  return sourceKey ? JSON.stringify([record.providerId, record.profileId, sourceKey]) : undefined;
 };
 // Failed claims inherit only the original preparation window; success records
 // a separate fact that survives teardown and placement retirement.
@@ -87,11 +90,17 @@ export type PassContext = Readonly<{
   presenceDeferred: boolean;
   inventory: readonly Environment[];
   oldestFirst: readonly Environment[];
+  reportRefill: (message: string) => void;
 }>;
+export function skipRefill(ctx: PassContext, source: Environment, reason: string): void {
+  ctx.reportRefill(
+    `Prepared worker refill skipped (${source.profileId}, ${source.environmentId}): ${reason}`,
+  );
+}
 export function deferGeneration(ctx: PassContext, generation: Generation, error: unknown): void {
   generation.deferred = true;
-  ctx.options.warn(
-    `Prepared worker maintenance deferred (${generation.source.profileId}); retaining unused capacity until its original expiry: ${boundedWorkerError(error)}`,
+  ctx.reportRefill(
+    `Prepared worker maintenance deferred (${generation.source.profileId}, ${generation.source.environmentId}); retaining unused capacity until its original expiry: ${boundedWorkerError(error)}`,
   );
 }
 export function admitSources(ctx: PassContext): Generations {
@@ -127,7 +136,7 @@ export function admitSources(ctx: PassContext): Generations {
     if (isSupersededPresenceReserve(record, demand)) {
       continue;
     }
-    const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+    const preparation = readWorkerPreparation(record.profileSnapshot);
     if (key && demandAtMs !== undefined && preparation) {
       if (record.lastActivatedAtMs !== null) {
         const generationKey = JSON.stringify([key, preparation.key]);
@@ -157,9 +166,14 @@ export function admitSources(ctx: PassContext): Generations {
       (limits.target === 0 && !buildingKeys.has(key)) ||
       limits.maxTotal === 0
     ) {
+      skipRefill(
+        ctx,
+        record,
+        `profile removed or capacity disabled (readyWorkers=${limits.target}, maxTotal=${limits.maxTotal})`,
+      );
       continue;
     }
-    const preparationKey = readWorkerProjectPreparation(record.profileSnapshot.project)!.key;
+    const preparationKey = readWorkerPreparation(record.profileSnapshot)!.key;
     try {
       const provider = options.resolveProvider(record.providerId);
       if (!provider) {
@@ -197,6 +211,8 @@ export function admitSources(ctx: PassContext): Generations {
           deferred: Boolean(presenceOwned && deferred && !activationEligible),
           activationEligible,
         });
+      } else {
+        skipRefill(ctx, record, "activation demand expired or provider idle policy is ineligible");
       }
     } catch (error) {
       signal.throwIfAborted();

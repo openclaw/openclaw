@@ -159,7 +159,7 @@ describe("entry compile cache", () => {
   });
 
   it.each(["git", "source", "package"])(
-    "activates compiled-entry cache for an enabled %s install",
+    "activates compiled worker cache for an enabled %s install",
     async (kind) => {
       argv = [process.execPath, entryFile, "gateway", "run"];
       if (kind === "git") {
@@ -184,10 +184,10 @@ describe("entry compile cache", () => {
   it.each([
     ["gateway", WINDOWS_TASK_SUPERVISOR_FLAG],
     ["gateway", "run", `${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}=65536`],
-  ])("keeps automatic caching for Windows service arguments: %j", (...args) => {
+  ])("keeps worker caching for Windows service arguments: %j", (...args) => {
     argv = [process.execPath, entryFile, ...args];
     enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
-    expect(enableCompileCache).toHaveBeenCalledOnce();
+    expect(enableCompileCache).toHaveBeenCalledTimes(1);
   });
 
   it("leaves source entry compilation uncached", async () => {

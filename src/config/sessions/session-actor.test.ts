@@ -1,43 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  requestSqliteWorkerOperationAdmission,
-  withSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  settleSqliteWorkerOperationContext,
-  type SqliteWorkerOperationContext,
-  type SqliteWorkerOperationSettlement,
-} from "../../infra/sqlite-worker-operation-settlement.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
+import { observeSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { createSessionActorReplica } from "./session-actor-replica.js";
-import {
-  seedSessionActorOutcomeTransferTranscript,
-  SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT,
-} from "./session-actor-worker.test-support.js";
-import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
-import { createSessionActorWorker } from "./session-actor.worker.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withActor } from "./session-actor-transport.test-support.js";
+import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
 
@@ -50,40 +26,105 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
+it("publishes actor initialization from its absent transaction preimage", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const fixture = createSessionCompoundWorkerFixture();
+    const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Fixture requires durable storage");
+    }
+    const scope = {
+      ...fixture.scope,
+      sessionKey: "agent:main:actor-first-maintenance",
+      sessionId: "actor-first-maintenance",
+    };
+    const actor = await createDurableSessionActorFactory({
+      agentId: "main",
+      path: fixture.database.path,
+      env,
+    }).acquire(
+      {
+        sessionKey: scope.sessionKey,
+        database: {
+          kind: "file",
+          physicalIdentity: identity.identity,
+          birthtime: identity.birthtime,
+          nativeLocation: fixture.database.path,
+        },
+      },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const ageChanges = vi.fn();
+    const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(identity.identity, ageChanges);
+    try {
+      const result = await appendSessionManagerActor({
+        actor,
+        toolResult: false,
+        assertCurrent() {},
+        append: {
+          kind: "message",
+          input: {
+            scope,
+            cwd: "/synthetic",
+            messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
+          },
+          initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
+        },
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.committed).toMatchObject({
+        kind: "message",
+        value: { snapshot: { ok: true } },
+      });
+      expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: scope.sessionKey,
+        entry: expect.objectContaining({ sessionId: scope.sessionId }),
+        previousEntry: undefined,
+      });
+    } finally {
+      stopAgeChanges();
+      await actor.release();
+    }
+  });
+});
+
+it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
       env,
     };
-    const sessionKey = "agent:main:dashboard:incognito-declined";
-    const owner = runOpenClawAgentWriteTransaction((opened) => {
-      writeSessionEntry(opened, sessionKey, {
-        sessionId: "native-session",
-        updatedAt: 1,
-        incognito: true,
-      });
-      return opened;
-    }, database);
-    const actor = await acquireSessionInputActor(
-      {
-        agentId: database.agentId,
-        storePath: database.path,
-        env,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    expect(actor).toBeUndefined();
+    const sessionKey = "agent:main:dashboard:incognito-actor";
+    const scope = { ...database, storePath: database.path, sessionKey };
+    const target = { ...scope, target: { canonicalKey: sessionKey, storeKeys: [sessionKey] } };
+    const lifetime = { assertCurrent() {}, assertReadable() {} };
+    expect(await acquireSessionInputActor(target, lifetime)).toBeUndefined();
     expect(memorySessionActorOwners.read(database)).toBeUndefined();
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
-    expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
-      sessionId: "native-session",
-      updatedAt: 1,
-      incognito: true,
-    });
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+    const created = await acquireSessionActorStorage(scope, { lifetime, authority, create: true });
+    expect(created).toBeDefined();
+    try {
+      await created!.actor.storage.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { sessionId: "memory-session", updatedAt: 1, incognito: true },
+          },
+        },
+        authority,
+      );
+      const acquired = await acquireSessionInputActor(target, lifetime);
+      expect(acquired?.actor.target.database.kind).toBe("memory");
+      try {
+        expect(acquired?.actor.snapshot(authority)?.entry?.sessionId).toBe("memory-session");
+      } finally {
+        await acquired?.actor.release();
+      }
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+    } finally {
+      await created?.actor.release();
+      memorySessionActorOwners.closeDatabase(database);
+    }
   });
 });
 
@@ -93,7 +134,7 @@ it.each([false, true])(
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const fixture = createSessionCompoundWorkerFixture();
       if (oversized) {
-        seedSessionActorOutcomeTransferTranscript(fixture);
+        seedSessionActorOutcomeTransferEntry(fixture);
       }
       const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
       if (typeof identity.identity !== "string") {
@@ -119,6 +160,11 @@ it.each([false, true])(
       if ("kind" in actor) {
         throw new Error("Durable session must be actor-owned");
       }
+      const ageChanges = vi.fn();
+      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
+        identity.identity,
+        ageChanges,
+      );
       try {
         const beforeEntry = fixture.read();
         const revoked = await actor.patch(
@@ -141,6 +187,7 @@ it.each([false, true])(
           error: { message: "synthetic live authority revocation" },
         });
         expect(fixture.read()).toEqual(beforeEntry);
+        expect(ageChanges).not.toHaveBeenCalled();
 
         const retained = retainPreparedSessionEntryPredicate({
           databaseIdentity: `file:${identity.identity}`,
@@ -156,18 +203,23 @@ it.each([false, true])(
             reducers: [{ kind: "activity", updatedAt: 543 }],
           },
           authority,
-          { committed: () => expect(retained.isCurrent()).toBe(false) },
+          {
+            committed: () => {
+              expect(retained.isCurrent()).toBe(false);
+              expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+                sessionKey: fixture.scope.sessionKey,
+                entry: expect.objectContaining({ updatedAt: 543 }),
+                previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
+              });
+            },
+          },
         );
         expect(result.kind).toBe("committed");
         if (result.kind !== "committed") {
           throw new Error("Expected the durable executor to reconstruct its transferred outcome");
         }
-        expect(result.receipt.postimage.transcript.idempotency).toHaveLength(
-          oversized ? SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT : 0,
-        );
-        expect(result.receipt.postimage.transcript.anchors).toHaveLength(
-          oversized ? SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT : 0,
-        );
+        expect(result.receipt.postimage.transcript.idempotency).toEqual([]);
+        expect(result.receipt.postimage.transcript.anchors).toEqual([]);
         expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
         expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
         expect(fixture.read()?.updatedAt).toBe(543);
@@ -195,244 +247,16 @@ it.each([false, true])(
           sequence: before.version.sequence + 1,
         });
       } finally {
+        stopAgeChanges();
         await actor.release();
       }
     });
   },
 );
 
-/** Real transaction kernels and native receipts with publication and transport faults. */
-async function withActor(
-  run: (fixture: {
-    actor: ReturnType<typeof createSessionActor>;
-    commands: string[];
-    admissions: SqliteWorkerAdmissionRequest[];
-    fault: {
-      reply: "normal" | "lost" | "unknown";
-      settlementLost?: boolean;
-      workerPublicationFailure?: boolean;
-      incompleteOutcomeTransfer?: boolean;
-      afterCommitted?: () => Promise<void>;
-      drain?: Promise<void>;
-      onExecuted?: () => void;
-      admissionCancelled?: boolean;
-      disclosureRevoked?: boolean;
-    };
-    seedTransferTranscript(this: void): void;
-    readEntry(
-      this: void,
-    ): ReturnType<ReturnType<typeof createSessionCompoundWorkerFixture>["read"]>;
-    retireGeneration(this: void): void;
-    nativePatch(this: void, updatedAt: number): void;
-  }) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createSessionCompoundWorkerFixture();
-    const database = fixture.database;
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires durable storage");
-    }
-    const target = {
-      sessionKey: fixture.scope.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
-    const options = { agentId: "main", path: database.path };
-    const commands: string[] = [];
-    const admissions: SqliteWorkerAdmissionRequest[] = [];
-    const fault: Parameters<typeof run>[0]["fault"] = { reply: "normal" };
-    let epoch = 0;
-    const lifetime = {
-      assertAdmission() {
-        if (fault.admissionCancelled) {
-          throw new Error("Admission cancelled");
-        }
-      },
-      assertCurrent() {},
-      assertReadable() {
-        if (fault.disclosureRevoked) {
-          throw new Error("Snapshot disclosure revoked");
-        }
-      },
-    };
-    const replica = createSessionActorReplica({
-      target,
-      lifetime,
-      currentGeneration: () => `fixture:${epoch}`,
-    });
-    let admit: (stage: "transaction" | "commit", publication?: unknown) => void = () => {
-      throw new Error("No active transport admission");
-    };
-    let admittedOutcomeDataFrames = 0;
-    let interruptedOutcomeTransferFrame = false;
-    const createKernel = () =>
-      createSessionActorWorker(
-        {
-          options,
-          open: () => database,
-          admit: (stage, publication) => admit(stage, publication),
-          writeTransaction: (_label, _owner, write) => {
-            const result = runOpenClawAgentWriteTransaction(write, options);
-            if (fault.workerPublicationFailure) {
-              throw new Error("Worker publication failed");
-            }
-            return result;
-          },
-        },
-        () => target.database,
-      );
-    let kernel = createKernel();
-    const transport: SessionActorTransport = {
-      run(operation, authorize) {
-        return runOpenClawAgentWorkerWrite(options, async () => {
-          async function execute<Key extends keyof SessionActorOperations>(command: {
-            type: Key;
-            input: SessionActorOperations[Key]["input"];
-          }): Promise<SessionActorOperations[Key]["output"]>;
-          async function execute(
-            command: SqliteWorkerCommand<SessionActorOperations>,
-          ): Promise<SessionActorOperations[keyof SessionActorOperations]["output"]> {
-            admittedOutcomeDataFrames = 0;
-            interruptedOutcomeTransferFrame = false;
-            commands.push(command.type);
-            const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
-            const retained = { settled: completion.promise };
-            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-              admissions.push(request);
-              authorize(request, { admission, retained }, grant);
-            });
-            const dropped = fault.reply === "unknown";
-            const postMessage = admission.port.postMessage.bind(admission.port);
-            const wire = vi
-              .spyOn(admission.port, "postMessage")
-              .mockImplementation((message, transferList) => {
-                if (
-                  isRecord(message) &&
-                  ((dropped &&
-                    (message.kind === "native-commit" || message.kind === "native-settlement")) ||
-                    (fault.settlementLost && message.kind === "native-settlement"))
-                ) {
-                  return;
-                }
-                postMessage(message, transferList);
-                // Native admission blocks synchronously; its host runs on this fixture's isolate.
-                admission.service();
-              });
-            const native: SqliteWorkerOperationContext = {
-              port: admission.port,
-            };
-            admit = (stage, publication) => {
-              const actorPublication =
-                isRecord(publication) && isRecord(publication.publication)
-                  ? publication.publication
-                  : undefined;
-              if (
-                fault.incompleteOutcomeTransfer &&
-                !interruptedOutcomeTransferFrame &&
-                stage === "transaction" &&
-                isRecord(actorPublication) &&
-                actorPublication.kind === "session-actor-outcome" &&
-                isRecord(actorPublication.transfer)
-              ) {
-                if (admittedOutcomeDataFrames > 0) {
-                  interruptedOutcomeTransferFrame = true;
-                  throw new Error("Synthetic incomplete actor outcome transfer");
-                }
-                admittedOutcomeDataFrames += 1;
-              }
-              requestSqliteWorkerOperationAdmission({ stage, facts: { identity, publication } });
-            };
-            try {
-              await kernel.prepare(command);
-              const value = withSqliteWorkerOperationAdmission(native, () =>
-                kernel.execute(command),
-              );
-              const finish = () => {
-                settleSqliteWorkerOperationContext(native, "completed");
-                admission.service();
-                completion.resolve(
-                  dropped || fault.settlementLost
-                    ? { kind: "unknown", error: new Error("Native receipt lost") }
-                    : { kind: "completed" },
-                );
-              };
-              if (fault.drain) {
-                void fault.drain.then(finish);
-              } else {
-                finish();
-              }
-              fault.onExecuted?.();
-              if (fault.reply !== "normal") {
-                throw new Error("Ordinary reply lost");
-              }
-              return value;
-            } finally {
-              void completion.promise.then(() => {
-                wire.mockRestore();
-                admission.finish();
-              });
-            }
-          }
-          return operation({
-            execute,
-          });
-        });
-      },
-      async afterCommitted(outcome) {
-        if (fault.afterCommitted) {
-          await fault.afterCommitted();
-          const copy = structuredClone(outcome);
-          copy.receipt.commandId = "detached-follow-up-copy";
-          return { value: copy.value };
-        }
-        return undefined;
-      },
-      async release() {},
-    };
-    const actor = createSessionActor({ target, lifetime, replica, transport });
-    try {
-      await run({
-        actor,
-        admissions,
-        commands,
-        fault,
-        seedTransferTranscript() {
-          seedSessionActorOutcomeTransferTranscript(fixture);
-        },
-        readEntry() {
-          return readExactSessionEntryRow(database, fixture.scope.sessionKey)?.entry;
-        },
-        retireGeneration() {
-          epoch += 1;
-          kernel.close();
-          kernel = createKernel();
-        },
-        nativePatch(updatedAt) {
-          runOpenClawAgentWriteTransaction(
-            (db) =>
-              writeSessionEntry(db, fixture.scope.sessionKey, {
-                ...fixture.read()!,
-                updatedAt,
-              }),
-            options,
-          );
-        },
-      });
-    } finally {
-      await actor.release();
-      kernel.close();
-    }
-  });
-}
-
 it("recovers a transferred native commit after ordinary reply loss without replay", async () => {
-  await withActor(async ({ actor, commands, fault, seedTransferTranscript, readEntry }) => {
-    seedTransferTranscript();
+  await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
+    seedTransferEntry();
     fault.reply = "lost";
     const result = await actor.patch(
       {
@@ -449,8 +273,8 @@ it("recovers a transferred native commit after ordinary reply loss without repla
     if (result.kind !== "committed") {
       throw new Error("Expected native transfer evidence to recover the committed outcome");
     }
-    expect(result.receipt.postimage.transcript.idempotency).toHaveLength(
-      SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT,
+    expect(result.receipt.postimage.entry?.skillsSnapshot?.prompt.length).toBeGreaterThan(
+      1024 * 1024,
     );
     expect(commands).toEqual(["session.actor.patch"]);
     expect(readEntry()?.updatedAt).toBe(600);
@@ -473,8 +297,8 @@ it("recovers a transferred native commit after ordinary reply loss without repla
 });
 
 it("does not publish a candidate when its outcome transfer is incomplete", async () => {
-  await withActor(async ({ actor, commands, fault, seedTransferTranscript, readEntry }) => {
-    seedTransferTranscript();
+  await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
+    seedTransferEntry();
     const before = readEntry();
     fault.incompleteOutcomeTransfer = true;
     const observer = { committed: vi.fn() };
@@ -511,6 +335,46 @@ it("serves installed state without a request and reconciles a retired worker gen
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
+
+it.each(["updated", "caller revoked", "disclosure revoked", "keeps changing"] as const)(
+  "reconciles a cold actor read superseded by a native publication (%s)",
+  async (change) => {
+    await withActor(async ({ actor, commands, fault, nativePatch }) => {
+      let callerRevoked = false;
+      const readAuthority: SessionActorAuthority = {
+        assertCurrent() {
+          if (callerRevoked) {
+            throw new Error("Read caller revoked");
+          }
+        },
+        authorize() {},
+      };
+      fault.onExecuted = () => {
+        if (change !== "keeps changing") {
+          fault.onExecuted = undefined;
+        }
+        nativePatch(654 + commands.length);
+        callerRevoked = change === "caller revoked";
+        fault.disclosureRevoked = change === "disclosure revoked";
+      };
+      const reading = actor.read(readAuthority);
+      if (change === "updated") {
+        await expect(reading).resolves.toMatchObject({ entry: { updatedAt: 655 } });
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else if (change === "keeps changing") {
+        await expect(reading).rejects.toThrow(
+          "Session actor changed before its read could publish",
+        );
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else {
+        await expect(reading).rejects.toThrow(
+          change === "caller revoked" ? "Read caller revoked" : "Snapshot disclosure revoked",
+        );
+        expect(commands).toEqual(["session.actor.read"]);
+      }
+    });
+  },
+);
 
 it("installs a cold command and stale preimage without a separate read request", async () => {
   await withActor(async ({ actor, commands, fault, retireGeneration }) => {
@@ -713,7 +577,7 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("shares immutable actor revisions and isolates explicit policy copies", async () => {
+it("shares actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
     expect(actor.snapshot(authority)).toBe(initial);
@@ -729,11 +593,6 @@ it("shares immutable actor revisions and isolates explicit policy copies", async
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          expect(Object.isFrozen(snapshot)).toBe(true);
-          expect(Object.isFrozen(snapshot.entry)).toBe(true);
-          expect(() => {
-            snapshot.dependencySessionIds.length = 0;
-          }).toThrow(TypeError);
           const copy = structuredClone(snapshot);
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
@@ -805,7 +664,9 @@ it("admits tool appends once per transaction boundary without transferring trans
       ).toBe(false);
     }
     const committed = actor.snapshot(authority)!;
-    expect(committed.transcript.anchors.length).toBeGreaterThan(initial.transcript.anchors.length);
+    expect(committed.transcript.version.rawSeq).toBeGreaterThan(
+      initial.transcript.version.rawSeq ?? -1,
+    );
     const refused = await actor.appendToolResult(
       {
         commandId: "refused-tool",
@@ -882,7 +743,9 @@ it.each([false, true])(
       fault.disclosureRevoked = false;
       const current = actor.snapshot(authority)!;
       expect(current.version.sequence).toBe(initial.version.sequence + 1);
-      expect(current.transcript.anchors).toHaveLength(initial.transcript.anchors.length + 1);
+      expect(current.transcript.version.rawSeq).toBeGreaterThan(
+        initial.transcript.version.rawSeq ?? -1,
+      );
     });
   },
 );
@@ -890,6 +753,16 @@ it.each([false, true])(
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
+    if (actor.target.database.kind !== "file") {
+      throw new Error("Fixture requires durable storage");
+    }
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${actor.target.database.physicalIdentity}`,
+      sessionKey: actor.target.sessionKey,
+      entry: initial.entry,
+      matches: (before, after) => before?.sessionId === after?.sessionId,
+    });
+    using _ = { [Symbol.dispose]: retained.release };
     const rejected = await actor.patch(
       {
         commandId: "refused",
@@ -909,6 +782,7 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(rejected.kind).toBe("rolled-back");
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
+    expect(retained.isCurrent()).toBe(true);
     fault.reply = "unknown";
     const unknown = await actor.patch(
       {
@@ -920,6 +794,7 @@ it("retains rollback state and fences unknown commits until an explicit read", a
       authority,
     );
     expect(unknown.kind).toBe("unknown");
+    expect(retained.isCurrent()).toBe(false);
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
     expect(

@@ -3,8 +3,14 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as configSerialization from "../config/runtime-config-snapshot-match.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -323,6 +329,56 @@ describe("prepared model runtime snapshots", () => {
     expect(secondLease.snapshot).not.toBe(first);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
     await secondLease[Symbol.asyncDispose]();
+  });
+
+  it("reuses publication fingerprints across fleet catalog reads without caching mutable projections", async () => {
+    const stringify = vi.spyOn(configSerialization, "stableConfigStringify");
+    try {
+      for (const size of [8, 16]) {
+        const config: OpenClawConfig = {
+          agents: {
+            entries: Object.fromEntries(
+              Array.from({ length: size }, (_, index) => [`agent-${index}`, { name: "original" }]),
+            ),
+          },
+        };
+        setRuntimeConfigSnapshot(config);
+        const input = {
+          ...inputFor(`read-only-fleet-${size}`, config),
+          agentId: "agent-0",
+          readOnly: true,
+        };
+        const snapshot = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+        });
+        stringify.mockClear();
+        for (let request = 0; request < 16; request++) {
+          expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(snapshot);
+        }
+        expect(stringify.mock.calls.filter(([value]) => value === config)).toHaveLength(0);
+
+        const projected = structuredClone(config);
+        expect(getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected })).toBe(
+          snapshot,
+        );
+        projected.agents!.entries!["agent-0"]!.name = "projected";
+        expect(
+          getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected }),
+        ).toBeUndefined();
+
+        config.agents!.entries!["agent-0"]!.name = "republished";
+        setRuntimeConfigSnapshot(config);
+        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBeUndefined();
+        const replacement = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+        });
+        expect(replacement).not.toBe(snapshot);
+        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(replacement);
+      }
+    } finally {
+      clearRuntimeConfigSnapshot();
+      stringify.mockRestore();
+    }
   });
 
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {

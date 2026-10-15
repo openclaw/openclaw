@@ -103,6 +103,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   excludedStoreTargets?: ReadonlySet<string>;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
+  signal?: AbortSignal;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
@@ -368,6 +369,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           excludedStoreTargets: new Set(marking.failedTargets?.map(restartRecoveryStoreTargetKey)),
           lifecycleGeneration,
           shouldContinue,
+          signal: abortController.signal,
           gatewayRuntime: params.gatewayRuntime,
         });
         result.failed += marking.failedTargets?.length ?? 0;

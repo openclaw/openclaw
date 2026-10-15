@@ -97,7 +97,6 @@ vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
     options?.onChunk?.(
       [...runs.values()].map((entry) => ({
         entry,
-        version: "fixture-version",
         createdAt: entry.createdAt,
       })),
     );

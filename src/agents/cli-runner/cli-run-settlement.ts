@@ -50,7 +50,7 @@ async function settleCliAuthProfile(params: {
   provider: string;
   agentDir?: string;
   terminal:
-    | { outcome: "success" }
+    | { outcome: "success"; modelId?: string }
     | {
         outcome: "failure";
         error: unknown;
@@ -65,6 +65,7 @@ async function settleCliAuthProfile(params: {
         store: params.store,
         profileId: params.profileId,
         provider: params.provider,
+        modelId: params.terminal.modelId,
         agentDir: params.agentDir,
       });
       return;
@@ -268,7 +269,7 @@ export async function settlePreparedCliRun(params: {
               modelId: context.modelId,
             }
           : outcome.result.meta.executionTrace?.attempts?.at(-1)?.result === "success"
-            ? { outcome: "success" }
+            ? { outcome: "success", modelId: context.modelId }
             : undefined;
       if (terminal) {
         await settleCliAuthProfile({
@@ -488,6 +489,7 @@ export function buildCliRunResult(params: {
   const runParams = context.params;
   const text = output.text?.trim();
   const rawText = output.rawText?.trim();
+  const rawFinalText = output.rawFinalText?.trim();
   const sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams,
@@ -611,6 +613,11 @@ export function buildCliRunResult(params: {
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
       ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
       ...(rawText ? { finalAssistantRawText: rawText } : {}),
+      // An empty final message is recorded as "" so capture never falls back to
+      // the cumulative raw text.
+      ...(rawFinalText !== undefined && rawFinalText !== rawText
+        ? { finalAssistantMessageRawText: rawFinalText }
+        : {}),
       systemPromptReport: context.systemPromptReport,
       ...(terminalInterruption
         ? {

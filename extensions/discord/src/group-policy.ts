@@ -9,6 +9,10 @@ import {
 import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
+import {
+  findDiscordChannelPolicyKey,
+  getDiscordChannelPolicyBinding,
+} from "./channel-policy-state.js";
 
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
 const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
@@ -80,7 +84,23 @@ function resolveDiscordPolicyScope(params: ChannelGroupContext) {
   if (!guildKey) {
     return { tree, path: [] };
   }
-  const channelKey = resolveDiscordChannelKey(guilds?.[guildKey]?.channels, params);
+  const channels = guilds?.[guildKey]?.channels;
+  let channelKey = resolveDiscordChannelKey(channels, params);
+  if (channelKey !== params.groupId) {
+    // Resolved name keys bind to their channel id: the bound channel keeps its entry after a
+    // rename, and threads or other channels that share the name never select it.
+    const boundKey = params.groupId
+      ? findDiscordChannelPolicyKey(params.accountId, guildKey, params.groupId)
+      : undefined;
+    if (boundKey !== undefined && channels?.[boundKey]) {
+      channelKey = boundKey;
+    } else if (
+      channelKey !== undefined &&
+      getDiscordChannelPolicyBinding(params.accountId, guildKey, channelKey) !== undefined
+    ) {
+      channelKey = undefined;
+    }
+  }
   return {
     tree,
     path: [

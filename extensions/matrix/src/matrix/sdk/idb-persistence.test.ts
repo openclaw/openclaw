@@ -3,7 +3,7 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { backup } from "node:sqlite";
+import { backup, DatabaseSync } from "node:sqlite";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
@@ -410,6 +410,9 @@ describe("Matrix IndexedDB persistence", () => {
     const source = openOpenClawStateDatabase({
       env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
     });
+    if (!(source.db instanceof DatabaseSync)) {
+      throw new Error("Matrix snapshot corruption fixture requires SQLite");
+    }
     const corruptRoot = path.join(tmpDir, "corrupt-startup");
     fs.mkdirSync(path.join(corruptRoot, "state"), { recursive: true });
     await backup(source.db, path.join(corruptRoot, "state", "openclaw.sqlite"));

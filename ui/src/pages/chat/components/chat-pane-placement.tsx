@@ -1,18 +1,19 @@
 import { createMemo, For, Show } from "solid-js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import "../../../components/elapsed-time.tsx";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
+import "../../../components/elapsed-time.tsx";
 import { resolveCloudWorkerStopAction } from "../../../components/cloud-worker-stop.ts";
+import {
+  repositorySessionNeedsWorker,
+  sessionPlacementRetry,
+} from "../../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { solidContent } from "../../../lit/solid-content.tsx";
-import {
-  repositorySessionNeedsWorker,
-  resolveChatPaneWorkerPresentation,
-} from "../chat-pane-placement.ts";
+import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
 
 export function ChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
@@ -35,6 +36,7 @@ export function ChatPanePlacement(props: {
       return null;
     }
     const placementMove = session.placementMove;
+    const retry = sessionPlacementRetry(session);
     const workerPlacement =
       placement && placement.state !== "local" && placement.state !== "requested"
         ? placement
@@ -81,6 +83,7 @@ export function ChatPanePlacement(props: {
                   ? t("sessionsView.repositoryWorkerRequiredLabel")
                   : worker.label;
     const moveDisabledReason = props.placementMoveDisabledReason;
+    const destructiveMove = retry ? retry.abandonSource === true : deviceOffline;
     const reclaimDisabledReason = props.placementReclaimDisabledReason;
     const recoveryDisabledReason = props.placementRecoveryDisabledReason;
     const age = formatRelativeTimestamp(placement?.stateChangedAtMs, {
@@ -111,13 +114,17 @@ export function ChatPanePlacement(props: {
       actions: [
         {
           id: "move",
-          visible: placementState === "active",
-          className: `chat-pane__placement-move ${deviceOffline ? "session-menu__item--destructive" : ""}`,
-          destructive: deviceOffline,
+          visible: placementState === "active" || Boolean(retry),
+          className: `chat-pane__placement-move ${destructiveMove ? "session-menu__item--destructive" : ""}`,
+          destructive: destructiveMove,
           disabledReason: moveDisabledReason,
           icon: "monitor" as const,
           label: t(
-            deviceOffline ? "sessionsView.continueOnGatewayMenu" : "sessionsView.moveSession",
+            retry
+              ? "sessionsView.retrySessionMove"
+              : deviceOffline
+                ? "sessionsView.continueOnGatewayMenu"
+                : "sessionsView.moveSession",
           ),
           onClick: props.onPlacementMove,
         },

@@ -6,7 +6,7 @@ import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.t
 import { dashboardsRouteData } from "./route.ts";
 import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
 
-export type DashboardsPageProps = { routeData?: DashboardsRouteData };
+type DashboardsPageProps = { routeData?: DashboardsRouteData };
 
 export function DashboardsPage(props: DashboardsPageProps) {
   const context = useApplication();
@@ -15,7 +15,11 @@ export function DashboardsPage(props: DashboardsPageProps) {
     ownerId: "",
     sort: "updated",
   });
-  const [data, setData] = createSignal(() => props.routeData, { ownedWrite: true });
+  // Loader data is an initial seed; session publications own subsequent updates.
+  const [data, setData] = createSignal(
+    untrack(() => props.routeData),
+    { ownedWrite: true },
+  );
   const gateway = projectGateway(context.gateway);
 
   const selection = projectAgentSelection(context.agentSelection);
@@ -55,14 +59,16 @@ export function DashboardsPage(props: DashboardsPageProps) {
   );
 
   return (
-    <DashboardsView
-      data={data()}
-      filters={filters()}
-      handlers={{
-        onFilterChange: (filter) => setFilters((current) => ({ ...current, ...filter })),
-        onNavigate: context.navigate,
-      }}
-      gatewaySnapshot={gateway.read().snapshot}
-    />
+    <openclaw-dashboards-page>
+      <DashboardsView
+        data={data()}
+        filters={filters()}
+        handlers={{
+          onFilterChange: (filter) => setFilters((current) => ({ ...current, ...filter })),
+          onNavigate: context.navigate,
+        }}
+        gatewaySnapshot={gateway.read().snapshot}
+      />
+    </openclaw-dashboards-page>
   );
 }

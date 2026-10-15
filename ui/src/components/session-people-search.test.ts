@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
+import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { containers, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
@@ -32,28 +32,29 @@ describe("searchable session people", () => {
     const root = document.createElement("div");
     containers.push(root);
     document.body.append(root);
-    render(
-      renderChatSessionSharing({
-        session: { key: "agent:main:people", kind: "direct", updatedAt: 1, sharingRole: "owner" },
-        state: {
-          loading: false,
-          result: {
-            sessionKey: "agent:main:people",
-            role: "owner",
-            allowedVisibilities: ["shared"],
-            members: [{ identityId: "person-100", addedBy: "owner", addedAt: 1 }],
-            identities: Array.from({ length: 101 }, (_, i) => ({
-              type: "human" as const,
-              id: `person-${i}`,
-              label: `Person ${String(i).padStart(4, "0")}`,
-            })),
+    mountSolid(
+      () =>
+        createComponent(ChatSessionSharing, {
+          session: { key: "agent:main:people", kind: "direct", updatedAt: 1, sharingRole: "owner" },
+          state: {
+            loading: false,
+            result: {
+              sessionKey: "agent:main:people",
+              role: "owner",
+              allowedVisibilities: ["shared"],
+              members: [{ identityId: "person-100", addedBy: "owner", addedAt: 1 }],
+              identities: Array.from({ length: 101 }, (_, i) => ({
+                type: "human" as const,
+                id: `person-${i}`,
+                label: `Person ${String(i).padStart(4, "0")}`,
+              })),
+            },
           },
-        },
-        onOpen: vi.fn(),
-        onVisibilityChange: vi.fn(),
-        onMemberChange,
-      }),
-      root,
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange,
+        }),
+      { container: root },
     );
     root.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
     flush();

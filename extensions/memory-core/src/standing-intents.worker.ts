@@ -9,6 +9,8 @@ import {
 import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
+  getStandingIntentLifecycleDeadline,
+  hasNoActiveStandingIntents,
   invalidateStandingIntentLifecycle,
   listStandingIntentsInDatabase,
   maintainStandingIntentLifecycle,
@@ -61,23 +63,29 @@ export function bindSqliteWorkerBackend(
       if (schemaPrepared) {
         return { kind: "schema-prepared" };
       }
+      const result = <T>(value: T) => ({
+        kind: "result" as const,
+        value,
+        nextDueAt: getStandingIntentLifecycleDeadline(db),
+      });
+      // Absence survives until an owner write; there is no effect to transact or authorize.
+      if (command.type === "match" && hasNoActiveStandingIntents(db)) {
+        return result([]);
+      }
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
       >(() => {
         switch (command.type) {
           case "create":
-            return { kind: "result", value: createStandingIntentInDatabase(db, command.input) };
+            return result(createStandingIntentInDatabase(db, command.input));
           case "list":
-            return { kind: "result", value: listStandingIntentsInDatabase(db, command.input) };
+            return result(listStandingIntentsInDatabase(db, command.input));
           case "sweep":
-            return {
-              kind: "result",
-              value: maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()),
-            };
+            return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
           case "cancel":
-            return { kind: "result", value: cancelStandingIntentInDatabase(db, command.input) };
+            return result(cancelStandingIntentInDatabase(db, command.input));
           case "match":
-            return { kind: "result", value: matchStandingIntentsInDatabase(db, command.input) };
+            return result(matchStandingIntentsInDatabase(db, command.input));
         }
         throw new Error("Unknown standing-intent command");
       });

@@ -27,7 +27,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { isSessionEntryReplacementReceiptUsable } from "./session-accessor.sqlite-entry-receipt.js";
-import { publishSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
+import {
+  captureSessionEntryMaintenanceAgeChange,
+  publishSessionEntryMaintenanceAgeChanges,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import {
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -39,7 +42,7 @@ import { retainSessionTranscriptWorkerPublication } from "./session-transcript-a
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** A confirmed worker result invalidates row facts without opening a parent connection. */
+/** Publish confirmed removals or invalidate incomplete row facts without a parent connection. */
 export function publishSessionEntryWorkerInvalidations(
   params: {
     agentId: string;
@@ -53,19 +56,20 @@ export function publishSessionEntryWorkerInvalidations(
   const keys = [...new Set(changedKeys)];
   const changes: SessionRowChange[] = [];
   for (const sessionKey of keys) {
+    const removed = params.removedSessionKeys?.has(sessionKey) === true;
     // Confirmed absence revokes a generation; other incomplete postimages remain unavailable.
     publishRetainedSessionEntryChange(
       params.databaseIdentity,
       sessionKey,
       undefined,
       undefined,
-      params.removedSessionKeys?.has(sessionKey) === true,
+      removed,
     );
     const change: SessionRowChange = {
       agentId: params.agentId,
       storePath: params.storePath,
       sessionKey,
-      factsInvalidated: true,
+      ...(removed ? { facts: { kind: "removed" as const } } : { factsInvalidated: true }),
     };
     bindPreparedSessionEntryPublication(change, {
       kind: "marker",
@@ -292,6 +296,14 @@ export function retainSessionEntryWorkerPublication(params: {
             receipt.source.identity === params.databaseIdentity && currentKeys.has(sessionKey),
         );
         release();
+        publishSessionEntryMaintenanceAgeChanges(
+          params.databaseIdentity,
+          identityRecords.flatMap(({ sessionKey, value }) =>
+            value.previous
+              ? []
+              : [captureSessionEntryMaintenanceAgeChange({ sessionKey, entry: value.entry })],
+          ),
+        );
         sessionChanges.emitBatch(
           [...selected, ...invalidations, ...transcriptChanges],
           undefined,

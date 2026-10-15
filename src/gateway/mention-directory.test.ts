@@ -315,7 +315,9 @@ describe("human mention directory", () => {
         if (!directory.ok || !validateUsersMentionableResult(directory.payload)) {
           throw new Error("Invalid mention directory response");
         }
-        const admission = f.inbox.validateRecipients(f.aliceClient, { sessionKey }, [f.bob.id]);
+        const admission = await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey }, [
+          f.bob.id,
+        ]);
         await f.post("policy-source", { sessionKey, sessionId });
         expect({
           users: directory.payload.users.map((user) => [user.profileId, user.online]),
@@ -346,7 +348,7 @@ describe("human mention directory", () => {
           ok: true,
           payload: { users: [{ profileId: f.bob.id, displayName: "Bob" }] },
         });
-        expect(f.inbox.validateRecipients(f.aliceClient, draft, [f.bob.id])).toEqual({
+        expect(await f.inbox.validateRecipientsAsync(f.aliceClient, draft, [f.bob.id])).toEqual({
           ok: true,
           value: [f.bob.id],
         });
@@ -376,11 +378,18 @@ describe("human mention directory", () => {
         false,
       );
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.alice.id]).ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            f.alice.id,
+          ])
+        ).ok,
       ).toBe(false);
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, ["missing-person"])
-          .ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            "missing-person",
+          ])
+        ).ok,
       ).toBe(false);
       await f.setSession({ visibility: "draft" });
       const hidden = await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.bobClient);
@@ -389,7 +398,11 @@ describe("human mention directory", () => {
         error: { code: "INVALID_REQUEST", message: "Session was not found." },
       });
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]).ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            f.bob.id,
+          ])
+        ).ok,
       ).toBe(false);
     });
   });

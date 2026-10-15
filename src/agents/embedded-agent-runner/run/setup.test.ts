@@ -249,9 +249,9 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it.each([
     { fastMode: "ultrafast" as const, serviceTier: undefined, expected: 260_000 },
     { fastMode: true, serviceTier: undefined, expected: 922_000 },
-    { fastMode: false, serviceTier: "ultrafast", expected: 260_000 },
-    { fastMode: "ultrafast" as const, serviceTier: "priority", expected: 922_000 },
-    { fastMode: "ultrafast" as const, serviceTier: "default", expected: 922_000 },
+    { fastMode: false, serviceTier: "ultrafast", expected: 922_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "priority", expected: 260_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "default", expected: 260_000 },
   ])(
     "caps client compaction only for the effective Ultrafast tier: $fastMode/$serviceTier",
     ({ fastMode, serviceTier, expected }) => {

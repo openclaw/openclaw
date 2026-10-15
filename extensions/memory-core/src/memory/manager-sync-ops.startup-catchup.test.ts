@@ -146,7 +146,8 @@ describe("session startup catch-up", () => {
       agentId: "main",
       storePath,
       sessionKey,
-      entry: { sessionId, updatedAt: 10 },
+      // Keep the synthetic session recent so retention cannot prune it during the test.
+      entry: { sessionId, updatedAt: Date.now() },
     });
     const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
     await appendSessionTranscriptMessageByIdentity({
@@ -296,7 +297,6 @@ describe("session startup catch-up", () => {
       ],
       true,
       false,
-      true,
     );
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -367,7 +367,7 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await SessionStartupCatchupHarness.create([], true, false, false, {
+    const harness = await SessionStartupCatchupHarness.create([], true, false, {
       session: { store: storePath },
     });
     harness.addPendingSessionTarget({
@@ -432,7 +432,7 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await SessionStartupCatchupHarness.create([], false, false, false, {
+    const harness = await SessionStartupCatchupHarness.create([], false, false, {
       session: { store: session.storePath },
     });
     harness.afterNextCorpusListForTest(async () => {

@@ -1,5 +1,6 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, ANSI output, and dangerous config reporting.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -106,6 +107,15 @@ describe("gateway startup log", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("logs version alignment guidance as information on ordinary startup", async () => {
+    const { info, warn } = await startup({});
+
+    expect(info).toHaveBeenCalledWith(
+      "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("warns when dangerous config flags are enabled", async () => {
@@ -371,13 +381,18 @@ describe("gateway startup log", () => {
     ]);
     const messages = info.mock.calls.map((call) => call[0]);
     const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
-    expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
-      pid: process.pid,
-      node: process.versions.node,
-      sqlite: process.versions.sqlite,
-      uv: process.versions.uv,
-      openssl: process.versions.openssl,
-    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
+        pid: process.pid,
+        node: process.versions.node,
+        sqlite: database.prepare("SELECT sqlite_version() AS version").get()?.version,
+        uv: process.versions.uv,
+        openssl: process.versions.openssl,
+      });
+    } finally {
+      database.close();
+    }
     const workers = messages.find((message) => message.startsWith("worker startup state: "));
     expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
       workerCount: expect.any(Number),

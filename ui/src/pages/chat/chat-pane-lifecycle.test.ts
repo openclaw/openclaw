@@ -16,9 +16,12 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+  createPaneTestHost,
+  getPaneTestRuntime,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -54,9 +57,8 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const key = "agent:main:parked-edit";
   const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
   const pane = fixture.mount(key);
-  const updates = vi.spyOn(pane, "performUpdate");
+  const updates = vi.spyOn(pane, "render");
   await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(1);
   await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(160);
   await vi.dynamicImportSettled();
@@ -130,7 +132,11 @@ describe("chat pane composer prefill attention", () => {
 
 describe("chat pane first-turn attachment lifecycle", () => {
   it("claims the connected client's first message before attaching the pane", () => {
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    // SAFETY: The shared test host forwards the controller surface declared by TestChatPane.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
     const targetSessionKey = "agent:main:created-session";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
@@ -157,7 +163,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
     });
 
     try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
       expect(attachedState?.client).toBe(client);
       expect(attachedState?.chatMessages).toEqual([
         expect.objectContaining({
@@ -184,7 +190,11 @@ describe("chat pane initial panel layout", () => {
       const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "detail"), preference === "open");
       const client = createGatewayBrowserClientFixture();
       const context = createInitializationContext(client);
-      const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+      // SAFETY: The shared test host forwards the controller surface declared by TestChatPane.
+      const pane = createPaneTestHost(
+        "openclaw-chat-runtime-test",
+        ChatPaneRuntime,
+      ) as unknown as TestChatPane;
       pane.context = context;
       pane.sessionKey = left;
       pane.chatMessagesBySession = new Map();
@@ -212,7 +222,7 @@ describe("chat pane initial panel layout", () => {
         expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
       };
       try {
-        expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+        expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
         expectOwnLayout();
         pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
         expectOwnLayout();

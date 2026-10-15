@@ -3,6 +3,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -305,6 +306,9 @@ export function persistClawPackageRef(
     updatedAtMs: nowMs,
   };
   runOpenClawStateWriteTransaction(({ db }) => {
+    if (isPostgresSqlConnection(db)) {
+      throw new Error("Claw package provenance requires SQLite named-parameter support.");
+    }
     const existing = db /* sqlite-allow-raw: exact owned package-ref replay lookup. */
       .prepare(
         `SELECT schema_version, agent_id, claw_name, package_kind, package_source,

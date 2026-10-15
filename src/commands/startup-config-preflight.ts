@@ -2,11 +2,17 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import type { PluginCache } from "../plugins/plugin-cache.js";
+import {
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   readAdmittedConfigSnapshot,
@@ -39,6 +45,7 @@ export type StartupConfigPreflightResult = ReturnType<typeof result> & {
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
+  assertDatabasePortStartupAllowed(resolveStateDir(process.env));
   for (let attempt = 1; ; attempt++) {
     await using snapshots = createConfigPreflightSnapshotReader();
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
@@ -186,6 +193,7 @@ async function prepareStartupConfig(
         return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
           config: read.snapshot.sourceConfig,
           env,
+          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
           pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
           historicalWebhookListeners: true,
           startup: true,
@@ -207,11 +215,12 @@ async function prepareStartupConfig(
         }
       }
     }
-    const verification = await refreshStartupPluginQuarantine({
-      cfg: read.snapshot.sourceConfig,
-      env,
-      measure,
-    });
+    const verification = await withPluginCache(
+      read.pluginMetadataSnapshot
+        ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
+        : getPluginCache(),
+      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+    );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),

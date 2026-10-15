@@ -60,7 +60,7 @@ async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
   const shown = new Promise<Event>((resolve) => {
-    tooltip.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("overlay-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
@@ -194,7 +194,7 @@ describe("annotation chip and hovercard", () => {
             Number.parseFloat(getComputedStyle(comment).lineHeight) * 4 + 1,
           );
           const hidden = new Promise<Event>((resolve) => {
-            tooltip.addEventListener("wa-after-hide", resolve, { once: true });
+            tooltip.addEventListener("overlay-after-hide", resolve, { once: true });
           });
           await userEvent.keyboard("{Escape}");
           await hidden;

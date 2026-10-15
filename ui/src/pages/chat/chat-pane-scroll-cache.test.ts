@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { stubAnimationFrames } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

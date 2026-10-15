@@ -2,17 +2,22 @@ import type { SqliteSourceFenceIdentity } from "../infra/sqlite-source-fence-con
 import type {
   GitHubPublicationSourceFacts,
   GitHubPublicationSourceSelector,
+  GitHubPublicationSessionFacts,
 } from "./github-publication-source.types.js";
 
-/** Physical owners and exact prepared predicates, never host callbacks. */
-export type GitHubPublicationSourcePredicate = {
-  destination: SqliteSourceFenceIdentity;
-  source: SqliteSourceFenceIdentity;
-  selector: GitHubPublicationSourceSelector;
+/** Memory metadata is supplied by its live host owner; durable sources stay worker-owned. */
+export type GitHubPublicationSourceRead = { selector: GitHubPublicationSourceSelector } & (
+  | {
+      destination: SqliteSourceFenceIdentity;
+      source: SqliteSourceFenceIdentity;
+      memory?: never;
+    }
+  | { destination?: never; source?: never; memory: GitHubPublicationSessionFacts }
+);
+
+export type GitHubPublicationSourcePredicate = GitHubPublicationSourceRead & {
   expected: GitHubPublicationSourceFacts;
 };
-
-export type GitHubPublicationSourceRead = Omit<GitHubPublicationSourcePredicate, "expected">;
 
 export type GitHubPublicationSourceOperations = {
   "githubPublication.sourceFacts": {

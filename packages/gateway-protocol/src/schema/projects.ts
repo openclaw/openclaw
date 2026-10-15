@@ -83,6 +83,18 @@ export const ProjectSummarySchema = closedObject({
   lastUsedAt: Type.Number({ minimum: 0 }),
 });
 
+export const ProjectsCheckoutOptionsParamsSchema = closedObject({
+  projectId: NonEmptyString,
+  agentId: NonEmptyString,
+});
+
+/** Advisory selection facts; sessions.create revalidates authority and the checkout. */
+export const ProjectsCheckoutOptionsResultSchema = closedObject({
+  current: Type.Boolean(),
+  worktree: Type.Boolean(),
+});
+export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
+
 export const ProjectsListParamsSchema = closedObject({
   includeObserved: Type.Optional(
     Type.Boolean({

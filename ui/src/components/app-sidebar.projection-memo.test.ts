@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import type { LitElement } from "lit";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
@@ -19,14 +18,14 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import type { SelectPicker } from "./select-picker.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   sidebarNarrationLines: ReadonlyMap<string, string>;
 };
 
@@ -132,20 +131,20 @@ describe("sidebar projection memo", () => {
     const ownerPicker = sidebar
       .querySelector("#sidebar-session-owner-title")!
       .closest<SelectPicker>("openclaw-select-picker")!;
-    const renderOwnerPicker = vi.spyOn(ownerPicker, "render");
+    const ownerPickerParams = ownerPicker.params;
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     expect(projectHome).toHaveBeenCalled();
     projectHome.mockClear();
     projectRows.mockClear();
     for (const change of [
       () => {
-        sidebar.teamOnlineExpanded = true;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.devGitBranch = "feature/sidebar";
       },
       () => {
-        sidebar.teamOnlineExpanded = false;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.sidebarMenus.closePositionedMenu("sessionSort");
@@ -159,7 +158,7 @@ describe("sidebar projection memo", () => {
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
     expect(projectHome).not.toHaveBeenCalled();
-    expect(renderOwnerPicker).not.toHaveBeenCalled();
+    expect(ownerPicker.params).toBe(ownerPickerParams);
 
     await expectRowRefresh(sidebar, () =>
       publish([
@@ -169,7 +168,7 @@ describe("sidebar projection memo", () => {
       ]),
     );
     expect(row(key("first"))?.textContent).toContain("Renamed first");
-    expect(renderOwnerPicker).not.toHaveBeenCalled();
+    expect(ownerPicker.params).toBe(ownerPickerParams);
     expect(projectHome).toHaveBeenCalled();
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
     await expectRowRefresh(sidebar, () => {
@@ -265,7 +264,7 @@ describe("sidebar projection memo", () => {
       }
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-      sidebar.teamOnlineExpanded = true;
+      sidebar.requestUpdate();
       await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(999);
       await settleLitElement(sidebar);
@@ -285,12 +284,17 @@ describe("sidebar projection memo", () => {
     const sidebar = mounted.sidebar as unknown as Sidebar;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(mounted.sidebar);
-    const newSession = sidebar.querySelector<LitElement>("openclaw-sidebar-new-session-menu")!;
-    await newSession.updateComplete;
-    await rosterActivityStore(mounted.context).refresh();
+    const source = sidebar.rosterSessionSource;
+    const refresh = rosterActivityStore(mounted.context).refresh();
+    flush();
+    expect(sidebar.rosterSessionSource).toBe(source);
+    await refresh;
     await settleRoster(mounted.sidebar);
-    await newSession.updateComplete;
-    const menuUpdate = vi.spyOn(newSession, "performUpdate");
+    await vi.dynamicImportSettled();
+    flush();
+    const newSession = sidebar.querySelector(".sidebar-new-session-menu")!;
+    const menuItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
+    expect(menuItems).toHaveLength(3);
     const sessionKey = "agent:main:recent";
     const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(row()).not.toBeNull();
@@ -313,19 +317,24 @@ describe("sidebar projection memo", () => {
     );
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
-    expect(menuUpdate).not.toHaveBeenCalled();
+    expect(sidebar.querySelector(".sidebar-new-session-menu")).toBe(newSession);
+    const retainedItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
+    expect(retainedItems).toHaveLength(menuItems.length);
+    retainedItems.forEach((item, index) => expect(item).toBe(menuItems[index]));
   });
 
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
+    const expiresAt = 11_000;
     const target = session("attention", {
-      agentStatus: { note: "Waiting for credentials", attention: "key", expiresAt: 11_000 },
+      agentStatus: { note: "Waiting for credentials", attention: "key", expiresAt },
     });
     const { sidebar, sessions, gateway, row, publishApprovals } = await mount([target]);
     expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
     projectRows.mockClear();
-    await vi.advanceTimersByTimeAsync(1_000);
+    // Mount readiness advances fake timers; stop before the expiry invalidation turn.
+    await vi.advanceTimersByTimeAsync(expiresAt - Date.now());
     await settleLitElement(sidebar);
     expect(projectRows).not.toHaveBeenCalled();
     expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
@@ -408,6 +417,86 @@ describe("sidebar projection memo", () => {
       cancel?.();
     });
     expect(row(target.key)).not.toBeNull();
+  });
+
+  it("retires visible activity on answer and finishing without changing active run ownership", async () => {
+    const target = session("answer", {
+      hasActiveRun: true,
+      activeRunIds: ["answer-run"],
+      status: "running",
+    });
+    const other = session("other", {
+      hasActiveRun: true,
+      activeRunIds: ["other-run"],
+      status: "running",
+    });
+    const { sidebar, gateway, row, sessions } = await mount([target, other]);
+    const spinner = (sessionKey: string) =>
+      row(sessionKey)?.querySelector('[aria-label="Active run"]');
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 1,
+      stream: "assistant",
+      data: { text: "The answer is ready." },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    expect(spinner(other.key)).not.toBeNull();
+    gateway.publishEvent("chat", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      state: "delta",
+      replace: true,
+      message: { role: "assistant", content: [] },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 2,
+      stream: "item",
+      data: {
+        kind: "tool",
+        phase: "start",
+        itemId: "inspect",
+        toolCallId: "inspect",
+        name: "read_file",
+        title: "Read file",
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing", error: "retryable" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 4,
+      stream: "run_status",
+      data: { phase: "retrying", message: "Retrying" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
   });
 
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {

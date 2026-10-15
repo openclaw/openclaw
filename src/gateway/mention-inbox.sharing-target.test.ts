@@ -190,6 +190,7 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
         "Design review",
       );
       f.broadcast.mockClear();
+      // This spy counts host SQL; invalidated targets are now prepared in the worker.
       let exactRowReads = 0;
       // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
       const originalGet = StatementSync.prototype.get;

@@ -382,7 +382,9 @@ describe("handleFeishuCommentEvent", () => {
   });
 
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
+    const log = vi.fn();
     await handleComment({
+      runtime: { log, error: vi.fn(), exit: vi.fn() },
       cfg: buildConfig({
         channels: {
           feishu: {
@@ -424,6 +426,8 @@ describe("handleFeishuCommentEvent", () => {
       is_whole_comment: false,
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).not.toContain("TESTCODE");
+    expect(log).toHaveBeenCalledWith("feishu[default]: comment pairing request sender=ou_sender");
   });
 
   it("always finalizes comment typing cleanup even when dispatch fails", async () => {

@@ -50,6 +50,7 @@ export async function recordGatewaySessionRunFailure(
           renderCodexAppServerFailureCopy(error) ??
           `Your request couldn't be completed: ${error}`),
     display: true,
+    excludeFromContext: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };
   const result = await withSessionTranscriptWriteAssertion(

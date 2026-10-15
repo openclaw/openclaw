@@ -2,7 +2,6 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { onOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
@@ -20,10 +19,13 @@ import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
 } from "../infra/session-delivery-queue-runtime.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -35,6 +37,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import {
   clearGatewayMaintenanceHandles,
   type GatewayMaintenanceHandles,
@@ -118,37 +121,67 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  const isRecovering = () =>
+    getQueueSize(CommandLane.Background) > 0 ||
+    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+  const idle = {
+    scheduler: params.scheduler,
+    delayMs: params.delayMs,
+    retryDelayMs: Math.max(1_000, params.delayMs),
+    isClosing: () => params.signal.aborted || params.isClosing(),
+    isBusy: isRecovering,
+    waitForReady: params.waitForPostReadyWork,
+    log: params.log,
+  };
   if (process.platform === "linux") {
-    params.scheduler.schedule({
+    scheduleGatewayIdleTask({
+      ...idle,
       id: "database:page-cache",
-      delayMs: params.delayMs,
-      everyMs: 15 * 60 * 1000,
-      run: () =>
-        runWithGatewayIndependentRootWorkAdmission(
-          async () => {
-            await racePromiseWithAbortSignal(params.waitForPostReadyWork(), params.signal);
-            if (params.isClosing()) {
-              return;
-            }
-            const { warmGatewayDatabasePageCache } =
-              await import("./server-database-page-cache.js");
-            params.signal.throwIfAborted();
-            await warmGatewayDatabasePageCache({
-              databases: params.startupMaintenance.startupSessionDatabases,
-              signal: params.signal,
-              startupTrace: params.startupMaintenance.startupTrace,
-              log: params.log,
-            });
-          },
-          "runtime:database-page-cache",
-          params.signal,
-        ).catch((error: unknown) => {
-          if (!params.isClosing()) {
+      repeatDelayMs: 15 * 60 * 1000,
+      errorMessage: "database page-cache probe failed",
+      run: async (signal) => {
+        try {
+          const { warmGatewayDatabasePageCache } = await import("./server-database-page-cache.js");
+          signal.throwIfAborted();
+          await warmGatewayDatabasePageCache({
+            databases: params.startupMaintenance.startupSessionDatabases,
+            signal,
+            startupTrace: params.startupMaintenance.startupTrace,
+            log: params.log,
+          });
+        } catch (error) {
+          if (!signal.aborted && !params.isClosing()) {
             params.log.warn(`database page-cache probe failed: ${String(error)}`);
           }
-        }),
+        }
+      },
     });
   }
+  scheduleGatewayIdleTask({
+    ...idle,
+    id: "startup:database-maintenance",
+    errorMessage: "Gateway post-ready startup maintenance failed",
+    run: async (signal) => {
+      await measureStartup(
+        params.startupMaintenance.startupTrace,
+        "post-ready.startup-maintenance",
+        async () => {
+          const { runGatewayPostReadyStartupMaintenance } =
+            await import("./server-startup-plugins.js");
+          signal.throwIfAborted();
+          await runGatewayPostReadyStartupMaintenance({
+            getConfig: getRuntimeConfig,
+            getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
+            pluginMetadataSnapshot: params.startupMaintenance.pluginMetadataSnapshot,
+            databases: params.startupMaintenance.startupSessionDatabases,
+            startupTrace: params.startupMaintenance.startupTrace,
+            signal,
+            log: params.log,
+          });
+        },
+      );
+    },
+  });
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
@@ -161,29 +194,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
           await params.waitForPostReadyWork();
           if (params.isClosing()) {
             return;
-          }
-          try {
-            await measureStartup(
-              params.startupMaintenance.startupTrace,
-              "post-ready.startup-maintenance",
-              async () => {
-                const { runGatewayPostReadyStartupMaintenance } =
-                  await import("./server-startup-plugins.js");
-                await runGatewayPostReadyStartupMaintenance({
-                  getConfig: getRuntimeConfig,
-                  getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
-                  pluginMetadataSnapshot: params.startupMaintenance.pluginMetadataSnapshot,
-                  databases: params.startupMaintenance.startupSessionDatabases,
-                  startupTrace: params.startupMaintenance.startupTrace,
-                  signal: params.signal,
-                  log: params.log,
-                });
-              },
-            );
-          } catch (error) {
-            if (!params.isClosing()) {
-              params.log.warn(`Gateway post-ready startup maintenance failed: ${String(error)}`);
-            }
           }
           try {
             if (!params.isClosing()) {

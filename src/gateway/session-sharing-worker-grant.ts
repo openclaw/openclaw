@@ -1,8 +1,4 @@
 import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import {
   releaseSessionSourceAuthorities,
   type SessionSourceTransactionGrant,
 } from "../config/sessions/session-source-authority.js";
@@ -17,10 +13,7 @@ import {
   type PreparedMutationSharing,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
-import {
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
-} from "./session-sharing-incognito.js";
+import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   captureSessionMutationRouting,
   prepareSessionMutationFacts,
@@ -47,38 +40,24 @@ export async function prepareSessionSharingWorkerGrant(params: {
     profiles: PreparedSessionSharingProfiles,
   ) => void;
 }) {
-  const targets = params.targets.map((target) => {
-    const memoryBinding = captureSessionSharingActorBinding(target);
-    return {
-      ...target,
-      resolved: target.resolved && { ...target.resolved },
-      memoryFacts:
-        memoryBinding &&
-        captureSessionActorMutationFacts(
-          memoryBinding,
-          target.sessionKey,
-          true,
-          target.resolved?.readSource?.path ??
-            target.resolved?.storePath ??
-            target.absentTarget?.storePath,
-        ),
-      binding: memoryBinding
-        ? undefined
-        : captureIncognitoSessionBinding({
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            storePath: target.resolved?.readSource?.path ?? target.resolved?.storePath,
-          }),
-    };
-  });
-  const changed = (key = targets[0]?.sessionKey ?? "") =>
+  const changed = (key = params.targets[0]?.sessionKey ?? "") =>
     sessionMutationTargetChanged(params.request.method, key);
-  if (params.transactionSource && (!params.transactionFacts || targets.length !== 1)) {
+  if (params.transactionSource && (!params.transactionFacts || params.targets.length !== 1)) {
     throw changed();
   }
-  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed, targets);
-  const talkAgentId = params.sourceConfig.talk?.agentId;
+  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed, params.targets);
   let active = true;
+  const targets = params.targets.map((target) => ({
+    ...target,
+    resolved: target.resolved && { ...target.resolved },
+    memoryFacts: captureSessionSharingMemoryFacts(target, () => {
+      if (!active) {
+        throw sessionMutationTargetChanged(params.request.method, target.sessionKey);
+      }
+      assertRouting(params.request.context.getRuntimeConfig());
+    }),
+  }));
+  const talkAgentId = params.sourceConfig.talk?.agentId;
   const releases: Array<{ release: () => void | Promise<void> }> = [];
   const sourceChecks: Array<() => void> = [];
   let transaction: SessionSourceTransactionGrant | undefined;
@@ -91,22 +70,16 @@ export async function prepareSessionSharingWorkerGrant(params: {
     for (const expected of targets) {
       const initialConfig = params.request.context.getRuntimeConfig();
       assertRouting(initialConfig);
-      if (expected.memoryFacts || expected.binding) {
+      if (expected.memoryFacts) {
         const target = expected.resolved;
         if (!target) {
           throw changed(expected.sessionKey);
         }
-        const prepare = () =>
-          prepareSessionSharingSource(target, () =>
-            assertRouting(params.request.context.getRuntimeConfig()),
-          );
-        const source = await (expected.memoryFacts
-          ? prepareSessionSharingSource(
-              target,
-              () => assertRouting(params.request.context.getRuntimeConfig()),
-              expected.memoryFacts,
-            )
-          : withIncognitoSessionBinding(expected.binding!, prepare));
+        const source = await prepareSessionSharingSource(
+          target,
+          () => assertRouting(params.request.context.getRuntimeConfig()),
+          expected.memoryFacts,
+        );
         releases.push(source);
         sourceChecks.push(source.assertCurrent);
         reads.push((profiles) => {

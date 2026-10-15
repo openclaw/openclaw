@@ -20,7 +20,6 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
   upsertSessionEntryCore,
-  withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
@@ -37,7 +36,10 @@ import {
   onSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -930,8 +932,10 @@ describe("worker transcript commit application", () => {
         messages: [{ ...message, idempotencyKey: "worker-unbound-lifecycle" }],
         cwd: root,
       };
-      const prepared = await withTranscriptWriteTransaction(sessionTarget, () =>
-        prepareTranscriptCommit(input),
+      const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(sessionTarget));
+      const prepared = runOpenClawAgentWriteTransaction(
+        () => prepareTranscriptCommit(input),
+        databaseOptions,
       );
       expect(prepared.result).toMatchObject({
         ok: true,
@@ -940,8 +944,9 @@ describe("worker transcript commit application", () => {
       if (replaceLifecycle) {
         await updateSessionEntry(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
       }
-      const outcome = await withTranscriptWriteTransaction(sessionTarget, () =>
-        applyPreparedTranscriptCommit(input, prepared, input.messages, () => undefined),
+      const outcome = runOpenClawAgentWriteTransaction(
+        () => applyPreparedTranscriptCommit(input, prepared, input.messages, () => undefined),
+        databaseOptions,
       );
       expect(outcome).toMatchObject(
         replaceLifecycle

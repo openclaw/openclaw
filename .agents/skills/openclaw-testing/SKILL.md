@@ -32,6 +32,8 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 ## Select the proof
 
+- Select proof for touched contract; reuse valid proof (rerun for changed inputs or missing coverage); finish workflow's required gates within user/host limits; report unrun checks and gaps. Prove user-visible behavior through real flow when feasible; external APIs need live contract proof; isolated mock-Gateway harness = valid channel boundary proof. Docs-only: docs sanity and `git diff --check`.
+
 - Runtime defect: reproduce real entry point; rerun it + relevant siblings.
 - Trusted source: `pnpm changed:lanes --json`, focused tests + targeted typecheck/lint/format; `pnpm check:changed` = optional smart local check.
 - Public SDK/plugin contract: representative consumers, not all-plugin sweep.
@@ -46,7 +48,13 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   [plugin release matrix](../release-openclaw-plugin-testing/SKILL.md),
   [Docker authoring](../openclaw-docker-e2e-authoring/SKILL.md), channel skill/
   [Control UI E2E](../control-ui-e2e/SKILL.md).
-- Mock-Gateway boundary proof valid; state live gaps.
+- An isolated mock-Gateway harness is valid channel boundary proof; state live
+  gaps. Prove user-visible behavior through the real flow when feasible;
+  external APIs require live contract proof. Read the scoped channel/platform
+  guide for live-channel or native-app work. Telegram claims require
+  [Test Server userbot proof with Convex-leased credentials](../telegram-e2e-userbot/SKILL.md).
+  Platform claims require real-device evidence; macOS permission proof requires
+  a stable [signed app](../../../docs/platforms/mac/signing.md#permission-evidence).
 - Release proof: preserve candidate/Tooling SHAs; never grants publication authority.
 
 ## Source and state boundaries
@@ -75,6 +83,15 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 - Distinguish product, harness, infrastructure, credentials, superseded-run
   cancellation. Snapshots pass macOS/fail CI: reproduce Linux/Node bytes before
   regenerating.
+
+### Baseline and expected-failure exceptions
+
+Narrow baseline, snapshot, ignore, and expected-failure exceptions are implementer
+decisions only when each entry is verified against source and the PR records its
+reason (for example, tool-owned metadata in an upgrade snapshot while user data
+stays exact). Never mask a real regression or user-data change. Blanket or
+unverified exceptions need approval. Exact shrink-only ratchet updates are
+maintenance.
 
 ### Test failure policy
 

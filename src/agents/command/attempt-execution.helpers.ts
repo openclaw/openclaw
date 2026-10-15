@@ -22,10 +22,7 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,7 +31,6 @@ import {
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.claude.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { sleep } from "../../utils/sleep.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
@@ -54,8 +50,16 @@ export function resolveCommandReplyExpectation(params: {
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "chatType">;
   messageChannel?: string;
-  opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
+  opts: Pick<
+    AgentCommandOpts,
+    "lane" | "privateCompletion" | "inputProvenance" | "replyExpectation"
+  >;
 }): ReplyExpectation | undefined {
+  // Internal producers own whether this input owes a result. Routing is only a
+  // fallback for ordinary command requests, never a reason to override that fact.
+  if (params.opts.replyExpectation !== undefined) {
+    return params.opts.replyExpectation;
+  }
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||
@@ -143,13 +147,13 @@ export async function sessionTranscriptHasContent(
     return false;
   }
   abortSignal?.throwIfAborted();
-  const source = captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    source.assertCurrent();
-    return false;
-  }
-  const incognito = captureIncognitoSessionHistoryBinding(target);
-  const capturedTarget = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
+  const source = captureSessionActorStorageOwner(target, {
+    assertCurrent() {
+      abortSignal?.throwIfAborted();
+    },
+    authorize() {},
+  });
+  const capturedTarget = { ...target, ...(source ? { storePath: source.path } : {}) };
   await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
   const { readSessionTranscriptBoundedMessageTailPageAsync } =
     await import("../../gateway/session-transcript-readers.js");
@@ -157,7 +161,6 @@ export async function sessionTranscriptHasContent(
     capturedTarget,
     { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
     abortSignal,
-    incognito,
   );
   return events.some(
     ({ event }) =>

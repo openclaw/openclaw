@@ -1,6 +1,5 @@
 /** Writes, restores, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -18,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -82,7 +82,7 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
 export type InstalledPluginIndexWriteLease = {
-  assertOwnedInTransaction(database: DatabaseSync, stage?: "transaction" | "commit"): void;
+  assertOwnedInTransaction(database: EngineConnection, stage?: "transaction" | "commit"): void;
 };
 
 type PreparedPluginCandidate = {
@@ -143,7 +143,9 @@ type InstalledPluginIndexRow = Pick<
 >;
 type PersistedInstalledPluginIndexValue = { revision: number; index: unknown };
 
-function readInstalledPluginIndexRow(database: DatabaseSync): InstalledPluginIndexRow | undefined {
+function readInstalledPluginIndexRow(
+  database: EngineConnection,
+): InstalledPluginIndexRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     database,
     getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)
@@ -203,7 +205,7 @@ function resolveNextInstalledPluginIndexRevision(current: number | null): number
 }
 
 function writePersistedInstalledPluginIndexRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   index: InstalledPluginIndex,
   revision: number,
 ): void {
@@ -313,7 +315,7 @@ export function writePersistedInstalledPluginIndexToSqlite(
 
 /** Merge prepared facts against the worker's current row, never the caller's old inventory. */
 export function publishPluginSourceAdmissionInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   publication: PluginSourceAdmissionPublication,
 ): boolean {
   // Only the lifecycle owner releases or reclaims its holder; receipts cannot fence its rollback.

@@ -22,6 +22,10 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -498,6 +502,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
   it("lets a disposer drain its real session without waiting on its own retained execution", async () => {
     const execution = createExecution();
+    setRuntimeConfigSnapshot(execution.params.cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const controllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers: controllers,

@@ -249,6 +249,8 @@ describe("node worker environment lifetime", () => {
               ...poll.descriptor,
               connectionEndpoint: TEST_WORKER_ENDPOINT,
             }),
+            false,
+            true,
           ),
         );
       poll.descriptor.assignment.systemPrompt += "x".repeat(

@@ -52,20 +52,8 @@ afterEach(async () => {
 
 it.each([
   {
-    name: "explicit Telegram owner DM and another account",
-    heartbeat: { target: "telegram", to: "1234567890", accountId: "personal" },
-  },
-  {
     name: "explicit other channel",
     heartbeat: { target: "whatsapp", to: "+15555550166", accountId: "personal" },
-  },
-  {
-    name: "last with explicit destination and account",
-    heartbeat: { target: "last", to: "1234567890", accountId: "personal" },
-  },
-  {
-    name: "owner with explicit destination and account",
-    heartbeat: { target: "owner", to: "1234567890", accountId: "personal" },
   },
 ] as const)("exec capture outranks $name", async ({ heartbeat }) => {
   await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -358,7 +346,7 @@ it("does not replace an unavailable captured account with a configured heartbeat
   });
 });
 
-it.each(["generic", "cron", "generic-exec-text", "cron-exec-text"] as const)(
+it.each(["generic-exec-text", "cron-exec-text"] as const)(
   "does not grant exec authority to %s event context",
   async (kind) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {

@@ -12,14 +12,14 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 - A native chat UI for the gateway.
 - Uses the same sessions and routing rules as other channels.
-- Deterministic routing: replies always go back to WebChat.
+- Replies always go back to WebChat.
 - History is always fetched from the gateway (no local file watching). If the gateway is unreachable, WebChat is read-only.
 
 ## Quick start
 
 1. Start the gateway.
 2. Open the WebChat UI (macOS/iOS app) or the Control UI chat tab.
-3. Ensure a valid gateway auth path is configured (shared-secret by default, even on loopback). See [Auth basics (local vs remote)](/web/dashboard#auth-basics-local-vs-remote).
+3. Configure a valid gateway auth path (shared-secret by default, even on loopback). See [Auth basics (local vs remote)](/web/dashboard#auth-basics-local-vs-remote).
 
 ## How it works
 
@@ -34,7 +34,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history`. It includes that id on follow-up `chat.send` calls. Reconnects and page refreshes therefore continue the same stored conversation, unless the user starts or resets a session.
 - Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. If another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
 - When you change a chat setting and immediately send, Control UI shows **Applying chat settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
-- `chat.send` takes an idempotency key (Control UI uses the run id). The Gateway dedupes repeated requests that reuse the same key. Retried or duplicate in-flight submits do not create a second run when the session, message, attachments, and mention selections match. Reusing that key with different mention selections is rejected.
+- `chat.send` takes a key that prevents duplicate requests (Control UI uses the run id). The Gateway dedupes repeated requests that reuse the same key. Retried or duplicate in-flight submits do not create a second run when the session, message, attachments, and mention selections match. Reusing that key with different mention selections is rejected.
 - Queued messages keep their original send identity even when execution starts under a different run id. Clients reconcile the local pending message with its saved transcript entry by that send identity, so completion and history reload show one copy.
 - During reconnect, an attempted message whose delivery is uncertain stays in the transcript with a **Waiting for reconnect** status. Messages that have not been attempted stay in the composer queue. Messages the Gateway has queued for a later turn also appear above the composer until consumed or canceled, without a duplicate transcript bubble or another send. Their remove action cancels the exact queued message on the Gateway. Once removal is confirmed, that prompt and its attachments disappear from the queue and conversation, including after reconnect or reload. Stop, timeout, and unsuccessful-send cancellations keep their recovery messages visible. Reordering applies only to messages still owned by the browser. **Discard** on an uncertain local message removes only its browser copy; it does not cancel a message the Gateway already received.
 - Replying to a specific message (right-click → Reply) sends the target's transcript id as `replyToId` on `chat.send`. For sources with visible text, the Gateway resolves that message from session history. It hydrates the same channel-agnostic reply context metadata Discord replies use. Agents see `has_reply_context` plus the untrusted "Reply target of current user message" block with sender label and body. Webchat prompts keep volatile conversation ids such as `reply_to_id` suppressed, per the existing byte-stable prompt policy for direct webchat sessions. Reply targets without a persisted transcript id (for example pending sends) fall back to an inline quote in the message body.
@@ -65,9 +65,9 @@ must not predict it from history length or treat `status: "started"` as persiste
 Chat admission rechecks current committed session access independently of sidebar
 refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Accepted inputs stay below saved conversation history until
+the saved transcript row. Accepted inputs stay below saved conversation history until
 they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
-element during this handoff while canonical media metadata and image bytes load.
+element during this handoff while saved media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires
@@ -78,12 +78,45 @@ execution run, so two intentionally identical sends remain two inputs.
 WebChat has two separate data paths:
 
 - The SQLite transcript rows are the durable model/runtime transcript. For normal agent runs, the embedded OpenClaw runtime persists model-visible `user`, `assistant`, and `toolResult` messages through the session accessor. WebChat does not write arbitrary delivery, status, or helper text into that transcript.
-- Gateway `ReplyPayload` events are the live delivery projection: normalized for WebChat/channel display, block streaming, directive tags, media embedding, TTS/audio flags, and UI fallback behavior. They are not themselves the canonical session log.
+- Gateway `ReplyPayload` events are the live delivery projection: normalized for WebChat/channel display, block streaming, directive tags, media embedding, TTS/audio flags, and UI fallback behavior. They are not themselves the saved session log.
 - Harnesses that require visible replies through `tools.message` still use WebChat as a current-run internal source reply sink. A targetless `message.send` from that active WebChat run is projected into the same chat and mirrored to the session transcript. WebChat does not become a reusable outbound channel and never inherits `lastChannel`.
 - WebChat injects assistant transcript entries only when the Gateway owns a displayed message outside a normal embedded agent turn. Those cases are `chat.inject`, non-agent command replies, aborted partial output, and WebChat-managed media transcript supplements.
 - If live assistant text appears during a run but disappears after history reload, check three things in order. First, whether the SQLite transcript contains the assistant text. Second, whether the `chat.history` display projection stripped it. Third, whether the Control UI optimistic-tail merge replaced local delivery state with the persisted snapshot.
 
 Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
+
+## Speech
+
+When `tts` is configured, assistant messages offer **Read aloud**. Audio is
+synthesized by the Gateway using the configured TTS provider, voice, and endpoint.
+**Stop reading** cancels browser playback. Long replies play in ordered chunks
+within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
+previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
+
+Hold the microphone button for dictation. Explicit audio models in
+`tools.media.models` use the same transcription owner as uploaded voice notes,
+including local OpenAI-compatible `/v1/audio/transcriptions` endpoints and local
+CLI models. Audio is transcribed when capture ends; file-based providers do not
+produce partial captions. An explicit Talk transcription provider, matching
+`agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
+streaming path. Dictation is unavailable when none of the configured file
+providers or CLI commands can run.
+Loopback and private-network endpoints use the existing provider opt-in:
+`models.providers.<id>.request.allowPrivateNetwork: true`.
+
+Set `talk.realtime.mode: "stt-tts"` for split browser Talk: the Gateway transcribes
+each utterance, the current chat session's agent answers it, and the browser plays
+the Gateway's generated speech. This uses the configured agent model, including
+local models. Output uses `talk.provider` when set, otherwise `tts`.
+The browser pauses capture while generating and playing the answer. Stop ends
+capture and playback and cancels that call's active chat run. Split Talk requires
+both transcription and speech output to be configured. Dictation in an existing
+conversation uses that conversation's agent credentials; the catalog remains an
+advisory view of the configured Talk agent.
+
+Without these settings, the existing realtime Talk and transcription-provider
+selection remain unchanged. Browser microphone capture requires a secure context
+(HTTPS or localhost) and microphone permission.
 
 ## Human mention delivery
 

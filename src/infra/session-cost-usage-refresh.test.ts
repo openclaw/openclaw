@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { describePendingFakeTimers } from "../../test/helpers/fake-timer-diagnostics.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import {
@@ -16,6 +18,11 @@ import {
 } from "./session-cost-usage.js";
 
 const config = {};
+
+// mock-isolation: This suite owns refresh timers; filesystem observation has separate coverage.
+vi.mock("./owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 
 vi.mock("./session-cost-usage-aggregation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cost-usage-aggregation.js")>()),
@@ -50,6 +57,7 @@ describe("session cost usage refresh", () => {
             config,
             agentId: params.agentId,
             sessions: [{ sessionFile }],
+            requestRefresh: false,
           });
           return fullRefresh.promise;
         }
@@ -59,8 +67,6 @@ describe("session cost usage refresh", () => {
         return Promise.resolve("refreshed");
       });
 
-      // Process-owned directory observation must not borrow the refresh test's clock.
-      resolveAgentDir(config, params.agentId);
       vi.useFakeTimers();
       try {
         expect(await loadCostUsageSummaryFromCache(params)).toMatchObject({
@@ -89,7 +95,6 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(4_999);
         expect(refresh).toHaveBeenCalledTimes(10);
         await vi.advanceTimersByTimeAsync(1);
-        await queuedSubset;
         // Schedule the next batch outside the timer tick, regardless of filesystem timing.
         fullRefresh.resolve("refreshed");
         await fullRefresh.promise;
@@ -102,7 +107,8 @@ describe("session cost usage refresh", () => {
         expect(refresh).toHaveBeenCalledTimes(12);
         await vi.advanceTimersByTimeAsync(1);
         expect(refresh).toHaveBeenCalledTimes(13);
-        expect(vi.getTimerCount()).toBe(0);
+        await queuedSubset;
+        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         expect(
           await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
         ).toMatchObject({
@@ -112,16 +118,16 @@ describe("session cost usage refresh", () => {
         try {
           // Complete queued work even if an assertion failed before the final retry.
           refresh.mockResolvedValue("refreshed");
-          await queuedSubset;
           fullRefresh.resolve("refreshed");
           await fullRefresh.promise;
           await vi.runOnlyPendingTimersAsync();
+          await queuedSubset;
           expect(
             await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
           ).toMatchObject({
             cacheStatus: { status: "stale" },
           });
-          expect(vi.getTimerCount()).toBe(0);
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         } finally {
           refresh.mockReset();
           vi.useRealTimers();
@@ -147,7 +153,6 @@ describe("session cost usage refresh", () => {
       ),
     );
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      resolveAgentDir(config, agentId);
       vi.useFakeTimers();
       try {
         await run({ agentId, sessionFiles });
@@ -157,6 +162,429 @@ describe("session cost usage refresh", () => {
       }
     });
   }
+
+  it("refreshes each dirty session once after its own quiet gap and parks when clean", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      const dirty = (sessionFile: string) =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFile),
+            sessionFiles: [sessionFile],
+            coalesce: true,
+          }),
+        );
+      try {
+        dirty(sessionFiles[0]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        dirty(sessionFiles[0]);
+        dirty(sessionFiles[1]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        dirty(sessionFiles[1]);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(refresh).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refresh.mock.calls.map(([params]) => params.sessionFiles)).toEqual([
+          [sessionFiles[0]],
+        ]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(refresh.mock.calls.map(([params]) => params.sessionFiles)).toEqual(
+          sessionFiles.map((file) => [file]),
+        );
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+      } finally {
+        await scope.drain();
+      }
+    });
+  });
+
+  it("preserves oldest dirty age across turns and refreshes overdue work in the next idle gap", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      const dirty = () =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+      let claim: ReturnType<typeof claimAgentRunContext>;
+      try {
+        dirty();
+        for (let turn = 0; turn < 15; turn++) {
+          claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
+          dirty();
+          await vi.advanceTimersByTimeAsync(10_000);
+          releaseAgentRunContext("usage-batch-turn", claim);
+          await vi.advanceTimersByTimeAsync(10_000);
+        }
+        expect(refresh).toHaveBeenCalledTimes(1);
+        dirty();
+        claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
+        await vi.advanceTimersByTimeAsync(360_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        releaseAgentRunContext("usage-batch-turn", claim);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseAgentRunContext("usage-batch-turn", claim);
+        await scope.drain();
+      }
+    });
+  });
+
+  it("does not flush unrelated dirty sessions for a keyed read", async ({ signal }) => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      try {
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        await withinTest(
+          loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile: sessionFiles[1] }],
+            requestRefresh: false,
+          }),
+          signal,
+        );
+        expect(refresh).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(refresh.mock.calls[0]?.[0].sessionFiles).toEqual([sessionFiles[0]]);
+      } finally {
+        await scope.drain();
+      }
+    });
+  });
+
+  it("wakes a busy retry when an overlapping turn becomes idle", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const held = createDeferredCore<"busy">();
+      const refresh = vi
+        .mocked(refreshCostUsageCacheForAgent)
+        .mockResolvedValue("refreshed")
+        .mockReturnValueOnce(held.promise);
+      let claim: ReturnType<typeof claimAgentRunContext>;
+      try {
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        claim = claimAgentRunContext("usage-busy-turn", { agentId }, { trackOwner: true });
+        held.resolve("busy");
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        releaseAgentRunContext("usage-busy-turn", claim);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseAgentRunContext("usage-busy-turn", claim);
+        held.resolve("busy");
+        await scope.drain();
+      }
+    });
+  });
+
+  it("retains appends arriving during refresh for the next quiet gap", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const held = createDeferredCore<"refreshed">();
+      const refresh = vi
+        .mocked(refreshCostUsageCacheForAgent)
+        .mockResolvedValue("refreshed")
+        .mockReturnValueOnce(held.promise);
+      const dirty = () =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+      try {
+        dirty();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        dirty();
+        held.resolve("refreshed");
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        held.resolve("refreshed");
+        await scope.drain();
+      }
+    });
+  });
+
+  it.for([false, true])(
+    "returns exact session usage before bulk backfill finishes (dirty publication: %s)",
+    async (coalesce, { signal }) => {
+      const root = tempDirs.make("openclaw-usage-priority-");
+      const agentId = "priority-test";
+      const storePath = path.join(root, "agents", agentId, "sessions");
+      const sessionFile = path.join(storePath, "selected.jsonl");
+      const line = (id: string) =>
+        `${JSON.stringify({
+          type: "message",
+          id,
+          timestamp: "2026-09-18T00:00:00Z",
+          message: {
+            role: "assistant",
+            provider: "test",
+            model: "test",
+            usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+          },
+        })}\n`;
+      await fs.mkdir(storePath, { recursive: true });
+      await fs.writeFile(sessionFile, line("first"));
+      const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
+        "./session-cost-usage-aggregation.js",
+      );
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+        await actual.refreshCostUsageCacheForAgent({
+          config,
+          agentId,
+          sessionFiles: [sessionFile],
+        });
+        await fs.appendFile(sessionFile, line("second"));
+        const scope = new AsyncWorkScope();
+        const firstBatchEntered = createDeferredCore();
+        const releaseFirstBatch = createDeferredCore<"refreshed">();
+        const releaseBulk = createDeferredCore<"refreshed">();
+        let appended = false;
+        let bulkFinished = false;
+        const dirty = () =>
+          scope.run(() =>
+            requestCostUsageCacheRefresh({
+              config,
+              agentId,
+              storePath,
+              sessionFiles: [sessionFile],
+              coalesce: true,
+            }),
+          );
+        vi.mocked(refreshCostUsageCacheForAgent).mockImplementation(async (params) => {
+          if (!params.sessionFiles) {
+            params.onRemaining?.(
+              Array.from({ length: 121 }, (_, index) => {
+                const file = path.join(storePath, `bulk-${index}.jsonl`);
+                return { sessionFile: file, rollupId: file };
+              }),
+            );
+            firstBatchEntered.resolve();
+            return releaseFirstBatch.promise;
+          }
+          if (params.sessionFiles.includes(sessionFile)) {
+            const result = await actual.refreshCostUsageCacheForAgent(params);
+            if (!appended) {
+              appended = true;
+              await fs.appendFile(sessionFile, line("during-refresh"));
+              dirty();
+            }
+            return result;
+          }
+          await releaseBulk.promise;
+          bulkFinished = true;
+          return "refreshed";
+        });
+        let reading: ReturnType<typeof loadSessionCostSummariesFromCache> | undefined;
+        try {
+          scope.run(() => requestCostUsageCacheRefresh({ config, agentId, storePath }));
+          await withinTest(firstBatchEntered.promise, signal);
+          if (coalesce) {
+            dirty();
+          }
+          reading = loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          });
+          let settled = false;
+          void reading.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 150);
+          });
+          expect(settled).toBe(false);
+          releaseFirstBatch.resolve("refreshed");
+          const result = await withinTest(reading, signal);
+          expect(result.summaries[0]).toMatchObject({
+            input: 21,
+            output: 9,
+            totalTokens: 30,
+            totalCost: 3,
+          });
+          expect(bulkFinished).toBe(false);
+        } finally {
+          scope.beginClose();
+          releaseFirstBatch.resolve("refreshed");
+          releaseBulk.resolve("refreshed");
+          await Promise.allSettled([reading, scope.drain()]);
+          vi.mocked(refreshCostUsageCacheForAgent).mockReset();
+        }
+      });
+    },
+  );
+
+  it.each(["completes", "slow", "cancelled"] as const)(
+    "bounds publication waiting when the request is %s without adopting background work",
+    async (phase) => {
+      await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+        const refreshOwner = new AsyncWorkScope();
+        const requestOwner = new AsyncWorkScope();
+        const release = createDeferredCore<"refreshed">();
+        const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockReturnValue(release.promise);
+        const reason = new Error("usage client disconnected");
+        refreshOwner.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        const reading = requestOwner.track(() =>
+          loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile: sessionFiles[0] }],
+            requestRefresh: false,
+            maxPublicationWaitMs: 100,
+          }),
+        );
+        // Observe rejection immediately; scope cancellation must not become an
+        // unhandled rejection while the fake clock advances other work.
+        const result = Promise.allSettled([reading]);
+        try {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(refresh).toHaveBeenCalledOnce();
+          if (phase === "completes") {
+            release.resolve("refreshed");
+          } else if (phase === "cancelled") {
+            requestOwner.beginClose(reason);
+          } else {
+            await vi.advanceTimersByTimeAsync(100);
+          }
+          const [outcome] = await result;
+          if (phase === "cancelled") {
+            expect(outcome).toMatchObject({ status: "rejected", reason });
+          } else {
+            expect(outcome).toMatchObject({
+              status: "fulfilled",
+              value: { summaries: [null], cacheStatus: { status: "stale" } },
+            });
+          }
+          if (phase !== "completes") {
+            expect(refreshOwner.hasPendingWork).toBe(true);
+            expect(refreshOwner.signal.aborted).toBe(false);
+          }
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+        } finally {
+          release.resolve("refreshed");
+          await result;
+          await refreshOwner.drain();
+          await requestOwner.drain();
+        }
+      });
+    },
+  );
+
+  it("keeps an exact logical-selector read pending across a deferred rebuild", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const storePath = path.dirname(sessionFiles[0]);
+      const logical = `sqlite:${agentId}:selected:${path.join(storePath, "sessions.json")}`;
+      const canonical = `sqlite:${agentId}:selected:${path.join(storePath, "openclaw-agent.sqlite")}`;
+      const row = { key: canonical, valueJson: "{}", updatedAt: 1 };
+      const releaseFirst = createDeferredCore<"refreshed">();
+      const releaseSecond = createDeferredCore<"refreshed">();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent);
+      refresh.mockImplementationOnce(async (params) => {
+        await releaseFirst.promise;
+        params.onRemaining?.([{ sessionFile: logical, rollupId: canonical }]);
+        return "refreshed";
+      });
+      refresh.mockReturnValueOnce(releaseSecond.promise);
+      refresh.mockResolvedValue("refreshed");
+      let reading: ReturnType<typeof loadSessionCostSummariesFromCache> | undefined;
+      try {
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath,
+            sessionFiles: [logical],
+            rebuildRows: [row],
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        reading = loadSessionCostSummariesFromCache({
+          config,
+          agentId,
+          sessions: [{ sessionFile: logical }],
+          requestRefresh: false,
+        });
+        let settled = false;
+        void reading.then(() => {
+          settled = true;
+        });
+        releaseFirst.resolve("refreshed");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refresh.mock.calls[1]?.[0]).toMatchObject({
+          sessionFiles: [logical],
+          rebuildRows: [row],
+        });
+        expect(settled).toBe(false);
+        releaseSecond.resolve("refreshed");
+        await vi.advanceTimersByTimeAsync(1);
+        await reading;
+      } finally {
+        releaseFirst.resolve("refreshed");
+        releaseSecond.resolve("refreshed");
+        scope.beginClose();
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.allSettled([reading, scope.drain()]);
+      }
+    });
+  });
 
   it("bounds pending backfill batches and preserves queued rebuilds across a busy retry", async () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {
@@ -201,13 +629,15 @@ describe("session cost usage refresh", () => {
         expect(refresh.mock.calls[1]?.[0].sessionFiles).toEqual(pending.slice(0, 50));
         await vi.advanceTimersByTimeAsync(52);
         const accepted = refresh.mock.calls.slice(2).map(([params]) => params);
-        expect(accepted.map((params) => params.sessionFiles?.length)).toEqual([50, 50, 22]);
+        expect(accepted.map((params) => params.sessionFiles?.length)).toEqual([50, 50, 23]);
         expect(accepted.flatMap((params) => params.sessionFiles ?? [])).toEqual([
-          ...pending.map((file, index) => (index === 80 ? rollupIds[index]! : file)),
+          ...pending.slice(0, 81),
+          rollupIds[80]!,
+          ...pending.slice(81),
           late,
         ]);
-        expect(accepted.map((params) => params.rebuildRows)).toEqual([[], [rebuild], []]);
-        expect(vi.getTimerCount()).toBe(0);
+        expect(accepted.map((params) => params.rebuildRows)).toEqual([[rebuild], [rebuild], []]);
+        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
       } finally {
         scope.beginClose();
         await vi.advanceTimersByTimeAsync(50);
@@ -248,7 +678,7 @@ describe("session cost usage refresh", () => {
           await vi.advanceTimersByTimeAsync(50);
           expect(events).toEqual(["refresh settled", "scope drained"]);
           expect(refresh).toHaveBeenCalledOnce();
-          expect(vi.getTimerCount()).toBe(0);
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         } finally {
           release.resolve();
           scope.beginClose();
@@ -312,7 +742,7 @@ describe("session cost usage refresh", () => {
           );
           expect(write).toHaveBeenCalledWith(expect.stringContaining("background refresh"));
           expect(refresh).toHaveBeenCalledOnce();
-          expect(vi.getTimerCount()).toBe(0);
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         } finally {
           try {
             release.resolve("refreshed");
@@ -350,7 +780,7 @@ describe("session cost usage refresh", () => {
           await scope.drain();
           await vi.advanceTimersByTimeAsync(50);
           expect(refresh).toHaveBeenCalledTimes(callsBeforeClose);
-          expect(vi.getTimerCount()).toBe(0);
+          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
         } finally {
           scope.beginClose();
           await vi.advanceTimersByTimeAsync(50);

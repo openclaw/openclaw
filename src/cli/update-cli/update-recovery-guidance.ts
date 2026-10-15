@@ -82,13 +82,13 @@ export function resolveUpdateResultNextAction(params: {
       result.recovery.service === "healthy"
     ) {
       if (doctorSettlement?.exitCode === 0) {
-        return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+        return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
       }
       if (result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0)) {
         const refusal =
           result.rollbackOutcome?.reason ??
           result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
-        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
       }
     }
     if (
@@ -160,7 +160,7 @@ export function resolveUpdateResultNextAction(params: {
       state,
       retentionGuidance,
       result.reason === "state-migrated-no-rollback"
-        ? `Keep the new installation and recovery snapshots; do not roll back code alone. Run \`${formatCliCommand("openclaw update repair", env)}\` from the installed version to finish config and plugin maintenance.`
+        ? `Keep the new installation and recovery snapshots; do not roll back code alone. Stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` from the installed version to finish config and plugin maintenance.`
         : servingVersion && !hostLinkFailure
           ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
           : undefined,
@@ -179,7 +179,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Use the same profile, state, and config settings.`;
+    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Before applying cleanup, stop the Gateway first (\`${command("openclaw gateway stop")}\`). Use the same profile, state, and config settings.`;
   }
   return undefined;
 }

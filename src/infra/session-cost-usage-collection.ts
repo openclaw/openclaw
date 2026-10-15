@@ -11,7 +11,6 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -25,14 +24,23 @@ export type UsageCostCollectionAccess = {
   env?: NodeJS.ProcessEnv;
   materializeArchive: (sourcePath: string) => Promise<string>;
   listSqliteMetadataStores: (storePath: string) => readonly string[];
-  readSqliteMetadata: <T>(storePath: string, read: () => T) => Promise<T>;
+  resolveSqliteStorePath: (agentId: string, storePath: string) => string;
+  readSqliteArchives: (
+    agentId: string,
+    storePath: string,
+    archiveNames: string[],
+  ) => Promise<Array<{ archiveName: string; agentId: string; sessionId: string }>>;
   listSqliteInstances: (
     agentId: string,
     storePath: string,
   ) => Promise<Array<{ agentId: string; sessionId: string; updatedAtMs: number }>>;
   readSqliteStats: (
     markers: readonly SqliteSessionFileMarker[],
-  ) => Promise<Array<SessionTranscriptStats | undefined>>;
+  ) => Promise<
+    Array<
+      (SessionTranscriptStats & Pick<UsageCostTranscriptFile, "generation" | "cold">) | undefined
+    >
+  >;
 };
 
 type UsageCostJsonlSource = {
@@ -101,17 +109,7 @@ async function listUsageCountedTranscriptFileSources(
   );
   const archivesByStore = [];
   for (const databasePath of stores.values()) {
-    const { listSessionTranscriptArchivesReadOnly } =
-      await import("../config/sessions/session-accessor.sqlite-history.js");
-    const read = () =>
-      listSessionTranscriptArchivesReadOnly({
-        agentId,
-        archiveNames,
-        includeAllAgents: true,
-        storePath: databasePath,
-        env: params.env,
-      });
-    archivesByStore.push(await params.readSqliteMetadata(databasePath, read));
+    archivesByStore.push(await params.readSqliteArchives(agentId, databasePath, archiveNames));
   }
   const archives = new Map(archivesByStore.flat().map((archive) => [archive.archiveName, archive]));
   const tasks = transcripts
@@ -160,10 +158,7 @@ async function readUsageCostSqliteFiles(
     if (!stats) {
       return undefined;
     }
-    const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-      agentId: marker.agentId,
-      env: access.env,
-    });
+    const storePath = access.resolveSqliteStorePath(marker.agentId, marker.storePath);
     const filePath = formatSqliteSessionFileMarker({ ...marker, storePath });
     return {
       filePath,
@@ -174,6 +169,8 @@ async function readUsageCostSqliteFiles(
       size: stats.sizeBytes,
       eventCount: stats.eventCount,
       maxSeq: stats.maxSeq,
+      generation: stats.generation,
+      cold: stats.cold,
     };
   });
 }
@@ -280,13 +277,16 @@ export async function resolveUsageCostTranscriptSources(
     markers.filter((marker) => marker !== undefined),
     access,
   );
+  // Continuations and exact-read waiters use the caller's selector, not the cache key.
+  const requestedSource = (file: UsageCostSqliteFile | undefined, index: number) =>
+    file ? { ...file, sourcePath: sessionFiles[index]! } : undefined;
   if (sqliteFiles.length === sessionFiles.length) {
-    return sqliteFiles;
+    return sqliteFiles.map(requestedSource);
   }
   let sqliteIndex = 0;
   const tasks = sessionFiles.map((sessionFile, index) => {
     if (markers[index]) {
-      const file = sqliteFiles[sqliteIndex++];
+      const file = requestedSource(sqliteFiles[sqliteIndex++], index);
       return async () => file;
     }
     return () => resolveUsageCostTranscriptSource(sessionFile, access);
@@ -335,10 +335,7 @@ export async function resolveUsageCostTranscriptPaths(
     tasks: sessionFiles.map((sessionFile) => async () => {
       const marker = parseSqliteSessionFileMarker(sessionFile);
       if (marker) {
-        const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-          agentId: marker.agentId,
-          env: access.env,
-        });
+        const storePath = access.resolveSqliteStorePath(marker.agentId, marker.storePath);
         return formatSqliteSessionFileMarker({ ...marker, storePath });
       }
       try {

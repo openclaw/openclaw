@@ -612,7 +612,7 @@ suite.define(() => {
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(
           await page
-            .locator('.agent-select [part="menu"]')
+            .locator(".agent-select__menu")
             .evaluate((menu) => getComputedStyle(menu).opacity),
         ).toBe("1");
         if (proofEnabled) {

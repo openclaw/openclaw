@@ -2,6 +2,7 @@ import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
@@ -11,12 +12,10 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
-import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { currentSqliteOperationTiming, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_SOURCE_FENCE } from "./sqlite-source-fence-contract.js";
 import { runSqliteSourceFence } from "./sqlite-source-fence.js";
 import {
@@ -81,7 +80,6 @@ let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
-const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
 
 async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
   if (!sourceLoaderRegistered && sourceLoaderUrl) {
@@ -169,6 +167,8 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (timing) {
     timing.received ??= performance.now();
   }
+  const transactions = currentSqliteOperationTiming()?.transactions;
+  let loadedModules = false;
   let reply: SqliteWorkerReply;
   let executed = pendingResult !== undefined;
   let retire = false;
@@ -191,6 +191,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           actor: request.actor,
           context: {
             port: request.operationAdmission,
+            attachment: request.operationAttachment,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,
           },
@@ -270,6 +271,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           const loading = backend[SQLITE_WORKER_PREPARE_COMMAND]?.(typedCommand.type);
           if (loading) {
             await loading;
+            loadedModules = true;
           }
           try {
             // Preparation carries captured facts without retaining synchronous admission authority.
@@ -403,6 +405,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
       const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
+      loadedModules = true;
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -429,7 +432,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
-          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -532,7 +534,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const errorContext =
       request.stateContext ??
       (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
-    // Canonical error identities also belong to context-free ephemeral actors.
     const sharedState = !executed
       ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: Boolean(errorContext) })
       : undefined;
@@ -563,9 +564,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     });
   }
   const complete = !reply.ok || (!pendingInput && !pendingResult);
-  if (complete) {
-    reply.databaseAdmissions = captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
-  }
   if (complete && nativeCleanupFailure) {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;
@@ -574,6 +572,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     timing.replied = performance.now();
     reply.timing = timing;
   }
+  reply.transactionCount = transactions?.count ?? 0;
   if (reply.ok) {
     if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {
       const admission = captureSqliteNativeRuntimeAdmission();
@@ -587,6 +586,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   } else {
     port.postMessage(reply, []);
   }
+  if (loadedModules) {
+    scheduleOpenClawCompileCacheFlush();
+  }
   if (complete) {
     scheduleWorkerIdleGc();
   }
@@ -595,5 +597,8 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
 // The broker sends one request at a time, including module initialization.
 port.on("message", (request: SqliteWorkerRequest) => {
   cancelWorkerIdleGc();
-  void receive(request);
+  void withSqliteReaderOwner(
+    { operation: request.type, ownerKind: "worker", actorId: request.actor },
+    () => receive(request),
+  );
 });

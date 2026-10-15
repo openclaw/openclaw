@@ -1,3 +1,5 @@
+// Initialize the context-free root before a task can lazily import maintenance owners.
+import "../shared/detached-async-context.js";
 import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -5,6 +7,7 @@ import {
   type WorkerTaskChannel,
   type WorkerTaskControl,
 } from "@openclaw/worker-runtime/worker";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
 import {
   applyAgentDatabaseReaderRequest,
@@ -31,7 +34,11 @@ type WorkerTaskHandler<Output> = (
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
   handler: WorkerTaskHandler<Output>,
-  options: { transferList?: (value: Output) => Transferable[]; retireOnError?: boolean } = {},
+  options: {
+    transferList?: (value: Output) => Transferable[];
+    retireOnError?: boolean;
+    idleGc?: false;
+  } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
@@ -45,6 +52,8 @@ export function serveOwnedWorkerTasks<Output>(
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
+    /** Guest runtimes own their heap budget and lifetime across task boundaries. */
+    idleGc?: false;
   } = {},
 ): void {
   let memoryPort: MessagePort;
@@ -118,7 +127,13 @@ export function serveOwnedWorkerTasks<Output>(
         }
         databaseAdmissionPort ??= context.databaseAdmissionPort;
       },
-      onIdle: scheduleWorkerIdleGc,
+      onIdle() {
+        // Later tasks can load additional modules; an empty native flush does no I/O.
+        scheduleOpenClawCompileCacheFlush();
+        if (options.idleGc !== false) {
+          scheduleWorkerIdleGc();
+        }
+      },
       onRetire() {
         cancelWorkerIdleGc();
         try {

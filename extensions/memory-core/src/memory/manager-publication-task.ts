@@ -1,4 +1,5 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
@@ -57,7 +58,9 @@ export type MemoryPublicationOperations = {
       Parameters<typeof ensureMemoryIndexSchema>[0],
       "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
     >;
-    output: MemoryPublicationResult<ReturnType<typeof ensureMemoryIndexSchema>>;
+    output: MemoryPublicationResult<
+      ReturnType<typeof ensureMemoryIndexSchema> & { admission?: MemoryDatabaseAdmission }
+    >;
   };
   "source.refresh": {
     input: Parameters<typeof refreshMemorySessionSourceState>[1];

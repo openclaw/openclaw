@@ -52,7 +52,6 @@ const browserUrl = `${links.httpUrl}#bootstrapToken=one-time-bootstrap&gatewayUr
 
 beforeEach(async () => {
   await Promise.all([import("../agents/utility-model.js"), import("./onboard-agent-target.js")]);
-  // Advance handoff polling without draining process-owned directory maintenance.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(0);
   for (const name of [
@@ -99,9 +98,9 @@ function displayedNotes(prompter: ReturnType<typeof createWizardPrompter>) {
     .join("\n");
 }
 
-async function runHandoff(params: Parameters<typeof runBrowserHatchHandoff>[0]) {
+async function runHandoff(params: Parameters<typeof runBrowserHatchHandoff>[0], advanceMs = 0) {
   const result = runBrowserHatchHandoff(params);
-  await vi.runAllTimersAsync();
+  await vi.advanceTimersByTimeAsync(advanceMs);
   return await result;
 }
 
@@ -147,7 +146,7 @@ describe("runBrowserHatchHandoff", () => {
           },
         ]);
       const prompter = createWizardPrompter();
-      const result = await runHandoff({ config: {}, prompter });
+      const result = await runHandoff({ config: {}, prompter }, change === "new-tab" ? 0 : 60_000);
       expect(result).toEqual(
         change === "new-tab" ? { handedOff: true } : { handedOff: false, reason: "timeout" },
       );
@@ -210,7 +209,7 @@ describe("runBrowserHatchHandoff", () => {
       sharedMocks.callGateway.mockReset().mockResolvedValue([]);
       vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
       const prompter = createWizardPrompter();
-      expect(await runHandoff({ config: {}, prompter })).toEqual({
+      expect(await runHandoff({ config: {}, prompter }, 300_000)).toEqual({
         handedOff: false,
         reason: "timeout",
       });

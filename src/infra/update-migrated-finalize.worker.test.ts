@@ -276,7 +276,11 @@ it.each([false, true])(
           run: { ...input.params.opts.run, executorFence: fixture.fence },
         },
       },
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
+      {
+        candidateRuntime: true,
+        adoptedFinalization: true,
+        onGatewayStartAttempted: expect.any(Function),
+      },
     );
     expect(fixture.fence.assertCurrent).toHaveBeenCalled();
     expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
@@ -501,7 +505,11 @@ it.each([
       expect.objectContaining({
         opts: expect.objectContaining({ timeout: undefined }),
       }),
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
+      {
+        candidateRuntime: true,
+        adoptedFinalization: true,
+        onGatewayStartAttempted: expect.any(Function),
+      },
     );
     expect(fixture.writeFile).toHaveBeenCalledWith(
       input.resultPath,
@@ -563,7 +571,11 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
         shouldRestart: false,
         preManagedServiceStop: { ...transferred, windowsTaskAutoStartRecovery: undefined },
       }),
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
+      {
+        candidateRuntime: true,
+        adoptedFinalization: true,
+        onGatewayStartAttempted: expect.any(Function),
+      },
     );
     expect(fixture.stopService).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);

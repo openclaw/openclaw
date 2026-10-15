@@ -7,10 +7,11 @@ import type {
   TaskSuggestionsAcceptParams,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { isAbsolutePath } from "../../new-session/path.ts";
+import { ChatTaskStartMenu } from "./chat-task-start-menu.tsx";
 
 export type TaskSuggestionStartMode = Extract<
   TaskSuggestionsAcceptParams["mode"],
@@ -284,36 +285,7 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
                             : t("chat.taskSuggestions.startSession")
                         }
                       </button>
-                      <wa-dropdown
-                        placement="bottom-end"
-                        ?disabled=${busy || !canAccept}
-                        @wa-select=${(event: CustomEvent<{ item: { value: string } }>) => {
-                          const mode = event.detail.item.value;
-                          if (mode === "local" || mode === "worktree" || mode === "session") {
-                            accept(mode);
-                          }
-                        }}
-                      >
-                        <button
-                          slot="trigger"
-                          class="btn task-suggestion__start task-suggestion__start--options"
-                          type="button"
-                          ?disabled=${busy || !canAccept}
-                          aria-label=${t("chat.taskSuggestions.startOptions")}
-                          title=${canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
-                        >
-                          ${icons.chevronDown}
-                        </button>
-                        <wa-dropdown-item value="local" ?disabled=${busy || !canAccept}>
-                          ${t("chat.taskSuggestions.startSession")}
-                        </wa-dropdown-item>
-                        <wa-dropdown-item value="worktree" ?disabled=${busy || !canAccept}>
-                          ${t("chat.taskSuggestions.startWorktree")}
-                        </wa-dropdown-item>
-                        <wa-dropdown-item value="session" ?disabled=${busy || !canAccept}>
-                          ${t("chat.taskSuggestions.startCurrentSession")}
-                        </wa-dropdown-item>
-                      </wa-dropdown>
+                      ${solidContent(ChatTaskStartMenu, { busy, canAccept, onSelect: accept })}
                     `
               }
             </div>

@@ -146,6 +146,11 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
+Gateway model admission uses the configured agent's workspace and plugin inventory,
+including its published discovery catalog. A session opened in another folder keeps
+that folder as its execution cwd without losing discovered models. Standalone hosts
+continue to scope plugin discovery to their requested workspace.
+
 Setup provider detection loads providers from the metadata snapshot that
 selected its choices. Its operation cache owns only the probe registrations and
 plugin instances, which retire after the probes settle, so repeated detection

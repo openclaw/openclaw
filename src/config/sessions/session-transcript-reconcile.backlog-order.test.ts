@@ -24,6 +24,7 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => clearRuntimeConfigSnapshot());
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -96,6 +97,7 @@ it("gives another agent a turn at a session boundary without a priority queue", 
   let releaseAcknowledgement: (() => void) | undefined;
   let heldFirstFinish = false;
   try {
+    setRuntimeConfigSnapshot({});
     await seedPendingBacklogs(env, backlogs);
     const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
     operationSpy = vi

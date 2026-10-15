@@ -1,4 +1,3 @@
-import { html, render } from "lit";
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionMenuData } from "../components/session-menu-actions.ts";
@@ -9,7 +8,7 @@ import type {
   SessionMenuActionKind,
   SessionMenuWork,
 } from "../components/session-menu.ts";
-import type { SessionOwnerOption } from "../components/session-owner-chip.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
@@ -67,41 +66,34 @@ export async function mountMenu(
     categoryClearReturnsToGroups: false,
     ...options.session,
   };
-  render(
-    html`<openclaw-session-menu
-      .session=${session}
-      .compact=${options.compact ?? false}
-      .involvingMeContext=${options.involvingMeContext ?? false}
-      .navigationAllowed=${options.navigationAllowed ?? true}
-      .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
-      .splitAllowed=${options.splitAllowed ?? false}
-      .selectionCount=${options.selectionCount ?? 1}
-      .lastActive=${options.lastActive ?? "57d"}
-      .anchor=${{ x: 100, y: 100 }}
-      .trigger=${options.trigger ?? null}
-      .disabled=${false}
-      .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
-      .forkDisabled=${false}
-      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
-      .snoozeAllowed=${options.snoozeAllowed ?? false}
-      .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${
-        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
-      }
-      .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
-      .groups=${options.groups ?? []}
-      .currentOwner=${options.currentOwner ?? null}
-      .work=${options.work ?? null}
-      .pluginActions=${options.pluginActions ?? []}
-      .onAction=${options.onAction ?? (() => {})}
-      .onClose=${options.onClose ?? (() => {})}
-    ></openclaw-session-menu>`,
-    container,
-  );
-  const element = container.querySelector<SessionMenuElement>("openclaw-session-menu");
-  if (!element) {
-    throw new Error("Expected session menu");
-  }
+  const element = document.createElement("openclaw-session-menu");
+  Object.assign(element, {
+    session,
+    compact: options.compact ?? false,
+    involvingMeContext: options.involvingMeContext ?? false,
+    navigationAllowed: options.navigationAllowed ?? true,
+    copyMarkdownAllowed: options.copyMarkdownAllowed ?? true,
+    splitAllowed: options.splitAllowed ?? false,
+    selectionCount: options.selectionCount ?? 1,
+    lastActive: options.lastActive ?? "57d",
+    anchor: { x: 100, y: 100 },
+    trigger: options.trigger ?? null,
+    disabled: false,
+    actionDisabledReasons: options.actionDisabledReasons ?? {},
+    forkDisabled: false,
+    forkFromLastCompleted: options.forkFromLastCompleted ?? false,
+    snoozeAllowed: options.snoozeAllowed ?? false,
+    archiveAllowed: options.archiveAllowed ?? true,
+    deleteAllowed: options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true)),
+    cloudWorkerStopAllowed: options.cloudWorkerStopAllowed ?? false,
+    groups: options.groups ?? [],
+    currentOwner: options.currentOwner ?? null,
+    work: options.work ?? null,
+    pluginActions: options.pluginActions ?? [],
+    onAction: options.onAction ?? (() => {}),
+    onClose: options.onClose ?? (() => {}),
+  });
+  container.append(element);
   await settleSessionMenu(element);
   return element;
 }

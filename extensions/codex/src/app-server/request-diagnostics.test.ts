@@ -3,6 +3,7 @@ import * as diagnostics from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
@@ -137,10 +138,19 @@ describe("scoped Codex timeout diagnostics", () => {
           );
           return await Promise.all(calls);
         },
-        { sessionId: privateText, sessionKey: privateText },
+        {
+          // These identifiers test redaction; no session owner participates in this scope.
+          config: { agents: { entries: {} } },
+          sessionId: privateText,
+          sessionKey: privateText,
+        },
       ),
     );
-    await entered.promise;
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      result,
+      "Codex scope settled before all diagnostic requests started",
+    );
     await vi.advanceTimersByTimeAsync(50);
     expect(await result).toMatchObject({ message: "codex app-server request timed out" });
     const logged = await record();

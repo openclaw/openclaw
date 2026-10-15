@@ -381,7 +381,7 @@
   height: 44px;
 }
 
-.chat-image-actions::part(menu) {
+.chat-image-actions .oc-menu {
   min-width: 164px;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
@@ -405,7 +405,7 @@
 }
 
 .chat-image-action:hover,
-.chat-image-actions[open] .chat-image-action {
+.chat-image-actions .chat-image-action[aria-expanded="true"] {
   color: var(--text);
   background: var(--bg-hover);
 }

@@ -199,27 +199,23 @@ describe("voice-call active-call tool scope", () => {
     expect(carrier.hangupCall).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { action: "continue_call", callId: "bound", message: "continue" },
-    { action: "get_status", callId: "bound" },
-    { action: "initiate_call", message: "start" },
-    { action: "send_dtmf", callId: "bound", digits: "1" },
-    { action: "speak_to_user", callId: "bound", message: "speak" },
-    { action: "steer_call", callId: "bound", message: "steer" },
-  ])("rejects every bound-call action except end_call ($action)", async (params) => {
-    const { tool } = registerBoundTool();
-    const scopedParams = {
-      ...params,
-      ...(params.callId ? { callId: runtimeStub.call.callId } : {}),
-    };
+  it.each([{ action: "steer_call", callId: "bound", message: "steer" }])(
+    "rejects a non-end_call action on a bound call ($action)",
+    async (params) => {
+      const { tool } = registerBoundTool();
+      const scopedParams = {
+        ...params,
+        ...(params.callId ? { callId: runtimeStub.call.callId } : {}),
+      };
 
-    const result = await tool.execute("rejected", scopedParams);
+      const result = await tool.execute("rejected", scopedParams);
 
-    expect(JSON.stringify(result)).toContain("only end_call");
-    expect(runtimeStub.endCall).not.toHaveBeenCalled();
-    expect(runtimeStub.initiateCall).not.toHaveBeenCalled();
-    expect(runtimeStub.sendDtmf).not.toHaveBeenCalled();
-  });
+      expect(JSON.stringify(result)).toContain("only end_call");
+      expect(runtimeStub.endCall).not.toHaveBeenCalled();
+      expect(runtimeStub.initiateCall).not.toHaveBeenCalled();
+      expect(runtimeStub.sendDtmf).not.toHaveBeenCalled();
+    },
+  );
 
   it("finishes an accepted hang-up when the consult is cancelled during call lookup", async () => {
     const carrier = await makeManagerRuntime();

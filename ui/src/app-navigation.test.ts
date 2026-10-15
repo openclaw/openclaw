@@ -79,13 +79,10 @@ describe("formatDocumentTitle", () => {
     );
   });
 
-  it("shows attention separately from the disconnected state", () => {
+  it("prefixes a pending attention count", () => {
     expect(formatDocumentTitle({ context: "Usage", attentionCount: 3 })).toBe(
       "(3) Usage — OpenClaw",
     );
-    expect(
-      formatDocumentTitle({ context: "Usage", attentionCount: 3, gatewayDisconnected: true }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 

@@ -184,13 +184,10 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const card = await store.get(id);
-        if (!card) {
-          throw new Error(`card not found: ${id}`);
-        }
+        const { card, workerContext } = await store.readWithWorkerContext(id);
         return jsonResult({
           card: redactClaimToken(card),
-          workerContext: await store.buildWorkerContext(id),
+          workerContext,
         });
       },
     },

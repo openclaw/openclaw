@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
+import "../../../components/web-awesome.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import {
@@ -118,7 +119,10 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const trigger = fixture.container.querySelector<HTMLButtonElement>(
         ".chat-pane__layout-trigger",
       )!;
-      const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
+      const menu =
+        fixture.container.querySelector<HTMLElementTagNameMap["wa-dropdown"]>(
+          ".chat-pane__layout-menu",
+        )!;
       const shown = vi.fn();
       menu.addEventListener("wa-after-show", shown, { once: true });
       await openChatLayoutMenu({
@@ -139,27 +143,61 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         );
         expect(document.activeElement).toBe(trigger);
       }
-      for (const expectedCount of [3, 4]) {
-        trigger.click();
-        menu.querySelector<HTMLElement>('[value="side-panel"]')!.click();
-        await expect.poll(() => observations.length).toBe(expectedCount);
-        expect(menu.hasAttribute("open")).toBe(false);
-        expect(document.activeElement).toBe(trigger);
+      const transitions: Array<{ type: string; open: boolean; callbacks: number }> = [];
+      const events = ["wa-show", "wa-after-show", "wa-select", "wa-hide", "wa-after-hide"];
+      const recordTransition = (event: Event) => {
+        transitions.push({ type: event.type, open: menu.open, callbacks: observations.length });
+      };
+      for (const event of events) {
+        menu.addEventListener(event, recordTransition);
       }
-      expect(observations).toEqual([
-        { open: false, focused: true },
-        { open: false, focused: true },
-        { open: false, focused: true },
-        { open: false, focused: true },
-      ]);
+      try {
+        for (const expectedCount of [3, 4]) {
+          trigger.click();
+          menu.querySelector<HTMLElement>('[value="side-panel"]')!.click();
+          await expect.poll(() => observations.length).toBe(expectedCount);
+          expect(menu.hasAttribute("open")).toBe(false);
+          expect(document.activeElement).toBe(trigger);
+        }
+        expect(observations).toEqual([
+          { open: false, focused: true },
+          { open: false, focused: true },
+          { open: false, focused: true },
+          { open: false, focused: true },
+        ]);
+      } catch (error) {
+        console.error("Layout selection lifecycle", {
+          transitions,
+          open: menu.open,
+          popupActive: menu.shadowRoot?.querySelector("wa-popup")?.active,
+          focused: document.activeElement === trigger,
+          callbacks: observations.length,
+        });
+        throw error;
+      } finally {
+        for (const event of events) {
+          menu.removeEventListener(event, recordTransition);
+        }
+      }
     });
 
     it.each([320, 693])(
       "keeps a running batch and all controls inside a %ipx header",
       async (width) => {
+        await page.viewport(width, 800);
+        const onTerminal = vi.fn();
         const { container } = mountChatPaneHeader(containers, {
           narrow: true,
           runningSubagentCount: 12,
+          panelMenuActions: [
+            {
+              id: "terminal",
+              label: "Toggle terminal",
+              icon: html``,
+              shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
+              onActivate: onTerminal,
+            },
+          ],
           detailsControl: html`<openclaw-chat-details .presented=${true}></openclaw-chat-details>`,
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
@@ -196,6 +234,17 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
           "Subagents · 12 running",
         );
+        const scope = {
+          container,
+          click: (element: HTMLElement) => page.elementLocator(element).click(),
+        };
+        const menu = await openChatLayoutMenu(scope);
+        const shortcut = menu.querySelector<HTMLElement>("kbd")!;
+        expect(shortcut.checkVisibility()).toBe(false);
+        const surface = menu.shadowRoot!.querySelector<HTMLElement>("[role=menu]")!;
+        expect(surface.getBoundingClientRect().width).toBeLessThanOrEqual(264);
+        await selectChatLayoutAction(scope, "Toggle terminal");
+        expect(onTerminal).toHaveBeenCalledOnce();
       },
     );
 

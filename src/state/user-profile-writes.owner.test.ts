@@ -50,11 +50,28 @@ it("serves the first owner ensure after catalog hydration and applies write rece
 
     await setCanonicalUserProfileDisplayName(owner.id, null);
     await ensureCanonicalGatewayOwnerProfile(null);
+    vi.mocked(runOpenClawStateWorkerOperation).mockClear();
+    const missingName = vi.fn(async () => null);
+    const unnamedSql = observeMainThreadSql();
+    expect((await ensureCanonicalGatewayOwnerProfile(missingName)).displayName).toBeNull();
+    expect(missingName).toHaveBeenCalledOnce();
+    expect(runOpenClawStateWorkerOperation).not.toHaveBeenCalled();
+    unnamedSql.expectIdle();
+    vi.restoreAllMocks();
     const adoptedName = vi.fn(async () => "New Host Name");
     expect((await ensureCanonicalGatewayOwnerProfile(adoptedName)).displayName).toBe(
       "New Host Name",
     );
     expect(adoptedName).toHaveBeenCalledOnce();
+
+    await setCanonicalUserProfileDisplayName(owner.id, null);
+    const renamedDuringLookup = await ensureCanonicalGatewayOwnerProfile(async () => {
+      await setCanonicalUserProfileDisplayName(owner.id, "Saved during lookup");
+      vi.mocked(runOpenClawStateWorkerOperation).mockClear();
+      return null;
+    });
+    expect(renamedDuringLookup.displayName).toBe("Saved during lookup");
+    expect(runOpenClawStateWorkerOperation).not.toHaveBeenCalled();
   } finally {
     vi.restoreAllMocks();
     release();

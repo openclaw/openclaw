@@ -3,7 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { boardWidget, settleCells, snapshot } from "./board-view.test-support.ts";
+import { boardWidget, openBoardMenu, settleCells, snapshot } from "./board-view.test-support.ts";
 import "./board-document.tsx";
 
 const mounted: HTMLElement[] = [];
@@ -146,6 +146,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   await settleCells(view);
   const remove = view.querySelector<HTMLElement>(".board-widget__menu-danger")!;
   expect(remove).not.toBeNull();
+  await openBoardMenu(view);
   remove.click();
   await recoveryRequested.promise;
   await settleCells(view);
@@ -172,6 +173,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(1);
   expect(errors()).toEqual(beforeRefresh);
 
+  await openBoardMenu(view);
   remove.click();
   await waitForSolid(() => expect(view.snapshot?.revision).toBe(2));
   await settleCells(view);

@@ -373,7 +373,7 @@ describe("Gateway ACP completion ownership", () => {
           idempotencyKey: runId,
         };
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
-        expect(accepted.ok).toBe(true);
+        expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
         if (scenario.rpcAbort) {
           await turnStarted.promise;
           // Stop suppresses a start still awaiting publication; this case aborts after start.

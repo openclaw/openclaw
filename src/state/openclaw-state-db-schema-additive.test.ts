@@ -7,11 +7,13 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
@@ -197,7 +199,7 @@ it("adds the caption retry index to populated same-version state without changin
            ('meeting', 'start', 1, 'caption', 'Final caption', 1),
            ('meeting', 'start', 2, NULL, 'Unidentified caption', NULL);
   `);
-  const readState = (db: DatabaseSync) => ({
+  const readState = (db: EngineConnection) => ({
     sessions: db.prepare("SELECT * FROM meeting_transcript_sessions ORDER BY session_id").all(),
     utterances: db.prepare("SELECT * FROM meeting_transcript_utterances ORDER BY sequence").all(),
     metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
@@ -206,7 +208,7 @@ it("adds the caption retry index to populated same-version state without changin
   const before = readState(database.db);
   expect(before.version).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
   const indexName = "idx_meeting_transcript_utterances_id";
-  const readIndex = (db: DatabaseSync) =>
+  const readIndex = (db: EngineConnection) =>
     db
       .prepare('SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?')
       .get("meeting_transcript_utterances", indexName);
@@ -215,7 +217,7 @@ it("adds the caption retry index to populated same-version state without changin
   }).replace(/CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id\b[^;]*;/u, "");
   expect(() =>
     assertSqliteSchemaContains(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       database.path,
       previousSchema,
       OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,

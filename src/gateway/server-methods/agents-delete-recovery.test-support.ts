@@ -5,12 +5,15 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
+import { EMBEDDED_RUN_WAITERS } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
   resolveEmbeddedAgentRunProgressState,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import * as sessionPlacement from "../worker-environments/session-placement-lifecycle.js";
 import {
   deletionJournal,
   expectRespondErrorContaining,
@@ -66,6 +69,119 @@ type AgentDeleteRecoveryHarness = {
 
 export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecoveryHarness): void {
   const { mocks, makeCall, call, resume, expectTrashedWithinParent, expectNotTrashed } = harness;
+  it.each([
+    new Error("Placement read failed; restore the placement database and retry"),
+    new Error("Session placement identity changed; reload the session and retry"),
+    new AggregateError([new Error("placement cleanup failed")], "Placement stop failed", {
+      cause: new Error("Placement read failed; restore the placement database and retry"),
+    }),
+  ])("preserves a pre-cancellation placement failure: %s", async (placementError) => {
+    const sessionId = "placement-failure-session";
+    const sessionKey = "agent:test-agent:placement-failure";
+    const handle = createEmbeddedRunHandle({ runId: "placement-failure-run", abort: vi.fn() });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+    const prepareStop = vi
+      .spyOn(sessionPlacement, "prepareSessionWorkerPlacementStop")
+      .mockRejectedValueOnce(placementError);
+    try {
+      const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+      await expect(deletion.promise).rejects.toBe(placementError);
+      expect(handle.abort).not.toHaveBeenCalled();
+      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    } finally {
+      prepareStop.mockRestore();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+
+  it("reports slow placement preparation without canceling the run after timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sessionId = "slow-placement-session";
+    const sessionKey = "agent:test-agent:slow-placement";
+    const handle = createEmbeddedRunHandle({ abort: vi.fn() });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+    const preparation =
+      createDeferred<
+        Awaited<ReturnType<typeof sessionPlacement.prepareSessionWorkerPlacementStop>>
+      >();
+    const stop = vi.fn(async () => {});
+    const prepareStop = vi
+      .spyOn(sessionPlacement, "prepareSessionWorkerPlacementStop")
+      .mockReturnValueOnce(preparation.promise);
+    const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+    const failed = vi.fn();
+    const completed = Promise.resolve(deletion.promise).catch(failed);
+    try {
+      await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      expect(prepareStop).toHaveBeenCalledOnce();
+      expect(failed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "deletion preparation timed out for sessions: agent:test-agent:slow-placement. Check session placement availability",
+          ),
+        }),
+      );
+      preparation.resolve({ stop, startBeforeDrain: false });
+      await vi.runAllTimersAsync();
+      expect(handle.abort).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    } finally {
+      preparation.resolve({ stop, startBeforeDrain: false });
+      await vi.runAllTimersAsync();
+      await completed;
+      prepareStop.mockRestore();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { sessionKey: undefined, isAbortable: false },
+    { sessionKey: undefined, isAbortable: true },
+    { sessionKey: "agent:test-agent:stuck", isAbortable: false },
+    { sessionKey: "agent:test-agent:stuck", isAbortable: true },
+  ])(
+    "agents.delete bounds a never-ending run (key: $sessionKey, abortable: $isAbortable)",
+    async ({ sessionKey, isAbortable }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const sessionId = "stuck-deletion-session";
+      const handle = createEmbeddedRunHandle({ runId: "stuck-run", isAbortable });
+      setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+      const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+      const failed = vi.fn();
+      const completed = Promise.resolve(deletion.promise).catch(failed);
+      try {
+        await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+        expect(failed).toHaveBeenCalledOnce();
+        expect(failed).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringMatching(/stuck-deletion-session.*retry agents.delete/),
+          }),
+        );
+        expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+        expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalled();
+        expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+        expect(mocks.beginAgentDeletionRollback).not.toHaveBeenCalled();
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        await completed;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.for(["agent:test-agent:active", "global", undefined])(
     "drains an active %s run before retirement and permits recreation without a deletion retry",
     async (sessionKey, { signal }) => {
@@ -109,6 +225,7 @@ export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecove
           ]),
         );
         expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
         expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
         expect(resolveEmbeddedAgentRunProgressState("other-session")).toBeDefined();
         mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
@@ -293,7 +410,7 @@ export function registerAgentDeleteRollbackTests(harness: AgentDeleteRecoveryHar
     ]);
     expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(2);
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(1);
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 

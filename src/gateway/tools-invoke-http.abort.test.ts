@@ -255,7 +255,8 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
-    await withOpenClawTestState({ label: "http-tool-child-authority" }, async () => {
+    const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
+    await withOpenClawTestState(stateOptions, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {

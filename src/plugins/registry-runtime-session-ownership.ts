@@ -190,12 +190,11 @@ export function createPluginSessionOwnership(
     }
     assertReservedSessionKeyOwned(params.sessionKey, params.action);
   };
-  const { readOwnershipEntry, listOwnershipEntries, withPreparedSessionOwnership } =
-    createPluginSessionOwnershipReads({
-      runtime: registryParams.runtime,
-      currentSessionConfig,
-      assertRuntimeOwnerCurrent,
-    });
+  const { readOwnershipEntry, listOwnershipEntries } = createPluginSessionOwnershipReads({
+    runtime: registryParams.runtime,
+    currentSessionConfig,
+    assertRuntimeOwnerCurrent,
+  });
   const resolveStoredSessionOwnershipTarget = async (params: {
     agentId?: string;
     env?: NodeJS.ProcessEnv;
@@ -368,7 +367,7 @@ export function createPluginSessionOwnership(
     }
     const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
     // Embedded runs accept one exact key. Carry its resolved store into the
-    // keyless ID/file scan so incognito ownership stays in the process-held DB.
+    // keyless ID/file scan so incognito ownership stays in its memory namespace.
     const ownershipStorePath =
       sessionKey && sessionKeyAgentId
         ? resolveSessionStorePathForScope({
@@ -544,7 +543,6 @@ export function createPluginSessionOwnership(
     }
   };
   return {
-    withPreparedSessionOwnership,
     createSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["createSessionEntry"]>[0],

@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
-  runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
@@ -35,17 +34,6 @@ type RepairCanonicalSqliteIndexesOptions = {
  * Verify the whole file before schema convergence. Physical corruption belongs
  * to explicit Doctor maintenance, including when only an index is damaged.
  */
-export function verifyAndRepairCanonicalSqliteIndexes(
-  db: DatabaseSync,
-  databaseLabel: string,
-  schemaSql: string,
-  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
-): string[] {
-  return runSqliteIntegrityOperationSync(
-    verifyAndRepairCanonicalSqliteIndexSteps(db, databaseLabel, schemaSql, options),
-  );
-}
-
 export function* verifyAndRepairCanonicalSqliteIndexSteps(
   db: DatabaseSync,
   databaseLabel: string,

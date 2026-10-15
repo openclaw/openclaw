@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -67,7 +68,7 @@ describe("plugin state keyed store", () => {
     const counts = runWriteTransaction("register", (store) => {
       const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
       const statements = trackSqliteStatementExecutions(
-        store.db,
+        requireNativeSqliteDatabase(store.db),
         ["expiryProbe", "delete"],
         (sql) =>
           sql.startsWith('select "expires_at" from "plugin_state_entries"')
@@ -133,7 +134,7 @@ describe("plugin state keyed store", () => {
     );
     const store = createPluginStateSyncKeyedStore("discord", { namespace: "evict", maxEntries: 3 });
     const statements = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["delete"],
       (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
     );

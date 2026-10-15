@@ -19,6 +19,7 @@ import {
 } from "./oauth-refresh-failure.js";
 import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import * as oauth from "./oauth.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   mockLockedUpdateForStore,
@@ -720,6 +721,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   );
 
   it("re-arms a stale WHAM block from the latest blocked snapshot", async () => {
+    prepareSharedAuthStoreOwnershipForNative();
     const now = 1_700_000_000_000;
     const store = makeStore({
       "openai:default": {

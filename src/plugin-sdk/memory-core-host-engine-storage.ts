@@ -40,6 +40,7 @@ export {
   MEMORY_INDEX_VECTOR_TABLE,
   normalizeExtraMemoryPathEntries,
   readMemoryFile,
+  readMemorySearchManagerStatus,
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,

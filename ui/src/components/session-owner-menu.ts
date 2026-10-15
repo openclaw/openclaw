@@ -1,35 +1,36 @@
-import { ContextConsumer } from "@lit/context";
-import type { ReactiveControllerHost } from "lit";
-import { applicationContext } from "../app/context.ts";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
-import { GatewayPageController } from "../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../lib/reactive/gateway-page.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
 export class SessionOwnerMenu {
-  private readonly context;
-  private readonly connection;
+  private readonly context = useOptionalApplication();
+  private readonly agents = this.context ? projectAgents(this.context.agents) : undefined;
+  private readonly profiles = this.context
+    ? projectSource(profileDirectory(this.context.gateway), {
+        read: (directory) => directory,
+        subscribe: (directory, notify) => directory.subscribe(notify),
+        equality: "revision",
+      })
+    : undefined;
+  private readonly connection = useGatewayPage({
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.searchGeneration += 1;
+    },
+  });
   private searchGeneration = 0;
   private opened = false;
 
-  constructor(host: ReactiveControllerHost & HTMLElement) {
-    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    this.connection = new GatewayPageController(host, {
-      getGateway: () => this.context.value?.gateway,
-      invalidateRequests: () => {
-        this.searchGeneration += 1;
-      },
-    });
-    new SubscriptionsController(host).watchStore(() => this.context.value?.agents);
-    new SubscriptionsController(host).watchStore(() => this.directory);
-  }
+  constructor(private readonly host: { requestUpdate(): void }) {}
 
   private get directory() {
-    const gateway = this.context.value?.gateway;
-    return gateway ? profileDirectory(gateway) : undefined;
+    return this.profiles?.read();
   }
 
   readonly load = () => {
@@ -38,10 +39,11 @@ export class SessionOwnerMenu {
     }
     this.opened = true;
     void this.directory?.load(true);
+    this.host.requestUpdate();
   };
 
   private ownerOptions() {
-    const context = this.context.value;
+    const context = this.context;
     const self = sessionSelfOwner(context?.gateway.snapshot.selfUser);
     // Keep a same-connection directory during refresh, never a previous Gateway's result.
     const directory = this.directory?.result;
@@ -58,7 +60,7 @@ export class SessionOwnerMenu {
           profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
-    for (const agent of context?.agents.state.agentsList?.agents ?? []) {
+    for (const agent of this.agents?.read().agentsList?.agents ?? []) {
       const identity = context?.agentIdentity.get(agent.id);
       owners.push({
         type: "agent",
@@ -89,7 +91,7 @@ export class SessionOwnerMenu {
     return {
       ...this.ownerOptions(),
       searchGeneration: this.searchGeneration,
-      connected: Boolean(this.connection.capture()),
+      connected: Boolean(this.connection.snapshot && this.connection.capture()),
       loading: Boolean(directory?.loading),
       error: directory?.error,
     };

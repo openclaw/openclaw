@@ -22,9 +22,7 @@ it.each(["cleanup failure", "admission refusal"] as const)(
     const root = tempDirs.make("openclaw-model-auth-race-");
     const agentDir = path.join(root, "agents/main/agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
-      location: "legacy-main",
-    });
+    authPaths.noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
     const events: string[] = [];
     const refusal = new Error("Auth source admission revoked");
     const cleanupFailure = new Error("Auth child failed to close");

@@ -7,6 +7,10 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -30,17 +34,6 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
-const lookup = vi.hoisted(() => ({
-  value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
-}));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: () => lookup.value,
-}));
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  getRuntimeConfig: () => ({}),
-}));
 const roots: string[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionStoreTargetInWorker {
@@ -53,7 +46,7 @@ function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionSt
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  lookup.value = undefined;
+  clearRuntimeConfigSnapshot();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -77,6 +70,8 @@ async function scenario(
   const readProjection = placements.readProjection.bind(placements);
   const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
   const storePath = path.join(root, "sessions.sqlite");
+  const cfg = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
   // Recovery reads real result refs, so this managed-worktree fixture owns its Git root.
@@ -89,14 +84,6 @@ async function scenario(
     worktree: { id: "task-worktree", branch: "test", repoRoot: worktreePath },
     updatedAt: Date.now(),
   };
-  const target = {
-    storePath,
-    canonicalKey: REQUEST.sessionKey,
-    storeKeys: [REQUEST.sessionKey],
-    agentId: REQUEST.agentId,
-    store: { [REQUEST.sessionKey]: entry },
-  };
-  lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
   await replaceSessionEntry(
     { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
     entry,
@@ -261,7 +248,7 @@ async function scenario(
       runId,
     });
   const oldRunId = name + "-before-stop-complete";
-  const running = blockedInspection ? await admit(name + "-running").promise : undefined;
+  const running = blockedInspection ? await (await admit(name + "-running")).promise : undefined;
   const activeController = context.chatAbortControllers.get(name + "-running");
   if (pendingMove) {
     context.chatRunState.getOrCreate(name + "-running").buffer = "partial before queued Move Stop";
@@ -334,10 +321,10 @@ async function scenario(
   let approvalsCancelledDuringInspection = false;
   let abortedDuringInspection = false;
   let destroyedDuringInspection = false;
-  let old!: ReturnType<typeof admit>;
+  let old!: Awaited<ReturnType<typeof admit>>;
   let reclaimResult: { ok: boolean; state?: string; message?: string } | undefined;
-  const reserveOld = () => {
-    old = admit(oldRunId);
+  const reserveOld = async () => {
+    old = await admit(oldRunId);
     if (blockedInspection || pendingDispatch) {
       void old.promise.then((result) => {
         if (result.ok) {
@@ -386,7 +373,7 @@ async function scenario(
         approvalsCancelledDuringInspection = cancelApprovals.mock.calls.some(
           ([runId]) => runId === name + "-running",
         );
-        reserveOld();
+        await reserveOld();
         if (moving) {
           await awaitGateBeforeSettlement(
             moving,
@@ -406,13 +393,13 @@ async function scenario(
         reclaim,
         "Stop settled before fencing provisioning ingress",
       );
-      reserveOld();
+      await reserveOld();
       releaseProvision.resolve();
       active = await dispatching!;
     }
     await Promise.race([barrierEntered.promise, reclaim]);
     if (!beforeStop && !blockedInspection && !pendingDispatch) {
-      reserveOld();
+      await reserveOld();
     }
     releaseBarrier.resolve();
     reclaimResult = await reclaim;
@@ -427,7 +414,7 @@ async function scenario(
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       run: async () => {
-        reserveOld();
+        await reserveOld();
         await stop();
       },
     });
@@ -453,7 +440,7 @@ async function scenario(
     clearAgentRunContext(oldRunId, oldResult.value.lifecycleGeneration);
   }
   const freshRunId = name + "-explicit-after-stop";
-  const fresh = admit(freshRunId);
+  const fresh = await admit(freshRunId);
   const freshResult = await fresh.promise;
   if (freshResult.ok) {
     freshResult.value.cleanupAdmittedRun();
@@ -568,6 +555,7 @@ it.each([false, true])(
 
 it("an idempotent failed-cleanup result does not cancel work already on the local placement", async () => {
   const storePath = path.join(tempDirs.make("failed-already-local-"), "sessions.sqlite");
+  setRuntimeConfigSnapshot({ session: { store: storePath } });
   const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
   await replaceSessionEntry({ ...REQUEST, storePath }, entry);
   const local = { state: "local", sessionId: REQUEST.sessionId, generation: 4 };
@@ -629,15 +617,9 @@ it.each(["missing", "local"] as const)(
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     const storePath = path.join(root, "sessions.sqlite");
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
     const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
-    const target = {
-      storePath,
-      canonicalKey: REQUEST.sessionKey,
-      storeKeys: [REQUEST.sessionKey],
-      agentId: REQUEST.agentId,
-      store: { [REQUEST.sessionKey]: entry },
-    };
-    lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
     await replaceSessionEntry(
       { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
       entry,
@@ -685,8 +667,9 @@ it.each(["missing", "local"] as const)(
       createGatewayWorkerDispatchAdmission(async () => sessionRuntime),
     );
     const runId = `queued-local-${state}`;
-    const admitted = await admitWorkerStopChat({ context, storePath, entry, ...REQUEST, runId })
-      .promise;
+    const admitted = await (
+      await admitWorkerStopChat({ context, storePath, entry, ...REQUEST, runId })
+    ).promise;
     if (!admitted.ok) {
       throw new Error("Active local chat fixture was not admitted");
     }

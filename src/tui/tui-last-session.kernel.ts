@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   readConfigMachineStateRowInDatabase,
@@ -17,7 +17,7 @@ import type {
 import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "./tui-last-session.contract.js";
 
 function listRetiredTuiPointersInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   retiredSessionKeys: ReadonlySet<string>,
 ): string[] {
   const rows = executeSqliteQuerySync(
@@ -67,7 +67,7 @@ export function clearRetiredTuiPointers(
 }
 
 export function readTuiLastSessionCommand(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "tui.lastSession.read" }>,
 ): Extract<OpenClawStateReadReply, { type: "tui.lastSession.read" }> {
   return {

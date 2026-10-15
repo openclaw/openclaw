@@ -16,6 +16,7 @@ import {
   applySessionGoalOperation,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { TranscriptMessageAppendResult } from "./session-accessor.types.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
@@ -72,7 +73,7 @@ export function createSessionActorMemoryTranscript(options: {
   const goals = createSessionActorMemoryGoals(options);
   const events = createSessionActorMemoryEvents(options);
   const { version, tree, rebasePrepared, appendRaw } = events;
-  const { findByKey, appendMessage } = createSessionActorMemoryMessages(options, events);
+  const { appendMessage } = createSessionActorMemoryMessages(options, events);
   const requireEntry = () => {
     if (!state.hot.entry) {
       throw new SessionTranscriptWriterClaimReboundError();
@@ -82,7 +83,8 @@ export function createSessionActorMemoryTranscript(options: {
   const bindScope = (scope: MetadataInput["scope"]) => {
     if (
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
-      (scope.sessionKey !== undefined && scope.sessionKey !== state.hot.target.sessionKey) ||
+      (scope.sessionKey !== undefined &&
+        resolveSqliteSessionKey(scope.sessionKey, agentId) !== state.hot.target.sessionKey) ||
       (scope.storePath !== undefined && scope.storePath !== path) ||
       !sessionMatchesExpectedTranscriptTurn(
         state.hot.entry ? { entry: state.hot.entry } : undefined,
@@ -362,16 +364,6 @@ export function createSessionActorMemoryTranscript(options: {
           goal.id = opts.preparedGoalId;
         }
         const transactionVersion = version();
-        for (const append of opts.messages) {
-          if (!append.preparedMessage?.prepared) {
-            continue;
-          }
-          const event = findByKey(append);
-          const current = event ? { messageId: event.id, message: event.message } : undefined;
-          if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
-            throw new Error("Transcript idempotency changed while preparing the turn");
-          }
-        }
         let custody: SessionPendingInputWorkerReceipt | undefined;
         const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
         let predicateSkipped = false;

@@ -9,9 +9,9 @@ import { analyzeConfigSchema } from "../../components/config-form.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
@@ -360,7 +360,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
         )}
       </SettingsWorkspace>
       <PluginSkillPreview controller={page().skillPreview} state={page().skillPreview.state} />
-      <LitContent render={() => page().mcpLogin.render()} />
+      <WizardLogin controller={props.page.mcpLogin.dialog} revision={props.revision} />
       <Show when={page().consentController.consent}>
         {(consent) => {
           const icon = createMemo(() => {

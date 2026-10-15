@@ -1,6 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -215,37 +215,46 @@ describe("channel-owned voice selection RPC", () => {
     expect(call.currentVoice()).toBe("marin");
   });
 
-  it.each(["run", "binding", "call", "speaker"])(
+  it.for(["run", "binding", "call", "speaker"])(
     "rechecks %s ownership after replacement preparation",
-    async (retired) => {
-      const ready = createDeferredCore();
+    async (retired, { signal }) => {
       const entered = createDeferredCore();
+      const ready = createDeferredCore();
       const call = managedCall(async () => {
         entered.resolve();
         await ready.promise;
       });
       const changing = start("talk.voice.set", { voice: "cedar" }, call.client);
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        changing.completed,
-        "Voice change settled before replacement preparation",
-      );
-      expect(changing.respond).not.toHaveBeenCalled();
-      expect(await invoke("talk.voice.set", { voice: "cedar" }, call.client)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("already in progress") }),
-      );
-      if (retired === "run") {
-        releaseAgentRunDelegatedAuthority(call.authority);
-      } else if (retired === "binding") {
-        call.release();
-      } else if (retired === "call") {
-        call.handle.unregister();
-      } else {
-        call.revokeSpeaker();
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            changing.completed,
+            "Voice replacement did not reach preparation",
+          ),
+          signal,
+        );
+        expect(call.apply).toHaveBeenCalledOnce();
+        expect(changing.respond).not.toHaveBeenCalled();
+        expect(
+          await invoke("talk.voice.set", { voice: "cedar" }, call.client),
+        ).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: expect.stringContaining("already in progress") }),
+        );
+        if (retired === "run") {
+          releaseAgentRunDelegatedAuthority(call.authority);
+        } else if (retired === "binding") {
+          call.release();
+        } else if (retired === "call") {
+          call.handle.unregister();
+        } else {
+          call.revokeSpeaker();
+        }
+      } finally {
+        ready.resolve();
       }
-      ready.resolve();
       await changing.completed;
       expect(changing.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
       expect(call.currentVoice()).toBe("marin");

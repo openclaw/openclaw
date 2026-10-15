@@ -158,9 +158,11 @@ describe("cli session history", () => {
 
   it.each(
     ["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`].flatMap((driftContext) =>
-      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
-        (description) => ({ driftContext, description }),
-      ),
+      [
+        "messages occurred outside this Claude session",
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+        "earlier messages in this chat",
+      ].map((description) => ({ driftContext, description })),
     ),
   )(
     "dedupes $description context before optional drift context: $driftContext",

@@ -254,6 +254,13 @@ export const authFormatCases = [
   },
   ...failoverSignalRows(structuredSource, reason("format"), [
     [
+      "structured-tgi-output-only",
+      {
+        status: 422,
+        message: "Input validation error: `max_new_tokens` must be <= 4096. Given: 8192",
+      },
+    ],
+    [
       "structured-invalid-request-raw",
       {
         provider: "anthropic",

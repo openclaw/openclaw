@@ -448,6 +448,14 @@ describe("legacy main session history handoff", () => {
           entry: entries[2],
           events: events[2],
         });
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE session_windows SET row_transcript_json = NULL, row_transcript_updated_at = NULL WHERE session_key = ?",
+            ).run(canonicalKey);
+          },
+          { agentId: "ops", path: destinationPath, env: fixture.env },
+        );
       }
       const existingBefore =
         kind === "existing-current" ? snapshot("ops", destinationPath) : undefined;

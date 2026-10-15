@@ -11,6 +11,7 @@ import {
 } from "../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
+import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
@@ -40,6 +41,54 @@ type ChatMetadataShell = HTMLElement & {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("shares auth across config publications until the auth owner publishes changed facts", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const initial: ModelAuthStatusResult = { ts: 1, providers: [] };
+  const updated: ModelAuthStatusResult = {
+    ts: 2,
+    providers: [{ provider: "example", displayName: "Example", status: "missing", profiles: [] }],
+  };
+  const request = current().request.mockResolvedValue(initial);
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: {
+      config: createShellConfigFixture(),
+      gateway,
+    } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const read = () =>
+    Promise.all(Array.from({ length: 40 }, () => loadModelAuthStatus(client, { agentId: "main" })));
+  try {
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    request.mockResolvedValue(updated);
+    for (let index = 0; index < 10; index++) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "config.changed",
+        payload: { hash: `plugin-toggle-${index}`, ts: index },
+      });
+      expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
+    }
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { authChanged: true, modelCatalogChanged: false, commandsChanged: false },
+    });
+    expect(await read()).toEqual(Array.from({ length: 40 }, () => updated));
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
+  } finally {
+    stopShell();
+    gateway.stop();
+  }
 });
 
 it("retains model and auth reads across 50 metadata-only publications", async () => {
@@ -106,13 +155,117 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
       await read();
       await read();
       expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-        1,
+        event === "chat.metadata.changed" ? 1 : 0,
       );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
       expect(changed).toHaveBeenCalledOnce();
     }
   } finally {
     stopCatalog();
+    stopShell();
+    gateway.stop();
+  }
+});
+
+it("reuses unrelated agent catalogs across a minute of scoped publications", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  let revision = 0;
+  const request = current().request.mockImplementation(async () => ({
+    models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }],
+  }));
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: { gateway } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const scopes = ["writer", "reader"].flatMap((agentId) => [
+    { agentId },
+    { agentId, sessionKey: `agent:${agentId}:chat` },
+  ]);
+  const read = () => Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
+  try {
+    await read();
+    request.mockClear();
+    for (revision = 1; revision <= 60; revision++) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: {
+          agentId: "writer",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      });
+      const catalogs = await read();
+      expect(catalogs.map((catalog) => catalog.models[0]?.id)).toEqual([
+        `model-${revision}`,
+        `model-${revision}`,
+        "model-0",
+        "model-0",
+      ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(120);
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true, authChanged: false, commandsChanged: false },
+    });
+    expect((await read()).map((catalog) => catalog.models[0]?.id)).toEqual(
+      Array.from({ length: 4 }, () => "model-61"),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(124);
+  } finally {
+    stopShell();
+    gateway.stop();
+  }
+});
+
+it("keeps a pending agent catalog read when another agent publishes changes", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const wire = createDeferred<ModelCatalogResult>();
+  const catalog = { models: [{ id: "model", name: "Catalog model", provider: "fixture" }] };
+  const request = current().request.mockReturnValue(wire.promise);
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const scope = { agentId: "alpha" };
+  const reader = new ModelCatalogReader(() => {});
+  reader.bind(gateway, scope);
+  const pending = reader.read();
+  try {
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { agentId: "bravo", modelCatalogChanged: true, commandsChanged: false },
+    });
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    wire.resolve(catalog);
+    expect(await pending).toEqual(catalog);
+    for (const payload of [
+      { agentId: "alpha", modelCatalogChanged: true },
+      { modelCatalogChanged: true },
+      { agentId: "bravo", modelSelectionChanged: true },
+    ]) {
+      request.mockClear();
+      current().opts.onEvent?.({ type: "event", event: "chat.metadata.changed", payload });
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    }
+  } finally {
+    wire.resolve(catalog);
+    await pending;
+    reader.clear();
     stopShell();
     gateway.stop();
   }

@@ -15,6 +15,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import * as gitExec from "../../infra/git-exec.js";
 import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
@@ -33,9 +34,10 @@ import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as removal from "./removal-git.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
-import { ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
+  materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import * as snapshots from "./snapshot-host.js";
@@ -51,7 +53,11 @@ vi.mock("../../gateway/session-worker-placement-context.js", () => ({
         assertCurrent: () => {},
         release: () => {},
       }),
-      prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => undefined,
+        release: () => {},
+      }),
     },
   }),
 }));
@@ -221,4 +227,58 @@ it("refuses unarchive after an interrupted removal releases its process claim", 
   ).rejects.toThrow(/removal is incomplete/i);
   expect(entry.archivedAt).toBe(1);
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+});
+
+it("bounds Git housekeeping without delaying orphan cleanup or newly registered repositories", async () => {
+  const root = tempDirs.make("worktree-gc-cadence-state-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  setRuntimeConfigSnapshot({});
+  const repo = await initializeRepository(tempDirs.make("worktree-gc-cadence-"));
+  await materializeManagedWorktreeFixtures({
+    env,
+    repoRoot: repo,
+    stateDir: repo,
+    names: ["first", "second", "third"],
+    now: 1,
+  });
+  let now = 3;
+  const service = new ManagedWorktreeService({ env, now: () => now });
+  const commands = vi.spyOn(gitExec, "executeGitCommand");
+  const maintenanceRoots = () =>
+    commands.mock.calls.flatMap(([cwd, , options]) =>
+      options?.operation === "worktree.maintenance" ? [cwd] : [],
+    );
+  await service.gc();
+  expect(maintenanceRoots().length).toBeGreaterThan(0);
+  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
+  commands.mockClear();
+
+  const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
+  await fs.mkdir(orphan, { recursive: true });
+  now += WORKTREE_GC_INTERVAL_MS - 1;
+  expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
+  await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(maintenanceRoots()).toEqual([]);
+
+  const otherRepo = await initializeRepository(tempDirs.make("worktree-gc-new-repo-"));
+  await materializeManagedWorktreeFixtures({
+    env,
+    repoRoot: otherRepo,
+    stateDir: otherRepo,
+    names: ["new-repo"],
+    now,
+  });
+  await service.gc();
+  expect(new Set(maintenanceRoots())).toEqual(new Set([otherRepo]));
+  commands.mockClear();
+
+  now += 1;
+  await service.gc();
+  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
+  commands.mockClear();
+  await service.gc({ retryDeferred: true });
+  expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+  commands.mockClear();
+  await service.gc();
+  expect(maintenanceRoots()).toEqual([]);
 });

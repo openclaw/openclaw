@@ -590,23 +590,21 @@ export default {
             }
             const calls = (await readCalls()).slice(callsBefore);
             const expectedCalls = selection === "matched" ? count : 0;
+            let failureDetails: string | undefined;
             if (calls.length !== expectedCalls) {
-              console.log(
-                "NATIVE_HOOK_PRESSURE_FAILURE " +
-                  JSON.stringify({
-                    scenario,
-                    tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
-                    peakRelays,
-                    registry: await (
-                      await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
-                        headers: { Authorization: `Bearer ${gateway.token}` },
-                      })
-                    ).json(),
-                    logs: gateway.logs(),
-                  }),
-              );
+              failureDetails = JSON.stringify({
+                scenario,
+                tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
+                peakRelays,
+                registry: await (
+                  await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
+                    headers: { Authorization: `Bearer ${gateway.token}` },
+                  })
+                ).json(),
+                logs: gateway.logs(),
+              });
             }
-            expect(calls).toHaveLength(expectedCalls);
+            expect(calls, failureDetails).toHaveLength(expectedCalls);
             if (selection === "matched" && count === 20) {
               expect(scenario.failedResponses).toBe(1);
               expect(scenario.unacknowledgedRetries).toBeGreaterThan(0);

@@ -7,7 +7,6 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   openOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -20,7 +19,6 @@ import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSessionPendingInputAppend } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -28,7 +26,6 @@ import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import type {
   LockedTranscriptMessageAppendOptions,
-  SessionTranscriptWriteTransactionContext,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -181,33 +178,4 @@ export function runTranscriptWriteSnapshotSync<T>(
     throw new SessionTranscriptWriterClaimReboundError(result.error);
   }
   return result;
-}
-
-/** Runs synchronous transcript work under one writer queue and SQLite transaction. */
-export async function withTranscriptWriteTransaction<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (context: SessionTranscriptWriteTransactionContext) => T,
-): Promise<T> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  return await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () =>
-      runOpenClawAgentWriteTransaction(
-        () =>
-          run({
-            agentId: resolved.agentId,
-            sessionId: resolved.sessionId,
-            sessionKey: resolved.sessionKey,
-            storePath:
-              resolved.path ??
-              scope.storePath ??
-              resolveOpenClawAgentSqlitePath({ agentId: resolved.agentId, env: resolved.env }),
-          }),
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.batch" },
-      ),
-    "session.transcript.batch",
-  );
 }

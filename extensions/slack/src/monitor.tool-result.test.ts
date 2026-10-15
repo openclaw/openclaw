@@ -1,6 +1,9 @@
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
@@ -495,7 +498,17 @@ describe("Slack thread failure notices", () => {
       { ttlMs: 60_000 },
     );
     const runtime = getSlackRuntime();
-    setSlackRuntime({ ...runtime, state: { ...runtime.state, openKeyedStore } });
+    setSlackRuntime({
+      ...runtime,
+      state: {
+        ...runtime.state,
+        openKeyedStore,
+        openKeyedStoreV2: <T>(
+          options: OpenAsyncKeyedStoreOptions,
+          authority?: PluginStateActionAuthority,
+        ) => openKeyedStore<T>(options).withCurrent(authority ?? { assertCurrent() {} }),
+      },
+    });
     expect(hasSlackThreadParticipation("default", "C1", threadTs)).toBe(false);
     mockReplySequence({ text: AUTH_FAILURE, isError: true });
 

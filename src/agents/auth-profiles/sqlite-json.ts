@@ -1,21 +1,24 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
+  type AuthProfileReadDatabaseOpener,
 } from "./sqlite-read-pool.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
@@ -62,7 +65,7 @@ function authProfileSchemaObjectType(schema: SqliteSchemaFacts, name: string): s
 }
 
 function inspectAuthProfileTable(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
@@ -82,7 +85,7 @@ function inspectAuthProfileTable(
 
 /** Read admitted auth cells without discarding malformed JSON needed for migration backups. */
 export function readAuthProfileJsonCellText(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): string | undefined {
@@ -106,7 +109,7 @@ export function readAuthProfileJsonCellText(
 }
 
 export function inspectAuthProfileJsonCell(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -118,7 +121,7 @@ export function inspectAuthProfileJsonCell(
 }
 
 function inspectAuthProfileJsonCellContents(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -139,8 +142,9 @@ function inspectAuthProfileJsonText(raw: string | undefined): PersistedAuthProfi
 export function inspectAgentAuthProfileJsonCellReadOnly(
   databasePath: string,
   target: "store" | "state",
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
 ): PersistedAuthProfileStoreInspection {
-  const acquired = acquireAuthProfileReadDatabase(databasePath);
+  const acquired = acquireAuthProfileReadDatabase(databasePath, openReadOnlyDatabase);
   if (acquired.status === "missing") {
     return { status: "missing", reason: "database" };
   }
@@ -158,11 +162,17 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
 /** Reuse the worker-owned reader; each statement observes the latest committed rows. */
 export function readAuthProfileRowsReadOnly(
   databasePath: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
   retainReader = true,
 ): AuthProfileRowRead {
-  const acquired = acquireAuthProfileReadDatabase(databasePath, schema, expectedIdentity);
+  const acquired = acquireAuthProfileReadDatabase(
+    databasePath,
+    openReadOnlyDatabase,
+    schema,
+    expectedIdentity,
+  );
   if (acquired.status !== "readable") {
     const inspection: PersistedAuthProfileStoreInspection =
       acquired.status === "missing"
@@ -170,13 +180,26 @@ export function readAuthProfileRowsReadOnly(
         : { status: "unreadable" };
     return { store: inspection, state: inspection, cacheable: false };
   }
+  let keepReader = retainReader;
   try {
-    return readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+    const rows = readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+    // Another process initializes new agent files; empty schema facts cannot stay pooled.
+    if (
+      rows.store.status === "missing" &&
+      rows.store.reason === "table" &&
+      rows.state.status === "missing" &&
+      rows.state.reason === "table"
+    ) {
+      keepReader = false;
+    }
+    return rows;
   } catch {
     closeAuthProfileReadDatabase(databasePath);
     return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    if (!retainReader) {
+    if (isArtifactPreservingStateRead("agent", databasePath)) {
+      acquired.db.close();
+    } else if (!keepReader) {
       closeAuthProfileReadDatabase(databasePath);
     }
   }
@@ -184,12 +207,14 @@ export function readAuthProfileRowsReadOnly(
 
 /** Worker reads acquire both cells in one SQLite snapshot. */
 export function readAuthProfileRows(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
   authSchema?: SqliteAuthSchema,
 ): AuthProfileRowRead {
-  const canCache = prepareSqliteReadCache(database, databasePath);
+  const canCache = isPostgresSqlConnection(database)
+    ? () => false
+    : prepareSqliteReadCache(database, databasePath);
   const storeTable = authProfileTableName("store", databaseKind);
   const stateTable = authProfileTableName("state", databaseKind);
   let schemaObjects: Array<Record<string, unknown>>;
@@ -300,7 +325,7 @@ export function readAuthProfileRows(
 }
 
 function inspectAuthProfileRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -317,7 +342,7 @@ function inspectAuthProfileRow(
 }
 
 /** The selected worker returns source presence without transferring credential rows. */
-export function hasAgentAuthProfileSourceInDatabase(database: DatabaseSync): boolean {
+export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
   const store = inspectAuthProfileRow(database, "store", "agent");
   if (store.status !== "missing") {
     return true;

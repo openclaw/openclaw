@@ -10,6 +10,7 @@ import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
+import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
 import "./modal-dialog.ts";
 
@@ -41,34 +42,6 @@ type FilePreviewModalProps = {
 };
 type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
 
-function MarkdownContent(props: { contents: string; onClick: (event: MouseEvent) => void }) {
-  let article!: HTMLElement;
-  createEffect(
-    () =>
-      toSanitizedMarkdownHtml(stripFrontmatterBlock(props.contents), {
-        mode: "document",
-        remoteImages: false,
-        codeBlockChrome: "none",
-        fileLinks: false,
-      }),
-    (html) => {
-      // Only the Markdown owner's sanitized output enters this inert template.
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      article.replaceChildren(template.content);
-    },
-  );
-  return (
-    <article
-      class="markdown"
-      ref={(element) => {
-        article = element;
-      }}
-      onClick={(event) => props.onClick(event)}
-    />
-  );
-}
-
 function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePreviewModal) {
   const filteredFiles = createMemo(() => {
     const query = props.layout === "files" ? props.query.trim().toLowerCase() : "";
@@ -81,6 +54,14 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   );
   const codeSource = createMemo(() => activeFile()?.contents ?? "");
   const codeChunks = createMemo(() => chunkFileContents(codeSource()));
+  const documentHtml = createMemo(() =>
+    toSanitizedMarkdownHtml(stripFrontmatterBlock(codeSource()), {
+      mode: "document",
+      remoteImages: false,
+      codeBlockChrome: "none",
+      fileLinks: false,
+    }),
+  );
   const listMode = createMemo(() =>
     props.loading && !props.error
       ? "loading"
@@ -389,7 +370,12 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                       {contentMode() === "message" ? (
                         <p role="status">{file().message}</p>
                       ) : contentMode() === "markdown" ? (
-                        <MarkdownContent contents={file().contents} onClick={handleDocumentLink} />
+                        <SanitizedHtml
+                          tag="article"
+                          class="markdown"
+                          onClick={handleDocumentLink}
+                          html={documentHtml()}
+                        />
                       ) : (
                         <div class="code-content">
                           <For each={codeChunks()}>
@@ -412,10 +398,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
               <span class="foot-group">
                 <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
               </span>
-              <span class="spacer" />
-              <button class="button" onClick={close}>
-                {t("common.close")} <Kbd keys="esc" class="kbd" />
-              </button>
+              <openclaw-modal-actions>
+                <button class="button" onClick={close}>
+                  {t("common.close")} <Kbd keys="esc" class="kbd" />
+                </button>
+              </openclaw-modal-actions>
             </footer>
           </Show>
         </div>

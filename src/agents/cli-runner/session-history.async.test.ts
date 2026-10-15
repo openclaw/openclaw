@@ -10,6 +10,7 @@ import {
   loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
+  withTranscriptWriteLock,
 } from "../../config/sessions/session-accessor.js";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -57,7 +58,9 @@ function createRecorder(target: ReturnType<typeof targetIn>, text: string, times
   });
 }
 
-it("reads CLI presence after an earlier admitted transcript write settles", async ({ signal }) => {
+it("reads CLI presence under a transcript lock after an earlier write settles", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ label: "cli-presence-admission" }, async ({ stateDir }) => {
     const target = targetIn(stateDir);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -79,20 +82,23 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     let restore = () => {};
     try {
       await withinTest(entered.promise, signal);
+      const admitWorker = agentWriteAdmission.runOpenClawAgentWorkerWrite;
       const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
+        .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
         .mockImplementation((...args) => {
-          const pending = admit(...args);
+          const pending = admitWorker(...args);
           queued.resolve();
           return pending;
         });
       restore = () => admission.mockRestore();
-      reading = hasCliSessionTranscript({ sessionTarget: target });
+      reading = withTranscriptWriteLock(target, () =>
+        hasCliSessionTranscript({ sessionTarget: target }),
+      );
       await withinTest(
         awaitGateBeforeSettlement(
           queued.promise,
           reading,
-          "CLI presence bypassed the earlier admitted writer",
+          "Locked CLI presence bypassed the earlier admitted writer",
         ),
         signal,
       );

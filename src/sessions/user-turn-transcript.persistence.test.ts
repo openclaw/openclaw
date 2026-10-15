@@ -31,6 +31,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import {
   buildChannelUserTurnSender,
+  preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
 } from "./user-turn-transcript.metadata.js";
 import {
@@ -146,12 +147,19 @@ describe("persistUserTurnTranscript", () => {
     };
     const recorder = createUserTurnTranscriptRecorder({ target, input, updateMode: "none" });
     const prepared = recorder.message!;
+    prepared["__openclaw"] = { ...prepared["__openclaw"], chatRequestIdentity: "original-request" };
     const runtime = restorePreparedUserTurnOperationalMetaForRuntime({
       preparedMessage: prepared,
-      runtimeMessage: { ...prepared, content: "[redacted]" },
+      runtimeMessage: { ...prepared, content: "[redacted]", __openclaw: {} },
     });
     expect(stripEnvelopeFromMessages([runtime])[0]).toMatchObject({ content: "[redacted]" });
     expect(runtime).not.toHaveProperty("__openclaw.workContext");
+    expect(runtime).toHaveProperty("__openclaw.chatRequestIdentity", "original-request");
+    const written = preparePersistedUserTurnMessageForTranscriptWrite(runtime, {
+      beforeMessageWrite: ({ message }) => ({ ...message, __openclaw: {} }),
+    });
+    expect(written).toMatchObject({ content: "[redacted]" });
+    expect(written).toHaveProperty("__openclaw.chatRequestIdentity", "original-request");
     recorder.replaceTextBeforePersistence?.("approved continuation");
     await recorder.persistApproved();
     const [persisted] = await readTranscriptMessages(target);
@@ -159,6 +167,27 @@ describe("persistUserTurnTranscript", () => {
       content: "approved continuation",
     });
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
+
+  it("resolves committed hook metadata and redacted content for runtime replay", async () => {
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    const recorder = createUserTurnTranscriptRecorder({
+      target,
+      input: { text: "original input", timestamp: 123, idempotencyKey: "prepared:user" },
+      beforeMessageWrite: ({ message }) => ({
+        ...message,
+        content: "[redacted]",
+        __openclaw: { chatRequestIdentity: "admitted-request" },
+      }),
+    });
+    await recorder.persistApproved();
+    await expect(recorder.resolveMessage()).resolves.toEqual({
+      role: "user",
+      content: "[redacted]",
+      timestamp: 123,
+      idempotencyKey: "prepared:user",
+      __openclaw: { chatRequestIdentity: "admitted-request" },
+    });
   });
 
   it("round-trips source text and attachments byte-identically despite logging patterns", async () => {

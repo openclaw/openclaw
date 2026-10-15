@@ -1,3 +1,5 @@
+import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
+import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -547,7 +549,8 @@ const enSettings = {
       idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
       idleTimeoutPlaceholder: "45m",
       setup: "Setup command",
-      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
+      setupHelp:
+        "Optional shell command run before OpenClaw is installed; it must be safe to repeat.",
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
@@ -617,9 +620,15 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      nativeDescription:
+        "Sign in and enable this provider for this agent without changing the active model.",
+      nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
         "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
+      statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
+      startChat: "Start a new chat with {model}",
+      modelReady: "{model} is ready for your agent.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
       chooseAccount: "Choose account",
@@ -647,6 +656,7 @@ const enSettings = {
     status: {
       ok: "Signed in",
       ready: "Ready",
+      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -730,6 +740,8 @@ const enSettings = {
     readiness: {
       title: "AI setup",
       heading: "Connect a verified AI model",
+      readyHeading: "AI models available",
+      readyDescription: "Choose a default model below, or connect another provider.",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",
@@ -1678,10 +1690,10 @@ const enSettings = {
       description:
         "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
       activeMemory: {
-        title: "Active memory",
+        title: activeMemoryPresentation.memoryAddon.label,
       },
       memoryWiki: {
-        title: "Memory wiki",
+        title: memoryWikiPresentation.memoryAddon.label,
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Could not update {plugin}",

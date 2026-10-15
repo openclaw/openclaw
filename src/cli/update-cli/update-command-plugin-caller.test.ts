@@ -377,7 +377,6 @@ describe("connected in-process plugin finalization authority", () => {
           await expect(terminal).rejects.toMatchObject({ code: 1, name: new ExitError(1).name });
           expect(refused).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
           expect(refused).toMatchObject({
-            automaticTriage: undefined,
             result: { status: "error" },
           });
           expect(await fs.readFile(state.configPath, "utf8")).toBe(

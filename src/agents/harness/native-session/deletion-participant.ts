@@ -14,8 +14,6 @@ export type NativeSessionDeletionParticipant = {
   quiesce(): void;
   retain(custody: object): void;
   settle(outcome: "committed" | "rolled-back" | "unknown", error?: Error): void;
-  /** A confirmed compound rollback may restore a row without publishing its postimage. */
-  refreshCommittedFacts?(): Promise<void>;
   unknown: boolean;
 };
 

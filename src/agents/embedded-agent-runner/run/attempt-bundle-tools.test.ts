@@ -327,6 +327,41 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { runtime: undefined, publicationAllowed: true },
+    { runtime: ["sessions_spawn", "server__read"], publicationAllowed: false },
+  ])(
+    "retains unavailable publication under the final runtime cap: $publicationAllowed",
+    async ({ runtime, publicationAllowed }) => {
+      const inherited = ["sessions_spawn", "github_publish"];
+      const input = createInput(inherited, [createStubTool("sessions_spawn")]);
+      input.preparedToolBase.inheritedPublicationToolRef = {
+        current: createStubTool("github_publish"),
+      };
+      input.preparedToolBase.effectiveToolsAllow = runtime;
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: vi.fn() });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [createStubTool("server__read")],
+      });
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+      expect(inherited.includes("github_publish")).toBe(publicationAllowed);
+      expect(inherited).toContain("server__read");
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "sessions_spawn",
+        "server__read",
+      ]);
+      expect(
+        input.preparedToolBase.cronCreatorToolAllowlist.map((entry) =>
+          typeof entry === "string" ? entry : entry.name,
+        ),
+      ).not.toContain("github_publish");
+
+      input.preparedToolBase.inheritedPublicationToolRef.current = undefined;
+      result.refreshTools(() => {});
+      expect(inherited).not.toContain("github_publish");
+    },
+  );
+
   it("never adds policy-denied bundled tools to spawned-child inheritance", async () => {
     const inheritedToolAllowlist = ["sessions_spawn"];
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
@@ -436,7 +471,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
-  it.each([undefined, "MCP"])(
+  it.each(["MCP"])(
     "disposes prepared runtimes after policy failure and retains %s cleanup failure",
     async (failedCleanup) => {
       const disposeMcp = vi.fn(async () => {

@@ -55,6 +55,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
 });
@@ -194,9 +195,11 @@ it.each([false, true])(
     const handoffDatabase = vi.fn(async (options: OpenClawAgentDatabaseOptions) => {
       await reconcileSessionTranscriptIndexes(options);
     });
+    const retainedBytes = fs.readFileSync(deleted.path);
 
     await runSessionStartupMigration({ cfg, env, log, handoffDatabase });
 
+    expect(fs.readFileSync(deleted.path)).toEqual(retainedBytes);
     expect(handoffDatabase).toHaveBeenCalledExactlyOnceWith(survivorOptions);
     expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, survivorOptions)).toEqual(
       {
