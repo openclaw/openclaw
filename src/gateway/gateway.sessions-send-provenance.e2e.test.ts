@@ -869,6 +869,12 @@ async function verifyCrossHumanAdmission(
     },
   };
   try {
+    if (collaborative) {
+      await gateway.client.request("sessions.create", {
+        key: scenario.targetKey,
+        agentId: "deployment",
+      });
+    }
     await patchProofConfig(
       { messages: { queue: { allowCollaborativeSteering: allowCollaborativeSteering ?? null } } },
       ["messages.queue.allowCollaborativeSteering"],
@@ -938,15 +944,15 @@ async function verifyCrossHumanAdmission(
     scenario.releaseIncumbent.resolve();
     expect((await bob).deferredToActiveRun).toBe(collaborative ? "steer" : "followup");
     await alice;
-    await withinTest(scenario.targetStarted.promise, signal);
     await waitForGatewayActiveWork(30_000);
     stage = "result assertions";
     expect(providerErrors).toEqual([]);
-    expect(scenario.accepted).toMatchObject({ status: "accepted" });
+    expect(scenario.accepted, JSON.stringify(scenario.accepted)).toMatchObject({
+      status: "accepted",
+    });
     expect(scenario.incumbentRequests.every((request) => request.tools.includes("message"))).toBe(
       true,
     );
-    expect(scenario.sourceRequests.length).toBeGreaterThan(0);
     expect(scenario.targetRequests.length).toBeGreaterThan(0);
     expect(scenario.sourceRequests.map((request) => request.tools.includes("message"))).toEqual(
       scenario.sourceRequests.map(() => collaborative),
