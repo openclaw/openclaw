@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { createCommandTurnContext } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
@@ -17,6 +19,78 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: string): void {
+  it.each(["direct", "routed"] as const)(
+    "delivers one explicit followup start notice before the pending %s reply",
+    async (route) => {
+      setNoAbort();
+      const streamed = createDeferred();
+      const releaseReply = createDeferred();
+      const deliveredTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          deliveredTexts.push(payload.text ?? "");
+        },
+      });
+      mocks.routeReply.mockImplementation(async ({ payload }) => {
+        deliveredTexts.push(payload.text ?? "");
+        return { ok: true, delivered: true, messageId: "followup-start" };
+      });
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          SessionKey: `test:followup-start:${route}`,
+          Body: "summarize the report",
+          CommandTurn: createCommandTurnContext("text", {
+            authorized: true,
+            commandName: "followup",
+            body: "/followup summarize the report",
+          }),
+          ...(route === "routed"
+            ? { OriginatingChannel: "telegram", OriginatingTo: "chat:followup-start" }
+            : {}),
+        }),
+        cfg: {},
+        dispatcher,
+        replyOptions: { onPreparedAgentRunStart: () => "reply-dispatch" },
+        replyResolver: async (_ctx, opts) => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            expect(
+              notifyPreparedAgentRunStart(opts, {
+                runId: "followup-run",
+                transcriptStart: null,
+              }),
+            ).toBe("reply-dispatch");
+          }
+          await opts?.onBlockReply?.({ text: "The report covers three items." });
+          await dispatcher.waitForIdle();
+          streamed.resolve();
+          await releaseReply.promise;
+          return { text: "Summary complete." };
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          streamed.promise,
+          dispatch,
+          "reply settled before streaming",
+        );
+        expect(deliveredTexts).toEqual([
+          "Your followup has started.",
+          "The report covers three items.",
+        ]);
+      } finally {
+        releaseReply.resolve();
+        await dispatch;
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+      expect(deliveredTexts).toEqual([
+        "Your followup has started.",
+        "The report covers three items.",
+        "Summary complete.",
+      ]);
+    },
+  );
+
   it("reports strict steering refusal without claiming queueing or cancellation", async () => {
     setNoAbort();
     const deliveredTexts: string[] = [];

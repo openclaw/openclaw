@@ -33,7 +33,6 @@ import {
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
 } from "../../sessions/session-controller.session-reader.js";
-import { observeAgentRunStart } from "../agent-run-start.js";
 import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -159,16 +158,7 @@ export async function runReplyAgent(
     }
     const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
     const { runOptions: runOpts, hasVisiblePartialReply } = prepareReplyRunOptions({
-      opts: explicitFollowup
-        ? {
-            ...opts,
-            ...observeAgentRunStart(opts, () => {
-              if (replyOperationRunState) {
-                replyOperationRunState.explicitFollowupStarted = true;
-              }
-            }),
-          }
-        : opts,
+      opts,
       runId: controllerInput.protocolRunId ?? runId,
       abortSignal: followupRun.abortSignal,
       onVisiblePartialReply: () =>

@@ -720,8 +720,6 @@ export type ReplyOperationRunState = {
     }>;
   };
   admission?: ReplyOperationAdmissionSnapshot;
-  /** Set only when an explicit followup reaches the execution owner's start callback. */
-  explicitFollowupStarted?: true;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
   /** The Gateway accepted this question answer or rejected its values before commitment. */

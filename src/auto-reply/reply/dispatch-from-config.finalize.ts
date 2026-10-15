@@ -77,14 +77,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const replies =
     explicitSilence && !heartbeatReply ? retainSilentFinalPayloads(finalReplies) : finalReplies;
   const queueAdmission = state.replyOperationRunState.admission;
-  if (state.replyOperationRunState.explicitFollowupStarted) {
-    replies.unshift(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: "Your followup has started.",
-        isStatusNotice: true,
-      }),
-    );
-  }
   const collaborativeSteeringRefused =
     queueAdmission?.status === "skipped" &&
     queueAdmission.reason === "collaborative-steering-disabled";

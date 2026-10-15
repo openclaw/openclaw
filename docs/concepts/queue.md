@@ -148,8 +148,9 @@ from collect batches, and bypasses pending-question answering. If the session ha
 no active or queued work, it starts through normal admission. The turn retains
 its submitter and resolves current policy when admitted.
 
-The queued notice appears only after enqueue succeeds; started and rejected
-outcomes are reported separately. Queue capacity, overflow, and cancellation
+The queued notice appears only after enqueue succeeds. If the message starts
+immediately, its start notice appears when execution starts, before the answer.
+Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
 rules still apply. Gateway-backed chat and the local embedded TUI support this
 command. See [Steer](/tools/steer#one-message-as-a-new-turn) for the contrast with
 steering the active run.
