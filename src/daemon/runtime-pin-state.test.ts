@@ -8,6 +8,7 @@ import {
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
   readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
 import { resolveDaemonRuntimePinStorePath } from "./runtime-pin-store.js";
 
@@ -27,6 +28,7 @@ describe("transactional runtime pin state", () => {
         }),
       );
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const expected = readDaemonRuntimePin(scope, command);
       commitDaemonRuntimePin(scope, { expected, pin }, command);
       expect(readDaemonRuntimePin(scope, command).pin).toEqual(pin);
@@ -41,6 +43,7 @@ describe("transactional runtime pin state", () => {
   it("observes another writer's committed changes and rejects stale writes", async () => {
     await withOpenClawTestState({ label: "runtime-pin-current" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, command);
       const expected = readDaemonRuntimePin(scope, command);
       const writer = openNodeSqliteDatabase(resolveDaemonRuntimePinStorePath(state.env));
@@ -60,6 +63,7 @@ describe("transactional runtime pin state", () => {
   it("surfaces malformed records and refuses unsupported local schemas", async () => {
     await withOpenClawTestState({ label: "runtime-pin-malformed" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, command);
       const writer = openNodeSqliteDatabase(resolveDaemonRuntimePinStorePath(state.env));
       try {
@@ -78,6 +82,7 @@ describe("transactional runtime pin state", () => {
   it("refuses a linked local store instead of following another owner's file", async () => {
     await withOpenClawTestState({ label: "runtime-pin-link" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, command);
       const pathname = resolveDaemonRuntimePinStorePath(state.env);
       fs.renameSync(pathname, pathname + ".original");
@@ -86,12 +91,14 @@ describe("transactional runtime pin state", () => {
     });
   });
 
-  it("refuses a linked control directory before creating a store", async () => {
+  it("refuses a linked control directory before writing into it", async () => {
     await withOpenClawTestState({ label: "runtime-pin-directory-link" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const expected = readDaemonRuntimePin(scope, null);
       const target = state.statePath("other");
       fs.mkdirSync(target);
+      fs.renameSync(state.statePath("control"), state.statePath("control.original"));
       fs.symlinkSync(target, state.statePath("control"), "dir");
       expect(() => commitDaemonRuntimePin(scope, { expected, pin }, command)).toThrow(
         /directory is unsafe/,
@@ -105,6 +112,7 @@ describe("transactional runtime pin state", () => {
       const scope = { kind: "gateway" as const, env: state.env };
       fs.mkdirSync(state.statePath("control"), { mode: 0o700 });
       fs.writeFileSync(resolveDaemonRuntimePinStorePath(state.env), "", { mode: 0o600 });
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const expected = readDaemonRuntimePin(scope, command);
       expect(expected.stored).toBe(false);
       commitDaemonRuntimePin(scope, { expected, pin }, command);
@@ -115,9 +123,12 @@ describe("transactional runtime pin state", () => {
   it("keeps absent/default state read-only and persists explicit intent across reopen", async () => {
     await withOpenClawTestState({ label: "runtime-pin" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
-      const empty = readDaemonRuntimePin(scope, command);
-      expect(empty.pin).toBeUndefined();
+      expect(() => readDaemonRuntimePin(scope, command)).toThrow(/migration pending/);
       expect(fs.existsSync(state.statePath("control", "services.sqlite"))).toBe(false);
+      const empty = await withDaemonRuntimePinMigration(state.env, () =>
+        readDaemonRuntimePin(scope, command),
+      );
+      expect(empty.pin).toBeUndefined();
       commitDaemonRuntimePin(scope, { expected: empty, pin }, command);
       closeOpenClawStateDatabaseForTest();
       expect(readDaemonRuntimePin(scope, command).pin).toEqual(pin);
@@ -139,6 +150,7 @@ describe("transactional runtime pin state", () => {
   it("rejects stale plans and definition mismatch without adopting operator overrides", async () => {
     await withOpenClawTestState({ label: "runtime-pin-stale" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const original = readDaemonRuntimePin(scope, command);
       commitDaemonRuntimePin(scope, { expected: original, pin }, command);
       expect(() => assertDaemonRuntimePinCurrent(scope, original)).toThrow(/changed/);
@@ -160,6 +172,7 @@ describe("transactional runtime pin state", () => {
   it("retains inactive wrapper pins separately and clears intent transactionally", async () => {
     await withOpenClawTestState({ label: "runtime-pin-wrapper" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const wrapped = { programArguments: ["/wrapper", "gateway"] };
       const bun = { runtime: "bun" as const, path: "/runtime tools/bun" };
       commitDaemonRuntimePin(

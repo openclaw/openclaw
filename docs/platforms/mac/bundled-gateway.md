@@ -186,7 +186,11 @@ Runtime intent lives in the daemon-owned local SQLite store
 `<state>/control/services.sqlite`, independently of the selected shared-state
 engine. The app reads typed intent through its bundled CLI; it does not open the
 shared database. Unknown, malformed, or stale intent preserves the service and
-requires an explicit runtime selection before replacement.
+requires an explicit runtime selection before replacement. A pending migration is
+reported as `migrationPending`; update and resume preserve the current runtime
+until Doctor or a CLI start/repair completes it. An app-hosted resume that runs
+neither Doctor nor the CLI start fence may keep the receipt pending; the next
+CLI start/repair or `openclaw doctor` completes it.
 
 A newly installed app-managed Bun service is pinned to
 `<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and

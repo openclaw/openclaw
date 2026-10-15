@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -10,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { migrateDaemonRuntimePins } from "./state-migrations.daemon-runtime-pins.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,6 +46,15 @@ function targetRows(): DaemonRuntimePinRow[] | undefined {
         .all() as DaemonRuntimePinRow[],
   );
 }
+function receipt() {
+  return withDaemonRuntimePinStore(env, false, (db) =>
+    db
+      .prepare(
+        "SELECT source_state, phase, updated_at FROM daemon_runtime_pin_migration WHERE version = 1",
+      )
+      .get(),
+  );
+}
 function seedSource(rows: DaemonRuntimePinRow[]): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -57,9 +68,16 @@ function seedSource(rows: DaemonRuntimePinRow[]): void {
 }
 
 describe("daemon runtime pin owner migration", () => {
-  it("keeps fresh installations free of migration artifacts", async () => {
+  it("records complete custody for fresh installations without creating shared state", async () => {
     expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
-    expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(false);
+    expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(true);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    expect(targetRows()).toEqual([]);
+    expect(receipt()).toEqual({
+      source_state: resolveOpenClawStateSqlitePath(env),
+      phase: "complete",
+      updated_at: expect.any(Number),
+    });
   });
 
   it("moves raw values and timestamps once, preserving malformed and stale intent", async () => {
@@ -74,6 +92,11 @@ describe("daemon runtime pin owner migration", () => {
     expect(result.changes).toEqual(["Moved 3 daemon runtime pin(s) to local service intent."]);
     expect(sourceRows()).toEqual([]);
     expect(targetRows()).toEqual(rows);
+    expect(receipt()).toEqual({
+      source_state: resolveOpenClawStateSqlitePath(env),
+      phase: "complete",
+      updated_at: expect.any(Number),
+    });
     expect(
       runOpenClawStateWriteTransaction(
         ({ db }) =>
@@ -102,13 +125,18 @@ describe("daemon runtime pin owner migration", () => {
           conflicting.value_json,
           conflicting.updated_at_ms,
         );
+        db.prepare("INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'copied', 123)").run(
+          resolveOpenClawStateSqlitePath(env),
+        );
       });
+      const originalReceipt = receipt();
       const result = await migrateDaemonRuntimePins(env);
       expect(result.changes).toEqual([]);
       expect(result.warnings.join("\n")).toContain("migration conflict");
       expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
       expect(sourceRows()).toEqual([preceding, pin]);
       expect(targetRows()).toEqual([conflicting]);
+      expect(receipt()).toEqual(originalReceipt);
     },
   );
 
@@ -127,11 +155,45 @@ describe("daemon runtime pin owner migration", () => {
     expect(interrupted.warnings.join("\n")).toContain("interrupted pin retirement");
     expect(sourceRows()).toEqual([pin]);
     expect(targetRows()).toEqual([pin]);
+    expect(receipt()).toEqual({
+      source_state: resolveOpenClawStateSqlitePath(env),
+      phase: "copied",
+      updated_at: expect.any(Number),
+    });
     runOpenClawStateWriteTransaction(({ db }) => db.exec("DROP TRIGGER interrupt_pin_retirement"), {
       env,
     });
     expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
     expect(sourceRows()).toEqual([]);
     expect(targetRows()).toEqual([pin]);
+    expect(receipt()).toEqual({
+      source_state: resolveOpenClawStateSqlitePath(env),
+      phase: "complete",
+      updated_at: expect.any(Number),
+    });
   });
+
+  it.each([false, true])(
+    "retains an incomplete copy belonging to another source (source rows=%s)",
+    async (hasRows) => {
+      seedSource(hasRows ? [pin] : []);
+      withDaemonRuntimePinStore(env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
+          pin.state_key,
+          pin.value_json,
+          pin.updated_at_ms,
+        );
+        db.prepare("INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'copied', 123)").run(
+          path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), "other-source.sqlite"),
+        );
+      });
+      const originalReceipt = receipt();
+      const result = await migrateDaemonRuntimePins(env);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toMatch(/source|receipt/i);
+      expect(sourceRows()).toEqual(hasRows ? [pin] : []);
+      expect(targetRows()).toEqual([pin]);
+      expect(receipt()).toEqual(originalReceipt);
+    },
+  );
 });

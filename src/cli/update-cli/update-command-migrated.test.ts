@@ -10,6 +10,7 @@ import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import { withDaemonRuntimePinStore } from "../../daemon/runtime-pin-store.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   createPackageIntegrityReader,
@@ -594,6 +595,14 @@ it.each([
     });
     // Original runtime intent belongs to the pre-migration observation. The old
     // parent must not reopen its state DB after the candidate advances the schema.
+    // The synthetic updater owns database custody; seed its completed pin migration locally.
+    if (original) {
+      withDaemonRuntimePinStore(env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'complete', 1)").run(
+          database.path,
+        );
+      });
+    }
     const originalRuntimePin = original
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;

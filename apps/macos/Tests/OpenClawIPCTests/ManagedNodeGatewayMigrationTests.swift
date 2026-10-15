@@ -1031,12 +1031,19 @@ struct ManagedNodeGatewayMigrationTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().last == [
                 "status", "--runtime-intent-only", "--json",
             ])
-            #expect(pin.stored)
+            #expect(pin.stored == true)
             #expect(pin.revision == "operator-pin")
             #expect(pin.pin?.path == "/fixture/tools/node/bin/node")
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
                 #"{"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             #expect(try await !GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: directory, profile: .current))
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+            #expect(try await GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: directory, profile: .current))
+            let pending = try await GatewayLaunchAgentManager.runtimePinRecord(
+                stateDirectory: directory, profile: .current)
+            #expect(pending?.status == .migrationPending)
+            #expect(pending?.nextStep == "run openclaw doctor")
             for payload in [
                 #"{"service":{"runtimeIntent":{"status":"unknown","stored":true,"revision":"malformed"}}}"#,
                 #"{"service":{}}"#,
@@ -1162,11 +1169,12 @@ struct ManagedNodeGatewayMigrationTests {
         path: String = "/fixture/runtime/build/bin/bun") -> GatewayLaunchAgentManager.RuntimeIntent
     {
         .init(
-            status: "known",
+            status: .known,
             revision: revision,
             stored: true,
             definition: "fixture",
-            pin: .init(runtime: runtime, path: path))
+            pin: .init(runtime: runtime, path: path),
+            nextStep: nil)
     }
 
     @Test func `managed Node ownership excludes external binaries and links`() throws {

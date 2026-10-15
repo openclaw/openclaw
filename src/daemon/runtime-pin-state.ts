@@ -2,7 +2,12 @@
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
@@ -12,6 +17,7 @@ import {
 } from "./runtime-pin-store.js";
 import type { DaemonRuntimePinSnapshot, DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
 import { resolveTaskName } from "./schtasks-layout.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -21,11 +27,8 @@ import { resolveSystemdServiceName } from "./systemd-service-files.js";
 const pinSchema = z.object({ runtime: z.enum(["node", "bun"]), path: z.string().min(1) });
 const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definition: z.string() });
 
-type PinScope = {
-  kind: "gateway" | "node";
-  env: NodeJS.ProcessEnv;
-};
-function resolveScope({ kind, env }: PinScope) {
+type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
+function resolveKey({ kind, env }: PinScope) {
   const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
   const name =
     process.platform === "darwin"
@@ -33,12 +36,50 @@ function resolveScope({ kind, env }: PinScope) {
       : process.platform === "win32"
         ? resolveTaskName(nativeEnv).toLowerCase()
         : resolveSystemdServiceName(nativeEnv);
-  return {
-    key: `daemon-runtime-pin:${sha256Hex(JSON.stringify([kind, process.platform, name, resolveConfigPathCandidate(env)]))}`,
-  };
+  return `daemon-runtime-pin:${sha256Hex(JSON.stringify([kind, process.platform, name, resolveConfigPathCandidate(env)]))}`;
 }
+const migrationPending = new Map<string, boolean>();
+export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): boolean {
+  const source = resolveOpenClawStateSqlitePath(env);
+  if (!migrationPending.has(source)) {
+    const receipt = withDaemonRuntimePinStore(env, false, (db) =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<DaemonRuntimePinDatabase>(db)
+          .selectFrom("daemon_runtime_pin_migration")
+          .selectAll()
+          .where("version", "=", 1),
+      ),
+    );
+    migrationPending.set(source, receipt?.phase !== "complete" || receipt.source_state !== source);
+  }
+  return migrationPending.get(source) ?? false;
+}
+
+/** Admit migration under native service custody before planning any runtime change. */
+export function withDaemonRuntimePinMigration<T>(
+  env: NodeJS.ProcessEnv,
+  read: () => T,
+): Promise<T> {
+  return withGatewayServiceOperationLock(env, async () => {
+    if (readDaemonRuntimePinMigrationPending(env)) {
+      const { migrateDaemonRuntimePins } =
+        await import("../infra/state-migrations.daemon-runtime-pins.js");
+      const result = await migrateDaemonRuntimePins(env);
+      if (result.warnings.length) {
+        throw new Error(result.warnings.join("\n"));
+      }
+      migrationPending.set(resolveOpenClawStateSqlitePath(env), false);
+    }
+    return read();
+  });
+}
+
 function readPinValue(scope: PinScope): unknown {
-  const { key } = resolveScope(scope);
+  if (readDaemonRuntimePinMigrationPending(scope.env)) {
+    throw new Error("Runtime pin migration pending; run openclaw doctor.");
+  }
+  const key = resolveKey(scope);
   return withDaemonRuntimePinStore(scope.env, false, (db) => readDaemonRuntimePinValue(db, key));
 }
 
@@ -104,7 +145,7 @@ export function commitDaemonRuntimePin(
   update: DaemonRuntimePinUpdate,
   command: GatewayServiceCommandConfig | null,
 ): void {
-  const { key } = resolveScope(scope);
+  const key = resolveKey(scope);
   if (!update.pin && update.expected.revision === revision(undefined)) {
     assertDaemonRuntimePinCurrent(scope, update.expected);
     return;
@@ -120,29 +161,26 @@ export function commitDaemonRuntimePin(
       );
     }
     const store = getNodeSqliteKysely<DaemonRuntimePinDatabase>(db);
-    if (update.pin) {
-      const row = {
-        state_key: key,
-        value_json: JSON.stringify({
-          version: 1,
-          pin: pinSchema.parse(update.pin),
-          definition: binding,
-        }),
-        updated_at_ms: Date.now(),
-      };
-      executeSqliteQuerySync(
-        db,
-        store
-          .insertInto("daemon_runtime_pins")
-          .values(row)
-          .onConflict((conflict) => conflict.column("state_key").doUpdateSet(row)),
-      );
-    } else {
-      executeSqliteQuerySync(
-        db,
-        store.deleteFrom("daemon_runtime_pins").where("state_key", "=", key),
-      );
-    }
+    const row = update.pin
+      ? {
+          state_key: key,
+          value_json: JSON.stringify({
+            version: 1,
+            pin: pinSchema.parse(update.pin),
+            definition: binding,
+          }),
+          updated_at_ms: Date.now(),
+        }
+      : undefined;
+    executeSqliteQuerySync(
+      db,
+      row
+        ? store
+            .insertInto("daemon_runtime_pins")
+            .values(row)
+            .onConflict((conflict) => conflict.column("state_key").doUpdateSet(row))
+        : store.deleteFrom("daemon_runtime_pins").where("state_key", "=", key),
+    );
   });
 }
 

@@ -820,7 +820,7 @@ struct GatewayProcessManagerTests {
 
     @Test(
         arguments: [false, true],
-        ["managed-node", "pinned-managed-node", "operator-node", "operator-bun", "seeded-bun"])
+        ["managed-node", "pinned-managed-node", "operator-node", "operator-bun", "seeded-bun", "pending-bun"])
     func `pausing an app managed service preserves its runtime through resume and relaunch`(
         relaunch: Bool,
         runtimeLocation: String) async throws
@@ -841,7 +841,12 @@ struct GatewayProcessManagerTests {
                 ? "runtime/build-one/lib/node_modules/openclaw/openclaw.mjs"
                 : "lib/node_modules/openclaw/openclaw.mjs"
             let prefix = [executable, state.appendingPathComponent(package).path]
+            let pending = runtimeLocation == "pending-bun"
             let hadRuntimePin = runtimeLocation == "pinned-managed-node"
+            if pending {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+            }
             if hadRuntimePin {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(Self.pinnedStatus(executable: executable))
             }
@@ -876,6 +881,16 @@ struct GatewayProcessManagerTests {
             })
             manager.stop()
             await manager.waitForStartupAttempt()
+            if pending {
+                #expect(manager.status == .stopped)
+                #expect(FileManager.default.fileExists(atPath: plist.path))
+                #expect(manager.retainedServiceCLI?.prefix == prefix)
+                #expect(manager.retainedServiceCLI?.hadRuntimePin == true)
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.contains { $0.first == "stop" })
+                #expect(!calls.contains { $0.first == "uninstall" || $0.first == "install" })
+                return
+            }
             #expect(!FileManager.default.fileExists(atPath: plist.path))
             #expect(try await !GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: state, profile: .current))
             let receipt = try #require(AppDefaults.standard.data(forKey: GatewayLaunchAgentManager.resumeCommandKey))

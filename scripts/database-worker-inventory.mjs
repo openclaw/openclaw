@@ -46,7 +46,7 @@ const reviewed = new Map([
     {
       tier: "T3",
       evidence:
-        "Called only by the config-machine-state migration step in state-migrations.doctor.ts, under withLegacyMigrationStateLock exclusive custody; never a runtime compatibility reader.",
+        "Called by the config-machine-state Doctor step and the daemon pin admission fence under withLegacyMigrationStateLock exclusive custody; never a runtime compatibility reader.",
     },
   ],
   [

@@ -1,4 +1,7 @@
-import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  readDaemonRuntimePinMigrationPending,
+} from "../../daemon/runtime-pin-state.js";
 import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 import type { GatewayService, GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasGatewayServiceLauncherOverride } from "../../daemon/service-types.js";
@@ -24,6 +27,7 @@ export async function inspectCliRuntime(): Promise<CliRuntimeStatus> {
 
 export type ServiceRuntimeIntentStatus =
   | { runtimeIntent: { status: "unknown"; error?: string } }
+  | { runtimeIntent: { status: "migrationPending"; nextStep: "run openclaw doctor" } }
   | {
       runtimeIntent: DaemonRuntimePinSnapshot & { status: "known" };
       revision: string;
@@ -44,6 +48,9 @@ export async function inspectServiceRuntimeIntent(params: {
     return { runtimeIntent: { status: "unknown" } };
   }
   try {
+    if (readDaemonRuntimePinMigrationPending(params.serviceEnv)) {
+      return { runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" } };
+    }
     const pin = readDaemonRuntimePin({ kind: params.kind, env: params.serviceEnv }, params.command);
     const capability = await params.service.readDefinitionMutationCapability?.({
       env: params.env,

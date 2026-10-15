@@ -20,12 +20,16 @@ title: "Database layout"
 engine. Its independent schema version 1 contains `daemon_runtime_pins`, keyed by
 the existing hashed service identity, with exact versioned `value_json` and
 `updated_at_ms`. Malformed and stale records remain operator intent; inspection
-reports an error instead of treating them as unpinned.
+reports an error instead of treating them as unpinned. The single-row
+`daemon_runtime_pin_migration` receipt records version 1, the source state path,
+`copied` or `complete`, and its update time. A pending receipt is never unpinned.
 
 Doctor moves legacy `daemon-runtime-pin:*` rows from shared `config_machine_state`
 under exclusive state custody. It commits exact local copies before deleting
-source rows; identical copies permit a retry after interruption. Conflicting
-values or timestamps stop migration with both stores retained. Managed updates
+source rows, then marks the receipt complete; identical copies resume an
+interrupted copy. Install/start/repair perform this step under service custody
+before reading intent. Read-only status reports `migrationPending` with the next
+step `run openclaw doctor`. Conflicting values or timestamps stop migration with both stores retained. Managed updates
 run this migration for SQLite installations too. The exact updater recovery
 capture includes the local store. Runtime reads never fall back to shared state.
 

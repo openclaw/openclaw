@@ -7,7 +7,12 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readLaunchAgentProgramArguments } from "./launchd.js";
 import { resolveNodeService } from "./node-service.js";
-import { commitDaemonRuntimePin, readDaemonRuntimePin } from "./runtime-pin-state.js";
+import {
+  commitDaemonRuntimePin,
+  readDaemonRuntimePin,
+  readDaemonRuntimePinMigrationPending,
+  withDaemonRuntimePinMigration,
+} from "./runtime-pin-state.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
   GatewayServiceCommandConfig,
@@ -79,11 +84,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("native service runtime pin persistence", () => {
+  it.each(["gateway", "node"] as const)(
+    "admits pending migration before %s uninstall",
+    async (kind) => {
+      await withOpenClawTestState({ label: "pin-uninstall-migration" }, async (state) => {
+        const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
+        expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+        native.uninstall.mockImplementationOnce(async () => {
+          expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
+        });
+        await service.uninstall({ env: state.env, stdout: process.stdout });
+        expect(native.uninstall).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it.each(["before-native-write", "before-persistence"] as const)(
     "rejects a pin changed %s without overwriting the newer intent",
     async (phase) => {
       await withOpenClawTestState({ label: "pin-native-late-change" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
         const pin = { runtime: "node" as const, path: "/runtime/node" };
         const command = { programArguments: [pin.path, "/app/openclaw.mjs", "gateway"] };
@@ -142,6 +163,7 @@ describe("native service runtime pin persistence", () => {
       await withOpenClawTestState({ label: "pin-native" }, async (state) => {
         const service = kind === "gateway" ? resolveGatewayService() : resolveNodeService();
         const scope = { kind, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const pin = { runtime: "node" as const, path: "/runtime/node" };
         const args = {
           env: state.env,
@@ -191,6 +213,7 @@ describe("native service runtime pin persistence", () => {
   it("does not commit on failed native write or mismatched readback", async () => {
     await withOpenClawTestState({ label: "pin-native-failure" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
       const pin = { runtime: "node" as const, path: "/runtime/node" };
       const args = {
@@ -212,6 +235,7 @@ describe("native service runtime pin persistence", () => {
   it("does not claim an unchanged definition when custody is lost during installed pin readback", async () => {
     await withOpenClawTestState({ label: "pin-native-custody" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
       const pin = { runtime: "node" as const, path: "/runtime/node" };
       const args = {
@@ -252,6 +276,7 @@ describe("native service runtime pin persistence", () => {
   it("refuses a definition changed after planning without writing or clearing prior metadata", async () => {
     await withOpenClawTestState({ label: "pin-native-drift" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
       const expected = readDaemonRuntimePin(scope, null);
       native.command = { programArguments: ["/external/node", "gateway"] };
@@ -270,6 +295,7 @@ describe("native service runtime pin persistence", () => {
   it("serializes concurrent pin plans and refuses the stale writer before native mutation", async () => {
     await withOpenClawTestState({ label: "pin-native-concurrent" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
       const pin = { runtime: "node" as const, path: "/runtime/node" };
       const args = {
@@ -291,6 +317,7 @@ describe("native service runtime pin persistence", () => {
     async (changed) => {
       await withOpenClawTestState({ label: "pin-native-guarded-unpinned" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
         native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
         const expected = readDaemonRuntimePin(scope, native.command);
@@ -324,6 +351,7 @@ describe("native service runtime pin persistence", () => {
     async (disable) => {
       await withOpenClawTestState({ label: "pin-native-intervening-stop" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
         native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
         const original = native.command;
@@ -367,6 +395,7 @@ describe("native service runtime pin persistence", () => {
     async (action) => {
       await withOpenClawTestState({ label: "pin-native-running" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
         native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
         const pin = { runtime: "bun" as const, path: "/bundled/bun" };
@@ -391,6 +420,7 @@ describe("native service runtime pin persistence", () => {
     async (reason) => {
       await withOpenClawTestState({ label: "pin-native-unknown-running" }, async (state) => {
         const scope = { kind: "gateway" as const, env: state.env };
+        await withDaemonRuntimePinMigration(state.env, () => undefined);
         const service = resolveGatewayService();
         native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
         const original = native.command;
@@ -420,6 +450,7 @@ describe("native service runtime pin persistence", () => {
   it("admits a guarded fresh install without requiring an existing running service", async () => {
     await withOpenClawTestState({ label: "pin-native-fresh" }, async (state) => {
       const scope = { kind: "gateway" as const, env: state.env };
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
       const service = resolveGatewayService();
       native.loaded.mockResolvedValue(false);
       native.runtime.mockResolvedValue({ status: "stopped" });

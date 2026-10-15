@@ -352,10 +352,9 @@ enum GatewayLaunchAgentManager {
         guard let installedRuntimePath else { return "Gateway service runtime could not be inspected" }
         let directory = stateDirectory.appendingPathComponent("runtime", isDirectory: true)
         let pin = URL(fileURLWithPath: installedRuntimePath)
-        // Status does not expose pin metadata. Conservatively preserve every external executable,
-        // including unpinned ones, instead of inferring absent runtime intent from omitted JSON.
-        // Match directory boundaries before and after symlink resolution: a sibling directory or
-        // an app-looking link to an operator runtime does not confer ownership of that runtime.
+        // Preserve external executables, including unpinned ones. Match directory boundaries
+        // before and after symlink resolution: an app-looking link to an operator runtime
+        // does not confer ownership of that runtime.
         guard installedRuntimePath.hasPrefix("/"),
               pin.standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path + "/"),
               pin.resolvingSymlinksInPath().path.hasPrefix(directory.resolvingSymlinksInPath().path + "/")
@@ -647,16 +646,19 @@ extension GatewayLaunchAgentManager {
         "The newer selection was preserved; inspect it before retrying."
 
     struct RuntimeIntent: Decodable, Equatable, Sendable {
+        enum Status: String, Decodable, Sendable { case known, migrationPending }
+
         struct Pin: Decodable, Equatable, Sendable {
             let runtime: String
             let path: String
         }
 
-        let status: String
-        let revision: String
-        let stored: Bool
+        let status: Status
+        let revision: String?
+        let stored: Bool?
         let definition: String?
         let pin: Pin?
+        let nextStep: String?
     }
 
     private struct RuntimeIntentStatus: Decodable {
@@ -667,6 +669,22 @@ extension GatewayLaunchAgentManager {
         let service: Service
     }
 
+    private static func inspectRuntimeIntent(
+        invocation: DaemonInvocation,
+        timeout: Double = Self.startupMigrationTolerance) async throws -> RuntimeIntent
+    {
+        let observation = await self.executeDaemonCommand(
+            ["status", "--runtime-intent-only", "--json"], invocation: invocation, timeout: timeout, quiet: true)
+        guard case let .success(payload?) = observation else {
+            throw GatewayHostingError(message: Self.runtimePinSelectionChanged)
+        }
+        switch try? JSONDecoder().decode(RuntimeIntentStatus.self, from: payload).service.runtimeIntent {
+        case let intent? where intent.status == .known && intent.revision != nil && intent.stored != nil: return intent
+        case let intent? where intent.status == .migrationPending: return intent
+        default: throw GatewayHostingError(message: self.runtimePinSelectionChanged)
+        }
+    }
+
     static func hasRuntimePin(stateDirectory: URL, profile: AppProfile) async throws -> Bool {
         try await self.runtimePinRecord(stateDirectory: stateDirectory, profile: profile) != nil
     }
@@ -675,19 +693,8 @@ extension GatewayLaunchAgentManager {
         let runtime = BundledRuntime.isBundledApp ? try BundledRuntime.resolve(bundle: .main) : nil
         let invocation = await self.daemonInvocation(
             runtime: runtime, profile: profile, stateDirectory: stateDirectory)
-        let observation = await self.executeDaemonCommand(
-            ["status", "--runtime-intent-only", "--json"],
-            invocation: invocation,
-            timeout: Self.startupMigrationTolerance,
-            quiet: true)
-        guard case let .success(payload?) = observation,
-              let status = try? JSONDecoder().decode(RuntimeIntentStatus.self, from: payload),
-              status.service.runtimeIntent.status == "known"
-        else {
-            throw GatewayHostingError(message: Self.runtimePinSelectionChanged)
-        }
-        let intent = status.service.runtimeIntent
-        return intent.stored ? intent : nil
+        let intent = try await self.inspectRuntimeIntent(invocation: invocation)
+        return intent.status == .migrationPending || intent.stored == true ? intent : nil
     }
 
     private struct DaemonInvocation {
@@ -755,7 +762,7 @@ extension GatewayLaunchAgentManager {
             selectedCLI = installedCLI
         }
         let beforeSpawn: (@Sendable () -> String?)?
-        if args.first.map(["install", "uninstall", "restart"].contains) == true {
+        if args.first.map(["install", "uninstall", "start", "stop", "restart"].contains) == true {
             let custody: ServiceAuthority
             do { custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority() } catch {
                 return .failure(error.localizedDescription)
@@ -773,21 +780,20 @@ extension GatewayLaunchAgentManager {
         }
         let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: selectedCLI)
         if args.first == "install", invocation.supportsExpectedRuntimePin {
-            let observation = await self.executeDaemonCommand(
-                ["status", "--runtime-intent-only", "--json"],
-                invocation: invocation,
-                timeout: timeout,
-                quiet: true)
-            guard case let .success(payload?) = observation,
-                  let status = try? JSONDecoder().decode(RuntimeIntentStatus.self, from: payload),
-                  status.service.runtimeIntent.status == "known",
-                  let expected = try? JSONSerialization.data(withJSONObject: [
-                      "revision": status.service.runtimeIntent.revision,
-                      "definition": status.service.runtimeIntent.definition as Any? ?? NSNull(),
-                  ], options: [.sortedKeys, .withoutEscapingSlashes]),
-                  let expectation = String(bytes: expected, encoding: .utf8)
-            else { return .failure(self.runtimePinSelectionChanged) }
-            arguments += ["--expected-runtime-pin", expectation]
+            let intent: RuntimeIntent
+            do { intent = try await self.inspectRuntimeIntent(invocation: invocation, timeout: timeout) } catch {
+                return .failure(error.localizedDescription)
+            }
+            if intent.status == .known {
+                guard let revision = intent.revision,
+                      let expected = try? JSONSerialization.data(withJSONObject: [
+                          "revision": revision,
+                          "definition": intent.definition as Any? ?? NSNull(),
+                      ], options: [.sortedKeys, .withoutEscapingSlashes]),
+                      let expectation = String(bytes: expected, encoding: .utf8)
+                else { return .failure(self.runtimePinSelectionChanged) }
+                arguments += ["--expected-runtime-pin", expectation]
+            }
         }
         return await self.executeDaemonCommand(
             arguments,
