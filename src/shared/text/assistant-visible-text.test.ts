@@ -461,6 +461,16 @@ describe("assistantTraceTextFilter streamed projection", () => {
       "tool call: hidden\n\n[id]: /url\n\n![a [b]\nmore\n`x\ntool call: literal\nx`][id]",
       "[id]: /url\n\n![a [b]\nmore\n`x\nx`][id]",
     ],
+    [
+      "a multiline inline-link title",
+      'tool call: hidden\n[label](/url "title\nmore\n`x\ntool call: literal\nx`")',
+      '[label](/url "title\nmore\n`x\nx`")',
+    ],
+    [
+      "a definition absorbing its optional next-line title",
+      'tool call: hidden\n\n[id]: /url\n"title\nmore\n`x\ntool call: literal\nx`"',
+      '[id]: /url\n"title\nmore\n`x\nx`"',
+    ],
   ])("projects %s in token-sized chunks", (_name, source, expected) => {
     for (const size of [1, 3, 7]) {
       const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));

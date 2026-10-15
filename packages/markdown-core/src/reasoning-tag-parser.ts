@@ -485,6 +485,18 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       retainStart = Math.min(retainStart, blockStart);
     }
   }
+  if (definitions.length) {
+    // An unfinished next-line title can temporarily parse as several other blocks.
+    let lastBlank = -1;
+    for (const blank of text.matchAll(/(?:\r\n|\n|\r(?!\n))[ \t]*(?:\r\n|\n|\r(?!\n))/g)) {
+      lastBlank = blank.index;
+    }
+    for (const definition of definitions) {
+      if (definition.end > lastBlank) {
+        retainStart = Math.min(retainStart, definition.start);
+      }
+    }
+  }
   regions.sort((left, right) => left.start - right.start);
   return {
     regions,

@@ -66,9 +66,7 @@ function findTextCheckpoint(
     if (
       state.paragraphAmbiguous ||
       state.structuralUnknown ||
-      (!inFence &&
-        !state.fenceChar &&
-        (line.includes("\\]") || /!\[|\[[^\]]*$|\]:|^ {0,3}=+[ \t]*\r?\n$/.test(line)))
+      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = findCodeOwnership(text);
       // Normalization can expand a label beyond CommonMark's 999-character source limit.
