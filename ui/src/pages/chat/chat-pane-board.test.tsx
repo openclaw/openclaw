@@ -35,7 +35,7 @@ import {
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
-// These shell tests isolate board data and presentation; board rendering has its own suite.
+// mock-isolation: isolate board data and presentation without registering the real board renderer.
 vi.mock("../../components/board/board-view.ts", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});

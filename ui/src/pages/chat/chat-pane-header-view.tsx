@@ -1,4 +1,28 @@
+import { onCleanup } from "solid-js";
+import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
+import type { ChatDetails } from "./components/chat-details.tsx";
+
+export type PaneDetailsProps = {
+  chat: ChatDetails["props"];
+  mobile: boolean;
+  presentation: PresentationValue;
+  setRef: (details: ChatDetails | undefined) => void;
+};
+
+export function PaneDetails(props: PaneDetailsProps) {
+  const presented = usePanePresentation(() => props.presentation);
+  onCleanup(() => props.setRef(undefined));
+  return (
+    <openclaw-chat-details
+      ref={(element) => props.setRef(element)}
+      prop:props={props.chat}
+      prop:mobile={props.mobile}
+      prop:presented={presented()}
+    />
+  );
+}
 
 type PresenceProps = Pick<
   HTMLElementTagNameMap["openclaw-viewer-facepile"],
@@ -55,6 +79,8 @@ export function PaneHeaderSessionMenu(props: SessionMenuProps) {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-chat-details": HTMLAttributes<ChatDetails> &
+        ElementProperties<Pick<ChatDetails, "props" | "presented" | "mobile">>;
       "openclaw-chat-header-session-menu": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-header-session-menu"]
       > &

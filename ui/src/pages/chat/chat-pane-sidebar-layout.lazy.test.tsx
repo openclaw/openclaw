@@ -18,7 +18,8 @@ vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
 });
 
-vi.mock("../../app/stale-chunk-reload.ts", () => ({
+vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/stale-chunk-reload.ts")>()),
   isStaleChunkImportError: () => true,
   retryStaleChunkReloadWhenReachable: lazyMocks.retryDocument,
   scheduleStaleChunkReload: vi.fn(async () => false),

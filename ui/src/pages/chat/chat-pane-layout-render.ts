@@ -18,8 +18,8 @@ import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { PresentedPaneContent } from "./chat-pane-embedded-view.tsx";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import {
-  PaneDetails,
   PaneHeaderContent,
   PaneSubagentContent,
   PaneOutboxRecovery,
@@ -187,8 +187,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     };
-    const headerDetails = ownsSubagentsPanel
-      ? solidContent(PaneDetails, {
+    const headerDetails: PaneDetailsProps | undefined = ownsSubagentsPanel
+      ? {
           chat: paneChatProps,
           mobile: this.mergedChrome && !this.onBackToSubagents,
           presentation: this.mergedChrome
@@ -197,8 +197,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           setRef: (details) => {
             this.headerDetailsRef.value = details;
           },
-        })
-      : emptyLegacyContent;
+        }
+      : undefined;
     const subagentStop =
       chatProps.disabledBanner?.presentation &&
       chatProps.canAbort &&

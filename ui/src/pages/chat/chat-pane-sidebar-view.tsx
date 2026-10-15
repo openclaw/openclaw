@@ -2,8 +2,8 @@ import { For, Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
-import type { RegionProps } from "./components/chat-sidebar-region-types.ts";
 import type {
+  RegionProps,
   SidebarPanelDefinition,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
@@ -38,7 +38,7 @@ export type SidebarRegionParams = {
 type SidebarRegionViewProps = SidebarRegionParams & {
   panelIdPrefix: string;
   panelDefinitions: SidebarPanelDefinition[];
-  regionError: unknown | null | undefined;
+  regionError: unknown;
 };
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {

@@ -82,16 +82,17 @@ function nativeCloseLayoutFixture() {
   const [layout, setLayout] = createSignal(
     openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
   );
-  const panelDefinitions = sidebarPanelDefinitions().map((definition) => ({
-    ...definition,
-    available: definition.slot === "detail" || definition.slot === "workspace",
-    content:
-      definition.slot === "detail"
-        ? solidContent(CloseDetailContent, {})
-        : definition.slot === "workspace"
-          ? solidContent(WorkspaceContent, {})
-          : null,
-  }));
+  const panelDefinitions = sidebarPanelDefinitions().map((definition) =>
+    Object.assign(definition, {
+      available: definition.slot === "detail" || definition.slot === "workspace",
+      content:
+        definition.slot === "detail"
+          ? solidContent(CloseDetailContent, {})
+          : definition.slot === "workspace"
+            ? solidContent(WorkspaceContent, {})
+            : null,
+    }),
+  );
   const { container } = mountSolid(() => (
     <SidebarRegionView
       panelIdPrefix="chat-panel-sidebar-layout-fixture"
@@ -128,11 +129,12 @@ async function renderLayout(
       () => {
         const [state, setState] = createSignal(next);
         layouts.set(container, setState);
-        const panelDefinitions = sidebarPanelDefinitions().map((definition) => ({
-          ...definition,
-          available: ["detail", "terminal", "workspace"].includes(definition.slot),
-          content: definition.slot === "detail" ? solidContent(DetailContent, {}) : null,
-        }));
+        const panelDefinitions = sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: ["detail", "terminal", "workspace"].includes(definition.slot),
+            content: definition.slot === "detail" ? solidContent(DetailContent, {}) : null,
+          }),
+        );
         return (
           <SidebarRegionView
             panelIdPrefix={`chat-panel-${encodeURIComponent(state().presentationId)}`}

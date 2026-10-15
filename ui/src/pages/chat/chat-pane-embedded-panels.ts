@@ -18,7 +18,6 @@ import {
   CompanionPanel,
   DesktopPanel,
   DiscussionPanel,
-  ExternalPanelLink,
   LinkReaderPanel,
   PortalPanel,
   PresentedPaneContent,
@@ -37,7 +36,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 registerFilePreviewEnglish();
 
 function panelExternalLink(href: string | null | undefined, label: string) {
-  return href ? solidContent(ExternalPanelLink, { href, label }) : undefined;
+  return href ? { href, label } : undefined;
 }
 
 /** One ordered declaration for every chat side-panel slot. */
@@ -55,7 +54,7 @@ export function sidebarPanelDefinitions(
     slot: Exclude<SidebarSlotId, `plugin:${string}` | "link-reader">,
     icon: LegacyTemplateResult,
     content: SidebarPanelDefinition["content"],
-    headerAction?: SidebarPanelDefinition["headerAction"],
+    actions?: Pick<SidebarPanelDefinition, "headerAction" | "headerLink">,
   ): SidebarPanelDefinition => {
     const textKey = slot === "detail" ? "review" : slot === "workspace" ? "files" : slot;
     return {
@@ -93,7 +92,7 @@ export function sidebarPanelDefinitions(
         t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
       ),
       empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
-      headerAction,
+      ...actions,
       shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
     };
   };
@@ -156,24 +155,18 @@ export function sidebarPanelDefinitions(
     },
     definePanel("portal", icons.globe, portal),
     definePanel("workspace", icons.fileText, workspaceContent),
-    definePanel(
-      "companion",
-      icons.messageSquarePlus,
-      companion,
-      params ? solidContent(ClearCompanion, params) : undefined,
-    ),
-    definePanel(
-      "desktop",
-      icons.monitor,
-      desktop,
-      panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
-    ),
-    definePanel(
-      "discussion",
-      icons.messageSquare,
-      discussion,
-      panelExternalLink(params?.discussionOpenUrl, t("chat.sessionDiscussion.openExternal")),
-    ),
+    definePanel("companion", icons.messageSquarePlus, companion, {
+      headerAction: params ? solidContent(ClearCompanion, params) : undefined,
+    }),
+    definePanel("desktop", icons.monitor, desktop, {
+      headerLink: panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
+    }),
+    definePanel("discussion", icons.messageSquare, discussion, {
+      headerLink: panelExternalLink(
+        params?.discussionOpenUrl,
+        t("chat.sessionDiscussion.openExternal"),
+      ),
+    }),
     definePanel("dashboard", icons.layoutDashboard, params?.dashboard ?? null),
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,

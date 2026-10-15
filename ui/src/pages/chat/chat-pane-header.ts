@@ -37,6 +37,7 @@ import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { PaneHeaderPresence, PaneHeaderSessionMenu } from "./chat-pane-header-view.tsx";
+import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -134,7 +135,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
     subagentStop: unknown = emptyLegacyContent,
-    detailsControl: unknown = emptyLegacyContent,
+    detailsControl?: PaneDetailsProps,
     panelControls?: {
       openPanelSlot: (slot: SidebarSlotId) => void;
       closePanelSlot: (slot: SidebarSlotId) => void;
@@ -581,7 +582,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
       onOpenDetails:
-        detailsControl === emptyLegacyContent
+        detailsControl === undefined
           ? undefined
           : (source) => this.headerDetailsRef.value?.open(source),
       runAction: subagentStop,
@@ -627,22 +628,22 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 agentsList: this.context.agents.state.agentsList,
                 hello: this.context.gateway.snapshot.hello,
               }),
-              boardWidgetMenu: boardWidgetMenu,
+              boardWidgetMenu,
               sessionActions: this.headerSessionActions.read(
                 this.context,
                 row,
                 placement.reclaimDisabledReason,
                 this.onHeaderAction,
               ),
-              sharing: sharing,
+              sharing,
               groups: knownGroups,
               currentOwner: row.owner?.actor ?? null,
-              actionDisabledReasons: actionDisabledReasons,
+              actionDisabledReasons,
               forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
               forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed: archiveAllowed,
+              archiveAllowed,
               archiveShortcut: this.active && this.presented && !this.onboarding,
-              deleteAllowed: deleteAllowed,
+              deleteAllowed,
               onOpen: this.onHeaderMenuOpen,
               onOpenCommandPalette: this.onHeaderCommandPalette,
               onSettingsChange: this.onHeaderSettingsChange,

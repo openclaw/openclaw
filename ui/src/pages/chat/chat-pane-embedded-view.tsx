@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createRenderEffect, createSignal } from "solid-js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
@@ -99,7 +99,7 @@ export function CompanionPanel(props: Props) {
       prop:activeRunId={props.activeRunId}
       prop:pullRequests={props.pullRequests}
       prop:companion={props.companion}
-      prop:connected={props.state.connected === true}
+      prop:connected={props.state.connected}
       prop:sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
       prop:onSubmit={props.onCompanionSubmit}
       prop:onDraftChange={props.onCompanionDraftChange}
@@ -270,7 +270,7 @@ export function PresentedPaneContent(props: { presentation: PresentationValue; c
   return <LitContent value={presented() ? props.content : undefined} />;
 }
 
-type EmbeddedAttributes<Element extends HTMLElement> = JSX.HTMLAttributes<Element> &
+type EmbeddedAttributes<Element extends HTMLElement> = SolidJSX.HTMLAttributes<Element> &
   ElementProperties<Omit<Element, keyof HTMLElement | "updateComplete">>;
 declare module "@solidjs/web" {
   namespace JSX {

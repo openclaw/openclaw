@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -6,10 +6,10 @@ import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
+import { PaneDetails, type PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
-import type { ChatDetails } from "./components/chat-details.tsx";
 
 export function PaneBootLayout() {
   return <main class="app-shell app-shell--booting" aria-busy="true" />;
@@ -26,24 +26,6 @@ export function PaneOutboxRecovery(props: {
       prop:messages={props.state.chatMessages}
       prop:identity={props.identity}
       onOutbox-restored={() => props.onRestored()}
-    />
-  );
-}
-
-export function PaneDetails(props: {
-  chat: ChatProps;
-  mobile: boolean;
-  presentation: PresentationValue;
-  setRef: (details: ChatDetails | undefined) => void;
-}) {
-  const presented = usePanePresentation(() => props.presentation);
-  onCleanup(() => props.setRef(undefined));
-  return (
-    <openclaw-chat-details
-      ref={(element) => props.setRef(element)}
-      prop:props={props.chat}
-      prop:mobile={props.mobile}
-      prop:presented={presented()}
     />
   );
 }
@@ -66,7 +48,7 @@ export function PaneSubagentHeader(props: {
   title: string;
   onBack: () => void;
   stop: unknown;
-  details: unknown;
+  details: PaneDetailsProps | undefined;
 }) {
   return (
     <header class="chat-subagent-detail__header">
@@ -76,7 +58,10 @@ export function PaneSubagentHeader(props: {
       </button>
       <div class="chat-subagent-detail__heading">
         <strong class="chat-subagent-detail__title">{props.title}</strong>
-        <LitContent value={[props.stop, props.details]} />
+        <LitContent value={props.stop} />
+        <Show when={props.details !== undefined}>
+          <PaneDetails {...props.details!} />
+        </Show>
       </div>
     </header>
   );
@@ -134,8 +119,6 @@ declare module "@solidjs/web" {
         > & {
           "onOutbox-restored"?: () => void;
         };
-      "openclaw-chat-details": HTMLAttributes<ChatDetails> &
-        ElementProperties<Pick<ChatDetails, "props" | "presented" | "mobile">>;
     }
   }
 }

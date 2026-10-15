@@ -16,7 +16,7 @@ import {
   type SessionPatch,
 } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
+import { solidContent, type LegacyDirectiveResult } from "../../lit/solid-content.tsx";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -137,7 +137,7 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: ReturnType<typeof solidContent>;
+  composerControls: LegacyDirectiveResult;
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {
