@@ -666,6 +666,12 @@ function writeRelease(fixture, releaseSha = sha) {
   writeFileSync(join(release, "dist", "control-ui", "assets", "app.js"), "fixture();\n");
   writeFileSync(join(release, "dist", "index.js"), gatewaySource(fixture), { mode: 0o755 });
   mkdirSync(join(release,"dist/plugin-sdk"),{recursive:true});
+  writeFileSync(join(release,"dist/plugin-sdk/model-ref-parse.js"), `
+export function splitTrailingAuthProfile(raw) {
+  if (raw !== "fixture/exact-model") throw Error("unexpected synthetic model route");
+  return {model: raw};
+}
+`);
   writeFileSync(join(release,"dist/plugin-sdk/gateway-runtime.js"), `
 import {spawnSync} from 'node:child_process';
 export function isGatewayTransportError(error) {

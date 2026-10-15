@@ -98,7 +98,9 @@ still names that same run. Acceptance requires the subsequent `agent.wait`
 terminal receipt to bind the exact session, visible marker, and configured
 requested provider/model. The effective model must be that primary or one of its
 configured fallbacks captured with the protected policy; fallback changes are
-policy changes. A successful configured fallback remains valid when the primary
+policy changes. The release's native model-reference parser separates auth-profile
+suffixes for receipt comparisons; the full configured references remain protected.
+A successful configured fallback remains valid when the primary
 is rate-limited. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
 

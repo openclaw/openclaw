@@ -26,6 +26,23 @@ function deadlineRecovery(t, terminalAtMs, failure = null, admissionReadyAtMs = 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const journal = join(root, "journal.json"), events = join(root, "events.jsonl");
   const before = "a".repeat(40), after = "b".repeat(40);
+  for (const sha of [before, after]) {
+    const sdk = join(root, sha, "dist/plugin-sdk");
+    mkdirSync(sdk, { recursive: true });
+    writeFileSync(join(root, sha, "package.json"), '{"type":"module"}');
+    // Closed native SDK examples; parsing itself belongs to the public SDK.
+    writeFileSync(join(sdk, "model-ref-parse.js"), `
+export function splitTrailingAuthProfile(raw) {
+  const routes = {
+    "fixture/exact-model":"fixture/exact-model", "fixture/fallback":"fixture/fallback",
+    "fixture/exact-model@work":"fixture/exact-model", "fixture/fallback@work":"fixture/fallback",
+    "fixture/fallback@20251001":"fixture/fallback@20251001"
+  };
+  if (!Object.hasOwn(routes, raw)) throw Error("unexpected synthetic model route");
+  return { model: routes[raw] };
+}
+`);
+  }
   const original = JSON.stringify({ phase: "ROLLBACK_FAILED", topology: "system",
     predecessor: { sha: before }, candidate: { sha: after },
     process: { pid: 123, generation: 456 }, protectedPaths: {} });
@@ -189,6 +206,7 @@ verify_convergence() {
 proof_json() { [[ "$1" == gateway-status ]]; }
 assert_scheduler_owner() { :; }
 run_marker_rpc() { "$node_bin" "$FIXTURE_HELPER" rpc "$2" "$3" "$4" "$clock_ms"; }
+run_gateway_node() { "$node_bin" "$@"; }
 read_probe() {
   local body
   body="$("$node_bin" "$FIXTURE_HELPER" probe "$1" "$clock_ms")" || return "$?"
@@ -217,7 +235,7 @@ if recover_journal; then exit 0; else exit "$?"; fi
     env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
       FIXTURE_ROOT: root, FIXTURE_HELPER: helper, FIXTURE_NODE: process.execPath,
-      FIXTURE_POLICY: JSON.stringify({ model: "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
+      FIXTURE_POLICY: JSON.stringify({ model: options.policyModel ?? "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
       FIXTURE_REQUESTED_MODEL: options.requestedModel ?? "exact-model",
       FIXTURE_EFFECTIVE_MODEL: options.effectiveModel ?? "exact-model",
       FIXTURE_TERMINAL_AT_MS: String(terminalAtMs), FIXTURE_OBSERVATION_FAILURE: JSON.stringify(failure),
@@ -720,3 +738,22 @@ test(`marker configured fallback rejects ${label} and retains recovery evidence`
   assert.equal(existsSync(journal), true);
 });
 }
+
+test("marker configured fallback resolves auth profiles through the serving release SDK", (t) => {
+  const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /MARKER_VERIFIED /);
+  assert.equal(existsSync(journal), false);
+  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
+});
+
+test("marker configured fallback preserves model-version suffixes during receipt comparison", (t) => {
+  const { result, journal } = deadlineRecovery(t, 590_000, null, 0, {
+    fallbacks: ["fixture/fallback@20251001"], effectiveModel: "fallback",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stage=marker.reply-check/);
+  assert.equal(existsSync(journal), true);
+});

@@ -1317,7 +1317,7 @@ if(p.pid!==Number(process.env.EXPECTED_PID)||p.processInstanceId!==process.env.E
 
 verify_marker() {
 	local release="$1" scope="${2:-system}"
-	local marker session approvals_before approvals_after reply payload run_id terminal_state
+	local marker session approvals_before approvals_after reply payload run_id terminal_state marker_policy
 	local observed_process timeout_ms remaining observation_pause observation_pause_ms observation_exit
 	# Logical entries may retire while their exact transcript generation stays preserved.
 	printf '%s' "$session_witness" | verification_step marker.session-preservation proof session-preservation-verify "$release" "$release" "$state_database" >/dev/null || return 1
@@ -1328,6 +1328,13 @@ verify_marker() {
 		fail 'verification session already has approval history'
 		return 1
 	}
+	marker_policy="$(verification_step marker.model-policy run_gateway_node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [release, raw] = process.argv.slice(1), policy = JSON.parse(raw);
+const { splitTrailingAuthProfile } = await import(pathToFileURL(`${release}/dist/plugin-sdk/model-ref-parse.js`).href);
+process.stdout.write(JSON.stringify({model:splitTrailingAuthProfile(policy.model).model,
+  fallbacks:policy.fallbacks.map(value=>splitTrailingAuthProfile(value).model)}));
+' "$release" "$policy_identity")" || return 1
 	wait_for_marker_readiness "$release" "$scope" || return 1
 	remaining=$((verification_deadline - SECONDS))
 	verification_step marker.run-budget test "$remaining" -gt 0 || return 1
@@ -1383,7 +1390,7 @@ process.stdout.write(reply.runId);
 			[[ "$observation_exit" == 75 && "$reply" == RETRYABLE_OBSERVATION_TRANSPORT ]] || return "$observation_exit"
 			printf 'MARKER_OBSERVATION_RETRY same-run=required same-generation=required\n' >&2
 		else
-			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" POLICY_JSON="$policy_identity" verification_step marker.reply-check "$node_bin" -e '
+			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" POLICY_JSON="$marker_policy" verification_step marker.reply-check "$node_bin" -e '
 const r=JSON.parse(process.env.REPLY_JSON), receipt=r.terminalReceipt, policy=JSON.parse(process.env.POLICY_JSON);
 // A length stop can omit the visible truncation notice from terminalReply.
 if(r.runId!==process.env.RUN_ID||r.error||r.pendingError===true||
