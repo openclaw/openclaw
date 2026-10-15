@@ -75,7 +75,7 @@ describe("prompt image preparation", () => {
         attempt: {
           workspaceDir,
           model: { input: ["text", "image"] },
-          config: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
+          config: { agents: { entries: { main: { workspace: workspaceDir } } } },
         },
         mediaOwnerAgentId: "main",
         effectiveFsWorkspaceOnly: false,
