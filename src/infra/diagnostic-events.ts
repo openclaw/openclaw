@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
@@ -1049,7 +1050,8 @@ function dispatchDiagnosticEvent(
             createDiagnosticMetadataForListener(metadata),
           );
         } catch (err) {
-          const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          const errorMessage =
+            err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
           console.error(
             `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
           );
@@ -1078,7 +1080,7 @@ function dispatchDiagnosticEvent(
         }
         listener(eventForListener, metadataForListener, privateDataForListener);
       } catch (err) {
-        const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
+        const errorMessage = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
         console.error(
           `[diagnostic-events] trusted listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
         );
