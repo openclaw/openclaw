@@ -13,10 +13,13 @@ import {
   humanReplies,
   observeProofSteeringAdmission,
   outbound,
+  patchProofConfig,
   providerErrors,
   registerProofModelScript,
   runHuman,
   runProofIngress,
+  updateSenderPolicies,
+  verifyCollaborativeCancellation,
   type RunResult,
   type ProofCase,
   type ProofModelRequest,
@@ -71,24 +74,6 @@ const cases: ProofCase[] = [
     targetKey: "agent:main:telegram:direct:provenance-busy-receiver",
   },
 ];
-
-async function patchProofConfig(patch: Record<string, unknown>, replacePaths: string[] = []) {
-  const before = await gateway.client.request<{ hash: string }>("config.get", {});
-  await gateway.client.request("config.patch", {
-    baseHash: before.hash,
-    raw: JSON.stringify(patch),
-    replacePaths,
-  });
-}
-
-async function updateSenderPolicies(policies: Record<string, { deny: string[] | null }>) {
-  await patchProofConfig(
-    { tools: { toolsBySender: policies } },
-    Object.entries(policies).flatMap(([senderKey, policy]) =>
-      policy.deny === null ? [`tools.toolsBySender.${senderKey}.deny`] : [],
-    ),
-  );
-}
 
 async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
   for (const spec of cases) {
@@ -806,9 +791,10 @@ async function verifySteeringPolicyCompatibility(
 async function verifyCrossHumanAdmission(
   signal: AbortSignal,
   allowCollaborativeSteering: boolean | undefined,
+  conversation: "same" | "different" = "same",
 ) {
-  const collaborative = allowCollaborativeSteering !== false;
-  const id = `mixed_human_${allowCollaborativeSteering ?? "default"}`;
+  const collaborative = allowCollaborativeSteering !== false && conversation === "same";
+  const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
   const scenario = createScenario(
     {
       name: `cross-human ${collaborative ? "steer" : "followup"}`,
@@ -885,7 +871,7 @@ async function verifyCrossHumanAdmission(
     stage = "sender-policy preparation";
     await updateSenderPolicies({
       "id:alice": { deny: null },
-      "id:bob": { deny: collaborative ? ["message"] : null },
+      "id:bob": { deny: allowCollaborativeSteering !== false ? ["message"] : null },
     });
     stage = "Alice admission";
     alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
@@ -903,7 +889,15 @@ async function verifyCrossHumanAdmission(
       signal,
     );
     stage = "Bob steering admission";
-    bob = runHuman(scenario, "bob", scenario.sourcePrompt, "steer", signal);
+    bob = runHuman(
+      conversation === "same"
+        ? scenario
+        : { ...scenario, sourceRecipient: `${scenario.sourceRecipient}-other` },
+      "bob",
+      scenario.sourcePrompt,
+      "steer",
+      signal,
+    );
     if (collaborative) {
       // The receipt waits for transcript commitment, which needs Alice's held
       // tool to finish. Observe real admission before releasing that tool.
@@ -1019,5 +1013,9 @@ it(
     await verifyCrossHumanAdmission(signal, undefined);
     phase = "cross-human true";
     await verifyCrossHumanAdmission(signal, true);
+    phase = "different-conversation input";
+    await verifyCrossHumanAdmission(signal, true, "different");
+    phase = "collaborative cancellation";
+    await verifyCollaborativeCancellation(signal);
   },
 );
