@@ -73,7 +73,6 @@ export type IrcClientOptions = {
   nickserv?: IrcNickServOptions;
   channels?: string[];
   connectTimeoutMs?: number;
-  livenessTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
@@ -267,25 +266,19 @@ export async function connectIrcClient(options: IrcClientOptions) {
   };
 
   let lastReceivedAt = Date.now();
-  const livenessTimeoutMs = options.livenessTimeoutMs ?? IRC_LIVENESS_TIMEOUT_MS;
-  const livenessTimer = setInterval(
-    () => {
-      if (!ready || closed) {
-        return;
-      }
-      const silentMs = Date.now() - lastReceivedAt;
-      if (silentMs >= livenessTimeoutMs) {
-        fail(
-          new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`),
-        );
-        // Destroy directly, as for oversized input, so the close listener reports the disconnect.
-        socket.destroy();
-      } else if (silentMs >= livenessTimeoutMs / 2) {
-        sendRaw("PING :openclaw");
-      }
-    },
-    Math.max(1, Math.floor(livenessTimeoutMs / 8)),
-  );
+  const livenessTimer = setInterval(() => {
+    if (!ready || closed) {
+      return;
+    }
+    const silentMs = Date.now() - lastReceivedAt;
+    if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
+      fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
+      // Destroy directly, as for oversized input, so the close listener reports the disconnect.
+      socket.destroy();
+    } else if (silentMs >= IRC_LIVENESS_TIMEOUT_MS / 2) {
+      sendRaw("PING :openclaw");
+    }
+  }, IRC_LIVENESS_TIMEOUT_MS / 8);
   livenessTimer.unref?.();
 
   const quit = (reason?: string) => {

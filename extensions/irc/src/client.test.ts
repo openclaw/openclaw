@@ -635,22 +635,26 @@ describe("irc client inbound line bound", () => {
 });
 
 describe("irc client liveness", () => {
+  // Only the liveness interval and its clock are faked; socket I/O and the connect timeout stay real.
   async function connectToQuietServer(answerPing: boolean) {
-    const serverLines: string[] = [];
+    const serverPing = createDeferred<void>();
     const server = await startIrcTestServer((socket) => {
       socket.on("error", () => {});
       onIrcTestLine(socket, (line) => {
-        serverLines.push(line);
         if (line.startsWith("USER ")) {
           socket.write(":server 001 bot :welcome\r\n");
-        } else if (answerPing && line.startsWith("PING ")) {
-          socket.write(`:server PONG server ${line.slice("PING ".length)}\r\n`);
+        } else if (line === "PING :openclaw") {
+          if (answerPing) {
+            socket.write(":server PONG server :openclaw\r\n");
+          }
+          serverPing.resolve();
         }
       });
     });
     const errors: Error[] = [];
     let disconnects = 0;
     const disconnected = createDeferred<void>();
+    const pong = createDeferred<void>();
     const client = await connectIrcClient({
       host: "127.0.0.1",
       port: server.port,
@@ -658,8 +662,12 @@ describe("irc client liveness", () => {
       nick: "bot",
       username: "bot",
       realname: "OpenClaw Bot",
-      livenessTimeoutMs: 400,
       onError: (error) => errors.push(error),
+      onLine: (line) => {
+        if (line.includes(" PONG ")) {
+          pong.resolve();
+        }
+      },
       onDisconnect: () => {
         disconnects += 1;
         disconnected.resolve();
@@ -667,37 +675,56 @@ describe("irc client liveness", () => {
     });
     return {
       server,
-      serverLines,
       client,
       errors,
+      serverPing: serverPing.promise,
+      pong: pong.promise,
       disconnected: disconnected.promise,
       disconnects: () => disconnects,
     };
   }
 
+  const settleSocketEvents = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(() => setImmediate(resolve));
+    });
+
   it("drops a connection whose server goes silent and reports a disconnect", async () => {
-    const { server, serverLines, client, errors, disconnected } = await connectToQuietServer(false);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const { server, client, errors, serverPing, disconnected, disconnects } =
+      await connectToQuietServer(false);
     try {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await withTimeout(serverPing, 2000, "IRC client PING to a silent server");
+      await settleSocketEvents();
+      expect(disconnects()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
       await withTimeout(disconnected, 2000, "IRC disconnect after a silent server");
-      expect(serverLines).toContain("PING :openclaw");
-      expect(errors.some((error) => error.message.includes("sent nothing"))).toBe(true);
+      expect(errors.some((error) => error.message.includes("sent nothing for 240s"))).toBe(true);
       expect(client.isReady()).toBe(false);
     } finally {
+      vi.useRealTimers();
       await server.close();
     }
   });
 
   it("keeps a quiet connection whose server answers PING", async () => {
-    const { server, serverLines, client, errors, disconnects } = await connectToQuietServer(true);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const { server, client, errors, serverPing, pong, disconnects } =
+      await connectToQuietServer(true);
     try {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1200);
-      });
-      expect(serverLines).toContain("PING :openclaw");
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await withTimeout(serverPing, 2000, "IRC client PING to a quiet server");
+      await withTimeout(pong, 2000, "IRC server PONG");
+
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      await settleSocketEvents();
       expect(disconnects()).toBe(0);
       expect(errors).toEqual([]);
       expect(client.isReady()).toBe(true);
     } finally {
+      vi.useRealTimers();
       client.quit("test complete");
       await server.close();
     }
