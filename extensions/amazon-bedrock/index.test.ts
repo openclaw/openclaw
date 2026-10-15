@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -327,6 +328,14 @@ describe("amazon-bedrock provider plugin", () => {
     } as never);
 
     expect(restricted?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+  });
+
+  it("keeps unsupported provider routes disabled with the runtime cache override", async () => {
+    await withEnvAsync({ AWS_BEDROCK_FORCE_CACHE: "1" }, async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
+      expectWrappedResultFields(result, { cacheRetention: "none" });
+    });
   });
 
   it("omits temperature for canonical Bedrock Opus aliases", async () => {
