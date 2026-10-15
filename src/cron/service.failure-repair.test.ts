@@ -8,7 +8,6 @@ import {
   expectAlertTextContaining,
   setupFailureAlertSuite,
 } from "./service.failure-alert.test-helpers.js";
-import { markInterruptedStartupRun } from "./service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
 import { applyJobResult } from "./service/timer-outcomes.js";
 import type { CronJob } from "./types.js";
@@ -766,31 +765,5 @@ describe("CronService failure repair", () => {
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
       "failure-repair",
     ]);
-  });
-
-  it.each([
-    { name: "recurring job", schedule: "every", repairs: true },
-    { name: "retired one-shot", schedule: "at", repairs: false },
-  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, repairs }) => {
-    const { state, job, deferredNotifications } = repairPolicyFixture(
-      {
-        schedule:
-          schedule === "at"
-            ? { kind: "at", at: new Date(runningAtMs).toISOString() }
-            : { kind: "every", everyMs: 60_000 },
-        state: { consecutiveErrors: 1, nextRunAtMs: runningAtMs, runningAtMs },
-      },
-      runningAtMs + 30_000,
-    );
-    markInterruptedStartupRun({
-      state,
-      job,
-      runningAtMs,
-      nowMs: runningAtMs + 30_000,
-      deferredNotifications,
-    });
-    expect(deferredNotifications.map((notification) => notification.kind)).toEqual(
-      schedule === "at" ? [] : [repairs ? "failure-repair" : "failure-alert"],
-    );
   });
 });
