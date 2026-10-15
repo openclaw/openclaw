@@ -975,6 +975,50 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(latestAssistantText?.text).toBe("Visible answer before tool call");
   });
 
+  it("does not reuse an older matching assistant message across turns", async () => {
+    await writeTranscriptStore();
+
+    const olderResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Repeated answer" }),
+    });
+
+    const latestResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Different latest answer" }),
+    });
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Repeated answer",
+      storePath: fixture.storePath(),
+    });
+
+    expect(olderResult.ok).toBe(true);
+    expect(latestResult.ok).toBe(true);
+    expect(mirrorResult.ok).toBe(true);
+    if (olderResult.ok && latestResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).not.toBe(olderResult.messageId);
+      expect(mirrorResult.messageId).not.toBe(latestResult.messageId);
+
+      const messages = (await loadFixtureMessages()).flatMap((entry) =>
+        entry.message ? [entry.message] : [],
+      ) as Array<{
+        api?: string;
+        provider?: string;
+        model?: string;
+        content?: Array<{ text?: string }>;
+      }>;
+      expect(messages).toHaveLength(3);
+      expect(messages[2]?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
+      expect(messages[2]?.provider).toBe("openclaw");
+      expect(messages[2]?.model).toBe("delivery-mirror");
+      expect(messages[2]?.content?.[0]?.text).toBe("Repeated answer");
+    }
+  });
+
   it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
     await writeTranscriptStore();
     const toolCallId = "call_maniple_list";

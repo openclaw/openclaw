@@ -1,6 +1,7 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -30,6 +31,7 @@ import {
   adoptUpdateCampaignMock,
   startManagedServiceUpdateHandoffMock,
   transferManagedServiceUpdateHandoffMock,
+  cancelManagedServiceUpdateHandoffMock,
   claimManagedServiceUpdateHandoffMock,
   sendGatewayLifecycleNoticeMock,
   resolveGatewayLifecycleNoticeRouteMock,
@@ -420,6 +422,33 @@ describe("update.run restart scheduling", () => {
       }),
     );
   });
+  it("cancels foreground parking when its accepted notice cannot be persisted", async () => {
+    sentinelState.restartSentinelWriteError = new Error("state database unavailable");
+    const payload = await captureUpdateRunPayload();
+    expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
+    expect(payload).toMatchObject({ ok: false, sentinel: { persisted: false } });
+    const run = getUpdateRun(payload!.runId);
+    expect(run).toMatchObject({
+      status: "failed",
+      reason: "managed-service-handoff-failed",
+    });
+    expect(run?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "requested",
+        status: "failed",
+        failureFacts: [
+          expect.objectContaining({
+            check: "managed-service",
+            code: "Error",
+            errorName: "Error",
+            message: "state database unavailable",
+          }),
+          expect.objectContaining({ code: "handoff-payload-failed" }),
+        ],
+      }),
+    );
+  });
+
   it.each([
     { supervisor: "launchd", restartDelayMs: 0, expectedDelayMs: 0 },
     { supervisor: "systemd", restartDelayMs: 500, expectedDelayMs: 500 },
