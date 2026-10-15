@@ -623,6 +623,28 @@ describe("Browser panel stream ownership", () => {
     },
   );
 
+  it("asks again for a refused panel size after the stream reconnects", async () => {
+    const { controller, calls } = setup();
+    controller.handleViewportResize(640, 480);
+    const socket = await start(controller);
+    const resizes = () =>
+      calls("/act").filter(
+        ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
+      );
+    // The browser accepts each resize but keeps its 100 × 100 page: the panel stops asking.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(resizes()).toHaveLength(4);
+
+    // A restarted browser behind the reconnected stream gets a fresh request.
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(10_000);
+    sockets[1]!.receive(screencastFrame());
+    await flush();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resizes()).toHaveLength(5);
+    expect(resizes()[4]?.[1]).toMatchObject({ body: { width: 640, height: 480 } });
+  });
+
   it("negotiates pixel density and restarts only after a large debounced width change", async () => {
     const { controller, host, calls } = setup();
     vi.stubGlobal("devicePixelRatio", 2);

@@ -294,6 +294,10 @@ export class BrowserPanelController implements PanelLifecycleController {
     return this.viewport.observedViewportSize;
   }
 
+  forgetViewportResize(): void {
+    this.viewport.forgetResize();
+  }
+
   handleViewportResize(width: number, height: number): void {
     this.viewport.resize(width, height);
     this.stream.resize();

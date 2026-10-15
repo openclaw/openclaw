@@ -20,9 +20,22 @@ type ViewportResize = {
   remoteWidth: number | undefined;
   remoteHeight: number | undefined;
   acknowledged: boolean;
+  /** Earlier requests for this same mismatch; sets the retry backoff. */
+  retries: number;
+  /** Earlier requests for this mismatch that were accepted but never reached the page. */
+  unapplied: number;
+  /** Whether the request failed, as opposed to being accepted. */
+  failed: boolean;
+  /** When the request settled; the retry backoff counts from here. */
+  settledAt: number;
 };
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
+// A failed resize is retried while the mismatch lasts: after 2 s, 4 s, 8 s, ... at most 30 s apart.
+const VIEWPORT_RETRY_BASE_MS = 2_000;
+const VIEWPORT_RETRY_MAX_MS = 30_000;
+// An accepted resize the page never shows is retried this often, then treated as a refusal.
+const VIEWPORT_UNAPPLIED_RETRIES = 3;
 const MIN_VIEWPORT_DIMENSION = 100;
 const MAX_VIEWPORT_DIMENSION = 8192;
 
@@ -32,12 +45,20 @@ export class BrowserPanelViewportController {
   private lastResize: ViewportResize | null = null;
   private resizing = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly controller: BrowserPanelViewportHost) {}
 
   invalidate(): void {
     clearTimeout(this.timer);
     this.timer = undefined;
+    this.forgetResize();
+  }
+
+  /** Forgets earlier requests, e.g. when a reconnected stream may serve a restarted browser. */
+  forgetResize(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     this.lastResize = null;
   }
 
@@ -80,6 +101,9 @@ export class BrowserPanelViewportController {
   }
 
   private syncViewport(): void {
+    // Only a pending retry of an unchanged mismatch keeps this timer; every other outcome drops it.
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     const targetId = this.controller.activeTargetId;
     const observed = this.observedViewportSize;
     const view = this.controller.view;
@@ -115,7 +139,11 @@ export class BrowserPanelViewportController {
       return;
     }
     const previous = this.lastResize;
-    // Suppress an unchanged refusal, not a later resize by another browser user.
+    let retries = 0;
+    let unapplied = 0;
+    // The page still shows the size this same request saw. Retry a failed request with backoff
+    // while the mismatch lasts. Retry an accepted one only a few times: a browser that refuses
+    // the size keeps accepting it, and repeating it for every frame would be a request loop.
     if (
       previous?.targetId === targetId &&
       !previous.acknowledged &&
@@ -124,21 +152,46 @@ export class BrowserPanelViewportController {
       previous.remoteWidth === remoteWidth &&
       previous.remoteHeight === remoteHeight
     ) {
-      return;
+      unapplied = previous.unapplied + (previous.failed ? 0 : 1);
+      if (unapplied > VIEWPORT_UNAPPLIED_RETRIES) {
+        return;
+      }
+      const backoff = Math.min(
+        VIEWPORT_RETRY_MAX_MS,
+        VIEWPORT_RETRY_BASE_MS * 2 ** previous.retries,
+      );
+      const wait = previous.settledAt + backoff - Date.now();
+      if (wait > 0) {
+        // A static page sends no frames, so the retry cannot wait for the next one.
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = undefined;
+          this.schedule();
+        }, wait);
+        return;
+      }
+      retries = previous.retries + 1;
     }
-    const request = {
+    const request: ViewportResize = {
       targetId,
       width,
       height,
       remoteWidth,
       remoteHeight,
       acknowledged: false,
+      retries,
+      unapplied,
+      failed: false,
+      settledAt: Date.now(),
     };
     this.lastResize = request;
     // Invalidation retires observations, but an issued resize still has to settle.
     this.resizing = true;
     void this.controller
       .runAction((client) => resizeBrowserViewport(client, request))
+      .then((accepted) => {
+        request.failed = !accepted;
+        request.settledAt = Date.now();
+      })
       .finally(() => {
         this.resizing = false;
         this.schedule();
