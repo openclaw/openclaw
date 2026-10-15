@@ -6,6 +6,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
+import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
+import { createRemoteShellSandboxBackend } from "./sandbox/remote-shell-backend.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 
 const run = vi.hoisted(() => vi.fn());
@@ -54,6 +56,7 @@ function sandboxFixture(source = "openclaw-managed") {
     id: "fixture",
     runtimeId: "caller-sandbox",
     runtimeLabel: "Caller sandbox",
+    capabilities: { readOnlyResourceMounts: true },
     workdir: "/guest/repo",
     buildExecSpec: build,
     runShellCommand: vi.fn(),
@@ -103,6 +106,53 @@ it("exposes only the selected installed skill inside the actual protected sandbo
   })(() => {});
   expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
 });
+
+it("withholds protected installations on the SSH backend's mutable upload view", async () => {
+  const fixture = sandboxFixture();
+  fixture.sandbox.backend = await createRemoteShellSandboxBackend(
+    {
+      sessionKey: "review-fixture",
+      scopeKey: "review-fixture",
+      workspaceDir: fixture.sandbox.workspaceDir,
+      agentWorkspaceDir: fixture.sandbox.agentWorkspaceDir,
+      cfg: resolveSandboxConfigForAgent({
+        agents: {
+          defaults: {
+            sandbox: {
+              backend: "ssh",
+              workspaceAccess: "none",
+              ssh: { target: "unused", workspaceRoot: "/remote" },
+            },
+          },
+        },
+      }),
+    },
+    {
+      createSession: async () => {
+        throw new Error("No transport should run");
+      },
+      preprovisionedWorkdir: { runtimeId: "review-fixture", remoteWorkspaceDir: "/guest/repo" },
+    },
+  );
+  const capability = preparePluginToolExecutionCapabilities({
+    sandbox: fixture.sandbox,
+    skillsSnapshot: fixture.snapshot,
+  })(() => {});
+  expect(capability.sandbox?.installedSkillRoots).toEqual({});
+});
+
+it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
+  "withholds a protected installation hidden by tmpfs at %s",
+  (overlay) => {
+    const fixture = sandboxFixture();
+    fixture.sandbox.docker.tmpfs = [`${overlay}:rw`];
+    const capability = preparePluginToolExecutionCapabilities({
+      sandbox: fixture.sandbox,
+      skillsSnapshot: fixture.snapshot,
+    })(() => {});
+    expect(capability.sandbox?.installedSkillRoots).toEqual({});
+  },
+);
 
 it("refuses a retained command if invocation closes during backend preparation", async () => {
   const fixture = sandboxFixture();

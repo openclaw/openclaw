@@ -31,6 +31,9 @@ installation or skill library. The sandbox must provide `/usr/bin/python3` and
 a protected, read-only copy of that selected package. A repository-local skill
 named `autoreview` does not qualify. The tool is unavailable when those bindings
 or the calling user's model authority are absent.
+The backend must enforce read-only resource mounts; SSH sandbox file uploads do
+not qualify. Mounts or tmpfs overlays that replace the selected package also make
+it unavailable.
 
 The canonical skill discovers the enabled tool and calls it at its required
 checkpoint. If the tool is unavailable, enable the narrow capability or repair

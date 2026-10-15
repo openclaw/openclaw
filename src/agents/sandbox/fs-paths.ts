@@ -13,7 +13,11 @@ import {
   normalizeContainerPathCore,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import { resolveSandboxMountSelection, resolveSandboxBindMounts } from "./workspace-mounts.js";
+import {
+  resolveSandboxMountSelection,
+  resolveSandboxBindMounts,
+  resolveSandboxTmpfsMounts,
+} from "./workspace-mounts.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -44,6 +48,43 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     writable: !mount.readOnly,
     source: mount.source,
   }));
+}
+
+/** Select an unchanged read-only subtree, including the container's overlay precedence. */
+export function resolveProtectedSandboxDirectory(
+  sandbox: SandboxFsBridgeContext,
+  hostDirectory: string,
+): string | null {
+  const mounts = buildSandboxFsMounts(sandbox);
+  const containerOnlyMounts = resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map(
+    (mount) => mount.containerPath,
+  );
+  let resolved: SandboxResolvedFsPath;
+  try {
+    resolved = resolveSandboxFsPathWithMounts({
+      filePath: hostDirectory,
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+      containerOnlyMounts,
+    });
+  } catch {
+    // Unmapped or container-only sources cannot establish installation provenance.
+    return null;
+  }
+  if (
+    resolved.writable ||
+    resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !==
+      resolveSandboxHostPathViaExistingAncestor(hostDirectory) ||
+    [...mounts.map((mount) => mount.containerRoot), ...containerOnlyMounts].some(
+      (root) =>
+        root !== resolved.containerPath && isPathInsideContainerRoot(resolved.containerPath, root),
+    )
+  ) {
+    return null;
+  }
+  return resolved.containerPath;
 }
 
 export function resolveWritableSandboxBindHostRoots(

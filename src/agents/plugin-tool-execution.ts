@@ -12,10 +12,10 @@ import {
 import { parseModelRef } from "./model-selection-normalize.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
+import { resolveProtectedSandboxDirectory } from "./sandbox/fs-paths.js";
 import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
 import { shellEscape } from "./sandbox/remote-shell-command.js";
 import type { SandboxContext } from "./sandbox/types.js";
-import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import { canonicalizePath } from "./utils/paths.js";
 
@@ -47,12 +47,7 @@ export function preparePluginToolExecutionCapabilities(params: {
     ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
     : null;
   const installedSkillRoots: Record<string, string> = {};
-  if (sandbox?.backend) {
-    const mounts = resolveSandboxMountSelection({
-      ...sandbox,
-      workdir: sandbox.containerWorkdir,
-      binds: sandbox.docker.binds,
-    }).mounts;
+  if (sandbox && backend?.capabilities?.readOnlyResourceMounts) {
     for (const skill of params.skillsSnapshot?.resolvedSkills ?? []) {
       if (
         !["openclaw-managed", "openclaw-library", "openclaw-bundled"].includes(skill.source) ||
@@ -67,32 +62,9 @@ export function preparePluginToolExecutionCapabilities(params: {
       if (!usage) {
         continue;
       }
-      const mount = mounts
-        .filter((entry) => {
-          const relative = path.relative(entry.hostPath, usage.readPath);
-          return (
-            relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-          );
-        })
-        .toSorted((left, right) => right.hostPath.length - left.hostPath.length)[0];
-      if (mount?.readOnly) {
-        const root = path.posix.dirname(
-          path.posix.join(
-            mount.containerPath,
-            path.relative(mount.hostPath, usage.readPath).split(path.sep).join("/"),
-          ),
-        );
-        const shadowed = mounts.some(
-          (other) =>
-            other !== mount &&
-            (other.containerPath === root ||
-              other.containerPath.startsWith(`${root}/`) ||
-              (root.startsWith(`${other.containerPath}/`) &&
-                other.containerPath.length > mount.containerPath.length)),
-        );
-        if (!shadowed) {
-          installedSkillRoots[skill.name] = root;
-        }
+      const root = resolveProtectedSandboxDirectory(sandbox, path.dirname(usage.readPath));
+      if (root) {
+        installedSkillRoots[skill.name] = root;
       }
     }
   }

@@ -14,6 +14,11 @@ const selectedModel = {
   name: "Review",
   baseUrl: "https://example.invalid/v1",
   reasoning: true,
+  thinkingLevelMap: { high: "provider-high", max: "provider-max" },
+  params: { temperature: 0.2 },
+  authHeader: true,
+  localService: { command: "untrusted-service" },
+  agentRuntime: { id: "untrusted-runtime" },
   input: ["text" as const],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
@@ -151,9 +156,24 @@ it("returns the helper verdict and transfers complete CLI output under fixed hos
     plugins: { allow: [] },
     agents: { entries: { main: { skills: [], contextInjection: "never" } } },
     models: {
-      providers: { fixture: { apiKey: "fixture-private-key", models: [{ id: "review" }] } },
+      providers: {
+        fixture: {
+          apiKey: "fixture-private-key",
+          authHeader: true,
+          models: [
+            {
+              id: "review",
+              thinkingLevelMap: selectedModel.thinkingLevelMap,
+              params: selectedModel.params,
+              agentRuntime: { id: "openclaw" },
+            },
+          ],
+        },
+      },
     },
   });
+  expect(JSON.stringify(test.config())).not.toContain("untrusted-service");
+  expect(JSON.stringify(test.config())).not.toContain("untrusted-runtime");
   await expect(fs.stat(path.dirname(test.home()!))).rejects.toMatchObject({ code: "ENOENT" });
 });
 

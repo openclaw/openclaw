@@ -243,11 +243,14 @@ export function createAutoReviewTool(
                     api: model.api,
                     apiKey,
                     headers: model.headers,
+                    authHeader: model.authHeader,
                     models: [
                       {
                         id: model.id,
                         name: model.name,
                         reasoning: model.reasoning,
+                        thinkingLevelMap: model.thinkingLevelMap,
+                        params: model.params,
                         input: model.input,
                         cost: model.cost,
                         contextWindow: model.contextWindow,
