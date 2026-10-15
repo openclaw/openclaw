@@ -93,12 +93,9 @@ it("keeps observed serving limits through authored overrides and catalog refresh
                 api: "openai-responses",
                 contextWindow: 131_072,
               },
-              ...["missing", "invalid", "zero", "fractional"].map((id) => ({
-                ...defaults,
-                id,
-                name: id,
-                contextWindow: 131_072,
-              })),
+              ...["missing", "invalid", "zero", "fractional"].map((id) =>
+                Object.assign({}, defaults, { id, name: id, contextWindow: 131_072 }),
+              ),
             ],
           },
         },
