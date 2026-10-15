@@ -101,8 +101,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
-    const abortRegistration = prepared.activeRunAbort;
-    const { entry: abortEntry, controller: abortController } = abortRegistration;
+    const { entry: abortEntry, controller: abortController } = prepared.activeRunAbort;
     const operationalRunInstance = prepared.operationalRunInstance;
     const sessionKey = abortEntry?.sessionKey;
     const admittedRunIdentity = abortEntry
@@ -119,7 +118,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
         !leaseActive ||
-        (abortRegistration.registered && !prepared.activeGatewayWorkAdmission.isActive())
+        (prepared.activeRunAbort.registered && !prepared.activeGatewayWorkAdmission.isActive())
       ) {
         throw new Error("Agent settlement no longer owns this Gateway run");
       }
@@ -131,7 +130,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
         !leaseActive ||
-        (abortRegistration.registered &&
+        (prepared.activeRunAbort.registered &&
           (!prepared.activeGatewayWorkAdmission.isActive() ||
             !abortEntry ||
             params.context.chatAbortControllers.get(params.runId) !== abortEntry ||
@@ -267,10 +266,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         }
 
         if (prepared.acquireWorkspaceModelRuntime) {
-          const entry = params.sessionEntry;
+          let entry = params.sessionEntry;
           if (!entry || !params.resolvedSessionKey || entry.sessionId !== abortEntry?.sessionId) {
             throw new Error("Session changed before preparing its worktree.");
           }
+          params.sessionEntry = entry = { ...entry };
           await prepareSessionWorkspaceForRun({
             entry,
             cfg: params.cfgForAgent ?? params.cfg,
