@@ -19,7 +19,8 @@ vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => {
   throw new Error("trace_events must not load in a worker");
 });
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => "/fixture/openclaw",
 }));
 
