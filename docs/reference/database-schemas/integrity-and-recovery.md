@@ -668,10 +668,12 @@ session validation once instead of reusing the original identity receipt.
 
 ## Planner statistics maintenance
 
-The shared-state writer refreshes SQLite planner statistics once during its
+The shared-state writer maintains SQLite planner statistics once during its
 30-minute WAL maintenance pass, after a successful checkpoint. It uses
-`PRAGMA analysis_limit=1000; ANALYZE main;` under the existing writer admission
-and transaction authority, with no busy wait. Contention skips that attempt;
+`PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
+admission and transaction authority, with no busy wait. SQLite analyzes only
+tables with missing or stale statistics, including tables this maintenance
+connection has not queried. Contention skips that attempt;
 later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
@@ -682,8 +684,9 @@ retention, and schema versions are unchanged. Updates and rollback require no
 migration. Existing read snapshots remain intact. Newly opened readers use the
 latest statistics; retained connections can keep older selectivity after later
 refreshes until their normal retirement. This policy does not add recurring
-analysis to agent databases; Doctor's stopped-writer media maintenance continues
-using the same bounded statistics primitive.
+analysis to agent databases; Doctor's stopped-writer same-version media repair
+uses the same bounded statistics primitive.
+Modern version migrations leave unrelated planner statistics unchanged.
 
 ## Troubleshooting
 

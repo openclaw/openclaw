@@ -99,10 +99,10 @@ export function getProviderOwnerIndex(registry: PluginManifestRegistry): Provide
     }
   }
   for (const map of [providers, cliBackends]) {
-    for (const ids of map.values()) {
-      // Lists are private until publication; sort in place before freezing.
-      // eslint-disable-next-line unicorn/no-array-sort
-      Object.freeze(ids.sort((a, b) => a.localeCompare(b)));
+    for (const [ref, ids] of map) {
+      const sorted = ids.toSorted((a, b) => a.localeCompare(b));
+      Object.freeze(sorted);
+      map.set(ref, sorted);
     }
   }
   const index = { providers, refs: new Map([...cliBackends, ...providers]) };

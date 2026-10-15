@@ -543,7 +543,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     ),
     resolvedApiKey: resolvedAttemptApiKey,
     authProfileId: runtime.lastProfileId,
-    authProfileIdSource: explicitAuthProfile ? "user" : "auto",
+    authProfileIdSource: params.authProfileBinding
+      ? params.authProfileIdSource
+      : explicitAuthProfile
+        ? "user"
+        : "auto",
+    authProfileBinding: params.authProfileBinding,
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,

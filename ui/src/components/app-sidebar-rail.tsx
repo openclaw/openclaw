@@ -451,9 +451,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages.map((row) =>
-          restoreSnapshotSession(row, host.getRouteSessionKey()),
-        )
+      ? host.sidebarSnapshot.pages
+          .filter((row) => !row.archived)
+          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           host.getSessionNavigationState().toSidebarSession(row),
         ),
