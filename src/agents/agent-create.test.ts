@@ -248,7 +248,7 @@ describe("createAgent", () => {
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
   });
 
-  it("accepts a complete staged entry", async () => {
+  it("publishes guided staging and its new agent in one conditional transform", async () => {
     const result = await createAgent({
       entry: {
         id: "researcher",
@@ -257,31 +257,6 @@ describe("createAgent", () => {
         agentDir: "/tmp/staged-agent",
         model: "openai/gpt-5.5",
         identity: { name: "Researcher", emoji: "🔎" },
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "created",
-      agentId: "researcher",
-      workspace: "/tmp/staged-work",
-      agentDir: "/tmp/staged-agent",
-    });
-    expect(mocks.persisted).toMatchObject({
-      agents: {
-        entries: {
-          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
-        },
-      },
-    });
-    expect(mocks.persisted.agents).not.toHaveProperty("list");
-  });
-
-  it("publishes guided staging and its new agent in one conditional transform", async () => {
-    const result = await createAgent({
-      entry: {
-        id: "researcher",
-        name: "Researcher",
-        workspace: "/tmp/staged-work",
       },
       stagedConfig: {
         writeSnapshot: { snapshot: createTestConfigSnapshot({}), writeOptions: {} },
@@ -297,16 +272,27 @@ describe("createAgent", () => {
       },
     });
 
-    expect(result).toMatchObject({ status: "created", agentId: "researcher" });
+    expect(result).toMatchObject({
+      status: "created",
+      agentId: "researcher",
+      workspace: "/tmp/staged-work",
+      agentDir: "/tmp/staged-agent",
+    });
     if (result.status === "error") {
       throw new Error(result.message);
     }
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).toMatchObject({
-      agents: { entries: { main: expect.any(Object), researcher: expect.any(Object) } },
+      agents: {
+        entries: {
+          main: expect.any(Object),
+          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
+        },
+      },
       channels: { telegram: { enabled: true } },
     });
     expect(result.config).toEqual(mocks.persisted);
+    expect(mocks.persisted.agents).not.toHaveProperty("list");
   });
 
   it("rejects guided staging whose original revision no longer owns creation", async () => {
