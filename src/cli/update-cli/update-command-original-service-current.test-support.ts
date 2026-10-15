@@ -49,6 +49,7 @@ type Fixture = {
     nativeInstall: Mock;
     restart: Mock;
     health: Mock;
+    inspect: Mock;
     readiness: Mock;
   };
 };
@@ -389,37 +390,44 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   });
 
-  it.each(["slow", "generation-change"] as const)(
-    "retained readiness uses current bounded owner: %s",
+  it.each(["healthy", "not-ready", "generation-change"] as const)(
+    "retained readiness observes current bounded owner: %s",
     async (scenario) => {
       const { rootB, before, mocks } = fixture();
       await admitted(async (run) => {
-        const initial = mocks.health.getMockImplementation()!;
-        mocks.health.mockImplementation(async (params) => {
+        const initial = mocks.inspect.getMockImplementation()!;
+        let inspections = 0;
+        mocks.inspect.mockImplementation(async (params) => {
           expect(params.timeoutMs).toBeGreaterThan(3_000);
           const result = await initial(params);
           return {
             ...result,
-            gatewayBootId: scenario === "generation-change" ? "prior-boot" : undefined,
+            gatewayBootId:
+              scenario === "generation-change" && inspections++ === 0
+                ? "prior-boot"
+                : "current-boot",
           };
         });
+        if (scenario === "not-ready") {
+          mocks.readiness.mockResolvedValue({ readyz: 503 });
+        }
         const observation = observeOriginalManagedServiceRuntime(
           { root: rootB, opts: { run }, updateStepTimeoutMs: 40_000 },
           before,
         );
-        if (scenario === "slow") {
+        if (scenario === "healthy") {
           expect(await observation).toMatchObject({ verified: true });
-          expect(mocks.readiness).toHaveBeenCalledWith(
-            expect.objectContaining({
-              attempts: expect.any(Number),
-              probeTimeoutMs: expect.any(Number),
-            }),
-          );
-          expect(mocks.readiness.mock.calls[0]?.[0].probeTimeoutMs).toBeGreaterThan(3_000);
         } else {
           await expect(observation).rejects.toThrow();
         }
-        expect(mocks.health).toHaveBeenCalledOnce();
+        expect(mocks.readiness).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ attempts: 1, probeTimeoutMs: expect.any(Number) }),
+        );
+        expect(mocks.readiness.mock.calls[0]?.[0].probeTimeoutMs).toBeGreaterThan(3_000);
+        expect(mocks.inspect).toHaveBeenCalledTimes(3);
+        expect(mocks.health).not.toHaveBeenCalled();
+        expect(before.stopped).toBe(false);
+        expect(mocks.nativeRestart).not.toHaveBeenCalled();
       });
     },
   );
