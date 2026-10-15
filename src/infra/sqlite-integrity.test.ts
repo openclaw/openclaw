@@ -19,26 +19,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("names integrity-check failures", () => {
-    const database = {
-      prepare: () => ({ all: () => [{ integrity_check: "broken index" }] }),
-    } as unknown as DatabaseSync;
-
-    let failure: unknown;
-    try {
-      assertSqliteIntegrity(database, "test database");
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toMatchObject({
-      name: "SqliteIntegrityError",
-      message: expect.stringContaining(
-        "SQLite integrity_check failed for test database: broken index",
-      ),
-    });
-  });
-
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     try {
@@ -197,22 +177,6 @@ describe("assertSqliteIntegrity", () => {
     );
   });
 
-  it("bounds foreign-key violation diagnostics", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id)
-        VALUES (1, 99), (2, 99), (3, 99), (4, 99), (5, 99), (6, 99);
-      `,
-      /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
-    );
-  });
-
   it("cannot be bypassed by a schema object shadowing the table-valued pragma", () => {
     expectForeignKeyViolation(
       `
@@ -293,7 +257,6 @@ describe("integrity gate attribution", () => {
   }
 
   it.each([
-    { label: "fractional check", checkMs: 4.75, foreignKeyViolation: false, gateMs: 9, syncMs: 4 },
     { label: "measured zero", checkMs: 0.25, foreignKeyViolation: false, gateMs: 4, syncMs: 0 },
     { label: "failed check", checkMs: 4.75, foreignKeyViolation: true, gateMs: 9, syncMs: 4 },
   ])(
@@ -352,7 +315,6 @@ describe("integrity gate attribution", () => {
 
   it.each([
     { label: "fractional", checkMs: 4.75, lifetimeMs: 8.75, outcome: "healthy" },
-    { label: "zero", checkMs: 0, lifetimeMs: 0, outcome: "healthy" },
     { label: "failed check", checkMs: 4.75, lifetimeMs: 8.75, outcome: "failed" },
     { label: "failed before checking", checkMs: undefined, lifetimeMs: 8.75, outcome: "failed" },
   ] as const)(

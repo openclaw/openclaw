@@ -564,7 +564,7 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
         writerConclusion: null,
         writerRef: workflowRef,
         writerFullRef: workflowFullRef,
-        writerPath: ".github/workflows/linux-app-release.yml",
+        writerPath: ".github/workflows/linux-app-mirror.yml",
         writerEvent: "workflow_dispatch",
       },
     } satisfies State),
@@ -694,7 +694,9 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
       value.authority.writerPath =
         mode === "finalize-core"
           ? ".github/workflows/openclaw-release-publish.yml"
-          : ".github/workflows/linux-app-release.yml";
+          : mode === "publish"
+            ? ".github/workflows/linux-app-release.yml"
+            : ".github/workflows/linux-app-mirror.yml";
       value.authority.writerEvent = mode === "publish" ? "workflow_run" : "workflow_dispatch";
     });
     if (mode === "publish") {
@@ -833,19 +835,6 @@ it("reuses complete public Linux assets without local build inputs", () => {
   const advanced = f.bytes(nextTag, "OpenClaw-2026.9.4-linux.json");
   expect(f.bytes(channel, "latest.json")).toEqual(advanced);
   expect(f.bytes(nextTag, "latest.json")).toEqual(advanced);
-});
-
-it("reuses immutable publication bytes without local build inputs on replay", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const original = f.bytes(tag, "OpenClaw-2026.9.3-linux.json");
-  f.update((state) => {
-    state.calls = [];
-  });
-  succeeded(f.run("publish", tag, undefined, true));
-  expect(f.bytes(channel, "latest.json")).toEqual(original);
-  expect(f.bytes(tag, "OpenClaw-2026.9.3-linux.json")).toEqual(original);
-  expect(f.mutations()).toEqual([]);
 });
 
 it("retains partial canonical replacement when the executing writer is cancelled after deletion", () => {

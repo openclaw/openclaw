@@ -62,9 +62,12 @@ is needed.
 
 You can also choose **Meta → Muse Code** in the **Provider Access** connection
 dialog. It signs in, verifies access, and enables the Muse runtime without
-changing the active model. Select **Muse Spark 1.3** separately in the agent's
-**Model** dropdown when you want to use it. Use **AI Setup** to connect and select
-a model in one flow.
+changing the active model. The success dialog confirms **Muse Code is connected**
+and names the model ready for your agent using the Gateway's provider catalog,
+without waiting for a catalog refresh in the browser.
+Choose **Start a new chat with Muse Spark 1.3** to use that model for a new chat,
+or **Close** to stay on Provider Access. Use **AI Setup** to connect and select a
+default model in one flow.
 
 For manual configuration, route one Meta model through the Muse runtime:
 
@@ -105,15 +108,30 @@ The credential stays in Muse Code's own credential store; OpenClaw does not
 copy it into an auth profile. This sign-in authorizes the Muse runtime, not
 the direct Meta API route.
 
+Keep the sign-in dialog open while it shows **Waiting for approval in your
+browser…**. The device code and **Open sign-in** link remain available during
+the wait. After approval, OpenClaw checks access before showing **Muse Code is
+connected**; you can then start a new chat or close the dialog.
+
 For Muse-owned sign-ins, OpenClaw checks that Muse can fetch the candidate model
 from Meta's live catalog. It does not run a model turn or expose native tools
 during verification. The same check runs again before activation is committed.
+The read-only Muse host is reused while its credential binding stays unchanged;
+the pre-commit check still requests the live catalog and rechecks caller authority.
+Canceling sign-in closes its verification host, including during startup.
 **AI Setup** selects that model; **Provider Access** preserves the active model.
 
 Gateway-driven sign-in always uses Muse's file credential backend under the
 OpenClaw state directory (`muse/muse/auth.json`). It needs one browser approval
 and does not access the macOS Keychain. Verification and chat use that same
 credential directory when its credential file exists.
+
+Before the first sign-in for an agent, OpenClaw asks you to accept Muse Code's
+native permissions. Continuing remembers this choice for that agent, so future
+Muse chats do not ask again. Muse runs on the Gateway host with its own tools;
+OpenClaw's optional native tool and sandbox restrictions do not apply to it.
+OpenClaw-hosted tools retain their policy checks. Revoke consent by removing
+`muse` from the agent's **Remembered native runtime permissions** setting.
 
 Alternatively, run `muse login` on the Gateway host and approve the browser
 code, or store an API key with `muse auth set`. When no Gateway-managed credential
@@ -196,10 +214,14 @@ expired, or cancelled approval sends a deny choice, and so does an approval
 with no surface to show it. Each approval waits up to two minutes. The harness
 never grants persistent approvals.
 
-The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox,
-workspace-only file access, or a restricted plugin tool policy. Muse runs on
-the Gateway host and cannot enforce those boundaries. Select the `openclaw`
-runtime for those agents or sessions.
+The harness also refuses an attempt when OpenClaw requires an OpenClaw sandbox
+or workspace-only file access. Muse runs on the Gateway host and cannot enforce
+those boundaries. Select the `openclaw` runtime for those agents or sessions.
+
+A conversation tool policy (for example `tools.deny`) does not block Muse once
+you accept the native-runtime prompt. Muse does not receive OpenClaw's agent
+tools, so the policy has nothing to filter, and its own tools follow the
+approval mode above. Without that consent, OpenClaw refuses the turn.
 
 A refused attempt fails before any `muse` process starts, with an error that
 names the setting.

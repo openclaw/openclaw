@@ -31,7 +31,6 @@ export async function completeTerminalEffects(
     mutated: boolean;
     sessionSuperseded: boolean;
     suppressSessionEffects: boolean;
-    terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
     loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
@@ -41,14 +40,17 @@ export async function completeTerminalEffects(
 ): Promise<void> {
   const params = context.options;
   const { completeParams, completionReason, mutated } = args;
-  let terminalGeneration = args.terminalGeneration;
   let entry = args.entry;
   if (resolveSubagentChildAuthority(entry).status === "mismatch") {
     return;
   }
   let { sessionSuperseded, suppressSessionEffects } = args;
+  const sessionEffects = context.getSessionEffects(entry);
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
+    if (
+      !context.isTerminalExecutionCurrent(entry) ||
+      context.getSessionEffects(entry) !== sessionEffects
+    ) {
       return false;
     }
     args.assertCurrent();
@@ -72,7 +74,6 @@ export async function completeTerminalEffects(
         draft.execution = { ...draft.execution, suppressSessionEffects: true };
       },
     });
-    terminalGeneration = context.bumpTerminalGeneration(entry);
   };
   const refreshSessionEffectsSuppression = async () => {
     const suppressed = await context.shouldSuppressSessionEffects(entry);

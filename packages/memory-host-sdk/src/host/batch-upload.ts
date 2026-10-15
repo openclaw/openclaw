@@ -2,6 +2,7 @@ import { buildBatchHeaders, type BatchHttpClientConfig } from "./batch-utils.js"
 import { resolveEmbeddingEndpointUrl } from "./embeddings-remote-client.js";
 import { formatErrorMessage } from "./error-utils.js";
 import { hashText } from "./hash.js";
+import { createProviderHttpError } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import {
   readMemoryHostResponseTextSnippet,
@@ -31,14 +32,21 @@ export async function uploadBatchJsonlFile(params: {
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl ?? "", "files"),
     ssrfPolicy: params.client.ssrfPolicy,
     fetchImpl: params.client.fetchImpl,
+    resolveRequestHeaders: params.client.resolveRequestHeaders,
     signal: params.signal,
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.client, { json: false }),
       body: form,
     },
-    onResponse: async (fileRes) => {
+    onResponse: async (fileRes, requestHeaders) => {
       if (!fileRes.ok) {
+        if (params.client.resolveRequestHeaders) {
+          throw await createProviderHttpError(fileRes, params.errorPrefix, {
+            requestHeaders,
+            signal: params.signal,
+          });
+        }
         const text = await readMemoryHostResponseTextSnippet(fileRes, { signal: params.signal });
         throw new Error(`${params.errorPrefix}: ${fileRes.status} ${formatErrorMessage(text)}`);
       }

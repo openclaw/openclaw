@@ -464,6 +464,23 @@ describe("Muse native MSP harness", () => {
     }
   });
 
+  it("runs a consented turn whose conversation tool policy is restricted", async () => {
+    const { harness, params } = setup();
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    try {
+      await harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true });
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.map((request) => request.method)).toContain("turn/start");
+    } finally {
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns the terminal observer's unresolved native tool error", async () => {
     const { harness, params } = setup();
     const lastToolError = { toolName: "read_file", error: "file unavailable" };
@@ -886,9 +903,19 @@ describe("Muse native MSP harness", () => {
       }
       try {
         await harness.verifySetup(verification);
+        await harness.verifySetup(verification);
         await harness.loadModelCatalog(scope);
         expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
+        const initialRequests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
+        expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(
+          3,
+        );
         vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
+        await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
         await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
         await expect(harness.loadModelCatalog(scope)).rejects.toThrow("authenticate");
         expect(harness.readModelCatalogReadiness(verification)).toBeUndefined();
@@ -910,12 +937,9 @@ describe("Muse native MSP harness", () => {
     },
   );
 
-  it("rejects sandbox and restricted-tool attempts before starting native work", async () => {
+  it("rejects sandbox and workspace-only attempts before starting native work", async () => {
     const { harness, params, bindings } = setup();
     try {
-      await expect(
-        harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true }),
-      ).rejects.toThrow("cannot enforce");
       await expect(harness.runAttempt({ ...params, requireWorkspaceOnly: true })).rejects.toThrow(
         "cannot enforce",
       );

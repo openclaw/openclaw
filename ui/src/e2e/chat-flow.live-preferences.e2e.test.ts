@@ -6,7 +6,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Live chat preferences" });
 
 suite.define(() => {
-  it("saves model and reasoning while the admitted reply continues", async () => {
+  it("saves model, reasoning, and speed while the admitted reply continues", async () => {
     await suite.withPage({ viewport: { width: 1200, height: 853 } }, async ({ page }) => {
       const key = "agent:main:live-preferences";
       const levels = [
@@ -106,9 +106,14 @@ suite.define(() => {
       // The mounted slider is enabled before the popup can receive keyboard focus.
       await expect.poll(() => slider.isVisible()).toBe(true);
       await expect.poll(() => slider.isEnabled()).toBe(true);
-      expect(await main.locator("[data-chat-speed-option=on]").isDisabled()).toBe(true);
+      const speed = main.locator("[data-chat-speed-option=on]");
+      expect(await speed.isEnabled()).toBe(true);
+      await speed.click();
+      const speedPatch = await gateway.waitForRequest("sessions.patch", { after: 1 });
+      expect(speedPatch.params).toMatchObject({ key, fastMode: true });
+      await speed.and(main.locator('[aria-checked="true"]')).waitFor({ state: "visible" });
       await slider.press("End");
-      const thinking = await gateway.waitForRequest("sessions.patch", { after: 1 });
+      const thinking = await gateway.waitForRequest("sessions.patch", { after: 2 });
       expect(thinking.params).toMatchObject({ key, thinkingLevel: "high" });
       await emitText(
         "The first reply is still running. Its next chunk arrived after the settings changed.",
@@ -119,6 +124,11 @@ suite.define(() => {
         .waitFor();
       await expect.poll(() => model.textContent()).toContain("Example B");
       await expect.poll(() => effort.textContent()).toContain("High");
+      expect(await gateway.getSessionRow(key)).toMatchObject({
+        model: "example/example-b",
+        thinkingLevel: "high",
+        fastMode: true,
+      });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       expect(await page.getByRole("button", { name: "Stop generating", exact: true }).count()).toBe(

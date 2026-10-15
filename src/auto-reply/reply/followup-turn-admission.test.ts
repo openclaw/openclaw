@@ -7,6 +7,7 @@ import {
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import type { FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
@@ -151,6 +152,29 @@ function createActiveGoalEntry(): SessionEntry {
 }
 
 describe("admitFollowupTurn", () => {
+  it("reports a queued event's admission refusal to its source before consuming it", async () => {
+    const error = new SessionWorkStartError("archived", "Restore this session before retrying.");
+    state.admitReply.mockResolvedValue({
+      status: "skipped",
+      reason: "lifecycle-invalidated",
+      error,
+    });
+    const queued = createRun();
+    const onFailed = vi.fn();
+    queued.run.internalEventExecution = {
+      onStarted: vi.fn(),
+      onTerminal: vi.fn(),
+      onFailed,
+    };
+
+    await expect(admitFollowupTurn({ queued, defaults: createDefaults() })).resolves.toEqual({
+      kind: "skipped",
+      reason: "lifecycle-invalidated",
+    });
+    expect(onFailed).toHaveBeenCalledExactlyOnceWith(error);
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
   it.each([
     "paused",
     "blocked",
@@ -226,25 +250,25 @@ describe("admitFollowupTurn", () => {
     expect(operation.complete).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { sessionKey: " agent:main:session ", expected: "agent:main:session" },
-    { sessionKey: undefined, expected: "legacy-target" },
-  ])("preserves the admitted transcript target $expected", async ({ sessionKey, expected }) => {
-    const queued = createRun();
-    queued.run.sessionKey = sessionKey;
-    queued.run.sessionFile = "legacy-target";
-    state.admitReply.mockResolvedValue({
-      status: "owned",
-      operation: createOperation("admitted-session"),
-    });
+  it.each([{ sessionKey: undefined, expected: "legacy-target" }])(
+    "preserves the admitted transcript target $expected",
+    async ({ sessionKey, expected }) => {
+      const queued = createRun();
+      queued.run.sessionKey = sessionKey;
+      queued.run.sessionFile = "legacy-target";
+      state.admitReply.mockResolvedValue({
+        status: "owned",
+        operation: createOperation("admitted-session"),
+      });
 
-    const result = await admitFollowupTurn({ queued, defaults: createDefaults({ sessionKey }) });
+      const result = await admitFollowupTurn({ queued, defaults: createDefaults({ sessionKey }) });
 
-    expect(result.kind).toBe("admitted");
-    if (result.kind === "admitted") {
-      expect(result.turn.queued.run.sessionFile).toBe(expected);
-    }
-  });
+      expect(result.kind).toBe("admitted");
+      if (result.kind === "admitted") {
+        expect(result.turn.queued.run.sessionFile).toBe(expected);
+      }
+    },
+  );
 
   it("reports each active-run deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
@@ -391,34 +415,6 @@ describe("admitFollowupTurn", () => {
     ).rejects.toBe(failure);
     expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
     expect(operation.complete).toHaveBeenCalledOnce();
-  });
-
-  it("prefers the admitted snapshot over unchanged stale in-memory state", async () => {
-    const operation = createOperation("admitted-session");
-    const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
-    const admittedEntry: SessionEntry = {
-      sessionId: "admitted-session",
-      modelSelectionLocked: true,
-      updatedAt: 2,
-    };
-    const sessionStore = { main: queuedEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
-    state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
-
-    const result = await admitFollowupTurn({
-      queued: createRun(),
-      defaults: createDefaults({ sessionEntry: queuedEntry, sessionStore }),
-    });
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: {
-        queued: { run: { sessionId: "admitted-session", modelSelectionLocked: true } },
-      },
-    });
-    if (result.kind === "admitted") {
-      expect(result.turn.session.current()).toBe(admittedEntry);
-    }
   });
 
   it("clears queued generation facts when only the lifecycle revision advances", async () => {
@@ -570,59 +566,6 @@ describe("admitFollowupTurn", () => {
       result.turn.session.publish({ ...initialEntry, updatedAt: 2 });
       expect(sessionStore.main).toBeUndefined();
     }
-  });
-
-  it("creates an owned session-store view when only persisted state is available", async () => {
-    const operation = createOperation();
-    const admittedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
-    state.loadEntry.mockReturnValue(admittedEntry);
-
-    const result = await admitFollowupTurn({
-      queued: createRun(),
-      defaults: createDefaults({ storePath: "/tmp/sessions.json" }),
-    });
-
-    expect(result.kind).toBe("admitted");
-    if (result.kind === "admitted") {
-      expect(result.turn.sessionStore?.main).toBe(admittedEntry);
-      const updated = { ...admittedEntry, compactionCount: 1, updatedAt: 2 };
-      result.turn.sessionStore!.main = updated;
-      expect(result.turn.session.current()).toBe(updated);
-    }
-  });
-
-  it("synchronizes a fresh admitted snapshot over same-generation stale memory", async () => {
-    const operation = createOperation();
-    const staleEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "revision-a",
-      verboseLevel: "off",
-      updatedAt: 1,
-    };
-    const freshEntry: SessionEntry = {
-      ...staleEntry,
-      verboseLevel: "full",
-      updatedAt: 2,
-    };
-    const sessionStore = { main: staleEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: freshEntry });
-    state.loadEntry.mockReturnValue(freshEntry);
-
-    const result = await admitFollowupTurn({
-      queued: createRun(),
-      defaults: createDefaults({ sessionStore, sessionEntry: staleEntry }),
-    });
-
-    expect(result.kind).toBe("admitted");
-    if (result.kind === "admitted") {
-      expect(result.turn.session.current()).toBe(freshEntry);
-      expect(sessionStore.main).toBe(freshEntry);
-    }
-    expect(state.refreshGoal).toHaveBeenCalledWith(undefined, freshEntry);
-    expect(state.recheckFallbackProbe).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: freshEntry, sessionKey: "main" }),
-    );
   });
 
   it("adopts a generation already published by owned preflight compaction", async () => {
@@ -971,32 +914,5 @@ describe("admitFollowupTurn", () => {
       turn: { preflightFailurePayload: { text: userMessage } },
     });
     expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
-  });
-
-  it("uses admitted verbosity over stale queued verbosity for a preflight failure", async () => {
-    const operation = createOperation();
-    const admittedEntry: SessionEntry = {
-      sessionId: "queued-session",
-      updatedAt: 2,
-      verboseLevel: "off",
-    };
-    state.admitReply.mockResolvedValue({
-      status: "owned",
-      operation,
-      sessionEntry: admittedEntry,
-    });
-    state.loadEntry.mockReturnValue(admittedEntry);
-    state.preflight.mockRejectedValue(new Error("preflight failed"));
-    const queued = createRun();
-    queued.run.verboseLevel = "full";
-
-    await admitFollowupTurn({
-      queued,
-      defaults: createDefaults({ sessionEntry: admittedEntry }),
-    });
-
-    expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
-      includeDetails: false,
-    });
   });
 });

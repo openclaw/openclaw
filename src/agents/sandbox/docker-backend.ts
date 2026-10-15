@@ -28,6 +28,7 @@ import {
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
+import { bindSandboxInputStager, createSandboxInputStager } from "./input-staging.js";
 import { resolveSandboxContainerOnlyMounts } from "./mount-plan.js";
 import { createSandboxProcessCleanup } from "./process-cleanup.js";
 import type { SandboxRegistryEntry } from "./registry.js";
@@ -122,11 +123,21 @@ async function createContainerSandboxBackend(
     assertCurrent,
     githubIdentity,
   });
-  handle.createFsBridge = ({ sandbox }) =>
-    createSandboxFsBridge({
+  handle.createFsBridge = ({ sandbox }) => {
+    const bridge = createSandboxFsBridge({
       sandbox: { ...sandbox, backend: sandbox.backend ?? handle },
       containerOnlyMounts,
     });
+    bindSandboxInputStager(
+      bridge,
+      createSandboxInputStager({
+        root: params.workspaceDir,
+        bridge,
+        assertCurrent,
+      }),
+    );
+    return bridge;
+  };
   return handle;
 }
 

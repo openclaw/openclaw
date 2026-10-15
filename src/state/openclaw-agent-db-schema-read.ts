@@ -10,16 +10,16 @@ import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import {
-  readExistingAgentSchemaMeta,
-  type ExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-metadata.js";
+import type { ExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 
 export { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 
-export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): number {
-  const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
+export function assertSupportedAgentSchemaVersion(
+  db: DatabaseSync,
+  pathname: string,
+  userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db),
+): number {
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
       "OpenClaw agent database",
@@ -31,17 +31,30 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
   return userVersion;
 }
 
-/** Readers may pass their immediate check; writers reread the version after integrity work. */
+export function hasAgentDatabaseApplicationSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    for (const names of [schema.tables, schema.views, schema.indexes, schema.triggers.keys()]) {
+      for (const name of names) {
+        if (!name.startsWith("sqlite_")) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1").get(),
+  );
+}
+
+/** Persistence gates consume the catalog published by admission or schema maintenance. */
 export function assertCanonicalAgentPersistenceVersion(
   db: DatabaseSync,
   pathname: string,
   userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db),
 ): void {
-  const hasApplicationSchema =
-    userVersion === 0 &&
-    db.prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1").get();
-  const isNewUnownedDatabase =
-    userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
+  const isNewUnownedDatabase = userVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }

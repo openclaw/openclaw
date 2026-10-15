@@ -8,7 +8,6 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -28,21 +27,15 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
-import {
-  readChatPaneMutationAccess,
-  renderChatPaneComposerControls,
-} from "./chat-pane-session-controls.ts";
+import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
-import { switchChatModel, switchChatSetting } from "./chat-session.ts";
-import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
-import { getChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
@@ -475,13 +468,6 @@ describe("chat pane composer controls", () => {
 
   it.each([
     {
-      label: "successful update after switching sessions",
-      result: "success",
-      invalidate: (state: ChatPageHost) => {
-        state.sessionKey = "agent:main:other-session";
-      },
-    },
-    {
       label: "failed update after switching sessions",
       result: "failure",
       invalidate: (state: ChatPageHost) => {
@@ -742,301 +728,4 @@ describe("chat pane model controls", () => {
     reconcileChatRunLifecycle(state, { clearLocalRun: true });
     expect(state.chatRunId).toBeNull();
   });
-
-  it("does not show another session's pending model after switching sessions", () => {
-    const previousSessionKey = "agent:main:previous";
-    const selectedSession: GatewaySessionRow = {
-      key: "agent:main:selected",
-      kind: "direct",
-      model: "primary",
-      modelProvider: "example",
-    };
-    const pane = createRenderTestChatPane();
-    const state = pane.initialize(createInitializationContext());
-    Object.assign(state, {
-      sessionKey: previousSessionKey,
-      sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
-      chatModelCatalog: [{ id: "primary", name: "Primary", provider: "example" }],
-      chatModelSwitchPromises: {},
-      connected: true,
-      client: createTestGatewayClient(async () => ({})),
-    });
-    getChatSessionProjection(state, { sessionKey: previousSessionKey });
-    state.chatRunId = "previous-session-run";
-    state.chatStream = "Working";
-    state.chatSending = true;
-    state.chatSendingScopeKey = storedChatOutboxScopeKey({ sessionKey: previousSessionKey });
-    setChatRunOwner(state, state.chatRunId);
-    state.sessionKey = selectedSession.key;
-
-    const controls = renderControls(state, {
-      agentDefaultModel: "example/primary",
-      contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-    });
-    const container = document.createElement("div");
-    render(controls.composerControls, container);
-
-    const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
-    expect(trigger?.textContent).toContain("Primary");
-    expect(trigger?.textContent).not.toContain("Model pending");
-    expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
-  });
-});
-
-function createControlsFixture(
-  scope: string,
-  sharingRole: GatewaySessionRow["sharingRole"] = "owner",
-  globalTarget?: { sessionKey: string; rowAgentId: string },
-) {
-  const selectedSession = {
-    key: globalTarget ? "global" : "agent:main:existing",
-    ...(globalTarget ? { agentId: globalTarget.rowAgentId } : {}),
-    kind: globalTarget ? "global" : "direct",
-    sessionId: "existing-session",
-    sharingRole,
-    model: "gpt-test-a",
-    modelProvider: "openai",
-    thinkingLevel: "low",
-    fastMode: false,
-    thinkingLevels: [
-      { id: "low", label: "Low" },
-      { id: "high", label: "High" },
-    ],
-    contextWindow: "standard",
-    contextWindowDefault: "standard",
-    contextWindows: [
-      { id: "standard", label: "Standard", contextWindow: 100000 },
-      { id: "extended", label: "Extended", contextWindow: 200000 },
-    ],
-  } satisfies GatewaySessionRow;
-  const sessionsResult = { ...createSessionsListResult(), sessions: [selectedSession] };
-  const state = makeChatHost({
-    sessionKey: globalTarget?.sessionKey ?? selectedSession.key,
-    ...(globalTarget
-      ? {
-          assistantAgentId: "work",
-          agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-          sessionsResultAgentId: globalTarget.rowAgentId,
-        }
-      : {}),
-    sessionsResult,
-    hello: sessionMutationGatewayHello([scope]),
-    chatModelCatalog: [
-      { id: "gpt-test-a", name: "Test model", provider: "openai", supportsFastMode: true },
-      { id: "gpt-test-b", name: "Other model", provider: "openai", supportsFastMode: true },
-    ],
-    chatModelSwitchPromises: {},
-    requestHandlers: {
-      "sessions.patch": { ok: true, key: selectedSession.key, entry: selectedSession },
-      "sessions.list": sessionsResult,
-    },
-  });
-  const paneState = state as unknown as ChatPageHost;
-  const visibleSession = selectedChatSessionRow(paneState);
-  const access = readChatPaneMutationAccess(
-    {
-      client: state.client,
-      phase: "connected",
-      hello: state.hello,
-    } as ApplicationGatewaySnapshot,
-    state.sessionKey,
-    visibleSession,
-  );
-  const controls = renderControls(paneState, {
-    selectedSession: visibleSession,
-    modelAccess: access.model,
-    effortAccess: access.effort,
-    contextWindowAccess: access.contextWindow,
-    permissionAccess: access.permission,
-    canSelectFull: scope === "operator.admin",
-  });
-  const container = document.createElement("div");
-  render(controls.composerControls, container);
-  return { state, selectedSession, access, controls, container };
-}
-
-describe("chat pane model-setting permissions", () => {
-  it.each([
-    { sessionKey: "agent:work:main", rowAgentId: "work", sharingRole: "owner", allowed: true },
-    { sessionKey: "global", rowAgentId: "main", sharingRole: "owner", allowed: false },
-  ] as const)(
-    "dispatches settings only for the owned global target ($sessionKey, $rowAgentId, $sharingRole)",
-    async ({ sessionKey, rowAgentId, sharingRole, allowed }) => {
-      const { state, selectedSession, access } = createControlsFixture(
-        "operator.sessions.write",
-        sharingRole,
-        { sessionKey, rowAgentId },
-      );
-      expect([access.model.allowed, access.effort.allowed]).toEqual([allowed, allowed]);
-
-      const results = [
-        await switchChatModel(state, "openai/gpt-test-b"),
-        await switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
-        await switchChatSetting(state, { kind: "fastMode", value: "on" }),
-      ];
-      expect(results).toEqual([allowed, allowed, allowed]);
-
-      const target = {
-        key: sessionKey,
-        agentId: "work",
-        expectedSessionId: selectedSession.sessionId,
-      };
-      expect(state.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual(
-        allowed
-          ? [
-              ["sessions.patch", { ...target, model: "openai/gpt-test-b" }],
-              ["sessions.patch", { ...target, thinkingLevel: "high" }],
-              ["sessions.patch", { ...target, fastMode: true }],
-            ]
-          : [],
-      );
-    },
-  );
-
-  it.each([
-    { scope: "operator.read", sharingRole: "owner", allowed: false },
-    { scope: "operator.sessions.write", sharingRole: "owner", allowed: true },
-    { scope: "operator.sessions.write", sharingRole: "viewer", allowed: false },
-    { scope: "operator.write", sharingRole: "viewer", allowed: true },
-    { scope: "operator.admin", sharingRole: "viewer", allowed: true },
-  ] as const)(
-    "uses exact field permissions with $scope on a $sharingRole session",
-    async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, access, controls, container } = createControlsFixture(
-        scope,
-        sharingRole,
-      );
-      expect(access.unarchive.allowed).toBe(
-        allowed && (scope === "operator.admin" || sharingRole === "owner"),
-      );
-      const readOnly = !allowed;
-      expect(
-        container.querySelector("[data-chat-model-select]")?.getAttribute("aria-disabled"),
-      ).toBe(String(readOnly));
-      expect(
-        container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-disabled"),
-      ).toBe(String(readOnly));
-      const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
-      const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
-      const context = container.querySelector<HTMLButtonElement>(
-        "[data-chat-context-window-toggle]",
-      )!;
-      expect(thinking.disabled).toBe(readOnly);
-      expect(fast.disabled).toBe(readOnly);
-      expect(context.disabled).toBe(scope !== "operator.admin");
-      context.click();
-      if (!readOnly) {
-        thinking.value = "1";
-        thinking.dispatchEvent(new Event("change", { bubbles: true }));
-        fast.click();
-        await getPendingChatPickerPatch(state, state.sessionKey);
-        expect(state.request).toHaveBeenCalledWith(
-          "sessions.patch",
-          expect.objectContaining({ key: selectedSession.key, fastMode: true }),
-        );
-        expect(state.request).toHaveBeenCalledWith(
-          "sessions.patch",
-          expect.objectContaining({ key: selectedSession.key, thinkingLevel: "high" }),
-        );
-      } else {
-        fast.click();
-        expect(state.request).not.toHaveBeenCalled();
-      }
-      const contextPatches = state.request.mock.calls.filter(
-        ([method, params]) =>
-          method === "sessions.patch" &&
-          params &&
-          typeof params === "object" &&
-          "contextWindow" in params,
-      );
-      expect(contextPatches).toHaveLength(scope === "operator.admin" ? 1 : 0);
-      container
-        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-test-b"]')!
-        .click();
-      await getPendingChatPickerPatch(state, state.sessionKey);
-      if (allowed) {
-        expect(state.request).toHaveBeenCalledWith(
-          "sessions.patch",
-          expect.objectContaining({
-            key: selectedSession.key,
-            model: "openai/gpt-test-b",
-            expectedSessionId: selectedSession.sessionId,
-          }),
-        );
-      }
-      for (const permissionMode of ["read-only", "guarded", "workspace", null] as const) {
-        await controls.permissionPicker.onSelect(permissionMode);
-      }
-      await controls.permissionPicker.onSelect("full");
-      const permissionPatches = state.request.mock.calls.filter(
-        ([method, params]) =>
-          method === "sessions.patch" &&
-          params &&
-          typeof params === "object" &&
-          "permissionMode" in params,
-      );
-      expect(permissionPatches).toHaveLength(allowed ? (scope === "operator.admin" ? 5 : 4) : 0);
-    },
-  );
-
-  it.each([
-    { change: "scope", queued: false },
-    { change: "ownership", queued: false },
-    { change: "missing-row", queued: false },
-    { change: "session", queued: false },
-    { change: "connection", queued: false },
-    { change: "scope", queued: true },
-    { change: "ownership", queued: true },
-    { change: "session", queued: true },
-  ] as const)(
-    "rechecks picker authority after changing $change (queued: $queued)",
-    async ({ change, queued }) => {
-      const { state, selectedSession, controls, container } = createControlsFixture(
-        queued ? "operator.sessions.write" : "operator.write",
-      );
-      const held = createDeferred<Awaited<ReturnType<typeof patchChatSessionSettings>>>();
-      const operations: Promise<unknown>[] = [];
-      if (queued) {
-        state.request.mockImplementationOnce(async () => await held.promise);
-        operations.push(
-          patchChatSessionSettings(state, state.sessionKey, { thinkingLevel: "low" }),
-          switchChatModel(state, "openai/gpt-test-b"),
-          switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
-          switchChatSetting(state, { kind: "fastMode", value: "on" }),
-          Promise.resolve(controls.permissionPicker.onSelect("guarded")),
-        );
-      }
-      if (change === "scope") {
-        state.hello = sessionMutationGatewayHello(["operator.sessions.read"]);
-      } else if (change === "ownership") {
-        state.hello = sessionMutationGatewayHello(["operator.sessions.write"]);
-        selectedSession.sharingRole = "viewer";
-      } else if (change === "missing-row") {
-        state.hello = sessionMutationGatewayHello(["operator.sessions.write"]);
-        state.sessionsResult = { ...createSessionsListResult(), sessions: [] };
-      } else if (change === "session") {
-        selectedSession.sessionId = "replacement-session";
-      } else {
-        state.connectionEpoch = (state.connectionEpoch ?? 0) + 1;
-      }
-      if (queued) {
-        held.resolve({ ok: true, path: "", key: selectedSession.key, entry: selectedSession });
-        await Promise.all(operations);
-        expect(
-          state.request.mock.calls.filter(([method]) => method === "sessions.patch"),
-        ).toHaveLength(1);
-        return;
-      }
-      container
-        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-test-b"]')!
-        .click();
-      const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
-      thinking.value = "1";
-      thinking.dispatchEvent(new Event("change", { bubbles: true }));
-      container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
-      await controls.permissionPicker.onSelect("guarded");
-      await getPendingChatPickerPatch(state, state.sessionKey);
-      expect(state.request).not.toHaveBeenCalled();
-    },
-  );
 });

@@ -61,20 +61,20 @@ function ActivityTime(props: { timestamp: number; labelKey: Parameters<typeof t>
 
 function StepMarker(props: {
   status: PresentedProgressStepStatus;
-  sessionStatus?: SessionRunStatus;
+  outcome?: ReturnType<typeof progressCardPresentation>["terminalOutcome"];
 }) {
-  const outcome = () => props.sessionStatus && TERMINAL_RUN_OUTCOMES[props.sessionStatus];
   return (
     <Show
-      when={props.status === "in_progress" && !outcome()}
+      when={props.status === "in_progress" && !props.outcome}
       fallback={
         <Icon
           name={
-            props.status === "completed" ||
-            (props.status === "in_progress" && outcome() === "completed")
-              ? "check"
-              : props.status === "in_progress" && outcome()
-                ? "circleX"
+            props.outcome
+              ? props.outcome === "completed"
+                ? "check"
+                : "circleX"
+              : props.status === "completed"
+                ? "check"
                 : "clock"
           }
         />
@@ -139,7 +139,7 @@ function Step(props: {
         data-outcome={terminalOutcome() ? props.sessionStatus : undefined}
         aria-hidden="true"
       >
-        <StepMarker status={status()} sessionStatus={props.sessionStatus} />
+        <StepMarker status={status()} outcome={terminalOutcome()} />
       </span>
       <span class="session-progress-card__step-text">{props.step.step}</span>
     </li>
@@ -253,28 +253,10 @@ function ComposerCard(props: CardProps) {
           data-outcome={view().effectiveSessionStatus}
           aria-hidden="true"
         >
-          <Show
-            when={
-              !view().terminalOutcome &&
-              !view().complete &&
-              view().currentStep?.status === "in_progress"
-            }
-            fallback={
-              <Icon
-                name={
-                  view().terminalOutcome
-                    ? view().terminalOutcome === "completed"
-                      ? "check"
-                      : "circleX"
-                    : view().complete
-                      ? "check"
-                      : "clock"
-                }
-              />
-            }
-          >
-            <StepMarker status={view().presentedCurrentStatus ?? "pending"} />
-          </Show>
+          <StepMarker
+            status={view().complete ? "completed" : (view().presentedCurrentStatus ?? "pending")}
+            outcome={view().terminalOutcome}
+          />
         </span>
         <span class="session-progress-card__summary-collapsed">
           <span class="session-progress-card__current">{view().stepLabel}</span>

@@ -208,6 +208,28 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return step.value;
   }
 
+  function readPreparedAuthProfileStore(
+    createReads: (
+      agentDir: string | undefined,
+      options: LoadAuthProfileStoreOptions,
+      env: NodeJS.ProcessEnv,
+    ) => AuthProfileStoreReadSequence,
+    agentDir?: string,
+    options?: EnsureAuthProfileStoreOptions,
+  ): Promise<AuthProfileStore> {
+    if (isEnvOnlyAuthProfileRuntime()) {
+      return Promise.resolve(createEmptyAuthProfileStore());
+    }
+    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
+      const store = await readAuthProfileStoreAsynchronously(
+        prepared,
+        (directory, preparedOptions, env) =>
+          createReads(directory, { ...preparedOptions, profileId: undefined }, env),
+      );
+      return prepared.materializePersonalProfile(store);
+    });
+  }
+
   function* readInheritedAuthProfileStore(
     options: LoadAuthProfileStoreOptions,
     env?: NodeJS.ProcessEnv,
@@ -319,21 +341,11 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     agentDir?: string,
     options?: Parameters<typeof loadAuthProfileStoreWithoutExternalProfiles>[1],
   ): Promise<AuthProfileStore> {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
-      const store = await readAuthProfileStoreAsynchronously(
-        prepared,
-        (directory, preparedOptions, env) =>
-          loadAuthProfileStoreWithoutExternalProfilesReads(
-            directory,
-            { ...preparedOptions, profileId: undefined },
-            env,
-          ),
-      );
-      return prepared.materializePersonalProfile(store);
-    });
+    return readPreparedAuthProfileStore(
+      loadAuthProfileStoreWithoutExternalProfilesReads,
+      agentDir,
+      options,
+    );
   }
 
   function* loadAuthProfileStoreWithoutExternalProfilesReads(
@@ -374,17 +386,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     agentDir?: string,
     options?: Parameters<typeof ensureAuthProfileStore>[1],
   ): Promise<AuthProfileStore> {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
-      const store = await readAuthProfileStoreAsynchronously(
-        prepared,
-        (directory, preparedOptions, env) =>
-          ensureAuthProfileStoreReads(directory, { ...preparedOptions, profileId: undefined }, env),
-      );
-      return prepared.materializePersonalProfile(store);
-    });
+    return readPreparedAuthProfileStore(ensureAuthProfileStoreReads, agentDir, options);
   }
 
   function* ensureAuthProfileStoreReads(
@@ -466,21 +468,11 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     agentDir?: string,
     options?: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfiles>[1],
   ): Promise<AuthProfileStore> {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
-      const store = await readAuthProfileStoreAsynchronously(
-        prepared,
-        (directory, preparedOptions, env) =>
-          ensureAuthProfileStoreWithoutExternalProfilesReads(
-            directory,
-            { ...preparedOptions, profileId: undefined },
-            env,
-          ),
-      );
-      return prepared.materializePersonalProfile(store);
-    });
+    return readPreparedAuthProfileStore(
+      ensureAuthProfileStoreWithoutExternalProfilesReads,
+      agentDir,
+      options,
+    );
   }
 
   function* ensureAuthProfileStoreWithoutExternalProfilesReads(

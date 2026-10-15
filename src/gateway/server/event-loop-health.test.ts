@@ -33,8 +33,6 @@ type CpuUsage = ReturnType<typeof process.cpuUsage>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
-// Bun lacks async_hooks Promise before/after callbacks, so only Node counts the synthetic 20 ms step.
-const promiseHookClockStepMs = process.versions.bun ? 0 : 20;
 vi.mock("node:perf_hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:perf_hooks")>()),
   monitorEventLoopDelay: () => ({
@@ -132,7 +130,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       delayP99Ms: 0,
       degraded: false,
     });
-    expect(idleSample?.delayMaxMs).toBe(promiseHookClockStepMs);
+    expect(idleSample?.delayMaxMs).toBe(0);
     idle = false;
     await harness.samples(500);
     await harness.samples(50);
@@ -182,7 +180,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: true,
       reasons: ["event_loop_delay"],
     });
-    expect(stalledSample?.delayMaxMs).toBe(1_200 + promiseHookClockStepMs);
+    expect(stalledSample?.delayMaxMs).toBe(1_200);
     await harness.samples(50);
     expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, degraded: false });
   });

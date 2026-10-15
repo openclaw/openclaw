@@ -926,7 +926,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", {
           schedule: {
             autoEnabled: false,
-            channel: "dev",
+            channel: "beta",
             install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
             target: {
               kind: "git",
@@ -936,7 +936,7 @@ suite.define(() => {
             },
           },
           updateAvailable: {
-            channel: "dev",
+            channel: "beta",
             commitsBehind: 246,
             currentSha: "1111111111111111111111111111111111111111",
             currentVersion: "2026.8.1",

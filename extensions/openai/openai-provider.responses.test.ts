@@ -153,3 +153,84 @@ it("owns replay policy for OpenAI and Codex transports", () => {
     appendOnlyRuntimeContext: true,
   });
 });
+
+describe("configured speed defaults", () => {
+  const model: Model<"openai-responses"> = {
+    id: "speed-fixture",
+    name: "Speed fixture",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    contextWindow: 1_050_000,
+    maxTokens: 4096,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+
+  it("snapshots speed until the current payload finishes, then reads the next preference", async () => {
+    let fastMode: boolean | "ultrafast" = "ultrafast";
+    const stream = wrapOpenAIResponsesStream({
+      provider: "openai",
+      modelId: model.id,
+      model,
+      streamFn: streamSimple,
+      nativeWebSearchAllowedByToolPolicy: false,
+      extraParams: { serviceTier: "flex", fastMode: () => fastMode },
+    });
+    const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+    const first = await stream(model, context, {
+      apiKey: "synthetic-test-key",
+      onPayload: async (payload) => {
+        fastMode = false;
+        // Async callers can replace a payload; the in-flight speed must not change.
+        await Promise.resolve();
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          throw new Error("Expected a Responses request object");
+        }
+        return { ...payload };
+      },
+    });
+    expect((await first.result()).errorMessage).toBe("captured before sending");
+    expect(params.at(-1)).toMatchObject({
+      service_tier: "ultrafast",
+      context_management: [{ type: "compaction", compact_threshold: 260_000 }],
+    });
+    const next = await stream(model, context, { apiKey: "synthetic-test-key" });
+    expect((await next.result()).errorMessage).toBe("captured before sending");
+    expect(params.at(-1)).toMatchObject({
+      service_tier: "default",
+      context_management: [{ type: "compaction", compact_threshold: 735_000 }],
+    });
+  });
+
+  it.each(["serviceTier", "service_tier"])(
+    "preserves inherited %s and lets each explicit speed override its request payload",
+    async (key) => {
+      for (const tier of ["auto", "default", "flex", "priority", "ultrafast"]) {
+        for (const [fastMode, expected] of [
+          [undefined, tier],
+          [false, "default"],
+          [true, "priority"],
+          ["ultrafast", "ultrafast"],
+        ] as const) {
+          const stream = wrapOpenAIResponsesStream({
+            provider: "openai",
+            modelId: model.id,
+            model,
+            streamFn: streamSimple,
+            nativeWebSearchAllowedByToolPolicy: false,
+            extraParams: { [key]: tier, fastMode },
+          });
+          const output = await stream(
+            model,
+            { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+            { apiKey: "synthetic-test-key" },
+          );
+          expect((await output.result()).errorMessage).toBe("captured before sending");
+          expect(params.at(-1)).toMatchObject({ model: model.id, service_tier: expected });
+        }
+      }
+    },
+  );
+});

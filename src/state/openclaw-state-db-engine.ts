@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
   admitPostgresPhysicalFacts,
@@ -121,12 +122,20 @@ export const stateEngineSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  postgres: [
-    runtime.eagerSql,
-    ...runtime.fragments
-      .filter((fragment) => fragment.activation === "version-additive")
-      .map((fragment) => fragment.sql),
-  ].join("\n"),
+  postgres: runtime.eagerSql,
+  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
+    const { activation } = fragment;
+    if (activation !== "first-use" && activation !== "version-additive") {
+      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+    }
+    return {
+      id: fragment.id,
+      tables: fragment.tables,
+      sql: fragment.sql,
+      dependencies: fragment.dependencies,
+      activation,
+    };
+  }),
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
@@ -171,6 +180,8 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     storeId: facts.storeId,
     store: facts.store,
     version: facts.version,
+    schema: stateEngineSchema,
+    recordSchema: true,
   });
   admitStatePostgres(db, false);
 }
