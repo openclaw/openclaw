@@ -2133,6 +2133,67 @@ describe("cron method validation", () => {
     }),
   );
 
+  // Creation records no host inference account for a CLI-backed model, so an
+  // edit must accept the same model ref instead of demanding a stored account.
+  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
+    const cliModel = "claude-sonnet-4-6";
+    const embeddedModel = "claude-opus-4-6";
+    const cliRef = `anthropic/${cliModel}`;
+    const embeddedRef = `anthropic/${embeddedModel}`;
+    setRuntimeConfig({
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: {
+          model: { primary: cliRef, fallbacks: [] },
+          models: {
+            [cliRef]: { agentRuntime: { id: "claude-cli" } },
+            [embeddedRef]: { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "synthetic-unused-model-key",
+            models: [cliModel, embeddedModel].map((id) => ({
+              id,
+              name: `Synthetic ${id}`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            })),
+          },
+        },
+      },
+    } as OpenClawConfig);
+    const patchFor = (model: string) => ({
+      payload: { kind: "agentTurn", message: "updated", model },
+    });
+
+    const accepted = await invokeCronUpdate(
+      { id: "cron-1", patch: patchFor(`${cliRef}@selected-profile`) },
+      createCronJob(),
+    );
+    expect(accepted.context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(accepted.respond);
+
+    // Control: an embedded-runtime reference still needs its stored account.
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: patchFor(`${embeddedRef}@missing-profile`) },
+      createCronJob(),
+    );
+    expect(refused.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
     setRuntimeConfig(msteamsConfig());
 
