@@ -35,6 +35,8 @@ const io = vi.hoisted(() => ({
   load: vi.fn(),
   report: vi.fn(),
   withdraw: vi.fn(),
+  restoreOperator:
+    vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
 }));
 vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
@@ -66,6 +68,10 @@ vi.mock(
     discardSessionPendingInput: io.withdraw,
   }),
 );
+vi.mock(import("./operator-run-recovery.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  restoreGatewayQueuedOperatorRecovery: io.restoreOperator,
+}));
 vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   resolveGatewaySessionStoreTargetInWorker: io.load,
@@ -99,7 +105,7 @@ const input: SessionPendingInput = {
       sourceTool: "sessions_send",
       sourceSessionKey: delivery.source.sessionKey,
     },
-    __openclaw: { sessionSendDelivery: delivery },
+    __openclaw: { sessionSendDelivery: { ...delivery, operatorSource: null } },
   },
 };
 const config: OpenClawConfig = {
@@ -435,7 +441,9 @@ it("retries transient admission with the saved input and delivery identity, in o
     message: {
       ...input.message,
       idempotencyKey: "next-delivery:user",
-      __openclaw: { sessionSendDelivery: { ...delivery, runId: "next-delivery" } },
+      __openclaw: {
+        sessionSendDelivery: { ...delivery, runId: "next-delivery", operatorSource: null },
+      },
     },
   };
   io.pending.mockResolvedValue({ items: [input, next], total: 2 });
@@ -565,10 +573,11 @@ const exhausted = {
 };
 
 it.each([
-  ["capacity", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
-  ["pending inspection", inspectionError("pending"), exhausted],
+  ["capacity", "endpoint", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
+  ["pending inspection", "endpoint", inspectionError("pending"), exhausted],
   [
     "failed inspection",
+    "endpoint",
     inspectionError("failed"),
     {
       reason: "store-unavailable",
@@ -578,6 +587,7 @@ it.each([
   ],
   [
     "unknown",
+    "endpoint",
     new Error(privateDiagnostic),
     {
       reason: "unknown",
@@ -585,12 +595,54 @@ it.each([
       description: "delivery failed",
     },
   ],
+  [
+    "requester preparation capacity",
+    "requester",
+    new WorkerTaskError(privateDiagnostic, "overloaded"),
+    exhausted,
+  ],
+  [
+    "requester authority refusal",
+    "requester",
+    new Error(privateDiagnostic),
+    {
+      reason: "requester-unavailable",
+      attempts: 1,
+      description: "original requester authority is unavailable; submit a new request",
+    },
+  ],
 ] as const)(
   "keeps path-bearing %s diagnostics out of saved recovery notices",
-  async (_name, error, { reason, attempts, description }) => {
-    io.load.mockRejectedValue(error);
+  async (_name, stage, error, { reason, attempts, description }) => {
+    if (stage === "requester") {
+      const acceptedInput: SessionPendingInput = {
+        ...input,
+        message: {
+          ...input.message,
+          __openclaw: {
+            sessionSendDelivery: {
+              ...delivery,
+              operatorSource: {
+                kind: "channel",
+                snapshot: {
+                  reference: { version: 1, id: "d0ba40e9-13e6-4e6b-918f-62e8bc12ffbd" },
+                  profileId: "original-requester",
+                  scopes: ["operator.write"],
+                },
+              },
+            },
+          },
+        },
+      };
+      io.pending.mockResolvedValue({ items: [acceptedInput], total: 1 });
+      io.source.mockResolvedValue(sourceSnapshot(acceptedInput));
+      io.restoreOperator.mockRejectedValue(error);
+    } else {
+      io.load.mockRejectedValue(error);
+    }
     await recoverWithTimers();
     expect(dispatch).not.toHaveBeenCalled();
+    expect(io.restoreOperator).toHaveBeenCalledTimes(stage === "requester" ? attempts : 0);
     const report = io.report.mock.calls[0]![1].selectReport(undefined);
     expect(report.details.inputs[0]).toEqual({
       inputId: input.id,
@@ -606,8 +658,10 @@ it.each([
     expect(JSON.stringify(report)).not.toContain(privateDatabasePath);
     expect(JSON.stringify(report)).not.toContain(quarantineCommand);
     const logs = warn.mock.calls.map(([line]) => line).join("\n");
-    expect(logs).toContain(privateDatabasePath);
-    expect(logs).toContain(quarantineCommand);
+    if (reason !== "requester-unavailable") {
+      expect(logs).toContain(privateDatabasePath);
+      expect(logs).toContain(quarantineCommand);
+    }
   },
 );
 

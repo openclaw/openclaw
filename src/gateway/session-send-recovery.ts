@@ -218,7 +218,9 @@ async function recoverSessionSendDeliveriesForAgents(
             let communication:
               | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
               | undefined;
-            let operator: RestoredGatewayOperatorAuthority | undefined;
+            let operator:
+              | Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">
+              | undefined;
             try {
               const retained = await readPendingInputSource(
                 scope,
