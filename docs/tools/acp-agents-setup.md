@@ -118,24 +118,31 @@ availability is unconfirmed, check the native app on the Gateway host and run
 
 ## Permissions for native chat runtimes
 
-When a native runtime cannot enforce the chat's optional OpenClaw tool, sandbox,
-or workspace restrictions, the Control UI offers **Continue for this chat** to
-an administrator. The same confirmation applies when selecting the runtime or
-sending a message with an existing selection.
+Enable an installed agent from **Models → Installed agents**. For a runtime that
+uses its own native permissions, OpenClaw asks **Use {runtime}’s native permissions?**
+before enabling it. Accepting remembers consent for the selected OpenClaw agent
+in the same config update as enablement. New chats using that runtime then start
+with **Full access** and optional sandboxing off, without repeating the prompt.
+Enabling a native app does not sign you in to that app.
 
-Confirming selects **Full access**, turns off optional sandboxing for that chat,
-and records consent for the exact native runtime. The native agent then uses its
-own permissions on the Gateway host. OpenClaw does not claim to enforce its
-optional tool restrictions inside that agent. Other chats and global settings
-stay unchanged, and tools hosted by OpenClaw retain their existing policy.
+The native agent uses its own permissions on the Gateway host. OpenClaw does not
+claim to enforce its optional tool restrictions inside that agent. Other agents
+and their chats stay unchanged, and tools hosted by OpenClaw retain their policy.
+Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
+revoke remembered consent. Disabling and re-enabling the app does not erase it.
+
+For a runtime configured manually without remembered consent, the Control UI
+still offers **Continue for this chat** to an administrator when selecting the
+runtime or sending a message with that selection. This fallback changes only
+that chat's permissions.
 
 Declining leaves permissions unchanged and keeps the message unsent. A first send
 can create an empty chat so confirmation is bound to that chat, but no message is
 saved or run before you confirm. Confirmation saves the permissions and retries
 that message once, including a chat's first message, without pinning its default model.
-Selection-only confirmation does not send the draft. Consent is not inherited by
-another chat and is cleared when the session resets or the selected runtime changes.
-Older hosts that do not recognize consent retain their previous restriction checks.
+Selection-only confirmation does not send the draft. This per-chat consent is
+not inherited by another chat and is cleared when the session resets or the
+selected runtime changes.
 
 Required sandboxes, required workspace boundaries, and incompatible remote
 execution placement cannot be waived by this confirmation. A restricted user

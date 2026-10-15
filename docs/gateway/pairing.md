@@ -445,6 +445,13 @@ metadata-upgrade auto-approval; they stay explicit re-approval requests.
 `/pair qr` renders the pairing payload as structured media so mobile and
 browser clients can scan it directly.
 
+In Control UI, the QR image stays beside the pairing details during chat history
+refreshes until it expires. The setup secret is not saved in the transcript or
+the browser's disk cache. Reloading, reconnecting, or changing authentication
+discards the live QR; run `/pair qr` again for a fresh code.
+Browser snapshots saved by older versions also discard QR credentials on restore;
+the remaining history is preserved and the sanitized snapshot replaces the old cache entry.
+
 Deleting a device also sweeps any stale pending pairing requests for that
 device id, so `nodes pending` does not show orphaned rows after a revoke.
 

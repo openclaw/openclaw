@@ -83,7 +83,7 @@ export function createCodexSessionCatalogControl(params: {
   const indexes = new Map<string, CodexCatalogIndex>();
   const directHomes = new Map<string, Promise<string>>();
   const residentRequests = new Set<Promise<CodexCatalogIndex>>();
-  let generation = params.getRuntimeConfig();
+  let generation = params.config;
   let closed = false;
   let runBackground = (run: () => Promise<void>) => run();
   let retiring: Promise<void> | undefined;

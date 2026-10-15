@@ -111,7 +111,13 @@ describe("sidebar live roster publication", () => {
           return gateway.gateway.snapshot.phase === "connected";
         },
         activeRouteId: "sessions",
+        sessionCatalogRowsVisible: true,
+        navigationVisible: true,
+        navigationView: "sessions",
+        sidebarAgentsMode: "chip",
+        shouldPublishSessionData: () => true,
         getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
+        childSessionParents: () => new Set(),
         sessionDataContext: context,
         addController: () => undefined,
         removeController: () => undefined,
@@ -125,6 +131,7 @@ describe("sidebar live roster publication", () => {
         sidebarSessionOwnerFilter: () => ({ ownerId: null, involvingMe: false }),
         sessionCatalogIdsWithoutVisibleRows: () => [],
         querySelector: () => null,
+        samePresence: () => false,
       } satisfies SessionDataControllerHost;
       const controller = new SessionDataController(host);
       try {

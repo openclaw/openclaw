@@ -472,7 +472,7 @@ describe("legacy media persistence doctor migration", () => {
       sql.restore();
     }
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(4);
+    expect(result.changes).toHaveLength(5);
     expect(result.changes).toEqual(
       expect.arrayContaining([
         `Upgraded agent database schema in ${databasePath}: v16 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
@@ -481,6 +481,18 @@ describe("legacy media persistence doctor migration", () => {
         `Migrated archived transcript media in ${compressedArchive}.`,
       ]),
     );
+
+    const recoveryDirectories = () =>
+      fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-"));
+    const backups = recoveryDirectories();
+    expect(backups).toHaveLength(1);
+    const preserved = readDatabaseSnapshot(
+      path.join(path.dirname(databasePath), backups[0]!, "database.sqlite"),
+    );
+    expect(preserved.rows).toEqual(before.rows);
+    expect(preserved.trajectoryRows).toEqual(before.trajectoryRows);
 
     const after = readDatabaseSnapshot(databasePath);
     expect(after.version.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
@@ -584,6 +596,7 @@ describe("legacy media persistence doctor migration", () => {
     const appended = readDatabaseSnapshot(databasePath).rows.find(
       (row) => JSON.parse(row.event_json).id === "current-writer",
     );
+    expect(recoveryDirectories()).toEqual(backups);
     expect(JSON.parse(appended!.event_json).message).toMatchObject({
       role: "assistant",
       content: "after repair",
@@ -655,6 +668,7 @@ describe("legacy media persistence doctor migration", () => {
                 `Upgraded agent database schema in ${databasePath}: v${schemaVersion} -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
               ]
             : []),
+          expect.stringMatching(/^Saved pre-repair SQLite backup: /),
           `Migrated media persistence in ${databasePath}: 1 transcript session(s), 0 trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
         ],
         warnings: [],
@@ -741,7 +755,11 @@ describe("legacy media persistence doctor migration", () => {
       const before = readDatabaseSnapshot(databasePath);
       const result = await migrateLegacyMediaPersistence({ env });
       expect(result.warnings).toHaveLength(1);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings[0]).toContain(`Skipped agent database migration for ${databasePath}:`);
       expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
       expect(readDatabaseSnapshot(databasePath)).toEqual(before);
