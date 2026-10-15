@@ -297,11 +297,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       return;
     }
     // Discovery can advance without changing displayed rows; admit it before the frame gate.
-    const creation = this.context?.chatSubmissions?.readCreate()?.creation;
-    if (
-      isSessionRouteId(this.host.activeRouteId) &&
-      !(this.host.activeRouteId === "chat" && creation && !creation.admitted)
-    ) {
+    if (isSessionRouteId(this.host.activeRouteId)) {
       void this.loadActiveSessionLineage(this.host.getRouteSessionKey());
     }
     scheduleSidebarChildSessions(this, () => this.host.childSessionParents());
