@@ -154,7 +154,10 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
-    return raw;
+    // A rejected config can still supply a malformed list (e.g. `redactPatterns: [1]`);
+    // Compiled matchers exec; anything else must be dropped instead of reaching
+    // `pattern.exec` from the warning path (#173461).
+    return typeof raw === "object" && "exec" in raw && typeof raw.exec === "function" ? raw : null;
   }
   // Linear matchers and compiled regexes share the source's masking policies below.
   let pattern: ResolvedRedactPattern | null =

@@ -227,4 +227,16 @@ describe("configured source language preservation", () => {
       expect(pattern.test(input)).toBe(true);
     }
   });
+
+  it("drops malformed non-string entries instead of throwing on pattern.exec", () => {
+    // A rejected config can still carry this list, and the directory-resolution
+    // warning runs through redaction: an unknown entry must not abort it (#173461).
+    const malformed = JSON.parse('{"mode":"tools","patterns":[1]}');
+    const input = "token=fixtureValue1234567890";
+    expect(() => redactSensitiveText(input, malformed)).not.toThrow();
+
+    // The malformed entry is dropped rather than carried into the matcher set.
+    const resolved = resolveRedactOptions(malformed).patterns;
+    expect(resolved.some((pattern) => typeof pattern === "number")).toBe(false);
+  });
 });
