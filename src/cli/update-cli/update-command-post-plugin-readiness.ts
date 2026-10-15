@@ -92,7 +92,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   const startedAt = Date.now();
   const doctorLint: UpdateStepResult = {
     name: "post-plugin-doctor-lint",
-    command: args.slice(1).join(" "),
+    command: args.join(" "),
     cwd: params.root,
     durationMs: 0,
     exitCode: null,
