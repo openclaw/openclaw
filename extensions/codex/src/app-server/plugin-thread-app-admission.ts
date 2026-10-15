@@ -153,7 +153,8 @@ export async function readCodexThreadAdmissibleAccountApps(
     cachedInventory.state === "fresh" && !cachedInventory.snapshot?.targetAppIds?.length
       ? cachedInventory.snapshot
       : await refreshCodexPluginAppInventory(params, appCache, {
-          forceRefetch: false,
+          // Account-only admission has no plugin readiness repair. Keep the
+          // default cold refresh so an empty native snapshot can be populated.
           reason: "account_apps_all",
           targetAppIds: [],
         });
