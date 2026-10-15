@@ -169,7 +169,10 @@ describe("managed service update handoff", () => {
         }
       }
       if (outcome === "unsafe") {
-        expect(result.log).toContain("keep the gateway stopped");
+        expect(result.log).toContain("runtime-verification-failed");
+        expect(result.log).toContain("openclaw update repair");
+        expect(result.log).toContain("openclaw gateway status --deep");
+        expect(result.log).not.toContain("keep the gateway stopped");
       }
       if (outcome === "validation") {
         expect(result.commands).toEqual([]);

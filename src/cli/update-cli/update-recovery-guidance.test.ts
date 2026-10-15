@@ -88,6 +88,53 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each([
+    { reason: "service-definition-rollback-unverified", dataAtRisk: false },
+    { reason: "runtime-verification-failed", dataAtRisk: false },
+    { reason: "state-migrated-no-rollback", dataAtRisk: true },
+    { reason: "rollback-state-unverified", dataAtRisk: true },
+    {
+      reason: "post-update-failed",
+      recoveryReason: "state-migration-started" as const,
+      dataAtRisk: true,
+    },
+    { reason: "unreadable-state", dataAtRisk: true },
+  ])(
+    "reserves stopped guidance for a named data risk ($reason)",
+    ({ reason, recoveryReason, dataAtRisk }) => {
+      const result = failure({
+        reason,
+        recovery: {
+          serviceRestartSafe: false,
+          reason: recoveryReason ?? "runtime-verification-failed",
+        },
+        ...(reason === "unreadable-state"
+          ? {
+              steps: [
+                {
+                  name: "doctor",
+                  command: "openclaw doctor",
+                  cwd: "/fixture",
+                  durationMs: 0,
+                  exitCode: 1,
+                  failureFacts: [{ check: "doctor-maintenance", code: reason }],
+                },
+              ],
+            }
+          : {}),
+      });
+      const action = resolveUpdateResultNextAction({ result, env: {}, serviceRunning: false });
+      expect(/keep the gateway stopped/i.test(action ?? "")).toBe(dataAtRisk);
+      if (dataAtRisk) {
+        expect(action).toContain(`data at risk (${recoveryReason ?? reason})`);
+      } else {
+        expect(action).toContain("openclaw update repair");
+        expect(action).toContain("openclaw gateway status --deep");
+        expect(action).toContain(reason);
+      }
+    },
+  );
+
   it.each(["unsettled", "foreign", "settled"] as const)(
     "keeps %s Doctor settlement guidance when the target Gateway responds",
     (settlement) => {

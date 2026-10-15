@@ -23,6 +23,10 @@ import {
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 import {
+  maybeRestartServiceAfterFailedMutableUpdate,
+  updateRecoveryDataAtRiskReason,
+} from "./update-command-service-recovery.js";
+import {
   readFailedUpdateGatewayState,
   verifyUpdatedGateway,
 } from "./update-command-verification.js";
@@ -43,7 +47,7 @@ export function shouldWaitForRecovery(
   );
 }
 
-/** Observe recovery after writers settle; this never starts or stops a Gateway. */
+/** Restore an owned stopped service after writers settle, then verify its installed runtime. */
 export async function verifyUpdateFailureRecovery(params: {
   result: UpdateRunResult;
   root: string;
@@ -52,6 +56,10 @@ export async function verifyUpdateFailureRecovery(params: {
   timeoutMs?: number;
   serviceStopped?: boolean;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  preManagedServiceStop?: PreManagedServiceStop;
+  onGatewayStartAttempted?: () => void;
+  nodeRunner?: string;
+  invocationCwd?: string;
   waitForStartup?: boolean;
   assertCurrent?: () => void;
 }): Promise<UpdateRunResult> {
@@ -100,6 +108,7 @@ export async function verifyUpdateFailureRecovery(params: {
   result.rollbackOutcome ??= recorded?.verification.rollbackOutcome ?? undefined;
   result.verification = {};
   const rollback = previousRecovery?.packageRollbackVerified;
+  let restartAttempted = false;
   try {
     await withCommandProcessScope(async () => {
       // Package rollback restores files even on a headless install. Its original
@@ -168,6 +177,37 @@ export async function verifyUpdateFailureRecovery(params: {
           serviceCommand: (await readManagedGatewayServiceForUpdate(env))?.command,
         }));
       params.assertCurrent?.();
+      if (
+        params.opts.restart !== false &&
+        params.preManagedServiceStop?.stopped &&
+        params.preManagedServiceStop.serviceMutationAllowed !== false &&
+        params.preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" &&
+        result.verification?.serviceRunning === false &&
+        !updateRecoveryDataAtRiskReason(result)
+      ) {
+        restartAttempted = true;
+        let restartFailure: string | undefined;
+        const restarted = await maybeRestartServiceAfterFailedMutableUpdate({
+          preManagedServiceStop: params.preManagedServiceStop,
+          updateRun: run,
+          recovery: { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) },
+          jsonMode: Boolean(params.opts.json),
+          timeoutMs: params.timeoutMs,
+          nodeRunner: params.nodeRunner,
+          invocationCwd: params.invocationCwd,
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
+          onFailure: (message) => {
+            restartFailure = message;
+          },
+        });
+        params.assertCurrent?.();
+        if (restarted !== "healthy") {
+          throw new Error(
+            restartFailure ??
+              "Managed Gateway restart did not verify readiness; run openclaw update repair and openclaw gateway status --deep.",
+          );
+        }
+      }
       const validation = await verifyUpdatedGateway({
         result,
         opts: params.opts,
@@ -183,7 +223,7 @@ export async function verifyUpdateFailureRecovery(params: {
       params.assertCurrent?.();
       Object.assign(result, appendPluginUpdateWarnings(result, validation.pluginWarnings ?? []));
       // Observed health cannot override an owner's unsafe restart verdict.
-      const restartUnsafe = previousRecovery?.serviceRestartSafe === false;
+      const restartUnsafe = previousRecovery?.serviceRestartSafe === false && !restartAttempted;
       result.recovery =
         validation.ok && !restartUnsafe
           ? {
@@ -203,6 +243,19 @@ export async function verifyUpdateFailureRecovery(params: {
                 serviceRestartSafe: false,
                 reason: "runtime-verification-failed",
               });
+      if (validation.ok && restartAttempted) {
+        warnRecording(
+          `Gateway recovered on ${version}; ${result.reason ?? "update recovery"} remains unverified. Recovery artifacts and package backups were retained. Run openclaw update repair.`,
+        );
+        if (result.reason === "service-definition-rollback-unverified") {
+          result.status = "ok";
+        }
+        if (run) {
+          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, {
+            env: run.env,
+          });
+        }
+      }
     });
   } catch (error) {
     assertRecoveryFailureCurrent(error);

@@ -77,8 +77,20 @@ export async function finishUpdate(
   { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
-  return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
-    finishSettledUpdate(settled, options, captured, failure),
+  return await withUpdateProgressSettlement(
+    params,
+    beforeFinalization,
+    async (settled, failure) => {
+      try {
+        return await finishSettledUpdate(settled, options, captured, failure);
+      } catch (error) {
+        // Final recovery can settle the earlier failure before its caller unwinds.
+        if (error instanceof UpdateCommandFailure && error.result.status === "ok") {
+          return error.result;
+        }
+        throw error;
+      }
+    },
   );
 }
 
@@ -370,6 +382,10 @@ async function finishSettledUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
+        preManagedServiceStop: currentServiceStop(),
+        onGatewayStartAttempted,
+        nodeRunner: params.packageUpdateNodeRunner,
+        invocationCwd: params.invocationCwd,
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
           : currentServiceStop()?.serviceUpdateVerdict,

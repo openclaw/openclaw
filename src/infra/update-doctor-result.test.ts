@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   captureUpdateDoctorConfigWrites,
+  collectUpdateDoctorFailureFacts,
+  DoctorMaintenanceRefusalError,
+  UpdateDoctorError,
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -25,6 +28,28 @@ afterEach(async () => {
 });
 
 describe("post-install doctor result IPC", () => {
+  it("preserves the named data risk when diagnostic facts fill the report allowance", () => {
+    const error = new DoctorMaintenanceRefusalError(
+      "State is unreadable",
+      {
+        kind: "data-at-risk",
+        reason: "unreadable-state",
+      },
+      {
+        failureFacts: Array.from({ length: 5 }, () => ({ check: "doctor", code: "doctor-failed" })),
+      },
+    );
+    const facts = collectUpdateDoctorFailureFacts(
+      new UpdateDoctorError(
+        "Doctor failed",
+        Array.from({ length: 5 }, () => ({ check: "doctor", code: "doctor-failed" })),
+        { cause: error },
+      ),
+    );
+    expect(facts).toHaveLength(5);
+    expect(facts[0]).toMatchObject({ check: "doctor-maintenance", code: "unreadable-state" });
+  });
+
   it.each(
     [
       {

@@ -15,6 +15,7 @@ import {
   UPDATE_FOREIGN_DESTINATION_REASON,
 } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
+import { updateRecoveryDataAtRiskReason } from "./update-command-service-recovery.js";
 
 type UnsafeUpdateRecovery = Extract<
   NonNullable<UpdateRunResult["recovery"]>,
@@ -119,12 +120,13 @@ export function resolveUpdateResultNextAction(params: {
     );
     const runningVersion = truncateUtf16Safe(params.runningVersion ?? "", 120);
     const servingVersion = truncateUtf16Safe(params.verifiedServingVersion ?? "", 120);
+    const dataAtRisk = updateRecoveryDataAtRiskReason(result);
     const state = servingVersion
       ? `Your Gateway is still serving ${servingVersion}; nothing to restore.${reason ? ` Restart remains unsafe (${reason}).` : ""}`
       : reason
         ? params.serviceRunning === true
           ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
-          : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
+          : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false && dataAtRisk ? ` Keep the gateway stopped: data at risk (${dataAtRisk}).` : ` Run \`${formatCliCommand("openclaw update repair", env)}\` and \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`}`
         : "";
     const configRefusal = result.steps.findLast(
       (step) => step.name === "config-rollback",
@@ -176,6 +178,9 @@ export function resolveUpdateResultNextAction(params: {
     return `This OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${command("openclaw doctor")}\` and \`${command("openclaw gateway restart")}\`. Examples: \`npm i -g openclaw@latest\` or \`pnpm add -g openclaw@latest\`.`;
   }
   if (result.status === "ok") {
+    if (result.recovery?.serviceRestartSafe === true && result.recovery.service === "healthy") {
+      return `Gateway recovery is healthy. Retained update warnings and backups need repair; run \`${command("openclaw update repair")}\`.`;
+    }
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
