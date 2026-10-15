@@ -139,18 +139,22 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
   }
 });
 
-it("forwards worker GC batches over the existing memory port and follows demand and shutdown", async () => {
+it.each([
+  ["sqlite-store.worker.ts", "sqlite-store.worker", undefined],
+  ["code-mode-node.worker.ts", "code-mode-node.worker", 1],
+  ["code-mode-node.worker.mjs", "code-mode-node.worker", 1],
+] as const)("batches %s GC and flushes at shutdown", async (file, script, slot) => {
   const worker = createCpuTrackedWorker(
     'require("node:worker_threads").parentPort.on("message", () => {});',
     { eval: true },
   );
-  trackNativeWorkerForCpu(worker, new URL("../infra/sqlite-store.worker.ts", import.meta.url));
+  trackNativeWorkerForCpu(worker, new URL(`../infra/${file}`, import.meta.url));
   const parent = new MessageChannel();
   const events: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        events.push([event.kind, event.thread, event.durationMs]);
+        events.push([event.kind, event.thread, event.durationMs, event.workerSlot]);
       }
     },
     { include: ["diagnostic.gc"] },
@@ -175,21 +179,42 @@ it("forwards worker GC batches over the existing memory port and follows demand 
     await fence();
     expect(native.observers).toHaveLength(2);
     const workerObserver = native.observers[1]!;
-    const forwarded = once(telemetry!, "message");
+    const messages: unknown[] = [];
+    telemetry!.on("message", (sample) => messages.push(sample));
+    workerObserver.deliver([{ startTime: performance.now(), duration: 2 }]);
     workerObserver.deliver([
-      { startTime: performance.now(), duration: 2 },
       {
         startTime: performance.now(),
         duration: 8,
         detail: { kind: constants.NODE_PERFORMANCE_GC_MAJOR },
       },
     ]);
-    await forwarded;
+    await fence();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ heapUsed: expect.any(Number) });
     await waitForDiagnosticEventsDrained();
     expect(events).toEqual([
-      ["scavenge", "sqlite-store.worker.js", 2],
-      ["mark_sweep_compact", "sqlite-store.worker.js", 8],
+      ["scavenge", `${script}.js`, 2, slot],
+      ["mark_sweep_compact", `${script}.js`, 8, slot],
     ]);
+    events.length = 0;
+    messages.length = 0;
+    const flushed = once(telemetry!, "message");
+    const batch = Array.from({ length: 128 }, () => ({
+      startTime: performance.now(),
+      duration: 1,
+    }));
+    workerObserver.deliver(batch);
+    workerObserver.deliver(batch);
+    await flushed;
+    await waitForDiagnosticEventsDrained();
+    expect(messages).toEqual([
+      { gc: Array.from({ length: 256 }, () => ({ kind: "scavenge", durationMs: 1 })) },
+    ]);
+    expect(events).toEqual(
+      Array.from({ length: 256 }, () => ["scavenge", `${script}.js`, 1, slot]),
+    );
+    events.length = 0;
     setDiagnosticsEnabledForProcess(false);
     stopDiagnosticGcObserver();
     await fence();
@@ -199,12 +224,13 @@ it("forwards worker GC batches over the existing memory port and follows demand 
     reconcileDiagnosticGcObserver();
     await fence();
     expect(native.observers).toHaveLength(4);
+    native.observers[3]!.deliver([{ startTime: performance.now(), duration: 7 }]);
     const closed = once(telemetry!, "close");
     close();
     await closed;
     expect(native.observers[3]!.disconnect).toHaveBeenCalled();
     await waitForDiagnosticEventsDrained();
-    expect(events).toHaveLength(2);
+    expect(events).toEqual([["scavenge", `${script}.js`, 7, slot]]);
   } finally {
     close();
     stopDiagnosticGcObserver();
@@ -220,7 +246,7 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        labels.push([event.kind, event.thread]);
+        labels.push([event.kind, event.thread, event.workerSlot]);
       }
     },
     { include: ["diagnostic.gc"] },
@@ -231,16 +257,30 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
     {"kind":"mark_sweep_compact","thread":"sqlite-store.worker.js"},
     {"kind":"dynamic-123","thread":"worker-123"},
     {"kind":"dynamic-456","thread":"/private/workers/job-456.js"},
-    {}
+    {},
+    {"thread":"code-mode-node.worker.js","workerSlot":1},
+    {"thread":"code-mode-node.worker.js","workerSlot":64},
+    {"thread":"code-mode-node.worker.js","workerSlot":65},
+    {"thread":"code-mode-node.worker.js","workerSlot":0},
+    {"thread":"code-mode-node.worker.js","workerSlot":1.5},
+    {"thread":"code-mode-node.worker.js","workerSlot":"1"},
+    {"thread":"main","workerSlot":1}
   ]`)) {
     emitTrustedDiagnosticEvent({ type: "diagnostic.gc", durationMs: 1, ...fields });
   }
   await waitForDiagnosticEventsDrained();
   expect(labels).toEqual([
-    ["scavenge", "main"],
-    ["mark_sweep_compact", "sqlite-store.worker.js"],
-    [undefined, "other"],
-    [undefined, "other"],
-    [undefined, "main"],
+    ["scavenge", "main", undefined],
+    ["mark_sweep_compact", "sqlite-store.worker.js", undefined],
+    [undefined, "other", undefined],
+    [undefined, "other", undefined],
+    [undefined, "main", undefined],
+    [undefined, "code-mode-node.worker.js", 1],
+    [undefined, "code-mode-node.worker.js", 64],
+    [undefined, "code-mode-node.worker.js", undefined],
+    [undefined, "code-mode-node.worker.js", undefined],
+    [undefined, "code-mode-node.worker.js", undefined],
+    [undefined, "code-mode-node.worker.js", undefined],
+    [undefined, "main", undefined],
   ]);
 });

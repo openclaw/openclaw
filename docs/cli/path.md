@@ -153,8 +153,10 @@ oc://FILE/SECTION/ITEM/FIELD?session=SCOPE
 Slot rules: `field` requires `item`, and `item` requires `section`. Across
 all four slots:
 
-- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators. Content is
-  byte-literal; `"` and `\` are not allowed inside quotes. The file slot is
+- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators. Quoting makes
+  special tokens literal keys, including `"$first"`, `"*"`, `"+key"`, and `"[k=v]"`.
+  Inside quotes, use `\"` for a literal quote and `\\` for a literal backslash;
+  other backslash escapes are rejected. The file slot is
   also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
   `skills/email-drafter` as a single file path.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
@@ -164,7 +166,7 @@ all four slots:
   recursive). `find` accepts these; `resolve` and `set` reject them as
   ambiguous.
 - **Positional** — `$first` / `$last` resolve to the first / last index or
-  declared key.
+  declared key. Quote them (`"$first"` / `"$last"`) to address literal keys with those names.
 - **Ordinal** — `#N` for the Nth match by document order.
 - **Insertion markers** — `+`, `+key`, `+nnn` for keyed / indexed insertion
   (use with `set`).
@@ -218,9 +220,11 @@ depending on the per-kind AST shape.
   the `jsonc-parser` edit path for ordinary leaf writes, preserving comments
   and nearby formatting.
 - JSONL leaf writes coerce like JSONC inside a line. Whole-line replacement
-  and append parse `<value>` as JSON. Rendered JSONL preserves the file's
-  dominant LF/CRLF line-ending convention (majority vote across the file's
-  newlines, so a mostly-CRLF file stays CRLF even with a few stray LFs).
+  and append parse `<value>` as JSON. Edits replace only the selected value's
+  source text, preserving untouched numbers, comments, whitespace, and each
+  existing line ending, including a missing final newline. Appends retain all
+  existing bytes and the final-newline convention; an unterminated file uses
+  its dominant LF/CRLF convention to separate the new record.
 - YAML leaf writes coerce to the existing scalar type (`string`, finite
   `number`, `true`/`false`, or `null`). YAML insertions use the bundled
   `yaml` package's document API for map/sequence updates. Malformed YAML

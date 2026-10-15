@@ -44,6 +44,7 @@ import {
   isActiveUnusableWindow,
   isProfileInCooldown,
   readInlineProviderApiKeyUsage,
+  readAuthProfileUsageStats,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -270,7 +271,6 @@ export function createModelAuthAvailabilityResolver(
   // Refresh authority follows exact profiles marked by the external-auth
   // lifecycle. Provider-wide authority could bless an unrelated stale profile.
   const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
-  const readOnlyAuthConfig = params.cfg;
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -321,7 +321,7 @@ export function createModelAuthAvailabilityResolver(
     }
     const resolution = prependAuthProfilePin(
       resolveAuthProfileOrderWithMetadata({
-        cfg: readOnlyAuthConfig,
+        cfg: params.cfg,
         store: orderStore,
         provider: normalized,
         preferredProfile: preferredProfileId,
@@ -374,7 +374,7 @@ export function createModelAuthAvailabilityResolver(
         ? store
         : { ...store, profiles: { ...store.profiles, [profileId]: credential } };
     const eligibility = resolveAuthProfileEligibility({
-      cfg: readOnlyAuthConfig,
+      cfg: params.cfg,
       store: effectiveStore,
       provider: normalizeProvider(provider),
       profileId,
@@ -389,7 +389,7 @@ export function createModelAuthAvailabilityResolver(
     return (
       profileId !== undefined &&
       !resolveAuthProfileEligibility({
-        cfg: readOnlyAuthConfig,
+        cfg: params.cfg,
         store: orderStore,
         provider: normalizeProvider(provider),
         profileId,
@@ -662,7 +662,7 @@ export function createModelAuthAvailabilityResolver(
       if (profile.readiness === "unavailable" || profile.cooldown !== "active") {
         return [];
       }
-      const stats = store.usageStats?.[profile.profileId];
+      const stats = readAuthProfileUsageStats(store, profile.profileId);
       const until =
         stats && !hasPermanentAuthFailure(stats) ? resolveProfileUnusableUntil(stats, model) : null;
       return until !== null && until > now ? [until] : [];

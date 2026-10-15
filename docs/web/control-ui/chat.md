@@ -14,10 +14,12 @@ How the chat pane behaves: the session rail, the composer, and how the transcrip
 
 When the visible conversation does not fill the chat pane, including when the
 latest history page is empty or tool activity is hidden, earlier history loads
-automatically after the layout settles. Loading stops when the pane is filled,
-history ends, or a request fails. Scroll upward or select **Show earlier** to
-load more or retry. Hidden panes and programmatic scroll placement do not trigger
-automatic loading. An incomplete history page does not show the new-chat welcome
+automatically after the layout settles. Filling stops once the prefetch margin
+is filled, after three automatic pages per open, when history ends, or when a
+request fails. A first page that already fills the viewport does not start this
+automatic loading. Scroll upward or select **Show earlier** to load more or retry.
+Hidden panes, background tabs, and programmatic or maintenance scrolling do not
+trigger automatic loading. An incomplete history page does not show the new-chat welcome
 screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
@@ -237,9 +239,11 @@ Session observation is enabled by default. Safe preamble headlines do not requir
 
 Session links in messages open inside the Control UI. This includes `agent:` keys,
 root-relative chat URLs, and URLs on the current origin or the Gateway's public origin
-when its applied configuration is loaded. Hovering a link shows the session card
-when the session is known locally. Unknown or ambiguous session references remain
-navigable without a card; links to other origins keep normal browser behavior.
+when its applied configuration is loaded. Links show the session's title, and hovering
+one shows its session card. Session URLs that are not in the loaded sidebar are
+resolved through the Gateway, including shortened IDs, using the same access rules as
+opening them. Missing, inaccessible, or ambiguous references stay plain navigable links
+without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` and `qa-café/index.md` retain workspace file handling, including
 Unicode names and percent-encoded Markdown link destinations. Explicit Markdown
@@ -274,6 +278,36 @@ repository with a commit. If it is not, the card keeps the prompt and lets you
 select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
+
+## Composer predictions
+
+Enable **Settings → Labs → Composer predictions** to try optional next-message
+suggestions. The experiment is off by default. After a reply finishes in the
+active conversation, OpenClaw can make one additional model request and show a
+possible follow-up as muted text in an empty composer. It may show no suggestion.
+It does not predict on every keystroke. Each active browser tab can make its own
+prediction request. Read-only, imported, and incognito conversations do not show
+predictions.
+
+Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**,
+**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+not saved as messages or collaborator drafts until you accept them. Switching
+conversations, hiding the page, or starting another turn discards pending results.
+
+The Labs model selector offers:
+
+- **Utility model** (default): use the agent's configured utility model. A fast,
+  inexpensive model is usually the best fit for this short, optional task.
+- **Conversation model**: use the model selected for this conversation.
+- **Default model**: use the agent's configured default model, ignoring the
+  conversation's model override.
+
+Predictions use bounded recent text from the current conversation in an isolated,
+tool-free request. They cannot run tools, retrieve memory, or send messages. An
+unavailable selected model skips the suggestion rather than silently switching
+to another model. Enabling the experiment can add model usage and cost; existing
+model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
@@ -472,7 +506,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails and provides Open, Download, and Copy actions for the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated full-image downloads while the image remains cached.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
-    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
+    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
     - Your pending prompt stays before its own saved assistant reply even when the reply arrives before history recovery finishes after reconnect; existing saved messages keep their transcript order.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
@@ -942,7 +976,7 @@ Focusing a marker also shows its preview without jumping to the message.
 Changing the draft height or entering Goal mode keeps the rail's scroll position
 stable. Navigation and keyboard focus still reveal the selected marker.
 
-The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". A reply can carry one "Replying to" line with the author's avatar and name, and no message excerpt. Assistant replies show it when they answer an older message, or when the conversation is shared: two or more people appear in the session participants or anywhere in the transcript, including messages hidden by search or not yet loaded. A reply in a one-to-one conversation that answers the prompt of its own turn shows no line. The line appears only once its origin and author are known, from a loaded message, a fetched original, or a reply snapshot that names its sender; until then, or when the author stays unknown, it is omitted rather than guessed. A reply to the current message resolves only through the run that prompt started, so legacy, mirrored, or ambiguous replies without that link show no line. When the original is confirmed deleted or inaccessible, the line shows "Original message unavailable" without an avatar or link, after the sender's name when the snapshot names it. A line whose row is reserved while the original is fetched never changes height: it fills in place, and a lookup that cannot reach the Gateway keeps the row reserved until a new connection retries. One exception is a shared conversation where the fetched original has no sender metadata and no reply snapshot names its sender: the author stays unknown, so the line ends hidden and its reserved row is released when the answer arrives. On desktop, the agent avatar stays at the top of attributed reply groups, with a short curved connector running from behind it to that line. On narrow screens, agent and participant avatars beside messages stay hidden to preserve content width; a small reply arrow introduces the line instead of the connector, while the author's avatar remains visible. Your own replies keep the line inside the bubble. Select the author to scroll to and briefly highlight the original. System entries such as local slash-command output render as centered notice rows without an avatar.
+The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". A reply can carry one "Replying to" line with the author's avatar and name, and no message excerpt. Assistant replies show it when they answer an older message, or when the conversation is shared: two or more people appear in the session participants or anywhere in the transcript, including messages hidden by search or not yet loaded. A reply in a one-to-one conversation that answers the prompt of its own turn shows no line. The line appears only once its origin and author are known, from a loaded message, a fetched original, or a reply snapshot that names its sender; until then, or when the author stays unknown, it is omitted rather than guessed. A reply to the current message resolves only through the run that prompt started, so legacy, mirrored, or ambiguous replies without that link show no line. When the original is confirmed deleted or inaccessible, the line shows "Original message unavailable" without an avatar or link, after the sender's name when the snapshot names it. A line whose row is reserved while the original is fetched never changes height: it fills in place, and a lookup that cannot reach the Gateway keeps the row reserved until a new connection retries. One exception is a shared conversation where the fetched original has no sender metadata and no reply snapshot names its sender: the author stays unknown, so the line ends hidden and its reserved row is released when the answer arrives. On desktop, the agent avatar stays at the top of attributed reply groups, with a short curved connector running from behind it to that line. On narrow screens, agent and participant avatars beside messages stay hidden to preserve content width; a small reply arrow introduces the line instead of the connector, while the author's avatar remains visible. Your own replies keep the line inside the bubble. Select the author to scroll to and briefly highlight the original. System entries such as local slash-command output render as centered notice rows without an avatar. Routine restart recovery shows only its heading, and queued agent updates do not add a separate waiting-for-delivery line. Interrupted or cancelled delivery and recovery still show their explanations.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player. Expand a video to sweep through assistant videos in the same turn with the previous/next buttons or Left/Right arrow keys. On touch screens, swipe the video picture or surrounding space left/right; the bottom native control strip remains available for seeking. When the video player itself has keyboard focus, its native playback shortcuts take precedence. Navigation stops the previous clip, and closing the viewer stops playback and returns focus to the original control. Videos from another turn or session are not included.
 

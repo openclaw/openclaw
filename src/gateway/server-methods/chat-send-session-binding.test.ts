@@ -29,6 +29,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
@@ -84,6 +85,7 @@ it.each(admissionScenarios)(
             ? "released"
             : scenario;
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
@@ -426,6 +428,7 @@ it.each(
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
       async (state) => {
+        await loadOrCreateProcessDeviceIdentityAsync();
         setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:reaction-source";
         const sessionId = "reaction-source-session";

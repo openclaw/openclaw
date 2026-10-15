@@ -156,6 +156,7 @@ describe("LINE send helpers", () => {
         primaryPlatformMessageId: messageId,
         raw,
         sentAt: fixedSentAt,
+        sourceResults: messageIds.map((messageId) => ({ channel: "line", messageId })),
         threadId: chatId,
       },
     };

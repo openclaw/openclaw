@@ -102,6 +102,10 @@ describePosix("explicit prior-CI admin landing", () => {
     const result = f.verifyPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("classic branch-protection policy is unavailable");
+    expect(result.output).toContain("ordinary green-CI landing");
+    expect(result.output).toContain(
+      "does not establish environment approval or production deployment authority",
+    );
     expect(f.state().calls.some((call) => call.includes("graphql"))).toBe(false);
     expect(f.state().mutations).toBe(0);
     expect(() => f.record()).toThrow();

@@ -93,7 +93,7 @@ type WrappedPendingContent = {
   payload: unknown;
 };
 
-/** @deprecated Use createChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. */
+/** @deprecated Use createChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. Final compatibility day: 2026-12-31. */
 export function createChannelApprovalNativeRuntimeAdapter<
   TPendingPayload,
   TPreparedTarget,

@@ -99,7 +99,7 @@ export function NewSessionPlusMenu(props: {
 }
 
 export function NewSessionSelectionStatus(props: { options: NewSessionComposerCapabilityOptions }) {
-  const count = () => countSessionToolOverrides(props.options.toolOverrides);
+  const count = createMemo(() => countSessionToolOverrides(props.options.toolOverrides));
   return (
     <Show when={count() > 0}>
       <button

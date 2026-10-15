@@ -10,9 +10,14 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
-import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
+import {
+  withChildProcessOperation,
+  type GitProcessOperation,
+} from "../../process/spawn-diagnostics.js";
+import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
+import type { ManagedWorktreeGcResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 const operation: GitProcessOperation = "worktree.maintenance";
@@ -29,6 +34,8 @@ type MaintenanceParams = {
   signal?: AbortSignal;
   commitGuard?: () => void;
   retryDeferred?: boolean;
+  progress?: WorktreeGcProgress;
+  checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
 };
 
 async function repairWorktreeObjects(
@@ -146,6 +153,7 @@ async function repairWorktreeObjects(
 async function maintainWorktreePacks(
   repoRoot: string,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
+  report: (before: number, after?: number) => Promise<void>,
 ): Promise<void> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -175,8 +183,11 @@ async function maintainWorktreePacks(
           throw error;
         });
         assertCurrent();
+        const before = packs.filter((name) => name.endsWith(".pack")).length;
+        await report(before);
         await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-        await consolidatePacks(repoRoot, packDirectory, packs, options);
+        const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
+        await report(before, after);
       }, params.signal),
     params.signal,
   );
@@ -195,22 +206,24 @@ async function cleanTemporaryPacks(
     return;
   }
   assertCurrent();
-  const result = await runCommandBuffersWithTimeout(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
-      ),
-    ],
-    {
-      input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
-      beforeInput: assertCurrent,
-      signal,
-      timeoutMs: 30_000,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-      maxOutputBytes: 4096,
-    },
+  const result = await withChildProcessOperation("worktree.maintenance", () =>
+    runCommandBuffersWithTimeout(
+      [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
+        ),
+      ],
+      {
+        input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
+        beforeInput: assertCurrent,
+        signal,
+        timeoutMs: 30_000,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        maxOutputBytes: 4096,
+      },
+    ),
   );
   assertCurrent();
   if (result.termination !== "exit" || result.code !== 0) {
@@ -257,31 +270,9 @@ async function consolidatePacks(
     packs.push({ name, size: stat.size, promisor: present.has(`${stem}.promisor`) });
   }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
+  let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
-    let candidates = packs.filter((pack) => pack.promisor === promisor);
-    if (candidates.length > 1) {
-      // Retire duplicate transfers before applying the rewrite budget. Never let
-      // ordinary copies displace promises, or a large redundant pack block convergence.
-      await requireGit(
-        repoRoot,
-        [
-          "multi-pack-index",
-          "write",
-          "--stdin-packs",
-          `--preferred-pack=${candidates.at(-1)!.name}`,
-        ],
-        {
-          ...options,
-          input: `${candidates.map((pack) => pack.name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
-        },
-      );
-      await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
-      const remaining = new Set(await fs.readdir(directory));
-      candidates = candidates.filter((pack) => remaining.has(pack.name));
-    }
-    if (candidates.length < 16) {
-      continue;
-    }
+    const candidates = packs.filter((pack) => pack.promisor === promisor);
     const selected = [];
     let bytes = 0;
     for (const pack of candidates) {
@@ -292,6 +283,50 @@ async function consolidatePacks(
       bytes += pack.size;
     }
     if (selected.length < 2) {
+      continue;
+    }
+    // Validate only the packs this pass may retire, without walking refs or
+    // missing partial-clone objects. The streaming writer does not check source CRCs.
+    objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
+    const verifyDeadline = performance.now() + PACK_BATCH_TIMEOUT_MS;
+    for (let offset = 0; offset < selected.length; offset += 128) {
+      const timeoutMs = Math.ceil(verifyDeadline - performance.now());
+      if (timeoutMs <= 0) {
+        throw new Error("Git pack verification exceeded its five-minute budget");
+      }
+      // Relative names and bounded argv also fit Windows' command-line limit.
+      await requireGit(
+        directory,
+        [
+          "-c",
+          "pack.threads=1",
+          "verify-pack",
+          `--object-format=${objectFormat}`,
+          ...selected.slice(offset, offset + 128),
+        ],
+        {
+          ...options,
+          timeoutMs,
+          // Standalone verification checks this pack/index, without rediscovering
+          // the entire partial clone for every index-pack child. Git ignores a ceiling at cwd.
+          env: { ...options.env, GIT_CEILING_DIRECTORIES: path.dirname(directory) },
+        },
+      );
+    }
+    await requireGit(
+      repoRoot,
+      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${selected.at(-1)!}`],
+      {
+        ...options,
+        input: `${selected.map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+      },
+    );
+    await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
+    const presentAfterExpiry = new Set(await fs.readdir(directory));
+    const remainingBatch = selected.filter((name) => presentAfterExpiry.has(name));
+    // The rewrite threshold applies to the inventory, not the byte-limited batch.
+    const remainingCount = candidates.length - selected.length + remainingBatch.length;
+    if (remainingCount < 16 || remainingBatch.length < 2) {
       continue;
     }
     // A static Git alias streams between native children without buffering packs in the Gateway.
@@ -305,7 +340,7 @@ async function consolidatePacks(
       {
         ...options,
         timeoutMs: PACK_BATCH_TIMEOUT_MS,
-        input: `${selected.join("\n")}\n`,
+        input: `${remainingBatch.join("\n")}\n`,
       },
     );
     const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
@@ -319,20 +354,20 @@ async function consolidatePacks(
       ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${replacement}`],
       {
         ...options,
-        input: `${[...new Set([...selected, replacement])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        input: `${[...new Set([...remainingBatch, replacement])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
       },
     );
     await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
   }
-  const remaining = (await fs.readdir(directory)).filter((name) =>
-    /^pack-[a-f0-9]+\.idx$/.test(name),
-  );
+  const remainingNames = await fs.readdir(directory);
+  const remaining = remainingNames.filter((name) => /^pack-[a-f0-9]+\.idx$/.test(name));
   if (remaining.length > 0) {
     await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
       ...options,
       input: `${remaining.join("\n")}\n`,
     });
   }
+  return remainingNames.filter((name) => name.endsWith(".pack")).length;
 }
 
 export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.now) {
@@ -340,6 +375,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
   const nextRunAt = new Map<string, number>();
   return async (params: MaintenanceParams): Promise<void> => {
+    const progress = params.progress ?? new WorktreeGcProgress();
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
       params.commitGuard?.();
@@ -350,27 +386,54 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
     }
     const records = await readRegistryWorktrees(env).catch((error: unknown) => {
       assertCurrent();
+      progress.error("git-maintenance", error);
       log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
       return [];
     });
     for (const repoRoot of new Set(records.map((record) => record.repoRoot))) {
       assertCurrent();
+      const report = async (
+        stage: NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>["stage"],
+        counts?: { packsBefore: number; packsAfter?: number },
+      ) => {
+        progress.result.gitMaintenance = {
+          ...progress.result.gitMaintenance,
+          ...counts,
+          repoRoot,
+          stage,
+        };
+        await params.checkpoint?.(progress.result);
+        assertCurrent();
+      };
+      progress.result.gitMaintenance = { repoRoot, stage: "packs" };
       if (failed.get(repoRoot) === "packs") {
+        progress.record(
+          "git-maintenance",
+          "deferred",
+          "Pack maintenance suspended; run worktrees gc --retry-deferred after repair",
+          repoRoot,
+        );
+        await report("suspended");
         continue;
       }
       if (!params.retryDeferred && now() < (nextRunAt.get(repoRoot) ?? 0)) {
+        await report("throttled");
         continue;
       }
       // Archive notifications also run cleanup; repository housekeeping stays hourly.
       nextRunAt.set(repoRoot, now() + 60 * 60_000);
       let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
-        const needsIntegrityCheck = records.some(
-          (record) =>
-            record.repoRoot === repoRoot &&
-            record.removedAt === undefined &&
-            record.gcRetry?.stage === "repository-corrupt",
-        );
+        await report(stage);
+        // Snapshot failures describe graph availability, not pack integrity.
+        // Verify bounded pack inputs before expiry; never gate them on full fsck.
+        await maintainWorktreePacks(repoRoot, params, async (before, after) => {
+          if (after !== undefined) {
+            progress.result.packsRemoved =
+              (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
+          }
+          await report(stage, { packsBefore: before, packsAfter: after });
+        });
         const options = {
           operation,
           signal: params.signal,
@@ -381,7 +444,9 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
           env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
         };
         let remote: string | undefined;
-        if (needsIntegrityCheck || params.retryDeferred) {
+        if (params.retryDeferred) {
+          stage = "objects";
+          await report(stage);
           const config = await runGit(
             repoRoot,
             ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
@@ -393,43 +458,8 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
             )?.[1];
           }
         }
-        let repaired = false;
-        if (needsIntegrityCheck) {
-          if (!remote) {
-            continue;
-          }
-          // A snapshot needs every blob locally; pack maintenance does not.
-          // Native fsck accepts promised omissions but still checks pack checksums.
-          const verify = () =>
-            withContentGitSlot(
-              () => requireGit(repoRoot, ["fsck", "--full", "--no-dangling"], options),
-              params.signal,
-            );
-          try {
-            await verify();
-          } catch (error) {
-            assertCurrent();
-            if (!params.retryDeferred) {
-              throw error;
-            }
-            // Recover unpromised live/index objects only on explicit retry.
-            stage = "objects";
-            await withContentGitSlot(
-              () => repairWorktreeObjects(repoRoot, remote, params),
-              params.signal,
-            );
-            repaired = true;
-            stage = "packs";
-            await verify();
-          }
-        }
-        // Repair lookup before traversing objects: interrupted writers can leave
-        // the MIDX referring to pack files that no longer exist.
-        await maintainWorktreePacks(repoRoot, params);
-        stage = "objects";
-        // Only an explicit repair pass may fetch. Successful batches remain in
-        // Git if interrupted; the next retry inventories only what is missing.
-        if (params.retryDeferred && remote && !repaired) {
+        // Only an explicit repair pass may fetch. Pack progress is already published.
+        if (params.retryDeferred && remote) {
           await withContentGitSlot(
             () => repairWorktreeObjects(repoRoot, remote, params),
             params.signal,
@@ -437,8 +467,16 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
         }
         stage = "maintenance";
         if (failed.has(repoRoot)) {
+          progress.record(
+            "git-maintenance",
+            "deferred",
+            "Object or graph maintenance suspended; run worktrees gc --retry-deferred after repair",
+            repoRoot,
+          );
+          await report("suspended");
           continue;
         }
+        await report(stage);
         await withContentGitSlot(
           () =>
             requireGit(
@@ -448,9 +486,12 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
             ),
           params.signal,
         );
+        await report("completed");
       } catch (error) {
         assertCurrent();
         failed.set(repoRoot, stage);
+        progress.error("git-maintenance", error, repoRoot);
+        await report("suspended");
         const recovery =
           stage === "objects"
             ? "Check the promisor remote, then run openclaw worktrees gc --retry-deferred to resume object repair."
@@ -460,5 +501,6 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
         );
       }
     }
+    await params.checkpoint?.(progress.result);
   };
 }

@@ -1,4 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createGitHubReadTool } from "./src/read-tool.js";
+import { createGitHubSearchTool } from "./src/search-tool.js";
 import { GITHUB_COMMIT_PATH_PATTERN, GITHUB_ITEM_PATH_PATTERN } from "./src/targets.js";
 
 export default definePluginEntry({
@@ -6,6 +8,14 @@ export default definePluginEntry({
   name: "GitHub",
   description: "Public GitHub link previews and document reader",
   register(api) {
+    api.registerTool(
+      { contextVersion: 2, create: (context) => createGitHubReadTool(api, context) },
+      { name: "github_read", workspaceAccess: false },
+    );
+    api.registerTool(
+      { contextVersion: 2, create: (context) => createGitHubSearchTool(api, context) },
+      { name: "github_search", workspaceAccess: false },
+    );
     // Commits open in the reader, but do not spend anonymous quota on hover.
     for (const reader of [
       { id: "github", pathPattern: GITHUB_ITEM_PATH_PATTERN, previewMethod: "github.preview" },

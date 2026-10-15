@@ -581,6 +581,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           );
           expect(cancelled.status).not.toBe("timeout");
           provider.release("cancelled-worker");
+          // The replacement send can race cancelled-turn persistence; chat admission joins it.
           await settlement.wait(admin, remoteKey, signal);
           expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
             "ALICE-RESOURCE-2\n",

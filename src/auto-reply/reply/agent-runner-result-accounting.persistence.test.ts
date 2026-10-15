@@ -11,6 +11,8 @@ import { applySessionEntryLifecycleMutation } from "../../config/sessions/sessio
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -27,10 +29,14 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { createFollowupRunner } from "./followup-runner.js";
+import * as followupAdmission from "./followup-turn-admission.js";
+import * as followupExecution from "./followup-turn-execution.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -96,6 +102,91 @@ it.each(["before-accounting", "during-payload-preparation"] as const)(
     );
   },
 );
+
+it("retains an accepted rejected followup's recovery claim until source delivery settles", async () => {
+  const fixture = await createFixture();
+  const { context, sessionId, turn } = fixture;
+  const sessionKey = context.sessionKey!;
+  const scope = { agentId: "main", storePath, sessionKey };
+  const entry = {
+    ...fixture.read()!,
+    restartRecoveryDeliveryRunId: "accepted-followup",
+    restartRecoveryDeliverySourceRunId: "accepted-source",
+  };
+  await fixture.replace(entry);
+  turn.session.publish(entry);
+  await using actor = createReplyRecoveryActorFixture({
+    ...scope,
+    getSessionId: () => sessionId,
+    operation: turn.operation,
+  });
+  const recovery = createReplyRestartRecoveryClaimController({
+    ...scope,
+    acquireSessionActor: () => actor.acquireSessionActor(),
+    admissionRunId: "accepted-followup",
+    executionRunId: turn.runId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    getEntry: turn.session.current,
+    getSessionId: () => sessionId,
+    isRestartAbort: () => false,
+    resolveDeliveryContext: () => undefined,
+    setEntry: (next) => turn.session.publish(next),
+  });
+  await recovery.admitUserTurn();
+  turn.restartRecovery = recovery;
+  let deliveryEntry: SessionEntry | undefined;
+  const deliver = vi.fn(async () => {
+    deliveryEntry = fixture.read();
+  });
+  turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+  const admission = vi
+    .spyOn(followupAdmission, "admitFollowupTurn")
+    .mockResolvedValue({ kind: "admitted", turn });
+  const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
+    commentaryPayloadsEnabled: false,
+    execution: {
+      runId: turn.runId,
+      outcome: { kind: "rejected", payload: { text: "Accepted setup failed", isError: true } },
+    },
+    runStartedAt: context.runStartedAt,
+    sessionCtx: {},
+    pendingToolTasks: new Set(),
+    progress: { drain: async () => {} },
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "synthetic",
+    source: "test",
+    provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+  });
+  try {
+    await withPluginRuntimeRegistryScope(registry, () =>
+      createFollowupRunner({
+        defaultModel: diagnostic.model,
+        typing: createMockTypingController(),
+        typingMode: "never",
+      })(turn.queued),
+    );
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        payloads: [expect.objectContaining({ text: "Accepted setup failed", isError: true })],
+        completion: expect.objectContaining({ kind: "failed" }),
+      }),
+    );
+    expect(deliveryEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "accepted-followup",
+      restartRecoveryDeliverySourceRunId: "accepted-source",
+    });
+    expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
+    const settledEntry = fixture.read();
+    expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
+  } finally {
+    admission.mockRestore();
+    execution.mockRestore();
+  }
+});
 
 it.each([
   { name: "auth profile", authProfileOverride: "openai:new", authProfileOverrideSource: "user" },

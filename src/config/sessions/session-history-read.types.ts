@@ -37,7 +37,7 @@ export type SessionBranchSummaryReadResult =
 export type SessionModelContextLimits = {
   maxBytes: number;
   maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
+  /** Model views may omit result bodies to retain earlier requests; evidence and forks stay strict. */
   toolResultOverflow?: "omit";
 };
 

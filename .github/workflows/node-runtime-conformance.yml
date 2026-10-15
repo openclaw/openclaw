@@ -39,6 +39,7 @@ on:
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
       - "!crates/openclaw-node-host/SIDECAR_PROTOCOL.md"
+      - "!patches/README.md"
   pull_request:
     paths: *validation_paths
 

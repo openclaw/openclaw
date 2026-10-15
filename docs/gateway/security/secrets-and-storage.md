@@ -58,6 +58,15 @@ Hardening: keep permissions tight (`700` on dirs, `600` on files); use full-disk
 
 `openclaw doctor` can warn and offer to tighten these.
 
+Normal config writes, recovery, and secret-file updates preserve the permissions
+of an existing state root, including an operator-configured group-shared root.
+New state roots and private subdirectories remain `700`; config, backups, and
+secret files remain `600`. This does not make a group-writable state root a
+security boundary against that group: members can replace directory entries
+even when they cannot read the original files. Share the state root only with
+trusted administrators. For sidecars that should access only workspace files,
+configure a workspace outside the private state root instead.
+
 ### Workspace `.env` files
 
 OpenClaw loads workspace-local `.env` files for agents and tools, but never lets them silently override gateway runtime controls:

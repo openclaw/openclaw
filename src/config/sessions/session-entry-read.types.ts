@@ -63,6 +63,8 @@ export type SessionEntryListWorkerResult = {
   unchanged?: true;
   /** Oldest cron run in the requested logical agent; null means no run rows. */
   nextCronRunUpdatedAt?: number | null;
+  /** Last scanned cron key when another retention page may remain. */
+  nextCronRunSessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {

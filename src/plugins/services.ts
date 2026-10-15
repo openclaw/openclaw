@@ -21,8 +21,9 @@ import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
-import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
+import type { PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
 import type { OwnedPluginService, PluginServicesOwner } from "./service-lifecycle.types.js";
@@ -486,17 +487,15 @@ async function startPreparedPluginServices({
       scheduler,
       createPluginServiceSchedulerRunner({ registry, record, instance, lease }),
     );
-    const runServiceStart = createScheduledGatewayRunner(
-      runtime ? getGatewayContextResolver(runtime) : undefined,
-    );
-    const getCron = getCronService
-      ? createPluginServiceCronGetter({
-          getCron: getCronService,
-          lease,
-          isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
-          resolveGatewayContext: runtime ? getGatewayContextResolver(runtime) : undefined,
-        })
-      : undefined;
+    const resolveGatewayContext = runtime ? getGatewayContextResolver(runtime) : undefined;
+    const runServiceStart = createScheduledGatewayRunner(resolveGatewayContext);
+    const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
+      pluginId: entry.pluginId,
+      lease,
+      getCronService,
+      resolveGatewayContext,
+      isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
+    });
     const nodeInvoker = record
       ? createPluginServiceNodeInvoker({
           registry,
@@ -530,6 +529,7 @@ async function startPreparedPluginServices({
       },
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
+      ...(mcpEvents ? { mcpEvents } : {}),
       ...(nodeInvoker
         ? { invokeNode: nodeInvoker.invoke, openNodeDuplex: nodeInvoker.openDuplex }
         : {}),

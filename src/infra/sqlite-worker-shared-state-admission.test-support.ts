@@ -21,6 +21,7 @@ import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -357,7 +358,29 @@ export function registerSharedStateWorkerAdmissionTests(
     const foreign = holdForeignWriter(captured);
     const canceled = new AbortController();
     const stopped = new Error("synthetic queued write canceled");
-    const posts = vi.spyOn(Worker.prototype, "postMessage");
+    const dispatched: number[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+    const nativePost = Worker.prototype.postMessage;
+    const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      let pid: number | undefined;
+      if (request.type === "execute") {
+        const command = deserialize(request.input) as {
+          type: string;
+          input: { record: NativeHookRelayBridgeRecord };
+        };
+        if (command.type === "nativeHookRelay.write") {
+          pid = command.input.record.pid;
+        }
+      }
+      nativePost.call(this, request, transferList);
+      if (pid !== undefined) {
+        dispatched.push(pid);
+      }
+    });
     let factories = 0;
     try {
       await runOpenClawStateWorkerOperation(
@@ -428,16 +451,6 @@ export function registerSharedStateWorkerAdmissionTests(
           },
         },
       );
-      const dispatched = posts.mock.calls.flatMap(([request]) => {
-        if (request.type !== "execute") {
-          return [];
-        }
-        const command = deserialize(request.input) as {
-          type: string;
-          input: { record: NativeHookRelayBridgeRecord };
-        };
-        return command.type === "nativeHookRelay.write" ? [command.input.record.pid] : [];
-      });
       expect(dispatched).toEqual([0, ...Array.from({ length: 255 }, (_, index) => index + 2)]);
       expect(factories).toBe(256);
       expect(

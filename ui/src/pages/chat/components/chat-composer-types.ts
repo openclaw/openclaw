@@ -1,12 +1,14 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import type { TemplateResult, nothing } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../../api/types.ts";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type { SessionProgressCardRefreshAction } from "../../../components/session-progress-card.ts";
@@ -25,6 +27,7 @@ import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
+import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -90,6 +93,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
@@ -113,6 +117,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  composerPredictions?: {
+    enabled: boolean;
+    active: boolean;
+    gateway: Pick<ApplicationGateway, "subscribeEvents">;
+  };
   mentions?: readonly HumanMention[];
   getMentions?: () => readonly HumanMention[];
   mentionDirectory?: HumanMentionDirectory;
@@ -149,7 +158,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
-  composerControls?: TemplateResult | typeof nothing;
+  composerControls?: TemplateResult | DirectiveResult | typeof nothing;
   footerContent?: JSX.Element;
   composerRecovery?: TemplateResult | typeof nothing;
   notices?: JSX.Element;

@@ -20,7 +20,11 @@ let cacheEpochMs = Date.now();
 function localGitReads() {
   return vi
     .mocked(runGitWorkerOperation)
-    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
+    .mock.calls.filter(
+      ([operation]) =>
+        operation.type !== "checkout.revision" &&
+        operation.type !== "pull-request.branch-comparison",
+    );
 }
 
 function paginatedChecksFetch(checkRuns: Record<string, unknown>[], laterStatus?: number) {
@@ -423,6 +427,9 @@ describe("loadControlUiSessionPullRequests", () => {
     ]);
     let additions = 1;
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return "unchanged";
       }
@@ -493,6 +500,9 @@ describe("loadControlUiSessionPullRequests", () => {
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return revision;
       }

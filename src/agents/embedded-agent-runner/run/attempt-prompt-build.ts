@@ -191,10 +191,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     activeAbortSignal,
   );
+  const assertHostActive = attempt.authProfileBinding
+    ? () => {
+        assertAdmittedActive?.();
+        attempt.authProfileBinding?.assertCurrent();
+      }
+    : assertAdmittedActive;
   assertHostActive?.();
   const hasPendingActionInstructions = Boolean(
     // Authorized enrichment runs after policy; do not pre-empt its required actions.
@@ -429,7 +435,7 @@ type PromptContextAttempt = Pick<
   | "sessionTarget"
   | "suppressNextUserMessagePersistence"
   | "operation"
->;
+> & { runId?: string };
 
 type PromptAssemblyContext = {
   effectivePrompt: string;
@@ -563,6 +569,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
           sessionTarget: attempt.sessionTarget,
+          runId: attempt.runId,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });

@@ -61,6 +61,7 @@ const readerOwners = resolveGlobalSingleton(
         timing: {
           preparedAtMs: number;
           hostAdmissionWaitMs: number;
+          databaseAdmissionWaitMs: number;
           transactions: { count: number };
         };
       }
@@ -98,6 +99,7 @@ export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: ()
       timing: {
         preparedAtMs: Date.now(),
         hostAdmissionWaitMs: 0,
+        databaseAdmissionWaitMs: 0,
         transactions: readerOwners.getStore()?.timing.transactions ?? { count: 0 },
       },
     },

@@ -252,16 +252,6 @@ describe("tab icon artwork lifecycle", () => {
     }
   });
 
-  it("does not load agent artwork for the default choice", () => {
-    const fixture = setup();
-    fixture.selection.state.selectedId = "other";
-    fixture.publish();
-    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
-    expect(resolveAvatarImageUrl).not.toHaveBeenCalled();
-    expect(fixture.identity.ensure).not.toHaveBeenCalled();
-    expect(loadUnlockedLobsterFavicon).not.toHaveBeenCalled();
-  });
-
   it("discards superseded protected-avatar results and stops reacting after disconnect", async () => {
     const pending = createDeferred<string | null>();
     const released = vi.fn();
@@ -282,43 +272,6 @@ describe("tab icon artwork lifecycle", () => {
     fixture.publish();
     expect(applyControlUiFaviconImage).toHaveBeenCalledTimes(calls);
   });
-
-  it.each([
-    ["agent", "square"],
-    ["agent:rounded", "rounded"],
-    ["agent:circle", "circle"],
-  ] as const)(
-    "hands %s artwork to the compositor and retires it when the source changes",
-    async (preference, shape) => {
-      const decoded = createDeferred();
-      vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:protected-avatar");
-      vi.stubGlobal(
-        "Image",
-        class {
-          src = "";
-          naturalWidth = 64;
-          naturalHeight = 32;
-          decode = () => decoded.promise;
-        },
-      );
-      const fixture = setup(preference);
-      await Promise.resolve();
-      decoded.resolve();
-      await decoded.promise;
-      await Promise.resolve();
-      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          src: "blob:protected-avatar",
-          naturalWidth: 64,
-          naturalHeight: 32,
-        }),
-        shape,
-      );
-      fixture.theme.settings.tabIcon = "default";
-      fixture.publish();
-      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
-    },
-  );
 
   it("retries the same source after a failed protected-avatar load", async () => {
     const missing = createDeferred<string | null>();

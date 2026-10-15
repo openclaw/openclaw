@@ -13,6 +13,7 @@ import type {
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -21,7 +22,6 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
-import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
@@ -49,6 +49,7 @@ export type ChatProps = Omit<
   | "pendingInputs"
   | "runActive"
   | "runWorking"
+  | "runFinalizing"
   | "startupLabel"
   | "retryAt"
   | "failureActionsRunId"
@@ -81,7 +82,7 @@ export type ChatProps = Omit<
     ) => Promise<boolean>;
     presented?: PresentationValue;
     historyState?: ChatState;
-    startupStatus?: ChatRunStartupStatus | null;
+    awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     providerReview?: ChatProviderReviewController;
@@ -234,10 +235,15 @@ export function createChatViewFrame(props: ChatProps) {
     pendingInputs: displayedPendingInputs,
     runActive: props.runActive === true,
     runWorking,
+    runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
     startupLabel: chatStartupStatusLabel(
       props.startupStatus,
       placementStartup,
       props.environmentStartStatus,
+      (runWorking || props.stream !== null) &&
+        props.awaitingActivity !== false &&
+        !props.stream?.trim() &&
+        props.toolMessages.length === 0,
     ),
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),

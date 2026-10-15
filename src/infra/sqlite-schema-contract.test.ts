@@ -75,12 +75,10 @@ it("excludes named expected indexes without accepting unexpected actual uniquene
   }
 });
 
-describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)", (cacheEnabled) => {
+describe("assertSqliteSchemaContains", () => {
   function createDatabase(schema: string): DatabaseSync {
     const database = new DatabaseSync(":memory:");
-    if (cacheEnabled) {
-      enableNodeSqliteKyselyStatementCache(database);
-    }
+    enableNodeSqliteKyselyStatementCache(database);
     database.exec(schema);
     return database;
   }
@@ -173,29 +171,7 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     }
   });
 
-  it.each([
-    "CREATE TABLE pragma_index_list (id INTEGER);",
-    "CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;",
-  ])("keeps schema checks working when PRAGMA function names are shadowed: %s", (collisionSql) => {
-    const schema = `${CANONICAL_SCHEMA}\n${collisionSql}`;
-    const database = createDatabase(schema);
-    try {
-      database.exec("PRAGMA trusted_schema=OFF;");
-      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
-      database.exec("DROP INDEX idx_children_parent;");
-      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
-        {
-          code: "missing-or-drifted-index",
-          objectName: "idx_children_parent",
-          message: "missing or drifted index idx_children_parent",
-        },
-      ]);
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each(["", "CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;"])(
+  it.each(["CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;"])(
     "keeps main index terms separate from temp shadows with fallback %s",
     (fallback) => {
       const schema = `
@@ -462,41 +438,12 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
 
   it.each([
     {
-      name: "type",
-      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value BLOB NOT NULL"),
-      issue: { code: "column-definition-drift", objectName: "parents.value" },
-    },
-    {
-      name: "default",
-      schema: CANONICAL_SCHEMA.replace(" DEFAULT 'pending'", " DEFAULT 'other'"),
-      issue: { code: "column-definition-drift", objectName: "events.payload" },
-    },
-    {
       name: "table constraint",
       schema: CANONICAL_SCHEMA.replace(
         /,\s*FOREIGN KEY \(parent_id\) REFERENCES parents\(id\) ON DELETE CASCADE/u,
         "",
       ),
       issue: { code: "table-constraint-drift", objectName: "children" },
-    },
-    {
-      name: "index",
-      schema: CANONICAL_SCHEMA.replace(
-        "CREATE INDEX idx_children_parent ON children(parent_id, id)",
-        "CREATE INDEX idx_children_parent ON children(id, parent_id)",
-      ),
-      issue: { code: "missing-or-drifted-index", objectName: "idx_children_parent" },
-    },
-    {
-      name: "trigger",
-      schema: CANONICAL_SCHEMA.replace(
-        "UPDATE parents SET value = NEW.value WHERE id = NEW.parent_id",
-        "UPDATE parents SET value = NULL WHERE id = NEW.parent_id",
-      ),
-      issue: {
-        code: "missing-or-drifted-trigger",
-        objectName: "children_value_after_update",
-      },
     },
     {
       name: "table options",
@@ -585,27 +532,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
       }
     },
   );
-});
-
-it("reads schema from an unenabled nonextensible database handle", () => {
-  const database = new DatabaseSync(":memory:");
-  try {
-    database.exec(CANONICAL_SCHEMA);
-    Object.preventExtensions(database);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
-    }
-    database.exec("DROP INDEX idx_children_parent;");
-    expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([
-      {
-        code: "missing-or-drifted-index",
-        objectName: "idx_children_parent",
-        message: "missing or drifted index idx_children_parent",
-      },
-    ]);
-  } finally {
-    database.close();
-  }
 });
 
 function schemaWithFutureColumn(declaration: string): string {

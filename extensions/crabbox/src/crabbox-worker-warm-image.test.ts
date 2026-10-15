@@ -116,12 +116,13 @@ describe("Crabbox profile warm images", () => {
 
     await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
 
-    expect(calls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual([
-      ["run"],
-      ["checkpoint", "create"],
-      ["stop"],
-    ]);
-    const scrub = calls[0];
+    const captureCalls = calls.filter(
+      ({ argv }) => argv[1] === "run" || argv[1] === "checkpoint" || argv[1] === "stop",
+    );
+    expect(captureCalls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual(
+      [["run"], ["checkpoint", "create"], ["stop"]],
+    );
+    const scrub = captureCalls[0];
     expect(scrub?.argv).toContain("--script-stdin");
     expect(scrub?.options.input).toContain("$HOME/.openclaw/cloud-workers");
 
@@ -130,7 +131,7 @@ describe("Crabbox profile warm images", () => {
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
-    expect(calls[1]?.options.timeoutMs).toBe(48 * 60_000);
+    expect(captureCalls[1]?.options.timeoutMs).toBe(48 * 60_000);
     expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
@@ -274,7 +275,7 @@ describe("Crabbox profile warm images", () => {
       }),
     ).toThrow();
     expect(fs.existsSync(envFile)).toBe(true);
-    expect(calls[1]?.argv.slice(1)).toEqual([
+    expect(captureCalls[1]?.argv.slice(1)).toEqual([
       "checkpoint",
       "create",
       "--provider",

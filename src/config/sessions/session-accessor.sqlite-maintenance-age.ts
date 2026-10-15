@@ -25,8 +25,14 @@ export type SessionEntryMaintenanceAgeFact = {
 type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
 type MaintenanceActivity = Pick<
   SessionEntry,
-  "updatedAt" | "lastActivityAt" | "lastInteractionAt" | "sessionStartedAt" | "archivedAt"
->;
+  | "updatedAt"
+  | "lastActivityAt"
+  | "lastInteractionAt"
+  | "sessionStartedAt"
+  | "archivedAt"
+  | "sessionId"
+  | "parentSessionKey"
+> & { preserved?: boolean };
 export type SessionEntryMaintenanceAgeChange = {
   sessionKey: string;
   entry: MaintenanceActivity;
@@ -40,19 +46,31 @@ const changeObservers = new Map<
 export function captureSessionEntryMaintenanceAgeChange(
   change: SessionEntryMaintenanceAgeChange,
 ): SessionEntryMaintenanceAgeChange {
-  const pick = ({
-    updatedAt,
-    lastActivityAt,
-    lastInteractionAt,
-    sessionStartedAt,
-    archivedAt,
-  }: MaintenanceActivity) => ({
-    updatedAt,
-    lastActivityAt,
-    lastInteractionAt,
-    sessionStartedAt,
-    archivedAt,
-  });
+  const pick = (entry: MaintenanceActivity) => {
+    const {
+      updatedAt,
+      lastActivityAt,
+      lastInteractionAt,
+      sessionStartedAt,
+      archivedAt,
+      sessionId,
+      parentSessionKey,
+    } = entry;
+    return {
+      updatedAt,
+      lastActivityAt,
+      lastInteractionAt,
+      sessionStartedAt,
+      archivedAt,
+      sessionId,
+      parentSessionKey,
+      preserved: shouldPreserveMaintenanceEntry({
+        key: change.sessionKey,
+        entry,
+        preserveRecentMs: null,
+      }),
+    };
+  };
   return {
     sessionKey: change.sessionKey,
     entry: pick(change.entry),
@@ -188,16 +206,33 @@ export function updateSessionEntryMaintenanceAgeFact(
     };
   }
   const { entry, previousEntry } = update;
-  if (previousEntry && !isMonotoneSessionEntryMaintenanceAgeChange(update)) {
+  if (
+    previousEntry &&
+    (!isMonotoneSessionEntryMaintenanceAgeChange(update) ||
+      previousEntry.sessionId !== entry.sessionId ||
+      previousEntry.parentSessionKey !== entry.parentSessionKey)
+  ) {
     // Exact replacement/lifecycle writers also own backdates and archive restores.
     return undefined;
   }
-  // A newly inserted historical entry must retain already-due transitions too.
+  const protectionReleased =
+    previousEntry &&
+    (previousEntry.preserved ??
+      shouldPreserveMaintenanceEntry({
+        key: update.sessionKey,
+        entry: previousEntry,
+        preserveRecentMs: null,
+      })) &&
+    !(
+      entry.preserved ??
+      shouldPreserveMaintenanceEntry({ key: update.sessionKey, entry, preserveRecentMs: null })
+    );
+  // Newly eligible historical entries must retain already-due transitions too.
   const at = nextEntryAgeAt(
     update.sessionKey,
     entry,
     fact.maintenance,
-    previousEntry ? Date.now() : -Infinity,
+    previousEntry && !protectionReleased ? Date.now() : -Infinity,
   );
   return {
     ...fact,
@@ -338,4 +373,20 @@ export function readSessionEntryMaintenanceNextAgeAt(
   }
   const fact = readSessionEntryMaintenanceAgeFact(database.db, maintenance);
   return fact ? Math.min(fact.next.at, fact.recheckAt) : Date.now();
+}
+
+export function capturePendingSessionMaintenanceAgeChanges(
+  pending: Map<string, SessionEntryMaintenanceAgeChange>,
+) {
+  const changes = [...pending.values()];
+  return {
+    changes,
+    acknowledge() {
+      for (const change of changes) {
+        if (pending.get(change.sessionKey) === change) {
+          pending.delete(change.sessionKey);
+        }
+      }
+    },
+  };
 }

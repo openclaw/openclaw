@@ -8,7 +8,7 @@ import type {
   SessionMenuActionKind,
   SessionMenuWork,
 } from "../components/session-menu.ts";
-import type { SessionOwnerOption } from "../components/session-owner-chip.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };

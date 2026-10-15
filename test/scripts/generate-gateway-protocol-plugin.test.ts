@@ -22,7 +22,7 @@ function writeExecutable(file: string, content: string) {
 
 describe("GenerateGatewayProtocol SwiftPM plugin", () => {
   it.runIf(process.platform === "darwin")(
-    "runs generation with a supported concrete Node when shims and old Node lead PATH",
+    "resolves supported Node shims and reports failed probe reasons",
     { timeout: 180_000 },
     () => {
       const root = tempDirs.make("openclaw-protocol-plugin-");
@@ -85,17 +85,27 @@ writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtim
       };
 
       const scratch = path.join(root, "build");
-      const result = spawnSync(
-        "swift",
-        ["build", "--package-path", pkg, "--scratch-path", scratch],
-        {
-          encoding: "utf8",
-          env,
-          // spawnSync blocks the worker, so the Vitest deadline cannot stop a stuck build.
-          timeout: 150_000,
-          killSignal: "SIGKILL",
-        },
-      );
+      const build = (configuration: "debug" | "release") =>
+        spawnSync(
+          "swift",
+          [
+            "build",
+            "--package-path",
+            pkg,
+            "--scratch-path",
+            scratch,
+            "--configuration",
+            configuration,
+          ],
+          {
+            encoding: "utf8",
+            env,
+            // spawnSync blocks the worker, so the Vitest deadline cannot stop a stuck build.
+            timeout: 150_000,
+            killSignal: "SIGKILL",
+          },
+        );
+      const result = build("debug");
 
       expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
       const generated = readdirSync(scratch, { recursive: true, encoding: "utf8" }).find((file) =>
@@ -107,6 +117,18 @@ writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtim
       expect(readFileSync(path.join(scratch, generated), "utf8")).toBe(
         `public let generatedBy = ${JSON.stringify(`${node} ${process.version}`)}\n`,
       );
+
+      writeFileSync(
+        path.join(root, "node-version.mjs"),
+        'throw new Error("fixture Node probe import failed");\n',
+      );
+      // A different configuration replans the build while reusing the compiled plugin.
+      const failed = build("release");
+      const diagnostic = `${failed.stdout}\n${failed.stderr}`;
+      expect(failed.error).toBeUndefined();
+      expect(failed.status, diagnostic).not.toBe(0);
+      expect(diagnostic).toContain("fixture Node probe import failed");
+      expect(diagnostic).toContain(`${path.join(root, "shims/node")} (exited with status 1 after `);
     },
   );
 });
