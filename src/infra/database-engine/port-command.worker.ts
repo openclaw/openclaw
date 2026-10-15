@@ -312,7 +312,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         const descriptor = await withDatabasePortPostgres(
           task.config,
           engine,
-          async (_db, descriptor) => descriptor,
+          async (_db, family) => family,
         );
         return { engine, descriptor, facts: undefined };
       }

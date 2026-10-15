@@ -1,25 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import { resolveDatabaseEngineInput } from "./config.js";
-import { DatabasePortDataError, type PortDescriptor } from "./port.worker.js";
+import {
+  DatabasePortDataError,
+  type DatabasePortProvider,
+  type PortDescriptor,
+} from "./port-descriptor.js";
 import { workboardPortProvider } from "./workboard-port.js";
-
-export type DatabasePortProvider = {
-  id: string;
-  resolveRoots(context: {
-    config: OpenClawConfig;
-    stateDir: string;
-    env: NodeJS.ProcessEnv;
-    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
-  }): readonly string[];
-  matchesSqlite(tables: ReadonlySet<string>): boolean;
-  /** Includes the expected catalog from the same generated source as the bundled DDL. */
-  loadDescriptor(): Promise<PortDescriptor>;
-};
 
 /** The only registration point for portable database families. */
 export const databasePortProviders: readonly DatabasePortProvider[] = [workboardPortProvider];
@@ -83,9 +73,10 @@ export function withDatabasePortPostgres<T>(
           );
         },
       );
-    if (rows.length !== 1 || rows[0].store_id !== anchor.storeId) {
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.store_id !== anchor.storeId) {
       throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
     }
-    return run(client, await requireDatabasePortProvider(rows[0].store).loadDescriptor());
+    return run(client, await requireDatabasePortProvider(row.store).loadDescriptor());
   });
 }

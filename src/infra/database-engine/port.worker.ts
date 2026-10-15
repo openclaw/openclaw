@@ -421,11 +421,11 @@ async function assertSourceIdentity(
 /** Offline recovery inspection, never a runtime foreign-writer probe. */
 export async function inspectDatabasePort(
   source: Endpoint,
-  descriptor: PortDescriptor,
+  baseDescriptor: PortDescriptor,
   storeId?: string,
   verifyDefinitions = false,
 ) {
-  descriptor = await admitDatabasePortDescriptor(source, descriptor);
+  const descriptor = await admitDatabasePortDescriptor(source, baseDescriptor);
   let definitions: Awaited<ReturnType<typeof referenceCatalog>> | undefined;
   if (source.engine === "postgres") {
     await assertSourceIdentity(source, descriptor, storeId ?? "");

@@ -5,8 +5,11 @@ import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { DatabaseEngineInput } from "./config.js";
-import type { DatabasePortProvider } from "./port-provider.js";
-import { DatabasePortDataError, type PortDescriptor } from "./port.worker.js";
+import {
+  DatabasePortDataError,
+  type DatabasePortProvider,
+  type PortDescriptor,
+} from "./port-descriptor.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 

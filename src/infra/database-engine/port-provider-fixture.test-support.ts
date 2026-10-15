@@ -1,7 +1,6 @@
-import { generateDatabasePortMetadata } from "../../../scripts/generate-postgres-schema.mts";
-import { catalog } from "../../../scripts/lib/postgres-schema-catalog.mts";
+import { catalog, portTables } from "../../../scripts/lib/postgres-schema-catalog.mts";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import type { DatabasePortProvider } from "./port-provider.js";
+import type { DatabasePortProvider } from "./port-descriptor.js";
 import type { PortDescriptor } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 
@@ -15,14 +14,9 @@ function schema(name: string, extra = false) {
   const postgres = `CREATE TABLE ${name} (id TEXT COLLATE "C" PRIMARY KEY, value TEXT COLLATE "C" NOT NULL${extra ? ", edits BIGINT NOT NULL" : ""});`;
   using db = openNodeSqliteDatabase(":memory:");
   db.exec(sqlite);
-  const data = generateDatabasePortMetadata(db, catalog(db, ""), {
-    id: "synthetic",
-    version: 2,
-    sqlite,
-    postgres,
-  });
+  const data = catalog(db, "");
   return {
-    tables: data.tables,
+    tables: portTables(data),
     sqlite,
     preData: postgres,
     postData: "",
@@ -36,14 +30,6 @@ export function fixtureDescriptor(): PortDescriptor {
   const sqlite = items.sqlite + projection.sqlite + trigger.sql;
   const postData = `CREATE FUNCTION port_item_edits_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.edits := NEW.edits + 1; RETURN NEW; END $$;
     CREATE TRIGGER port_item_edits BEFORE INSERT ON port_items FOR EACH ROW EXECUTE FUNCTION port_item_edits_fn();`;
-  using db = openNodeSqliteDatabase(":memory:");
-  db.exec(sqlite);
-  const data = generateDatabasePortMetadata(db, catalog(db, ""), {
-    id: "synthetic",
-    version: 2,
-    sqlite,
-    postgres: items.preData + projection.preData + postData,
-  });
   return {
     id: "synthetic",
     version: 2,
@@ -53,11 +39,7 @@ export function fixtureDescriptor(): PortDescriptor {
     sqlite,
     preData: items.preData + projection.preData,
     postData,
-    triggers: data.triggers.map((entry) => ({
-      name: String(entry.name),
-      table: String(entry.table),
-      sql: String(entry.sql),
-    })),
+    triggers: [trigger],
     expectedCatalog: [...items.expectedCatalog, ...projection.expectedCatalog],
     fragments: [
       { id: "labels", dependencies: [], ...schema("port_labels") },

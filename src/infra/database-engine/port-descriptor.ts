@@ -1,6 +1,8 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
@@ -12,6 +14,19 @@ import {
 import type { DatabaseEngineInput } from "./types.js";
 
 export class DatabasePortDataError extends Error {}
+
+export type DatabasePortProvider = {
+  id: string;
+  resolveRoots(context: {
+    config: OpenClawConfig;
+    stateDir: string;
+    env: NodeJS.ProcessEnv;
+    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
+  }): readonly string[];
+  matchesSqlite(tables: ReadonlySet<string>): boolean;
+  /** Includes the expected catalog from the same generated source as the bundled DDL. */
+  loadDescriptor(): Promise<PortDescriptor>;
+};
 
 export type PortRow = Record<string, SQLInputValue>;
 export type PortTable = {
@@ -119,7 +134,7 @@ export async function admitDatabasePortDescriptor(
         );
   if (
     requiredFragments &&
-    !isDeepStrictEqual([...requiredFragments].sort(), [...admitted.activeFragments!].sort())
+    !isDeepStrictEqual(requiredFragments.toSorted(), admitted.activeFragments!.toSorted())
   ) {
     throw new DatabasePortDataError("Port source fragments differ from the recorded backup");
   }
@@ -128,15 +143,13 @@ export async function admitDatabasePortDescriptor(
 /** Validate the canonical SQLite surface before scanning or owner migration. */
 export function inspectSqlitePortSchema(
   db: DatabaseSync,
-  descriptor: PortDescriptor,
+  baseDescriptor: PortDescriptor,
   pendingColumns: Readonly<Record<string, readonly string[]>> = {},
 ): PortDescriptor {
   assertSqliteIntegrity(db, "Port SQLite source");
   admitSqliteSchema(db);
   const facts = getAdmittedSqliteSchemaFacts(db);
-  if (facts) {
-    descriptor = selectFragments(descriptor, facts.tables);
-  }
+  const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
   if (
     !facts ||
     facts.views.size ||
