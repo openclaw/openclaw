@@ -70,6 +70,8 @@ vi.mock("../infra/sqlite-busy-timeout.js", () => ({
 // mock-isolation: The heartbeat diagnostic fixture has no native database or transaction custody.
 vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  runSqliteDeferredTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  runSqliteReadSnapshotSync: (_db: unknown, run: () => unknown) => run(),
   retainSqliteWriteAdmissionService: () => () => {},
 }));
 vi.mock("./openclaw-state-db-handle.js", () => ({

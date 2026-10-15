@@ -1,17 +1,17 @@
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionMenuData } from "../components/session-menu-actions.ts";
-import "../components/session-menu.ts";
 import type {
   PluginSessionMenuAction,
   SessionMenuAction,
   SessionMenuActionKind,
   SessionMenuWork,
 } from "../components/session-menu.ts";
+import "../components/session-menu.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
+import { flush } from "./solid-settle.ts";
 type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
-export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
 
 export const containers: HTMLElement[] = [];
 
@@ -100,48 +100,75 @@ export async function mountMenu(
 
 export async function settleSessionMenu(menu: SessionMenuElement): Promise<void> {
   await menu.updateComplete;
-  // The Solid host commits before its retained Web Awesome children and their focus work.
-  await Promise.all(
-    Array.from(
-      menu.querySelectorAll<SessionMenuItem>("wa-dropdown, wa-dropdown-item"),
-      (item) => item.updateComplete,
-    ),
-  );
+  flush();
   await Promise.resolve();
 }
 
-function itemLabel(item: HTMLElement): string {
-  return item.querySelector(".session-menu__text")?.textContent?.trim() ?? "";
+export function menuPanel(menu: ParentNode): HTMLElement {
+  const panel =
+    menu instanceof HTMLButtonElement
+      ? document.getElementById(menu.getAttribute("aria-controls") ?? "")
+      : menu instanceof HTMLElement && menu.matches('[role="menu"]')
+        ? menu
+        : menu.querySelector<HTMLElement>(".session-menu__panel");
+  if (!panel) {
+    throw new Error("Expected native menu panel");
+  }
+  return panel;
+}
+
+function itemLabel(item: HTMLButtonElement): string {
+  return item.getAttribute("aria-label") ?? "";
 }
 
 export function menuItemLabels(menu: ParentNode): string[] {
-  const selector =
-    menu instanceof Element && menu.matches("wa-dropdown-item")
-      ? ":scope > wa-dropdown-item[slot='submenu']"
-      : ":scope > wa-dropdown > wa-dropdown-item";
-  return Array.from(menu.querySelectorAll<HTMLElement>(selector)).map(itemLabel);
+  const panel = menuPanel(menu);
+  return [...panel.querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]')]
+    .filter((item) => item.closest('[role="menu"]') === panel)
+    .map(itemLabel);
 }
 
-export function menuItem(menu: ParentNode, label: string): SessionMenuItem {
-  const item = Array.from(menu.querySelectorAll<SessionMenuItem>("wa-dropdown-item")).find(
-    (candidate) => itemLabel(candidate) === label,
-  );
+export function menuItem(menu: ParentNode, label: string): HTMLButtonElement {
+  const item = [
+    ...menuPanel(menu).querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]'),
+  ].find((candidate) => itemLabel(candidate) === label);
   if (!item) {
     throw new Error(`Expected menu item: ${label}`);
   }
   return item;
 }
 
-export function iconChoices(menu: ParentNode): HTMLButtonElement[] {
-  return Array.from(menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"));
+export async function openSubmenu(menu: ParentNode, label: string): Promise<HTMLElement> {
+  const trigger = menuItem(menu, label);
+  const panel = menuPanel(trigger);
+  if (trigger.disabled || !trigger.closest('[role="menu"]')?.matches(":popover-open")) {
+    throw new Error(`Expected enabled submenu trigger in an open panel: ${label}`);
+  }
+  trigger.focus();
+  trigger.click();
+  flush();
+  await Promise.resolve();
+  if (!panel.matches(":popover-open")) {
+    throw new Error(`Expected open submenu: ${label}`);
+  }
+  return panel;
 }
 
-export function selectMenuValue(menu: SessionMenuElement, value: string) {
-  menu.querySelector("wa-dropdown")?.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
+export function iconChoices(menu: ParentNode): HTMLButtonElement[] {
+  return [...menuPanel(menu).querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice")];
+}
+
+export async function selectMenuValue(menu: SessionMenuElement, value: string) {
+  const item = [...menu.querySelectorAll<HTMLButtonElement>("button[value]")].find(
+    (candidate) =>
+      candidate.value === value &&
+      !candidate.disabled &&
+      candidate.closest('[role="menu"]')?.matches(":popover-open"),
   );
+  if (!item) {
+    throw new Error(`Expected enabled menu action in an open panel: ${value}`);
+  }
+  item.focus();
+  item.click();
+  await settleSessionMenu(menu);
 }

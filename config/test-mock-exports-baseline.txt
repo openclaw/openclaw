@@ -386,7 +386,6 @@
 ["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","./run-attempt-lifecycle.js","3bb355a2ed8b0ad24b16257e1117d97f3d14d97b81045d68eae058821bc88b09",1]
 ["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","./run-attempt-state.js","2b2864affdd4080cefb30883895f8ace9edc611f4a90c3e98160dc0c5d4e2ce1",1]
 ["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","./session-binding.js","2f40aba77aea25c5d5ce0ec4a2d89c9921d885fdec73871788a2da1663424046",1]
-["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","./usage-limit-error.js","31b750d410200f4ac4402208584d6026ec9118512d9deeb724018dfee3fc792d",1]
 ["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","./user-prompt-message.js","1ac47b4d6be67de78f12dd040e4e26e83c73dcc93bb17b964c1f980cd82e99fa",1]
 ["extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts","openclaw/plugin-sdk/agent-harness-runtime","db9741e80acd20cb0fc9fbb8e87cf8c9c36a216cc8b6746a97c6b44f4ce0eff1",1]
 ["extensions/codex/src/app-server/run-attempt.question-refresh.test.ts","openclaw/plugin-sdk/agent-harness-runtime","79aec9cb017cbe79cb52a923f068a188363d6f916780f88dc7ae1d5159ebba4c",1]

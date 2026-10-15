@@ -15,19 +15,26 @@ import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.t
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
   readonly renderedRects: Array<{ width: number; height: number } | null> = [];
-  private readonly rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
+  private rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
     kind: "content",
     key: `row-${index}`,
     content: html`<div style="height: 120px">Row ${index}</div>`,
   }));
 
-  initialize(context: ApplicationContext) {
+  initialize(context: ApplicationContext, followEnd = false) {
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
+    if (followEnd) {
+      this.rows = this.rows.map((row, index) => ({
+        kind: "content",
+        key: row.key,
+        content: html`<div style="height: 360px">Row ${index}</div>`,
+      }));
+    }
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
       scrollTop: 0,
-      anchorToEnd: false,
+      anchorToEnd: followEnd,
     });
   }
 
@@ -76,7 +83,7 @@ async function settleLayout() {
   }
 }
 
-async function mountPane() {
+async function mountPane(followEnd = false) {
   const fixture = createMountedPanes([
     { key: "agent:main:geometry-render", kind: "direct", updatedAt: 1 },
   ]);
@@ -86,7 +93,7 @@ async function mountPane() {
     client: null,
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
-  pane.initialize(fixture.context);
+  pane.initialize(fixture.context, followEnd);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
   await pane.updateComplete;
@@ -96,6 +103,43 @@ async function mountPane() {
   const viewport = expectDefined(session.scrollElement, "mounted transcript viewport");
   return { host: pane, session, viewport };
 }
+
+it("keeps the initial tail rows mounted while their estimated sizes settle", async () => {
+  const mounted = new Map<string, Set<Element>>();
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) {
+          continue;
+        }
+        const rows = node.matches(".chat-virtual-row")
+          ? [node]
+          : node.querySelectorAll(".chat-virtual-row");
+        for (const row of rows) {
+          const key = row.getAttribute("data-virtual-row-key")!;
+          const elements = mounted.get(key) ?? new Set<Element>();
+          elements.add(row);
+          mounted.set(key, elements);
+        }
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  try {
+    const { host, viewport } = await mountPane(true);
+    const tail = expectDefined(
+      host.querySelector('[data-virtual-row-key="row-99"]'),
+      "last transcript row",
+    );
+    expect([...mounted.get("row-99")!]).toEqual([tail]);
+    expect(mounted.has("row-0")).toBe(false);
+    expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(
+      1,
+    );
+  } finally {
+    observer.disconnect();
+  }
+});
 
 it("commits each settled pane width with its new transcript rect in exactly one render", async () => {
   const { host, viewport } = await mountPane();

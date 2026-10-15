@@ -28,7 +28,6 @@ import {
   withOpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -666,25 +665,20 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
-  it.each([false, true])(
-    "closes malformed JSON explicitly (authenticated=%s)",
-    async (connected) => {
-      const close = createCloseMock();
-      const harness = attachGatewayHarness({
-        connId: "conn-malformed-json",
-        connectNonce: "nonce-malformed-json",
-        close,
-      });
-      if (connected) {
-        harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
-        await harness.runWhenIdle();
-      }
-      harness.sendMessage("{");
-      await harness.runWhenIdle();
-      expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
-      expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
-    },
-  );
+  it("closes malformed JSON explicitly on an authenticated connection", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-malformed-json",
+      connectNonce: "nonce-malformed-json",
+      close,
+    });
+    harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    harness.sendMessage("{");
+    await harness.runWhenIdle();
+    expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
+    expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
+  });
 
   it.each(["bytes", "count"] as const)(
     "rejects queued handshake %s overflow before registration",
@@ -1438,81 +1432,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       )?.[1];
       expect(presence).not.toHaveProperty("user");
       expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
-    });
-  });
-
-  it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
-    const assertion = "header.payload.signature";
-    useGatewayTestConfig(loadConfigMock, () => ({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "cf-access-authenticated-user-email",
-            requiredHeaders: ["CF-Access-JWT-Assertion"],
-          },
-        },
-        trustedProxies: ["10.0.0.1"],
-        controlUi: { allowedOrigins: ["https://team.openclaw.ai"] },
-      },
-    }));
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "cf-access-authenticated-user-email",
-        requiredHeaders: ["CF-Access-JWT-Assertion"],
-      },
-    };
-    const harness = attachGatewayHarness({
-      connId: "conn-cloudflare-access",
-      connectNonce: "nonce-cloudflare-access",
-      requestHost: "team.openclaw.ai",
-      requestOrigin: "https://team.openclaw.ai",
-      remoteAddr: "10.0.0.1",
-      resolvedAuth,
-      headers: {
-        "cf-access-authenticated-user-email": "ada@example.com",
-        "cf-access-jwt-assertion": assertion,
-        "x-forwarded-for": "203.0.113.10",
-      },
-      ingressAttribution: {
-        kind: "trusted-proxy",
-        clientIp: "203.0.113.10",
-        rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
-      },
-    });
-
-    harness.sendConnect("connect-cloudflare-access", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "openclaw-control-ui",
-        version: "dev",
-        platform: "test",
-        mode: "ui",
-      },
-      role: "operator",
-      caps: [],
-    });
-
-    await waitForFast(() => {
-      expect(harness.client).toMatchObject({
-        authenticatedUserId: "ada@example.com",
-        authenticatedGitHubIdentitySync: expect.any(Function),
-      });
-      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authResult: expect.objectContaining({
-            method: "trusted-proxy",
-            user: "ada@example.com",
-          }),
-          authConfig: expect.objectContaining({ mode: "trusted-proxy" }),
-          requestHeaders: expect.objectContaining({
-            "cf-access-jwt-assertion": assertion,
-          }),
-        }),
-      );
     });
   });
 

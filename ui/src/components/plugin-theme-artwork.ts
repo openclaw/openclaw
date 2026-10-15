@@ -1,16 +1,6 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { until } from "lit/directives/until.js";
+import { solidContent } from "../lit/solid-content.tsx";
+import { LegacyPluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 
-export function renderPluginThemeArtwork(
-  url: string,
-  className: string,
-  fallback: TemplateResult | typeof nothing = nothing,
-) {
-  return until(
-    import("../pages/plugins/icon-loader.ts")
-      .then(({ fetchPluginThemeArtworkBlobUrl }) => fetchPluginThemeArtworkBlobUrl({ url }))
-      .then((src) => (src ? html`<img class=${className} alt="" src=${src} />` : fallback))
-      .catch(() => fallback),
-    fallback,
-  );
+export function renderPluginThemeArtwork(url: string, className: string, fallback?: unknown) {
+  return solidContent(LegacyPluginThemeArtwork, { url, class: className, fallback });
 }

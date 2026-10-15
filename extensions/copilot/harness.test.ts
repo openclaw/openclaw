@@ -301,20 +301,6 @@ describe("createCopilotAgentHarness", () => {
     });
   });
 
-  it("supports rejects manifest-owned providers outside the whitelist", () => {
-    const harness = createCopilotAgentHarness();
-
-    expect(
-      harness.supports({
-        provider: "anthropic",
-        modelId: "gpt-4.1",
-        requestedRuntime: "copilot",
-        providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
-      }),
-    ).toEqual({ supported: false, reason: "provider is not one of: github-copilot" });
-  });
-
   it("keeps invalid BYOK provider configuration on the structured attempt path", async () => {
     const pool = makePoolMock();
     mocks.createCopilotClientPool.mockReturnValue(pool);

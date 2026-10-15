@@ -240,7 +240,7 @@ export async function loadMatrixDeliveryPlan(
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
   }
   assertPlanIdentity(plan, params);
-  return structuredClone(plan);
+  return plan;
 }
 
 export async function persistMatrixDeliveryPlan(

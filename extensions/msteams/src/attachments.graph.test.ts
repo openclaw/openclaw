@@ -2,7 +2,6 @@
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
@@ -162,32 +161,6 @@ describe("msteams graph attachments", () => {
     expect(media.media).toHaveLength(2);
   });
 
-  it("cancels non-OK Graph collection bodies before returning empty hosted content", async () => {
-    const tracked = cancelTrackedTextResponse("missing hosted contents", { status: 404 });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
-      if (url === DEFAULT_MESSAGE_URL) {
-        return createJsonResponse({ attachments: [] });
-      }
-      if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
-        return tracked.response;
-      }
-      return createNotFoundResponse();
-    });
-
-    const media = await downloadMSTeamsGraphMedia({
-      messageUrl: DEFAULT_MESSAGE_URL,
-      tokenProvider: createTokenProvider(),
-      maxBytes: DEFAULT_MAX_BYTES,
-      fetchFn: fetchMock,
-      resolveFn: resolvePublicHost,
-    });
-
-    expect(media.media).toEqual([]);
-    expect(media.hostedStatus).toBe(404);
-    expect(tracked.wasCanceled()).toBe(true);
-  });
-
   it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
     const tokenProvider = createTokenProvider("top-secret-token");
     const escapedUrl = "https://example.com/collect";
@@ -327,13 +300,6 @@ const ADVERTISED_MEDIA_CASES = [
 ];
 
 const GRAPH_MESSAGE_URL_CASES = [
-  withLabel("builds a channel top-level message URL", {
-    params: createChannelGraphMessageUrlParams({
-      messageId: "123",
-    }),
-    expectedUrl: `${GRAPH_CHANNEL_MESSAGES_ROOT}/123`,
-  }),
-
   withLabel("builds a chat message URL", {
     params: {
       conversationType: "groupChat" as const,

@@ -408,9 +408,26 @@ describe("GitHub tool identity", () => {
       env,
     });
     await writeProfile(profileDir, "managed-publication-token");
+    const accessExpiresAtMs = 1_900_000_000_000;
+    oauthMocks.inspect.mockReturnValue({
+      state: "valid",
+      record: {
+        version: 1,
+        profileId,
+        agentId: "main",
+        scope: "system",
+        accountId: 202,
+        login: "managed-user",
+        refreshToken: "synthetic-publication-refresh",
+        scopes: [],
+        accessExpiresAtMs,
+        refreshExpiresAtMs: accessExpiresAtMs + 60_000,
+        createdAtMs: 0,
+      },
+    });
     const preparing = prepareGitHubPublicationIdentity({
       config: {
-        tools: { github: { profileId } },
+        tools: { github: { profileId, kind: "oauth" } },
         gateway: { controlUi: { github: { token: "resolved-preview-token" } } },
       },
       sourceConfig: {
@@ -443,6 +460,7 @@ describe("GitHub tool identity", () => {
       GITHUB_ENTERPRISE_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
     });
+    expect(identity.accessExpiresAtMs).toBe(accessExpiresAtMs);
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
     expect(childEnv.GH_TOKEN).toBe("managed-publication-token");

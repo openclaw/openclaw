@@ -389,7 +389,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "same-tools",
       }),
     ).toEqual({
@@ -404,7 +403,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "new-tools",
       }),
     ).toEqual({
