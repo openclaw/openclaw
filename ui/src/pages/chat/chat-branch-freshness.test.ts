@@ -82,6 +82,50 @@ describe("chat branch freshness", () => {
     return { request, state };
   }
 
+  it("keeps unchanged empty branch reads idle while recording their freshness", async () => {
+    const requestUpdate = vi.fn();
+    const { state } = createSessionEventState({ requestUpdate });
+    await loadChatBranches(state);
+    expect(state.chatBranches).toEqual([]);
+    expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
+    expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps unchanged and failed branch reads idle, then publishes recovered branch changes", async () => {
+    const branch = {
+      leafEntryId: "original-reply",
+      headline: "Original reply",
+      messageCount: 2,
+      active: true,
+    };
+    const requestUpdate = vi.fn();
+    const { state } = createSessionEventState({
+      chatBranches: [branch],
+      chatBranchesSessionKey: "agent:main:main",
+      chatBranchesConnectionEpoch: 1,
+      requestUpdate,
+    });
+    const listBranches = vi
+      .mocked(state.sessions.listBranches)
+      .mockResolvedValueOnce([{ ...branch }])
+      .mockRejectedValueOnce(new Error("Branch read failed"));
+    await loadChatBranches(state);
+    expect(requestUpdate).not.toHaveBeenCalled();
+    invalidateChatBranches(state);
+    await loadChatBranches(state);
+    expect(state.chatBranches).toEqual([branch]);
+    expect(state.chatBranchesConnectionEpoch).toBeNull();
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    const recovered = { ...branch, headline: "Recovered reply", messageCount: 3 };
+    listBranches.mockResolvedValueOnce([recovered]);
+    await loadChatBranches(state);
+    expect(state.chatBranches).toEqual([recovered]);
+    expect(state.chatBranchesConnectionEpoch).toBe(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { role: "assistant", historyPending: false },
     { role: "toolResult", historyPending: false },

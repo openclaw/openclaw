@@ -98,7 +98,15 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  begin: () => (() => void) | void;
+  /** No settlement means a source retry or a separate source-owned delivery outcome. */
+  begin: () =>
+    | ((settlement?: {
+        visibleReplySent: boolean;
+        failed: boolean;
+        /** Transport retained delivery without a callback to this source; clear activity UI. */
+        transportPending?: boolean;
+      }) => void)
+    | void;
 };
 
 /**
@@ -204,6 +212,10 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
+  onFollowupQueueDisposition?: (
+    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
+  ) => void;
   /**
    * Reports fresh visible children before their first turn and accepted spawns at settlement.
    * Creation reports include the key even when no public session URL is configured.

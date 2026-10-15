@@ -2,9 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
+import { registerRuntimeConfigWriteListener } from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  publishRuntimeConfigWrite,
 } from "../config/runtime-write-application.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -20,6 +22,7 @@ import {
   closeTestConfigReloaders,
   createReloaderHarness,
   flushReload,
+  makeSnapshot,
   makeZeroDebounceHookWrite,
   prepareConfigReloadTest,
 } from "./config-reload.test-support.js";
@@ -64,6 +67,45 @@ it("coalesces config writes after a delayed Gateway scheduler wake", async () =>
     await scheduler.stop();
   }
 });
+
+it.each([false, true])(
+  "settles a canonical reread by whether it preserves the saved change (%s)",
+  async (preserved) => {
+    const initial = { gateway: { reload: {} }, ui: { prefs: { locale: "en" } } };
+    const written = { ...initial, ui: { prefs: { locale: "fr" } } };
+    const observed = {
+      ...written,
+      ui: { prefs: { locale: preserved ? "fr" : "de" } },
+      logging: { level: "warn" as const },
+    };
+    const persistedHash = "canonical-reread";
+    const snapshot = makeSnapshot({ config: observed, hash: persistedHash });
+    const harness = createReloaderHarness(async () => snapshot, { initialConfig: initial });
+    await harness.reloader.ready;
+    const application = createRuntimeConfigWriteApplication();
+    const unsubscribe = registerRuntimeConfigWriteListener((write) => harness.emitWrite(write));
+    try {
+      publishRuntimeConfigWrite({
+        configPath: snapshot.path,
+        snapshot,
+        previousSourceConfig: initial,
+        writtenSourceConfig: written,
+        sourceConfig: observed,
+        runtimeConfig: observed,
+        persistedHash,
+        deferRuntimeActivation: true,
+        preparedCandidates: new Map(),
+        writeOptions: attachRuntimeConfigWriteApplication({}, application),
+      });
+      await flushReload(harness.reloader);
+
+      expect(harness.onConfigAccepted.mock.calls[0]?.[0]).toEqual(observed);
+      await expect(application.result).resolves.toBe(preserved ? "applied" : "superseded");
+    } finally {
+      unsubscribe();
+    }
+  },
+);
 
 it("applies an automatic write after the same source was accepted without runtime application", async () => {
   const write = makeZeroDebounceHookWrite("source-only-follow-up");

@@ -87,6 +87,13 @@ function mockPixVerseVideoTask(
 }
 
 describe("pixverse video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildPixVerseVideoGenerationProvider());
   });

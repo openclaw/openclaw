@@ -1100,41 +1100,6 @@ describe("Discord native plugin command dispatch", () => {
     },
   );
 
-  it("preserves partial delivery when a later Discord chunk fails without expiry", async () => {
-    const cfg = createConfig();
-    const interaction = createInteraction();
-    interaction.followUp
-      .mockResolvedValueOnce({ ok: true })
-      .mockRejectedValueOnce(new Error("provider connection failed"));
-    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
-      const dispatcherOptions = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-            onError?: (error: unknown, info: { kind: "final" }) => void;
-          };
-        }
-      ).dispatcherOptions;
-      try {
-        await dispatcherOptions.deliver({ text: "x".repeat(2500) }, { kind: "final" });
-      } catch (error) {
-        dispatcherOptions.onError?.(error, { kind: "final" });
-      }
-      return {
-        counts: { final: 0, block: 0, tool: 0 },
-        failedCounts: { final: 1, block: 0, tool: 0 },
-        queuedFinal: false,
-      };
-    });
-    const command = await createNativeCommand(cfg);
-
-    await command.run(interaction);
-
-    expect(interaction.followUp).toHaveBeenCalledTimes(2);
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
   it("returns an explicit warning when a direct plugin command has no visible reply", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {

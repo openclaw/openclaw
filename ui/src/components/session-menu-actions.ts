@@ -22,7 +22,6 @@ export type SessionMenuData = {
   target?: { key: string; agentId?: string };
   sessionId: string | null;
   isChild?: boolean;
-  hasChildren?: boolean;
   pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
@@ -56,7 +55,6 @@ const SIMPLE_SESSION_ACTIONS = [
   "move-session",
   "new-group",
   "toggle-archived",
-  "archive-tree",
   "move-to-top-level",
   "delete",
 ] as const;
@@ -209,14 +207,6 @@ export class SessionMenuActions {
         return false;
       case "move-to-top-level":
         return batch || !session.isChild;
-      case "archive-tree":
-        return (
-          batch ||
-          !session.hasChildren ||
-          session.archived ||
-          session.archiving === true ||
-          !state.archiveAllowed
-        );
       case "toggle-archived":
         return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":

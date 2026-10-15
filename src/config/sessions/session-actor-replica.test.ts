@@ -51,9 +51,11 @@ import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
+  readSessionActorTranscriptReplica,
   retainSessionActorEntryFacts,
   retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
+import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
@@ -143,6 +145,109 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   expect(selected(snapshot)).toBe(true);
   return snapshot;
 }
+
+it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
+  await drainGlobalSingletonLifecycleState("restart");
+  await withReplica((fixture) => {
+    const original = fixture.load();
+    fixture.replica.close();
+    fixture.replica.invalidate();
+    const cells: Array<{
+      replica: ReturnType<typeof createSessionActorReplica>;
+      state: SessionActorHotState;
+    }> = [];
+    const create = (entryFirst = false, keepOpen = false) => {
+      const state: SessionActorHotState = {
+        ...structuredClone(original),
+        target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
+      };
+      state.dependencySessionIds = [];
+      state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+        fixture.database.path,
+        collectSessionEntryLookupKeys(state.target.sessionKey),
+      )!;
+      if (state.target.database.kind !== "file") {
+        throw new Error("Replica fixture requires a durable target");
+      }
+      const target = { ...state.target, database: state.target.database };
+      if (entryFirst) {
+        retainSessionActorEntryFacts(
+          target.database,
+          [{ sessionKey: target.sessionKey, facts: { entry: state.entry, snapshots: "full" } }],
+          "budget-reader",
+        );
+      }
+      const replica = createSessionActorReplica({
+        target,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => "budget-reader",
+      });
+      expect(replica.beginRead()(state)).toBe(true);
+      if (!keepOpen) {
+        replica.close();
+      }
+      const cell = { replica, state };
+      cells.push(cell);
+      return cell;
+    };
+    const retain = (cell: (typeof cells)[number], characters: number) => {
+      const transcript: SessionActorTranscriptReplica = {
+        sessionId: cell.state.entry?.sessionId,
+        version: cell.state.transcript.version,
+        tail: {
+          coveredAfterSeq: -1,
+          events: [
+            { rawSeq: 0, event: { text: "x".repeat(characters) }, serializedBytes: characters },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(cell.state, transcript);
+      return transcript;
+    };
+    try {
+      const first = create(false, true);
+      const second = create(true);
+      const third = create();
+      retain(first, 1024 * 1024);
+      retain(second, 1024 * 1024);
+      const thirdTranscript = retain(third, 1024 * 1024);
+      // Three 2 MiB charges fit; growing and touching the oldest evicts the next oldest.
+      const grown = retain(first, 2 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
+      expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
+      retain(first, 512 * 1024);
+      first.replica.invalidate();
+      expect(first.replica.beginRead()(first.state)).toBe(true);
+      retain(first, 1024 * 1024);
+      const fourth = create();
+      retain(fourth, 2 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(third.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(first.state)).toBeDefined();
+      const oversized = retain(fourth, 5 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(first.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(fourth.state)).toBe(oversized);
+      retain(fourth, 16);
+      for (const cell of cells) {
+        cell.replica.close();
+        cell.replica.invalidate();
+      }
+      const small = Array.from({ length: 129 }, (_, index) => {
+        const cell = create(index % 2 === 0);
+        return { cell, transcript: retain(cell, 16) };
+      });
+      expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
+      for (const { cell, transcript } of small.slice(1)) {
+        expect(readSessionActorTranscriptReplica(cell.state)).toBe(transcript);
+      }
+    } finally {
+      for (const { replica } of cells) {
+        replica.close();
+        replica.invalidate();
+      }
+    }
+  });
+});
 
 it.each(["entry", "transcript", "plugin keys"] as const)(
   "evicts old replicas for large %s strings and releases replaced bytes",
@@ -705,7 +810,10 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     const selected = readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"]);
     expect(selected?.snapshots).toEqual(["skillsSnapshot"]);
     expect(selected?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
-    selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    expect(selected?.entry?.skillsSnapshot).toBe(before.entry?.skillsSnapshot);
+    expect(() => {
+      selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    }).toThrow(TypeError);
     expect(readSessionActorEntryFacts(entryTarget)?.entry?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
     );
@@ -725,13 +833,18 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       ],
       "row-facts-reader",
     );
-    retainedEntry.label = "Reader edit after retention";
-    projection.hasBoard = true;
     const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry).toBe(retainedEntry);
+    expect(retained.projection).toBe(projection);
     expect(retained.entry?.label).toBeUndefined();
     expect(retained.projection?.hasBoard).toBe(false);
-    retained.entry!.label = "Caller edit after reading";
-    retained.projection!.hasBoard = true;
+    expect(readSessionActorEntryFacts(entryTarget)?.entry).toBe(retained.entry);
+    expect(() => {
+      retained.entry!.label = "Caller edit after reading";
+    }).toThrow(TypeError);
+    expect(() => {
+      retained.projection!.hasBoard = true;
+    }).toThrow(TypeError);
     expect(readSessionActorEntryFacts(entryTarget)?.entry?.label).toBeUndefined();
     expect(readSessionActorEntryFacts(entryTarget)?.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"])?.snapshots).toEqual([]);

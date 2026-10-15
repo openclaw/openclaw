@@ -7,6 +7,7 @@ import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
 const controllers: ChatStateController<ChatPageHost>[] = [];
@@ -127,6 +128,19 @@ describe("transcript arrival scroll ownership", () => {
     controller.hostDisconnected();
     vi.advanceTimersToNextFrame();
     expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves follow effects when a host commit consumes a queued stream frame", () => {
+    const { controller, requestUpdate, state } = setup();
+    const follow = vi.spyOn(state, "chatScrollToEnd");
+    state.chatStream = "A response arrived before the property commit.";
+    requestChatPageUpdate(state, "animation-frame");
+    controller.hostUpdate();
+    controller.hostUpdated();
+    vi.advanceTimersToNextFrame();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(follow).toHaveBeenCalledOnce();
+    expect(state.chatStreamRenderFrame).toBeNull();
   });
 
   it.each(["message", "pending input", "resumed stream", "speech"] as const)(

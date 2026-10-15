@@ -127,6 +127,14 @@ describe("session-owned pending followup cleanup", () => {
     const runs = Array.from({ length: 6 }, (_, index) =>
       source(`source-${index}`, index % 2 ? "foreign-session" : alias),
     );
+    const reactions = runs.map(({ item }) => {
+      const end = vi.fn();
+      item.deliveryCorrelations = [{ begin: () => end }];
+      return end;
+    });
+    reactions[0]?.mockImplementation(() => {
+      throw new Error("reaction transport unavailable");
+    });
     for (const { item } of runs) {
       enqueueFollowupRun(key, item, createQueueSettings({ cap: 2 }), "none", undefined, false);
     }
@@ -147,6 +155,10 @@ describe("session-owned pending followup cleanup", () => {
     for (const [index, run] of runs.entries()) {
       expect(run.abandoned).toHaveBeenCalledTimes(index % 2 ? 0 : 1);
       expect(run.settled).toHaveBeenCalledTimes(index % 2 ? 0 : 1);
+      expect(reactions[index]).toHaveBeenCalledTimes(index % 2 ? 0 : 1);
+      if (index % 2 === 0) {
+        expect(reactions[index]).toHaveBeenCalledWith({ visibleReplySent: false, failed: true });
+      }
     }
   });
 

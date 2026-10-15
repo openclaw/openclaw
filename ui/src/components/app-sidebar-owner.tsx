@@ -31,14 +31,14 @@ import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
-import { renderSessionList } from "./app-sidebar-session-list-render.tsx";
+import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree, visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
@@ -192,7 +192,26 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           return () => snapshot.disconnect();
         },
       )
-      .watchStore(() => this.sidebarSnapshotController)
+      .watch(
+        () => this.sidebarSnapshotController,
+        (snapshot, notify) => {
+          let pending = snapshot.pending;
+          let model = this.sidebarSnapshot;
+          return snapshot.subscribe(() => {
+            if (pending !== snapshot.pending || model !== this.sidebarSnapshot) {
+              pending = snapshot.pending;
+              model = this.sidebarSnapshot;
+              notify();
+            } else {
+              // Persistence completion changes only the capture receipt, not the shell.
+              this.querySelector("aside.sidebar")?.setAttribute(
+                "data-snapshot-saved",
+                String(snapshot.saved),
+              );
+            }
+          });
+        },
+      )
       .effect(
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
@@ -315,21 +334,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     }
   }
 
-  private visibleNarrationRowsInOrder(): SidebarRecentSession[] {
-    const rows: SidebarRecentSession[] = [];
-    const append = (session: SidebarRecentSession) => {
-      rows.push(session);
-      if (this.isSessionChildrenExpanded(session)) {
-        visibleSessionChildren({
-          session,
-          fullyShown: this.isSessionChildrenFullyShown(session.key),
-        }).forEach(append);
-      }
-    };
-    this.visibleSessionRowsInOrder().forEach(append);
-    return rows;
-  }
-
   private narrationSyncInput(): SidebarNarrationSyncInput {
     const gateway = this.context?.gateway.snapshot;
     return {
@@ -337,7 +341,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       connected: this.connected && gateway?.phase === "connected",
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
-      rows: this.visibleNarrationRowsInOrder(),
+      rows: this.visibleSessionTreeInOrder(),
       openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };
@@ -489,13 +493,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element {
-    const row = renderSessionTree({
-      host: this,
-      get session() {
-        return session();
-      },
-      listItem: false,
-    });
+    const row = <SessionTree host={this} session={session()} listItem={false} />;
     return (
       <Show when={this.sidebarAgentsMode === "roster"} fallback={row}>
         {renderSidebarPinnedSession(this, session)}
@@ -537,64 +535,38 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         }
       },
     );
-    const nativeList = renderSessionList({
-      host: host(),
-      get empty() {
-        return visibleSessions().length === 0;
-      },
-      get sections() {
-        return sections();
-      },
-      get nativeSessionsHaveMore() {
-        return host().sessionData.sessionsResult?.hasMore === true;
-      },
-      get nativeSessionsLoading() {
-        return host().sessionData.sessionsLoading;
-      },
-      get catalogRenderer() {
-        return host().catalogRenderer;
-      },
-      catalogs: {
-        get catalogs() {
-          return catalogs();
-        },
-        get basePath() {
-          return host().basePath;
-        },
-        get routeSessionKey() {
-          return catalogRouteSessionKey();
-        },
-        get newSessionAgentId() {
-          return expandedAgentId();
-        },
-        get mainKey() {
-          return host().sessionMainKey();
-        },
-        get loadingMoreCatalogIds() {
-          return host().sessionData.loadingMoreSessionCatalogIds;
-        },
-        get projectGrouping() {
-          return host().catalogProjectGrouping;
-        },
-        get liveRows() {
-          return host().catalogLiveRows();
-        },
-        get toSidebarSession() {
-          return navigationState().toSidebarSession;
-        },
-        get catalogOpenTarget() {
-          return host().catalogOpenTarget;
-        },
-        get terminalAvailable() {
-          return host().terminalAvailable;
-        },
-      },
-    });
+    const nativeList = (
+      <SessionList
+        host={host()}
+        empty={visibleSessions().length === 0}
+        sections={sections()}
+        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
+        nativeSessionsLoading={host().sessionData.sessionsLoading}
+        catalogRenderer={host().catalogRenderer}
+        catalogs={{
+          catalogs: catalogs(),
+          basePath: host().basePath,
+          routeSessionKey: catalogRouteSessionKey(),
+          newSessionAgentId: expandedAgentId(),
+          mainKey: host().sessionMainKey(),
+          loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
+          projectGrouping: host().catalogProjectGrouping,
+          liveRows: host().catalogLiveRows(),
+          toSidebarSession: navigationState().toSidebarSession,
+          catalogOpenTarget: host().catalogOpenTarget,
+          terminalAvailable: host().terminalAvailable,
+        }}
+      />
+    );
     return (
       <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
         <SidebarAgentRoster
           host={host()}
-          active={host().navigationVisible}
+          active={
+            host().navigationVisible &&
+            host().navigationView === "sessions" &&
+            !host().contextualSidebar
+          }
           sections={sections()}
           empty={visibleSessions().length === 0}
           involvingMe={host().sessionInvolvingMeFilterActive}

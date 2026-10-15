@@ -228,12 +228,26 @@ describe("setOcPath — md insertion", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      ast: { raw: `---\nname: x\n${REDACTED_SENTINEL}: safe\n---` },
+      ast: { raw: `---\nname: x\n${REDACTED_SENTINEL}: safe\n---\n` },
     });
   });
 
   it.each([
-    ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section"],
+    ["section", "## Existing\n", "oc://X.md/+", "New Section", "## Existing\n\n## New Section\n"],
+    [
+      "frontmatter",
+      "\uFEFF## Existing\r\n* keep: literal",
+      "oc://X.md/[frontmatter]/+name",
+      "x",
+      "\uFEFF---\r\nname: x\r\n---\r\n## Existing\r\n* keep: literal",
+    ],
+    [
+      "empty frontmatter",
+      "\uFEFF---\r\n# keep\r\n---\r\n## Existing",
+      "oc://X.md/[frontmatter]/+name",
+      "x",
+      "\uFEFF---\r\n# keep\r\nname: x\r\n---\r\n## Existing",
+    ],
   ])("preserves output and input AST when inserting a %s", (_kind, raw, path, value, expected) => {
     const md = parseMd(raw).ast;
     const before = structuredClone(md);

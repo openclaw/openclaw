@@ -20,7 +20,6 @@ import {
   type NativeReferenceProgress,
 } from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
-import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
@@ -46,19 +45,15 @@ import {
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
-import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
 import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
-import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelCatalogPluginContext,
@@ -98,11 +93,12 @@ async function refreshAuthStore(params: {
   providerIds?: readonly string[];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
+  const { store, displayPath } = await loadAuthProfileStoreForCatalogAsync(params.agentDir, {
+    allowKeychainPrompt: false,
+    ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+  });
   const durable = preserveResolvedSecretBackedCredentials({
-    next: await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
-      allowKeychainPrompt: false,
-      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-    }),
+    next: store,
     existing: params.authStore,
   });
   const persistedProfileIds = new Set(params.authStore.runtimePersistedProfileIds ?? []);
@@ -120,7 +116,7 @@ async function refreshAuthStore(params: {
     next: durable,
     existing: params.authStore,
   });
-  return withPluginRuntimeGenerationScope(
+  const authStore = withPluginRuntimeGenerationScope(
     {
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
@@ -134,6 +130,7 @@ async function refreshAuthStore(params: {
         allowKeychainPrompt: false,
       }),
   );
+  return { authStore, displayPath };
 }
 
 function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
@@ -305,7 +302,7 @@ async function runCatalogRequest(
     }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const authStore = await refreshAuthStore({
+    const { authStore, displayPath } = await refreshAuthStore({
       agentDir: value.input.agentDir,
       inheritedAuthDir: value.input.inheritedAuthDir,
       authStore: value.authStore,
@@ -416,18 +413,17 @@ async function runCatalogRequest(
       staticOwner.staticProviderIds = staticProviderIds;
     }
     catalogGeneration = staticOwner.pluginGeneration;
-    const {
-      value: source,
-      providerExpiries,
-      providerModels,
-    } = await captureProviderCatalogExpiries(
-      () =>
-        prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
-          authStore,
-          providerDiscoveryProviderIds: request.providerIds,
-          providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-        }),
-      { refresh: request.refresh },
+    const source = await prepareAgentCatalogSource(
+      exactAgentFacts,
+      catalogGeneration,
+      "live",
+      false,
+      {
+        authStore,
+        refresh: request.refresh,
+        providerDiscoveryProviderIds: request.providerIds,
+        providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+      },
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,
@@ -455,32 +451,6 @@ async function runCatalogRequest(
     };
     const runtimeModels = new Map<string, Model[]>();
     const { catalogModels } = facts;
-    const hookRows = withPluginRuntimeGenerationScope(pluginGenerationScope, () => {
-      const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
-        pluginMetadataSnapshot,
-        value.input.config,
-        value.input.env,
-      );
-      const keyOf = createModelCatalogIdentityKeyResolver();
-      const accepted = new Set(
-        [...providerModels].flatMap(([provider, ids]) =>
-          [...ids].map((id) => keyOf({ provider: normalizeProvider(provider), id })),
-        ),
-      );
-      const rows = new Map<string, Set<string>>();
-      // Registry rows carry accepted route/config overlays; augmentation happens later.
-      for (const model of catalogModels) {
-        const provider = normalizeProvider(model.provider);
-        const key = keyOf({ provider, id: model.id });
-        if (!accepted.has(key)) {
-          continue;
-        }
-        const keys = rows.get(provider) ?? new Set<string>();
-        keys.add(modelCatalogRouteVariantKey(modelCatalogRowToEntry(model), key));
-        rows.set(provider, keys);
-      }
-      return rows;
-    });
     for (const model of catalogModels) {
       const provider = normalizeProviderId(model.provider);
       const models = runtimeModels.get(provider) ?? [];
@@ -508,8 +478,7 @@ async function runCatalogRequest(
       generationFingerprint,
       snapshot: facts.modelCatalog,
       runtimeModels,
-      providerExpiries,
-      hookRows,
+      providerExpiries: source.providerExpiries ?? new Map(),
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:
@@ -519,7 +488,7 @@ async function runCatalogRequest(
               prepareModelCatalogAuthLabels({
                 config: value.input.config,
                 agentDir: value.input.agentDir,
-                authStorePath: resolveAuthStorePathForDisplay(value.input.agentDir),
+                authStorePath: displayPath,
                 workspaceDir: value.input.workspaceDir,
                 env: value.input.env,
                 store: authStore,

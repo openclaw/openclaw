@@ -24,30 +24,30 @@ plugin tests. They are not published `package.json` exports for third-party
 plugins, and they may import Vitest or other repo-only test dependencies.
 
 ```typescript
+import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import {
   shouldAckReaction,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
-import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { withEnv, withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-understanding";
 import {
   bundledPluginRoot,
   createCliRuntimeCapture,
   runDirectImportSmoke,
   typedCases,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-understanding";
 import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 ```
 
 Use these focused subpaths for bundled plugin tests. The former
@@ -196,8 +196,8 @@ Use `installCommonResolveTargetErrorCases` to add standard error cases for
 channel target resolution:
 
 ```typescript
-import { describe } from "vitest";
 import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
+import { describe } from "vitest";
 
 describe("my-channel target resolution", () => {
   installCommonResolveTargetErrorCases({

@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SKILL_LIBRARY_MAX_FILES = 256;
 export const SKILL_LIBRARY_MAX_FILE_BYTES = 1024 * 1024;
@@ -15,7 +16,7 @@ const sessionKey = Type.String({ minLength: 1, maxLength: 512 });
 export const SkillLibraryFileSchema = closedObject({
   path: Type.String({ minLength: 1, maxLength: 512 }),
   content: Type.String({ maxLength: Math.ceil(SKILL_LIBRARY_MAX_FILE_BYTES / 3) * 4 }),
-  encoding: Type.Optional(Type.Union([Type.Literal("utf8"), Type.Literal("base64")])),
+  encoding: Type.Optional(stringLiteralUnion(["utf8", "base64"])),
   executable: Type.Optional(Type.Boolean()),
 });
 export const SkillLibrarySelectionSchema = closedObject({
@@ -27,9 +28,7 @@ export const SkillLibrarySelectionSchema = closedObject({
 });
 export const SkillsLibraryListParamsSchema = closedObject({
   sessionKey: Type.Optional(sessionKey),
-  scope: Type.Optional(
-    Type.Union([Type.Literal("mine"), Type.Literal("team"), Type.Literal("all")]),
-  ),
+  scope: Type.Optional(stringLiteralUnion(["mine", "team", "all"])),
 });
 export const SkillsLibraryReadParamsSchema = closedObject({
   skillId: id,
@@ -54,20 +53,20 @@ export const SkillsLibrarySaveParamsSchema = closedObject({
 export const SkillsLibraryMutateParamsSchema = closedObject({
   skillId: id,
   expectedRevision: revision,
-  action: Type.Union([
-    Type.Literal("share"),
-    Type.Literal("unshare"),
-    Type.Literal("transfer"),
-    Type.Literal("remove"),
-    Type.Literal("enable"),
-    Type.Literal("disable"),
-    Type.Literal("rollback"),
+  action: stringLiteralUnion([
+    "share",
+    "unshare",
+    "transfer",
+    "remove",
+    "enable",
+    "disable",
+    "rollback",
   ]),
   revision: Type.Optional(revision),
 });
 export const SkillsLibraryActivateParamsSchema = closedObject({
   sessionKey,
-  action: Type.Union([Type.Literal("attach"), Type.Literal("detach"), Type.Literal("refresh")]),
+  action: stringLiteralUnion(["attach", "detach", "refresh"]),
   skillId: Type.Optional(id),
   revision: Type.Optional(revision),
 });

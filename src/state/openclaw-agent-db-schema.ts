@@ -340,6 +340,7 @@ function ensureAgentSchema(
   targetVersion = OPENCLAW_AGENT_SCHEMA_VERSION,
   withMutation: AgentSchemaMutationGuard = (run) => run(),
   onMigrationWarning?: (warning: string) => void,
+  versionMigrationOnly = false,
 ): void {
   const warnings: string[] = [];
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
@@ -443,6 +444,13 @@ function ensureAgentSchema(
             });
           }
         }
+        // Historical rebuilds also converge indexes. Later version steps own
+        // only their declared tables; additive index repair stays at admission.
+        if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
+          repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
+            verifyPhysicalIntegrity: false,
+          });
+        }
         finishAgentSchemaMigration(
           db,
           agentId,
@@ -464,7 +472,9 @@ function ensureAgentSchema(
         );
         // Schema-25 writers predate later startup columns; read-only session
         // readers refuse a migrated database that still lacks them.
-        ensureSessionAdditiveColumns(db);
+        if (!versionMigrationOnly) {
+          ensureSessionAdditiveColumns(db);
+        }
         finishStorageMigration();
         return;
       }
@@ -618,6 +628,8 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   options: OpenClawAgentDatabaseOptions & {
     register?: boolean;
     onMigrationWarning?: (warning: string) => void;
+    /** Finish only the declared version step; ordinary admission owns additive repairs. */
+    versionMigrationOnly?: boolean;
   },
 ): SqliteIntegrityOperation<void> {
   const agentId = normalizeAgentId(options.agentId);
@@ -669,7 +681,9 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
           withCommit: withRegistrationFence,
         })
       : run();
-  if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
+  // The version-phase owner admitted every selected database before its scoped
+  // checkpoint, under the same Doctor custody retained through this write.
+  if (!options.versionMigrationOnly && readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
     const integrity = agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
     try {
       let step = withIntegrityMutation(() => integrity.next());
@@ -697,7 +711,11 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
     OPENCLAW_AGENT_SCHEMA_VERSION,
     withRegistrationFence,
     options.onMigrationWarning,
+    options.versionMigrationOnly,
   );
+  if (options.versionMigrationOnly) {
+    return;
+  }
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   let admittedDb: DatabaseSync | undefined;
   if (db.location() && (isSqliteSchemaAdmissionCold(db) || getAdmittedSqliteSchemaFacts(db))) {

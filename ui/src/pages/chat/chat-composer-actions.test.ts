@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
@@ -10,8 +9,8 @@ import {
   findPrimaryButton as primaryButton,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 
 afterEach(async () => {
@@ -127,7 +126,7 @@ describe("renderChatComposer controls", () => {
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
     const handleClick = vi.spyOn(dictation, "handleClick");
     const update = vi.spyOn(dictation, "update");
-    render(renderChatComposer(props), container);
+    renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
     if (!commit) {
       throw new Error("expected the composer transcript callback");

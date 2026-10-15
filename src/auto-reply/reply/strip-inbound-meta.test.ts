@@ -358,6 +358,7 @@ Hello from user`;
     } as TemplateContext)}\n\nHello from user`;
 
     expect(extractInboundSenderLabel(input)).toBe("Ali```ce");
+    expect(stripInboundMetadata(input)).toBe("Hello from user");
   });
 });
 

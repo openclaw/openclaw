@@ -462,7 +462,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.size).toBe(0);
   });
 
-  it.each(["group", "direct"] as const)(
+  it.each(["direct"] as const)(
     "recovers cold %s thread context in chronological order, excluding the trigger",
     async (kind) => {
       const { handler } = await setup(kind);

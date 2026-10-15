@@ -18,13 +18,15 @@ agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
-The `Linux App` Windows installer job allows 105 minutes for source staging and
-packaging. Its canonical core build uses the existing
+The `Linux App` Linux companion and Windows installer jobs allow 105 minutes for
+source staging, packaging, and native proof. Their canonical core builds use the existing
 `OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
-cold Windows declarations exceeded the default 45-minute package deadline, while
-a complete installer job previously took 78 minutes. The remaining job budget
-covers dependency installation, Rust compilation, and NSIS packaging. Linux and
-release-workflow budgets are unchanged.
+cold declarations exceeded the default 45-minute package deadline. A Linux run
+completed its package declarations in 38 minutes before the deadline interrupted
+the following declaration phase; a complete Windows installer job previously took
+78 minutes. The remaining job budget covers dependency installation, Rust
+compilation, desktop tests, and installer packaging. The override stays on each
+source-build step; release-workflow budgets and package-integrity checks are unchanged.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
@@ -203,7 +205,7 @@ The first `checks-ui` shard also runs a curated WebKit overlay and composer-focu
 
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
-Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 

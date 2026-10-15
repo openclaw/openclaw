@@ -214,41 +214,26 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         () => false,
       ),
     );
-    if (scenario === "root-owned") {
-      const stat = fs.stat.bind(fs);
-      vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-        const value = await stat(...args);
-        if (value && args[0] === directory) {
-          Object.defineProperty(value, "uid", { value: typeof value.uid === "bigint" ? 0n : 0 });
-        }
-        return value;
-      });
-    } else if (scenario === "unsafe mode") {
-      await fs.chmod(target, 0o777);
-    } else {
-      const writeFile = fs.writeFile.bind(fs);
-      let replaced = false;
-      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        await writeFile(...args);
-        if (
-          !replaced &&
-          typeof args[0] === "string" &&
-          path.basename(args[0]).startsWith(`${path.basename(file)}.`) &&
-          args[0].endsWith(".tmp")
-        ) {
-          replaced = true;
-          // Replacing an alias must reject publication and clean the original directory.
-          await fs.rename(directory, `${directory}.previous`);
-          await fs.symlink(scenario === "retargeted alias" ? replacement : target, directory);
-        }
-      });
-    }
+    const writeFile = fs.writeFile.bind(fs);
+    let replaced = false;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      if (
+        !replaced &&
+        typeof args[0] === "string" &&
+        path.basename(args[0]).startsWith(`${path.basename(file)}.`) &&
+        args[0].endsWith(".tmp")
+      ) {
+        replaced = true;
+        // Replacing an alias must reject publication and clean the original directory.
+        await fs.rename(directory, `${directory}.previous`);
+        await fs.symlink(scenario === "retargeted alias" ? replacement : target, directory);
+      }
+    });
     if (scenario === "retargeted alias") {
       await expect(stage()).rejects.toThrow();
     } else {
-      await expect(stage()).rejects.toThrow(
-        scenario === "changed alias" ? "changed during publication" : "SERVICE_DEFINITION_",
-      );
+      await expect(stage()).rejects.toThrow("changed during publication");
     }
     expect(await fs.readdir(target)).toEqual([]);
     expect(await fs.readdir(replacement)).toEqual([]);
@@ -551,37 +536,18 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each([{ artifact: "unit", select: () => unitPath, change: "between publications" }])(
-    "rejects a concurrent $artifact edit $change",
-    async ({ select, change }) => {
-      const target = select();
-      await withSystemdDefinitionMutation(env, env, async (mutation) => {
-        if (change === "between publications") {
-          await mutation.publish(target, "first publication", 0o600);
-          await writeFixtureFile(target, "operator edit");
-        } else {
-          const rename = fs.rename.bind(fs);
-          vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-            await rename(source, destination);
-            if (destination === target) {
-              if (change === "replacement after rename") {
-                const replacement = path.join(root, "operator-replacement");
-                await writeFixtureFile(replacement, "operator edit", { mode: 0o600 });
-                await rename(replacement, target);
-              } else {
-                await writeFixtureFile(target, "operator edit");
-              }
-            }
-          });
-        }
-        await expect(mutation.publish(target, "must not accept", 0o600)).rejects.toThrow(
-          "changed during publication",
-        );
-      });
-      expect(await fs.readFile(target, "utf8")).toBe("operator edit");
-      await expectNoTemporaryFiles(path.dirname(target));
-    },
-  );
+  it("rejects a concurrent unit edit between publications", async () => {
+    const target = unitPath;
+    await withSystemdDefinitionMutation(env, env, async (mutation) => {
+      await mutation.publish(target, "first publication", 0o600);
+      await writeFixtureFile(target, "operator edit");
+      await expect(mutation.publish(target, "must not accept", 0o600)).rejects.toThrow(
+        "changed during publication",
+      );
+    });
+    expect(await fs.readFile(target, "utf8")).toBe("operator edit");
+    await expectNoTemporaryFiles(path.dirname(target));
+  });
 
   it.each([
     { artifact: "unit", select: () => unitPath, existed: false },
@@ -621,45 +587,31 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each([{ artifact: "environment", select: () => environmentPath, environmentExisted: true }])(
-    "stage rollback preserves a concurrent $artifact edit (env existed=$environmentExisted)",
-    async ({ artifact, select, environmentExisted }) => {
-      const previousUnit = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
-      const previousEnvironment = "OPERATOR=original\n";
-      await writeFixtureFile(unitPath, previousUnit);
-      if (environmentExisted) {
-        await writeFixtureFile(environmentPath, previousEnvironment);
+  it("stage rollback preserves a concurrent edit to an existing environment", async () => {
+    const previousUnit = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
+    const previousEnvironment = "OPERATOR=original\n";
+    await writeFixtureFile(unitPath, previousUnit);
+    await writeFixtureFile(environmentPath, previousEnvironment);
+    const edited = environmentPath;
+    const rename = fs.rename.bind(fs);
+    let changed = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (destination === unitPath && !changed) {
+        changed = true;
+        expect(await fs.readFile(environmentPath, "utf8")).toContain("replacement-secret-canary");
+        await writeFixtureFile(edited, "OPERATOR=concurrent\n");
       }
-      const edited = select();
-      const rename = fs.rename.bind(fs);
-      let changed = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-        await rename(source, destination);
-        if (destination === unitPath && !changed) {
-          changed = true;
-          expect(await fs.readFile(environmentPath, "utf8")).toContain("replacement-secret-canary");
-          await writeFixtureFile(edited, "OPERATOR=concurrent\n");
-        }
-      });
+    });
 
-      await expect(stage()).rejects.toThrow("changed during publication");
+    await expect(stage()).rejects.toThrow("changed during publication");
 
-      expect(await fs.readFile(edited, "utf8")).toBe("OPERATOR=concurrent\n");
-      if (artifact !== "unit") {
-        expect(await fs.readFile(unitPath, "utf8")).toBe(previousUnit);
-      }
-      if (artifact !== "environment") {
-        if (environmentExisted) {
-          expect(await fs.readFile(environmentPath, "utf8")).toBe(previousEnvironment);
-        } else {
-          await expect(fs.stat(environmentPath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      }
-      for (const directory of [path.dirname(unitPath), stateDir]) {
-        await expectNoTemporaryFiles(directory);
-      }
-    },
-  );
+    expect(await fs.readFile(edited, "utf8")).toBe("OPERATOR=concurrent\n");
+    expect(await fs.readFile(unitPath, "utf8")).toBe(previousUnit);
+    for (const directory of [path.dirname(unitPath), stateDir]) {
+      await expectNoTemporaryFiles(directory);
+    }
+  });
 
   it.each([
     { mount: "file-ro", mode: 0o400, kind: "sealed" },
@@ -865,9 +817,13 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     }
   });
 
-  it("publishes the unit, backup, and generated environment without chmod or secret disclosure", async () => {
-    const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
+  it.each([0o644, 0o664])("regenerates owned unit artifacts with mode %o safely", async (mode) => {
+    const previous =
+      "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\nTimeoutStopSec=30\nKillMode=control-group\n";
     await writeFixtureFile(unitPath, previous);
+    await writeFixtureFile(`${unitPath}.bak`, "older backup\n");
+    await fs.chmod(unitPath, mode);
+    await fs.chmod(`${unitPath}.bak`, mode);
     await writeFixtureFile(environmentPath, "OPERATOR_SECRET=preserved-canary\n");
     const chmod = vi.spyOn(fs, "chmod");
 
@@ -876,6 +832,10 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readFile(`${unitPath}.bak`, "utf8")).toBe(previous);
     expect(await fs.readFile(unitPath, "utf8")).toContain("/srv/openclaw/dist/index.js");
     expect(await fs.readFile(unitPath, "utf8")).not.toContain("replacement-secret-canary");
+    expect(await fs.readFile(unitPath, "utf8")).toContain("TimeoutStopSec=330");
+    expect(await fs.readFile(unitPath, "utf8")).toContain("KillMode=mixed");
+    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(`${unitPath}.bak`)).mode & 0o777).toBe(0o600);
     expect(await fs.readFile(environmentPath, "utf8")).toContain(
       "OPERATOR_SECRET=preserved-canary",
     );
@@ -883,6 +843,18 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(
       (await fs.readdir(path.dirname(unitPath))).filter((file) => file.includes(".tmp")),
     ).toEqual([]);
+  });
+
+  it("refuses an unsafe directory even when its unit mode is repairable", async () => {
+    const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
+    await writeFixtureFile(unitPath, previous);
+    await fs.chmod(unitPath, 0o664);
+    await fs.chmod(path.dirname(unitPath), 0o775);
+
+    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
+    expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
+    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
+    expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
   });
 
   it("publishes only the environment selected by the effective service state dir", async () => {

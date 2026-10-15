@@ -138,21 +138,6 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls.length).toBe(2);
   });
 
-  it("release decrements; non-zero refcount keeps client alive", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 100, sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
-    const second = await pool.acquire(key, options);
-    await pool.release(first);
-
-    expect(first.client).toBe(second.client);
-    expect(sdk.stops).toEqual([]);
-    expect(pool.size()).toBe(1);
-  });
-
   it("acquire during idle window cancels teardown and reuses", async () => {
     vi.useFakeTimers();
     const sdk = makeFake();

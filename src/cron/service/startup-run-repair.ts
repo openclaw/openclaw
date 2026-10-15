@@ -5,8 +5,6 @@ import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
-import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
-import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 import {
   applyJobResult,
@@ -36,18 +34,11 @@ export function markInterruptedStartupRun(params: {
   runningAtMs: number;
   preservedOccurrenceAtMs?: number;
   nowMs: number;
-  deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
   const replacementAtMs =
     params.preservedOccurrenceAtMs ?? resolveOneShotReplacementAtMs(job, runningAtMs);
-  // A persisted running marker means the gateway stopped mid-run; mark it as a
-  // normal failed run so retries, alerts, and run logs all see one outcome.
-  const previousErrors =
-    typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
-      ? Math.max(0, Math.floor(job.state.consecutiveErrors))
-      : 0;
-
+  // An interrupted run remains visible, but is not a failure of the job itself.
   params.state.deps.log.warn(
     { jobId: job.id, runningAtMs },
     "cron: marking interrupted running job failed on startup",
@@ -62,7 +53,6 @@ export function markInterruptedStartupRun(params: {
   job.state.lastError = STARTUP_INTERRUPTED_ERROR;
   job.state.lastErrorReason = undefined;
   job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
-  job.state.consecutiveErrors = previousErrors + 1;
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
@@ -74,35 +64,10 @@ export function markInterruptedStartupRun(params: {
   job.state.startupCatchupAtMs = undefined;
   job.updatedAtMs = nowMs;
 
-  const alertConfig = resolveFailureAlert(params.state, job);
-  const autoDisableNotificationOwnsFailure = maybeAutoDisableCronJobAfterRunFailure({
-    job,
-    atMs: nowMs,
-    deferredNotifications: params.deferredNotifications,
-  });
-  if (autoDisableNotificationOwnsFailure) {
-    params.state.deps.log.error(
-      { jobId: job.id, name: job.name, consecutiveErrors: job.state.consecutiveErrors },
-      "cron: auto-disabled interrupted job after consecutive run failures",
-    );
-  }
   // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
   if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
   }
-  finalizeCronFailureNotifications(params.state, {
-    job,
-    alertConfig,
-    result: {
-      status: "error",
-      error: STARTUP_INTERRUPTED_ERROR,
-      errorClassification: { kind: "aborted" },
-      startedAt: runningAtMs,
-    },
-    completionStatus: "failed",
-    autoDisableNotificationOwnsFailure,
-    deferredNotifications: params.deferredNotifications,
-  });
 
   return {
     jobId: job.id,

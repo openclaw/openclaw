@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -302,12 +302,18 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
-      scope: (options) => ({
-        paths: new Map([...rows.values()].map((row, index) => [row.storeTarget.storePath, index])),
-        path: storePath,
-        agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
-        configuredAgentIds: options.configuredAgentsOnly ? new Set(listAgentIds(cfg)) : undefined,
-      }),
+      scope: (options) => {
+        const ownerAgentIds = new Set(listAgentIds(cfg));
+        return {
+          paths: new Map(
+            [...rows.values()].map((row, index) => [row.storeTarget.storePath, index]),
+          ),
+          path: storePath,
+          agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
+          configuredAgentIds: options.configuredAgentsOnly ? ownerAgentIds : undefined,
+          ownerAgentIds,
+        };
+      },
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
     selectEntries,

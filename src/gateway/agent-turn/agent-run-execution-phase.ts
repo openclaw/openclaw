@@ -92,9 +92,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
-    const abortRegistration = prepared.activeRunAbort;
-    const abortEntry = abortRegistration.entry;
-    const abortController = abortRegistration.controller;
+    const { entry: abortEntry, controller: abortController } = prepared.activeRunAbort;
     const operationalRunInstance = prepared.operationalRunInstance;
     const sessionKey = abortEntry?.sessionKey;
     const admittedRunIdentity = abortEntry
@@ -111,7 +109,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
         !leaseActive ||
-        (abortRegistration.registered && !prepared.activeGatewayWorkAdmission.isActive())
+        (prepared.activeRunAbort.registered && !prepared.activeGatewayWorkAdmission.isActive())
       ) {
         throw new Error("Agent settlement no longer owns this Gateway run");
       }
@@ -123,7 +121,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
         !leaseActive ||
-        (abortRegistration.registered &&
+        (prepared.activeRunAbort.registered &&
           (!prepared.activeGatewayWorkAdmission.isActive() ||
             !abortEntry ||
             params.context.chatAbortControllers.get(params.runId) !== abortEntry ||
@@ -162,10 +160,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     let dispatched = false;
-    const dispatchAdmittedAgentRun = (
-      dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0],
-    ) => {
-      const run = () => {
+    const dispatchAdmittedAgentRun = (dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0]) =>
+      withCurrentUserTurnInput(prepared.userTurn.recorder, () => {
         const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
           () => dispatchAgentRunWithMedia(dispatch, params),
@@ -173,9 +169,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         );
         dispatched = true;
         return execution;
-      };
-      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
-    };
+      });
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
       let publishFinalAfterCleanup: (() => void) | undefined;
@@ -194,8 +188,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           : undefined;
       const finishFailure = async (err: unknown, recordCompletion = true) => {
         const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
-        const renderedErr = error.message;
-        const outcome = buildAgentRunTerminalOutcome({ status: "error", error: renderedErr });
+        const outcome = buildAgentRunTerminalOutcome({ status: "error", error: error.message });
         if (recordCompletion) {
           try {
             await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
@@ -204,7 +197,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           }
         }
         await settleUnstartedFollowup(outcome);
-        const payload = { runId: params.runId, status: "error" as const, summary: renderedErr };
+        const payload = { runId: params.runId, status: "error" as const, summary: error.message };
         publishFinalAfterCleanup = () => {
           setGatewayDedupeEntries({
             dedupe: params.context.dedupe,
@@ -214,7 +207,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           });
           params.io.emitFinal([false, payload, error], {
             runId: params.runId,
-            ...diagnostics.errorMeta(renderedErr),
+            ...diagnostics.errorMeta(error.message),
           });
         };
       };
@@ -259,10 +252,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         }
 
         if (prepared.acquireWorkspaceModelRuntime) {
-          const entry = params.sessionEntry;
+          let entry = params.sessionEntry;
           if (!entry || !params.resolvedSessionKey || entry.sessionId !== abortEntry?.sessionId) {
             throw new Error("Session changed before preparing its worktree.");
           }
+          params.sessionEntry = entry = { ...entry };
           await prepareSessionWorkspaceForRun({
             entry,
             cfg: params.cfgForAgent ?? params.cfg,
@@ -373,6 +367,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
           expectedExistingSessionId: params.request.expectedExistingSessionId,
           resolvedSessionId: params.resolvedSessionId,
+          resolvedSessionKey: params.resolvedSessionKey,
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });
@@ -420,6 +415,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               commandRuntimeContext: {
                 config: replyDispatchRuntime.config,
                 pluginGeneration: replyDispatchRuntime.pluginGeneration,
+                freshChild: params.freshChild,
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
@@ -495,6 +491,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
+                replyExpectation: prepared.userTurn.replyExpectation,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

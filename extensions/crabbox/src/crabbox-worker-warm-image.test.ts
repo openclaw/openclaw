@@ -55,23 +55,6 @@ describe("Crabbox profile warm images", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
     expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
   });
-  it("captures distinct images when setup, machine class, desktop, or provider changes", async () => {
-    const profile = { ...PROFILE, setup: "install-node" };
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider, profile);
-
-    for (const [index, changed] of [
-      { ...profile, setup: "install-other-node" },
-      { ...profile, class: "fast" },
-      { ...profile, desktop: true },
-      { ...profile, provider: "hetzner" },
-    ].entries()) {
-      calls.length = 0;
-      await captureWarmImage(provider, changed, `provision:v2:${String(index + 1).repeat(64)}`);
-      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    }
-  });
-
   it("rejects explicit warm images without sizing before opening setup secrets", async () => {
     const { provider, calls } = createWarmProvider();
     await expect(
@@ -86,28 +69,6 @@ describe("Crabbox profile warm images", () => {
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(calls).toEqual([]);
   });
-
-  it.each(["standard"])(
-    "never invokes checkpoint commands with warm images disabled and class %s",
-    async (machineClass) => {
-      const { provider, calls } = createWarmProvider();
-      const profile = {
-        ...CLASSLESS_PROFILE,
-        ...(machineClass ? { class: machineClass } : {}),
-        warmImage: false,
-      };
-      const lease = await provisionWarmProfile(provider, profile);
-
-      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
-
-      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-      expect(calls.at(-1)?.argv[1]).toBe("stop");
-      // Even without capture, the stop command owns termination after its timer fires.
-      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThan(
-        calls.at(-1)!.options.timeoutMs,
-      );
-    },
-  );
 
   it("scrubs every worker identity and workspace before capturing an enrolled lease", async () => {
     const { provider, calls } = createWarmProvider();

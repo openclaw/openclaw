@@ -4,9 +4,9 @@ import {
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
@@ -23,6 +23,7 @@ type SupplementalKind = "usage" | "cost";
 /** Loads usage and cost after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
   private readonly requests = new Map<SupplementalKind, AbortController>();
+  private forceReload = false;
 
   constructor(
     private readonly host: ControllerHost,
@@ -59,21 +60,33 @@ export class ModelProviderSupplementalLoader {
       client &&
       !this.options.isCoreLoading() &&
       !this.loading &&
+      (previous?.providerUsage == null || this.forceReload) &&
       data.providerUsage === null &&
       data.costByProvider === null
     ) {
+      this.forceReload = false;
       void this.loadRequests(client, true);
     }
   }
 
+  resume(): void {
+    const data = this.options.getData();
+    const client = this.options.getDataClient();
+    if (data?.providerUsage === null && client) {
+      this.adoptCoreData(client, data);
+    }
+  }
+
   invalidate(): void {
+    this.forceReload = true;
     this.options.refreshPolicy.interrupt();
     this.cancelGeneration();
   }
 
   beginCoreRefresh(force: boolean): void {
-    this.cancelGeneration();
     if (force) {
+      this.cancelGeneration();
+      this.forceReload = true;
       this.options.refreshPolicy.resetPayload();
     }
   }

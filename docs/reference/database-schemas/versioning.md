@@ -48,10 +48,11 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
-Shared-state [schema 22](/reference/database-schemas/state-schema-history#state-schema-22)
-adds portable ACP resume columns and explicit cursor identities. Builds supporting
-only schema 21 or earlier refuse it. Existing cursor values are preserved; binary
-rollback requires the verified pre-upgrade backup and its matching build.
+Shared-state [schema 24](/reference/database-schemas/state-schema-history#state-schema-24)
+replaces eleven retained task indexes with a runtime/run lookup and two ordered
+Cron history indexes. Rows and history ordering are unchanged. Builds supporting
+only schema 23 or earlier refuse it; binary rollback requires the verified
+pre-upgrade backup and its matching build.
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
@@ -657,11 +658,30 @@ Older same-schema readers ignore the new tables but cannot provide managed-libra
 
 ## Declared migration backup scopes
 
+Recent version migrations are separate from same-version repair. Agent schema
+25 and later advances leave unrelated additive indexes to the writable repair
+owner. Missing startup columns required by current session readers are still
+installed by subsequent admission before an upgraded store is exposed. Declared
+version phases leave those additive repairs outside their checkpoint. Declared
+shared-state advances likewise run only their pending version steps and install
+indexes for those tables. Unrelated same-version repairs run afterward. Older
+sources without a complete declaration retain the historical runner and full backup.
+
+An agent version advance from the canonical media schema does not repeat media
+row or archive repair. The Doctor migration prelude also defers session-entry
+and transcript-directive repair for those targets until a same-version run.
+Explicit same-version Doctor repair records successful
+media-row and ACP replay accounting passes transactionally; later runs reuse
+those completion facts. Restoring missing ACP accounting columns forces their
+backfill again. Current writers maintain canonical values; unsupported direct
+SQL writes do not invalidate these historical repair markers. Planner maintenance
+uses bounded SQLite optimization, which analyzes only missing or stale statistics.
+
 Startup migrations default to a verified full-file backup. A migration owner may
 register the tables it rewrites in `src/state/schema-migration-backup-tables.ts`,
 keyed by database kind and destination schema version. Every pending version must
 have a declaration; one missing declaration keeps the whole pending set on full
-backups. Same-version repairs and plugin Doctor repairs also keep full backups.
+backups. General Doctor and updater rollback still use full backups.
 The backup owner adds `schema_meta`, the SQLite user version, and, for shared
 state, `config_machine_state` for deferred schema publication.
 
@@ -676,10 +696,32 @@ a helper-only test does not prove the owning migration's scope. Declare
 `sqlite_stat1` and `sqlite_stat4` together when rebuilding analyzed tables or
 indexes. No existing migration is implicitly declared by its read set.
 
+Agent schema 27 declares `context_engine_turn_outbox` and both planner-statistics
+tables. Doctor verifies source integrity before taking this checkpoint. If orphan
+history blocks admission, its recovery owner preserves the original before repair
+and checkpoint capture. Doctor then commits and validates the version phase before
+entering general maintenance; its recovery inventory is completed at that boundary.
+Startup columns, same-version index and memory repair, session normalization,
+transcript repairs, deletion recovery, and plugin hooks run afterward under their
+existing owners. Destructive recovery and retained-content rewrites preserve full
+originals only when actual repair work exists. Ordinary metadata repairs remain
+transactional. An eligible clean version bump therefore needs no full agent image.
+The version-phase fixture verifies that every undeclared table's schema and
+typed contents remain unchanged, including populated retained history.
+
+Shared-state schema 23 declares only `meeting_transcript_sessions`. Its version
+phase runs before agent maintenance leases can open or modify shared state. The
+scoped backup includes the two publication metadata tables, while unrelated
+repairs and planner statistics remain untouched. Restoration preserves live
+undeclared planner statistics with the archive’s byte-preserving row codec across
+its table rebuilds; explicitly declared
+statistics, such as agent schema 27's, are restored from the archive instead.
+
 For a fully declared migration, Doctor can write a sibling
 `<database>.pre-startup-migration-<id>.scoped.bak` containing the selected schema
 SQL, rows, and version metadata. Only this smaller archive gets the backup
-integrity scan. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
+integrity scan; the migration's source integrity admission still checks the full
+database once. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
 The shared database accompanying agent
 migrations retains its full backup for registry and receipt recovery.

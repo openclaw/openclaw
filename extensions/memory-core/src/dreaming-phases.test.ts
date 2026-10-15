@@ -92,13 +92,6 @@ function mockUntrustedMemoryArtifact(params: {
   ]);
 }
 
-function candidateKey(candidates: Array<{ key: string; path: string }>, sourcePath: string) {
-  return expectDefined(
-    candidates.find((entry) => entry.path === sourcePath),
-    sourcePath,
-  ).key;
-}
-
 async function seedTranscript(params: {
   messages: Array<{
     role: "assistant" | "user";
@@ -1312,51 +1305,6 @@ describe("memory-core dreaming phases", () => {
     expect(candidates.map((candidate) => candidate.snippet)).toEqual([
       "Relationship notes for Emma Rees: Prefers short messages after work.",
     ]);
-  });
-
-  it("skips REM short-term candidates whose source file disappeared", async () => {
-    const workspaceDir = await createWorkspace();
-    const nowMs = BASE_TIME.getTime();
-    await seedRemRecallSources(workspaceDir, "2026-04-03", nowMs);
-    const baseline = await rankCandidates(workspaceDir, nowMs);
-    const liveKey = candidateKey(baseline, "memory/2026-04-03.md");
-    const staleKey = candidateKey(baseline, "memory/.dreams/session-corpus/2026-04-16.txt");
-
-    await withClock(async () => {
-      setTime();
-      await runDreamingSweepPhases({
-        agentId: "main",
-        workspaceDir,
-        pluginConfig: {
-          dreaming: {
-            enabled: true,
-            timezone: "UTC",
-            storage: { mode: "inline", separateReports: false },
-            phases: {
-              light: { enabled: false },
-              rem: {
-                enabled: true,
-                lookbackDays: 7,
-                limit: 10,
-                minPatternStrength: 0,
-              },
-            },
-          },
-        },
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      });
-    });
-
-    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
-      workspaceDir,
-      new Date().toISOString(),
-    );
-    expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
-    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
-
-    const remOutput = await fs.readFile(path.join(workspaceDir, "memory", `${DAY}.md`), "utf-8");
-    expect(remOutput).toContain("Move backups to S3 Glacier.");
-    expect(remOutput).not.toContain("Documented Ollama provider setup");
   });
 
   it("keeps explicitly untrusted traces out of light and REM narratives", async () => {

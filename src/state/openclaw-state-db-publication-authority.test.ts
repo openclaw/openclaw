@@ -182,10 +182,15 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "github-publication-requester-authority-v18", path: databasePath },
         { kind: "predicate-columns-v21", path: databasePath },
         { kind: "portable-identity-columns-v22", path: databasePath },
+        { kind: "meeting-transcript-start-time", path: databasePath },
+        { kind: "task-run-indexes-v24", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Added original requester authority to GitHub publication receipts (v18)"],
+          changes: [
+            "Added original requester authority to GitHub publication receipts (v18)",
+            "Replaced retained task indexes with ordered cron history indexes (v24)",
+          ],
           warnings: [],
         });
       }

@@ -208,7 +208,7 @@ export function installEmbeddedAttemptStreamGuards(
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
           observation.dropCause;
-        log.warn(
+        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +

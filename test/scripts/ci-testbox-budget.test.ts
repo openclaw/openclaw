@@ -182,7 +182,7 @@ describe("Testbox spending admission", () => {
     expect(job.if).toContain("needs.admission.result == 'success'");
     expect(job["runs-on"]).toContain("needs.admission.outputs.runner");
     expect(job.concurrency.group).toContain("needs.admission.outputs.group");
-    expect(job.concurrency.queue).toBeUndefined();
+    expect(job.concurrency.queue).toBe("max");
     expect(job.concurrency["cancel-in-progress"]).toBe(false);
     const names = job.steps.map((step: { name: string }) => step.name);
     expect(names.indexOf("Reject expired Testbox admission")).toBeGreaterThan(

@@ -10,7 +10,7 @@ type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"]
 
 /**
  * Run failures get more room than schedule errors (10 vs. 3) because provider
- * and network errors are often transient, and restart-interrupted runs count too.
+ * and network errors are often transient.
  */
 const MAX_CONSECUTIVE_RUN_FAILURES = 10;
 

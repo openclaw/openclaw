@@ -44,9 +44,11 @@ calls to deprecated storage APIs still warn with their replacements.
 
 Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
 `info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
-a stack on every routine message. `error` and `fatal` records retain it. All levels
-retain call-site metadata while diagnostics are enabled and an internal log-record
-consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+a stack on every routine message. `error` and `fatal` records retain it. Other than
+`info`, all levels retain call-site metadata while diagnostics are enabled and an
+internal log-record consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+`info` records, including `raw()` lines, remain stack-free with diagnostic consumers;
+their severity, message, structured attributes, and trace context are still exported.
 This follows diagnostic enablement and subscriptions on the next record, including
 for existing subsystem loggers. Log messages, structured fields, and error stacks
 supplied by callers are unchanged.
@@ -60,13 +62,22 @@ transport failures remain warnings. The existing
 [model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
 promote transport details to `info` when enabled.
 
-Secret egress forwarding without credential substitution uses `debug`. Refusals
-and credential substitutions remain at `info`, and certificate failures remain
+Successful secret egress forwarding, including credential substitution, uses
+`debug`. Refusals remain at `info`, and certificate failures remain
 warnings. Their structured fields record the proxy outcome without request
 payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
 Code Mode and Tool Search catalog preparation summaries also use `debug`.
 [Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
 preparations, and model calls independently of log levels.
+
+Per-request GitHub API timing records also use `debug`, including fetches over
+500 ms. Transport failures and rate-limit errors retain their normal handling.
+
+Plugin host cleanup failures during session reset or deletion emit one
+`plugins/cleanup` warning per failure, including the operation, plugin, hook, and
+error. Check the reported cleanup error before retrying. Successful cleanup
+stays quiet, and failures remain best effort. Console diagnostics use the shared
+secret redactor; plain-text console fields are capped at 2,048 characters.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 

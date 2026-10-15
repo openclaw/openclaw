@@ -527,13 +527,21 @@ setup, preparation, dependency waits, and the final gate in workflow projections
 
 Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
-Precisely selected, source-only CLI and Gateway client jobs use the 16-class when
-every serial group belongs to either family, has at most two explicit files, and
-retains its two-worker fallback. Gateway client groups must pair the
-`agentic-gateway-core-2` owner with `vitest.gateway-client.config.ts`. Apply this
-capacity choice after packing; keep complete families, other owners, builds,
-memory floors, and explicit large-runner anchors at their planned capacity.
+Precisely selected, source-only CLI, Gateway client/server, and embedded-agent
+jobs use the 16-class when every serial group has one qualified config, one or
+two explicit files, and a two-worker pin or fallback. An explicit wider worker
+pin keeps the planned capacity. Apply this choice after packing; keep complete
+families, unqualified configs, builds, memory floors, and explicit large-runner
+anchors at their planned capacity. Resource-gated tooling tests remain outside
+this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
+The isolated `attempt.llm-boundary.cache-stability.test.ts` selection also uses
+the 16-class when it is the group's only file and the same guards hold. A complete
+replay at `33488188fcab` passed all 19 tests in 105 seconds through the production
+shard executor, using four CPUs, a 12-GiB memory limit, and no swap. Peak memory was
+4.23 GiB with no OOMs. This qualifies that file only; any unqualified isolated
+sibling keeps the whole job at its planned capacity. Native latency and billed
+savings for this selection still need post-merge observation.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan

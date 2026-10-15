@@ -1,5 +1,5 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
-import { createComponent } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -526,6 +526,7 @@ describe("mcp-app-view localization", () => {
       { installTranscriptDomMocks },
       { installOutboxBrowserStorage },
       { createStorageMock },
+      { AppsPage },
     ] = await Promise.all([
       import("../pages/chat/chat-pane-mounted.test-support.ts"),
       import("../pages/chat/components/chat-transcript.test-support.ts"),
@@ -640,20 +641,21 @@ describe("mcp-app-view localization", () => {
     });
     const appClient = createTestGatewayClient(request);
     client.request = appClient.request.bind(appClient);
-    // SAFETY: the registered Apps page exposes these properties to its rendering callers.
-    const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
-      readonly updateComplete: Promise<boolean>;
-    };
-    Object.assign(apps, { appSearch: "?server=parts&tool=library" });
     const provider = createApplicationContextProvider(fixture.context);
     const initialized = deferred();
     provider.addEventListener(MCP_APP_CONTEXT_EVENT, () => initialized.resolve(), { once: true });
-    provider.append(apps);
     document.body.append(provider);
+    const { container: apps, unmount } = mountSolid(
+      () => createComponent(AppsPage, { appSearch: "?server=parts&tool=library" }),
+      {
+        container: provider,
+        wrapper: createSolidApplicationContextProvider(fixture.context).wrapper,
+      },
+    );
     try {
-      await apps.updateComplete;
+      flush();
       await vi.dynamicImportSettled();
-      await apps.updateComplete;
+      flush();
       expect(
         apps.querySelector('[role="alert"]')?.textContent,
         JSON.stringify(request.mock.calls.map(([method]) => method)),
@@ -688,6 +690,7 @@ describe("mcp-app-view localization", () => {
         expect.objectContaining({ "openai/modelContext": null }),
       );
     } finally {
+      unmount();
       provider.remove();
       await vi.dynamicImportSettled();
       vi.useRealTimers();

@@ -439,6 +439,7 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (
+    command.type === "userModelAccounts.authorization" ||
     command.type === "userModelAccounts.links" ||
     command.type === "userModelAccounts.summary" ||
     command.type === "userModelAccounts.selection" ||

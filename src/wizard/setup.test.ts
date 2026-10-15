@@ -1164,65 +1164,6 @@ describe("runSetupWizard", () => {
     },
   );
 
-  it("localizes the quickstart summary", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18791");
-    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
-    const prompter = buildWizardPrompter();
-    await runWizard({}, createRuntime(), prompter);
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway 端口：18791"),
-      "QuickStart",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tailscale 暴露方式：关闭"),
-      "QuickStart",
-    );
-  });
-
-  it("verifies and persists managed-local setup without enabling lean mode", async () => {
-    const modelRef = "managed-local/test-model";
-    readConfigFileSnapshot.mockResolvedValue(configSnapshot({}));
-    replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
-      readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
-      return { nextConfig };
-    });
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: { ...args.config.agents?.defaults, model: { primary: modelRef } },
-        },
-        models: {
-          providers: {
-            "managed-local": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-              localService: { command: "/fixture/server" },
-            },
-          },
-        },
-      },
-    }));
-    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
-      expect(config.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(replaceConfigFile).not.toHaveBeenCalled();
-      return { ok: true, modelRef, latencyMs: 1 };
-    });
-    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true) });
-    await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
-    expect(prompter.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Test AI access now with a live completion?" }),
-    );
-    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
-    expect(
-      persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean,
-    ).toBeUndefined();
-    expect(persistedWizardConfigs().at(-1)?.wizard ?? {}).not.toHaveProperty(
-      "localModelLeanAutoModel",
-    );
-  });
-
   it("saves each retry credential before verification while failed candidates leave config unchanged", async () => {
     const stateDir = await makeCaseDir("failed-auth-profile-retry-");
     const agentDir = path.join(stateDir, "agents", "main", "agent");

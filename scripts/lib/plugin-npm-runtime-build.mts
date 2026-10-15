@@ -20,6 +20,7 @@ import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
+import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 const env = {
   NODE_ENV: "production",
@@ -685,6 +686,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
       },
       createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
       createPluginInventoryModuleRefsPlugin(plan.packageDir),
+      createStateSchemaInlinePlugin(plan.repoRoot),
     ],
     outputOptions: {
       // Published plugins still support hosts predating these private source facades.

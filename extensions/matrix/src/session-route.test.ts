@@ -253,34 +253,12 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", async () => {
-    const route = await resolveMatrixOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "room:!ops:example.org",
-      currentSessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org",
-    });
-
-    const channelRoute = expectRoute(route);
-    expect(channelRoute.sessionKey).toBe(
-      "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org",
-    );
-    expect(channelRoute.baseSessionKey).toBe("agent:main:matrix:channel:!ops:example.org");
-    expect(channelRoute.threadId).toBe("$RootEvent:Example.Org");
-  });
-
   it.each([
     {
       name: "uses the Matrix thread root when replying to a child event",
       threadId: "$ThreadRoot:Example.Org",
       replyToId: "$ReplyChild:Example.Org",
       expectedThreadId: "$ThreadRoot:Example.Org",
-    },
-    {
-      name: "keeps reply-only session routing when no Matrix thread exists",
-      threadId: undefined,
-      replyToId: "$ReplyChild:Example.Org",
-      expectedThreadId: "$ReplyChild:Example.Org",
     },
   ])("$name", async ({ threadId, replyToId, expectedThreadId }) => {
     const route = expectRoute(

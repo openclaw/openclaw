@@ -24,6 +24,7 @@ import {
   type loadAgentTranscriptOperations,
   type TranscriptInitialization,
 } from "./openclaw-agent-execution-transcript.worker.js";
+import type { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
@@ -400,14 +401,14 @@ export async function loadAgentTrajectoryOperations() {
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { writeTransaction, admit },
     ) => {
-      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
           deferSqliteWorkerCommitReceipt(current.db, result.receipt);
           admit("commit");
           return result;
         }),
-      );
+      ).receipt.windowFacts;
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
       return retention.beginTrajectoryRuntimeRetention(
@@ -661,40 +662,6 @@ export async function loadSessionRowBackfillOperations() {
         );
         admit("commit");
         return fields;
-      }),
-  } satisfies Handlers;
-}
-
-export async function loadUsageCacheOperations() {
-  const [
-    { pruneSessionCostUsageRollupsInDatabase, writeSessionCostUsageRollupInDatabase },
-    { withSqliteDatabaseWriteScope },
-  ] = await Promise.all([
-    import("../infra/session-cost-usage-cache.kernel.js"),
-    import("../infra/sqlite-database-admission.js"),
-  ]);
-  // Usage cache and partition writes do not change resident session facts.
-  return {
-    "usageCache.writeRollup": (
-      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        const result = withSqliteDatabaseWriteScope(db, [], () =>
-          writeSessionCostUsageRollupInDatabase(db, input),
-        );
-        admit("commit");
-        return result;
-      }),
-    "usageCache.prune": (
-      input: Parameters<typeof pruneSessionCostUsageRollupsInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
-        withSqliteDatabaseWriteScope(db, [], () =>
-          pruneSessionCostUsageRollupsInDatabase(db, input),
-        );
-        admit("commit");
       }),
   } satisfies Handlers;
 }

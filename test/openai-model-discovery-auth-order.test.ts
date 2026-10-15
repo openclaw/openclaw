@@ -640,7 +640,6 @@ describe("Provider model discovery auth preparation", () => {
         undefined,
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       const plan = await planCatalog(config, store, { providerId, outcomes });
@@ -657,7 +656,6 @@ describe("Provider model discovery auth preparation", () => {
         { ...previous, providers: new Map() },
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       expect(published.catalog.entries).toContainEqual(priorModel);

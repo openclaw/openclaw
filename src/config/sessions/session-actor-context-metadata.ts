@@ -20,7 +20,13 @@ export function projectSessionActorContextMetadata(
     [...identities.values()].some(
       (row) => row.event_type === "reset" || row.event_type === "compaction",
     ) ||
-    navigation.some((row) => ["reset", "compaction", "leaf", "branch_summary"].includes(row.type))
+    navigation.some(
+      (row) =>
+        row.type === "reset" ||
+        row.type === "compaction" ||
+        row.type === "leaf" ||
+        row.type === "branch_summary",
+    )
   ) {
     return undefined;
   }

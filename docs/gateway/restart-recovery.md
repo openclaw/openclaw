@@ -16,8 +16,11 @@ missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
 Inter-session steering updates remain context for the executing turn. When that
-turn retains a human Control UI or channel source claim, recovery uses the claim
-rather than treating the latest steering message as a new delegated request.
+turn retains a Control UI, channel, or authenticated operator source claim,
+recovery uses the claim rather than treating the latest steering message as a new
+delegated request. This includes authenticated non-browser clients whose ingress
+is labeled internal. Before execution, the Gateway restores the exact operator
+source under current identity and access policy; a revoked source cannot resume.
 The existing source-authorization and delivery checks still apply; a transcript
 message alone cannot restore missing sender authority.
 
@@ -34,6 +37,11 @@ and what the automatic resume looks like.
 During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
+
+After the HTTP listener binds, interrupted main-session marking overlaps session
+projection preparation. Both settle before channels start and the Gateway reports
+ready. Post-ready recovery reuses the completed store checks instead of repeating
+that scan.
 
 ## What survives a restart
 
@@ -67,6 +75,17 @@ Inputs accepted by older versions without resumable custody also require explici
 An uncertain submission stays unconfirmed until its outcome can be reconciled
 or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
+
+Accepted `sessions_send` agent updates recover from their saved input and original
+delivery ID. Temporary admission, worker capacity, and storage-readiness failures
+get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
+Each attempt checks the original source and destination sessions and current
+communication permission again. Reset, replaced, archived, or permission-denied
+sessions stop automatic delivery. Unknown failures and exhausted retries leave the
+input saved, with a fixed failure-reason code and attempt count recorded in the
+recovery notice details. The notice explains the failure and directs you to resend
+the update or ask the sender to retry. Detailed diagnostics stay in operator logs. Recovery never
+reruns the sender task or restores old approvals.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
@@ -1090,8 +1109,8 @@ existing restart delivery and continuation behavior.
   boots. Recovery preserves channels that an operator manually stopped and any
   separate development-mode suppression. Gateway logs look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Start a channel manually with: openclaw gateway call
-channels.start --params '{"channel":"<id>"}'`
+  start for <channel>… Start a channel manually with: openclaw gateway call
+  channels.start --params '{"channel":"<id>"}'`
 
   Safe mode also pauses main-session restart recovery. Interrupted entries and
   transcripts stay unchanged: the pause does not charge an attempt, settle a
@@ -1142,6 +1161,9 @@ channels.start --params '{"channel":"<id>"}'`
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle. Exhaustion tombstones that session until it is
   inspected and replaced.
+  Temporary target-resolution failures use the existing bounded startup retries
+  without charging a dispatch attempt. Missing owners and mismatched stores
+  remain skipped.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.

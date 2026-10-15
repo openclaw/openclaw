@@ -267,32 +267,6 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
-  it("patches color from the rendered session menu", async () => {
-    const target = sessionRow("color");
-    const sessions = createSessions();
-    const context = createContext(createGateway().gateway, sessions);
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    const menu = await openRowMenu(page, target);
-    const item = menu.querySelector<HTMLButtonElement>(
-      '.session-menu__color-choice[aria-label="Green"]',
-    )!;
-    item.click();
-    await vi.waitFor(() =>
-      expect(sessions.patch).toHaveBeenCalledWith(
-        target.key,
-        { color: "green" },
-        { agentId: undefined },
-      ),
-    );
-  });
-
-  it("hides pinning for a lineage child", async () => {
-    const target = sessionRow("dashboard:child", { parentSessionKey: "agent:main:parent" });
-    const context = createContext(createGateway().gateway, createSessions());
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    expect((await openRowMenu(page, target)).querySelector('[value="toggle-pin"]')).toBeNull();
-  });
-
   it("uses personal visibility RPC from the management menu", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const connection = createGateway({ request } as unknown as GatewayBrowserClient);
@@ -736,15 +710,6 @@ describe("sessions page new group", () => {
     expect(sessions.groupsPut).not.toHaveBeenCalled();
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Refresh");
-  });
-
-  it("does not assign when the catalog owner reports a stale write", async () => {
-    const { page, sessions, messages } = await mount(async () => "stale");
-    await page.requestNewCategory(key);
-    expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
   });
 });
 

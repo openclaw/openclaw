@@ -8,8 +8,8 @@ import type {
   ModelCatalogEntry,
   ModelCatalogResult,
 } from "../../api/types.ts";
-import "../../components/agent-emoji-picker.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
@@ -276,10 +276,10 @@ export function AgentOverview(
                         }
                       }}
                     />
-                    <openclaw-agent-emoji-picker
-                      prop:value={identityEmoji()}
-                      prop:disabled={identityBusy()}
-                      prop:onSelect={(emoji: string) =>
+                    <AgentEmojiPicker
+                      value={identityEmoji()}
+                      disabled={identityBusy()}
+                      onSelect={(emoji: string) =>
                         params.onIdentityFieldChange("emoji", limitEmoji(emoji))
                       }
                     />

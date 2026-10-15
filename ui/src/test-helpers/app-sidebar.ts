@@ -20,6 +20,7 @@ import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   createSessionCapability,
   type SessionCapability,
@@ -306,6 +307,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     subscribeCreated: () => () => undefined,
     isPreparedWorkSession: () => false,
+    isRunVisuallyActive: (row: GatewaySessionRow) =>
+      scopedSessions?.isRunVisuallyActive(row) ?? isSessionRunActive(row),
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -445,6 +448,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       },
       selection,
     );
+    scopedSessions.subscribe(notify);
   });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };

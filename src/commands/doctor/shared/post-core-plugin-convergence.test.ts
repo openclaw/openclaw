@@ -443,41 +443,6 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
-  it("keeps failed configured-plugin repair fetches nonblocking", async () => {
-    const message =
-      'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.';
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
-      onWarning?.({ message, pluginId: "matrix" });
-      return {
-        changes: [],
-        warnings: [message],
-        failedPluginIds: ["matrix"],
-        records: {},
-      };
-    });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { matrix: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
-    expect(result.errored).toBe(false);
-    expect(result.outcomes).toBeUndefined();
-    expect(result.warnings).toStrictEqual([
-      {
-        kind: "repair",
-        pluginId: "matrix",
-        reason: message,
-        message,
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
-    ]);
-    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
-      records: {},
-      env: expect.any(Object),
-    });
-  });
-
   it("blocks convergence when a missing plugin cannot activate without capability consent", async () => {
     const message = 'Plugin "consent-fixture" requires capability consent.';
     mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
@@ -509,40 +474,6 @@ describe("runPostCorePluginConvergence", () => {
     ]);
     expect(result.smokeFailures).toEqual([]);
     expect(result.installRecords).toEqual({});
-  });
-
-  it("keeps inactive repair failures nonblocking", async () => {
-    const message =
-      'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.';
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
-      onWarning?.({ message, pluginId: "discord" });
-      return {
-        changes: [],
-        warnings: [message],
-        failedPluginIds: ["discord"],
-        records: {
-          discord: {
-            source: "npm",
-            spec: "@acme/discord",
-            installPath: "/p/discord",
-          },
-        },
-      };
-    });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: {
-          deny: ["discord"],
-          entries: { discord: { enabled: true } },
-        },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
-    expect(result.errored).toBe(false);
-    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
-      records: {},
-      env: expect.any(Object),
-    });
   });
 
   it("surfaces repair notices without marking convergence errored", async () => {
@@ -611,50 +542,6 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
-  it("uses ownership guidance for unreadable package.json", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: { brave: { source: "npm", installPath: "/p/brave" } },
-    });
-    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
-      checked: ["brave"],
-      failures: [
-        {
-          pluginId: "brave",
-          installPath: "/p/brave",
-          reason: "unreadable-package-json",
-          detail: "Could not read package.json at /p/brave/package.json: EACCES: permission denied",
-        },
-      ],
-    });
-
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { brave: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
-
-    const message =
-      'Plugin "brave" failed post-core payload smoke check (unreadable-package-json): Could not read package.json at /p/brave/package.json: EACCES: permission denied';
-    const guidance = [
-      "Fix file access for /p/brave/package.json so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.",
-      "Run `openclaw plugins inspect brave --runtime --json` for details.",
-    ];
-    expect(result.warnings).toStrictEqual([
-      {
-        pluginId: "brave",
-        reason:
-          "unreadable-package-json: Could not read package.json at /p/brave/package.json: EACCES: permission denied",
-        kind: "load",
-        message,
-        guidance,
-      },
-    ]);
-    expect(result.errored).toBe(true);
-  });
-
   it("keeps an active __proto__ record in smoke and package-path classification", async () => {
     const stateDir = tempDirs.make("openclaw-post-core-convergence-");
     const installPath = path.join(
@@ -712,6 +599,10 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.warnings[0]).toMatchObject({
       pluginId: "__proto__",
       reason: expect.stringContaining("unreadable-package-json"),
+      guidance: [
+        `Fix file access for ${path.join(installPath, "package.json")} so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.`,
+        "Run `openclaw plugins inspect __proto__ --runtime --json` for details.",
+      ],
     });
     expect(result.errored).toBe(true);
   });

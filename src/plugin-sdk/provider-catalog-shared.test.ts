@@ -338,7 +338,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
     const model: ModelCatalogProvider["models"][number] = {
       id: "example-model",
       name: "Example Model",
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       reasoning: true,
       contextWindow: 128_000,
       contextTokens: 64_000,

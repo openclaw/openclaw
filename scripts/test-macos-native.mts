@@ -324,12 +324,17 @@ await runWithFailedTrailer("macos-native", async () => {
                 "inherited",
                 "browser-sign-in-before",
                 "browser-sign-in-after",
+                "dashboard-reconnect-before",
+                "dashboard-reconnect-after",
                 "guest-model-permitted",
                 "guest-model-null",
                 "guest-model-open",
                 "guest-model-invalidated",
                 "guest-model-recovered",
                 "history-message-recovery",
+                "worker-schema-before",
+                "worker-schema-after",
+                "worker-schema-no-updater",
               ]
             : ["thread-reasoning", "thread-tool-activity", "model-initial", "thread-restored"];
         const allowed = new RegExp(

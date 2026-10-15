@@ -1,9 +1,9 @@
-import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
@@ -39,19 +39,17 @@ describe.runIf(browserMode)("deferred attachment keyboard access", () => {
           url: `/tmp/openclaw/${crypto.randomUUID()}/keyboard.pdf`,
         },
       };
-      const update = () =>
-        render(
-          renderAssistantAttachments(
-            [item],
-            { onRequestUpdate: update },
-            withSidebar ? onOpenSidebar : undefined,
-            undefined,
-            false,
-          ),
-          target,
-        );
+      const props = () => ({
+        attachments: [item],
+        options: { onRequestUpdate: update },
+        onOpenSidebar: withSidebar ? onOpenSidebar : undefined,
+        inlinePlayback: false,
+      });
+      function update() {
+        view.update(props());
+      }
+      const view = mountSolid(AssistantAttachments, props(), target);
       try {
-        update();
         expect(target.getBoundingClientRect().top).toBeGreaterThan(
           scroller.getBoundingClientRect().bottom + 240,
         );
@@ -95,7 +93,7 @@ describe.runIf(browserMode)("deferred attachment keyboard access", () => {
         }
       } finally {
         metadata.resolve(Response.json({ available: false }));
-        render(null, target);
+        view.dispose();
         scroller.remove();
         releaseChatMediaResourceSubscriber(update);
         vi.unstubAllGlobals();

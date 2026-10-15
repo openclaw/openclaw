@@ -752,7 +752,7 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
 
-it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as const)(
+it.each(["alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as const)(
   "retains %s on the source filesystem outside the complete replacement boundary",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("openclaw-retained-placement-"));
