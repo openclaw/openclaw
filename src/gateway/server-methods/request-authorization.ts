@@ -472,6 +472,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         try {
           const preparedAccess = await prepareGatewaySessionAccessAuthority({
             policy: sessionPolicy,
+            methodOwner: params.methodRegistry
+              .descriptors()
+              .find((descriptor) => descriptor.name === params.method)?.owner,
             requestParams: params.requestParams,
             client: params.client ?? null,
             context: params.context,
