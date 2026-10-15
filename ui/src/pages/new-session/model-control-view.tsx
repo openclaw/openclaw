@@ -24,7 +24,6 @@ export function NewSessionModelControlView(props: {
         stops.push(
           app.gateway.subscribe(notify),
           app.agents.subscribe(notify),
-          app.sessions.subscribe(notify),
           app.config.subscribe(notify),
         );
       }
@@ -32,8 +31,21 @@ export function NewSessionModelControlView(props: {
     },
   });
   createEffect(source, (next) => updates.replaceSource(next));
+  const defaults = projectSource(untrack(context), {
+    // The draft reads defaults, never session rows. Capture field values so an
+    // in-place default change still publishes; nested metadata is owner-replaced.
+    read: (app) => Object.entries(app?.sessions.state.result?.defaults ?? {}),
+    equality: (previous, next) =>
+      previous.length === next.length &&
+      previous.every(
+        ([key, value], index) => key === next[index]?.[0] && value === next[index]?.[1],
+      ),
+    subscribe: (app, notify) => app?.sessions.subscribe(notify) ?? (() => {}),
+  });
+  createEffect(context, (next) => defaults.replaceSource(next));
   const controls = createMemo(() => {
     updates.revision();
+    defaults.revision();
     return control().renderProps({
       agent: agent(),
       agentId: agentId(),

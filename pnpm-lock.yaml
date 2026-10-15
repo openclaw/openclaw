@@ -3039,6 +3039,9 @@ importers:
       markdown-it-emoji:
         specifier: 3.1.0
         version: 3.1.0
+      mediabunny:
+        specifier: 1.61.0
+        version: 1.61.0
       parse5:
         specifier: 8.0.1
         version: 8.0.1
@@ -9172,6 +9175,9 @@ packages:
   media-typer@2.0.0:
     resolution: {integrity: sha512-kOy3OxT2HH39N70UnKgu4NWDZjLOz8W/mfyvniHjRH/DrL3f2pOfvWQ4p60offbbtDAnXWp0v9LfMIqMec269Q==}
     engines: {node: '>=18'}
+
+  mediabunny@1.61.0:
+    resolution: {integrity: sha512-WciPOYwKZwgYkoBKcEK6JzzIf+w5whypPzFdOihOylZ/5Qv19FmNfRnTcaprH+jD136YpEASU30Eb6VNCJiz3A==}
 
   mediabunny@1.61.3:
     resolution: {integrity: sha512-kUqLKVXQVwHR62GkOJxYosAmXERJbqnXBgJDTtRlxHEYviVkMg/Evhl9XN6kedqS5LP1tV4kFKyzY/V4a4ofow==}
@@ -17751,6 +17757,11 @@ snapshots:
   media-typer@1.1.1: {}
 
   media-typer@2.0.0: {}
+
+  mediabunny@1.61.0:
+    dependencies:
+      '@types/dom-mediacapture-transform': 0.1.12
+      '@types/dom-webcodecs': 0.1.13
 
   mediabunny@1.61.3:
     dependencies:

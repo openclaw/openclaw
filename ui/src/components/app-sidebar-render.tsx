@@ -20,7 +20,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
@@ -226,11 +226,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           )}
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              {renderHoverMarquee(name(), "sidebar-agent-card__name-text", {
-                loop: true,
-                delay: 300,
-                speed: 35,
-              })}
+              <HoverMarquee
+                content={name()}
+                class="sidebar-agent-card__name-text"
+                options={{ loop: true, delay: 300, speed: 35 }}
+              />
               <span class="sidebar-agent-card__chevron" aria-hidden="true">
                 <Icon name="chevronsUpDown" />
               </span>
@@ -359,11 +359,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       >
         <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
         <span class="sidebar-identity-card__text">
-          {renderHoverMarquee(selfLabel(), "sidebar-identity-card__name", {
-            loop: true,
-            delay: 300,
-            speed: 35,
-          })}
+          <HoverMarquee
+            content={selfLabel()}
+            class="sidebar-identity-card__name"
+            options={{ loop: true, delay: 300, speed: 35 }}
+          />
           {connectionStatus() ? (
             renderGatewayStatus({
               get kind() {

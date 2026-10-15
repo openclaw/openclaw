@@ -330,6 +330,26 @@ export async function handleControlUiAssistantMediaRequest(
         : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
     if (
+      media.reference.kind === "inbound" &&
+      mediaKind === "image" &&
+      url.searchParams.get("variant") === "thumbnail"
+    ) {
+      const { readImageThumbnailFromFile } = await import("./managed-image-thumbnail-cache.js");
+      const thumbnail = await readImageThumbnailFromFile(opened);
+      await byteStream.close();
+      await publishResponse(() => {
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Cache-Control", "private, no-cache");
+        res.setHeader(
+          "Content-Disposition",
+          buildAssistantMediaContentDisposition(`${filename}-preview.png`, "image/png"),
+        );
+        res.end(req.method === "HEAD" ? undefined : thumbnail);
+      });
+      return true;
+    }
+    if (
       url.searchParams.get("playback") === "1" &&
       (mediaKind === "audio" || mediaKind === "video")
     ) {

@@ -303,19 +303,16 @@ function replaceRuntimeAuthProfileStoreSnapshotEntries(
     return {
       databasePath,
       agentDir: path.dirname(databasePath),
-      store: cloneAuthProfileStore(entry.store),
-      owner: cloneRuntimeAuthSharedOwner(
-        runtimeAuthStoreSnapshots.get(databasePath)?.owner ?? {
-          kind: "unresolved",
-          scope: captureAuthProfileOwnerScope(),
-        },
-      ),
-      legacyCandidates: cloneRuntimeAuthProfileLegacyCandidates(
+      store: entry.store,
+      owner: runtimeAuthStoreSnapshots.get(databasePath)?.owner ?? {
+        kind: "unresolved",
+        scope: captureAuthProfileOwnerScope(),
+      },
+      legacyCandidates:
         runtimeAuthStoreSnapshots.get(databasePath)?.legacyCandidates ??
-          captureRuntimeAuthProfileLegacyCandidates(
-            entry.agentDir ?? (entry.databasePath ? path.dirname(databasePath) : undefined),
-          ),
-      ),
+        captureRuntimeAuthProfileLegacyCandidates(
+          entry.agentDir ?? (entry.databasePath ? path.dirname(databasePath) : undefined),
+        ),
     };
   });
   replaceOwnedRuntimeAuthProfileStoreSnapshots(prepared);

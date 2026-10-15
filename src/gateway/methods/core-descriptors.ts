@@ -174,6 +174,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agents.files.set", "agents", "operator.admin", "<=2026.7"],
   ["sessions.files.list", "sessions-files", "operator.read", "<=2026.7"],
   ["sessions.files.get", "sessions-files", "operator.read", "<=2026.7"],
+  ["sessions.files.download", "sessions-files", "operator.read", "2026.10"],
   // Workspace file writes require the same admin scope as agents.files.set.
   ["sessions.files.set", "sessions-files", "operator.admin", "<=2026.7"],
   ["sessions.files.reveal", "sessions-files", "operator.admin", "<=2026.7"],
@@ -742,4 +743,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
+  ["sessions.github.action", "sessions-github", "operator.write", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -7,7 +7,7 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import {
   ChatComposerPlusMenu,
-  type renderChatComposerPlusMenu,
+  type ChatComposerPlusMenuProps,
   type ChatComposerCapabilityMenuProps,
   type ChatComposerPlusMenuView,
 } from "../chat/components/chat-composer-plus-menu.tsx";
@@ -56,9 +56,9 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
 
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
-  attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"];
+  attachments: ChatComposerPlusMenuProps["attachments"];
 }) {
-  const menu = createMemo((): Parameters<typeof renderChatComposerPlusMenu>[0] => {
+  const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
     const disabled = options.submitting || options.messageLocked === true;
     const controller = options.textareaController;

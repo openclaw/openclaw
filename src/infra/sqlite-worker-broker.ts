@@ -144,6 +144,7 @@ export class SqliteWorkerBroker {
       this.clients.delete(client);
       return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
     }
+    const reusable = reserved ? this.findReusableClient(snapshot.databasePath) : undefined;
     return this.inputAdmission
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
@@ -162,6 +163,7 @@ export class SqliteWorkerBroker {
           );
         },
         snapshot.signal,
+        reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -169,9 +171,20 @@ export class SqliteWorkerBroker {
       });
   }
 
+  private findReusableClient(databasePath: string): StoreClient | undefined {
+    // A published client proves physical identity admission finished; initialized alone does not.
+    for (const client of this.stores.values()) {
+      if (!client.sealed && client.isAvailable() && client.actor.pathReferences.has(databasePath)) {
+        return client;
+      }
+    }
+    return undefined;
+  }
+
   private async openAdmitted<Operations extends SqliteWorkerOperations>(
     options: PreparedSqliteWorkerOpen,
     client: object,
+    reusable?: StoreClient,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     // Cached client callbacks share this scope; never capture the opening options in it.
     const { maintenanceScope } = options;
@@ -180,6 +193,9 @@ export class SqliteWorkerBroker {
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
     options.assertCurrent?.();
+    if (reusable && this.actors.get(key) !== reusable.actor) {
+      return undefined;
+    }
     const stateAccess = captureStateDatabaseAccess(
       options.stateDatabasePath ?? identity.canonicalPath,
     );
@@ -200,6 +216,9 @@ export class SqliteWorkerBroker {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     let actor = this.actors.get(key);
+    if (reusable && (actor !== reusable.actor || reusable.sealed || !reusable.isAvailable())) {
+      return undefined;
+    }
     if (actor?.slot.failed) {
       // Retained sibling clients must not pin a failed actor to its dead slot.
       await waitForSqliteOpen(this.lifecycle.retireActor(actor), options.signal);

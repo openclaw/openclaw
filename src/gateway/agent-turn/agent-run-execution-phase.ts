@@ -169,10 +169,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     let dispatched = false;
-    const dispatchAdmittedAgentRun = (
-      dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0],
-    ) => {
-      const run = () => {
+    const dispatchAdmittedAgentRun = (dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0]) =>
+      withCurrentUserTurnInput(prepared.userTurn.recorder, () => {
         const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
           () => dispatchAgentRunWithMedia(dispatch, params),
@@ -180,9 +178,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         );
         dispatched = true;
         return execution;
-      };
-      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
-    };
+      });
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
       let publishFinalAfterCleanup: (() => void) | undefined;
@@ -380,6 +376,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
           expectedExistingSessionId: params.request.expectedExistingSessionId,
           resolvedSessionId: params.resolvedSessionId,
+          resolvedSessionKey: params.resolvedSessionKey,
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });

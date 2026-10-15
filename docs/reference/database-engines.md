@@ -60,6 +60,9 @@ The supported PostgreSQL families are:
   file artifacts under `logbook/frames`. Ports preserve their stored paths and
   leave the files in place. Backups include that directory alongside the database
   export and anchor; retain it when restoring or moving an installation.
+- **Team Reports:** saved reports, person-day counts, and run history;
+  bidirectional database ports; and matched backups. Collected activity is
+  session-local scratch and is not exported or backed up.
 
 Shared state, agent/session storage, and other stores continue using SQLite. Incognito storage
 remains memory-only. A supported store never silently falls back to SQLite when
@@ -85,9 +88,14 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Workboard and Logbook are registered families.** State, agent, Team Reports,
-and Matrix-root support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
+schema descriptor and expected PostgreSQL catalog. **Workboard, Logbook, and Team Reports
+are registered families.** State, agent, and Matrix-root
+support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
+For separately installed plugins such as Team Reports, operations load the
+selected installed plugin's schema and admission API. Keep the matching plugin
+installed for port, backup, and restore. Preflight does not require absent
+optional plugins.
 
 The command inventories all existing registered stores, including
 disabled plugin stores. It does not create missing stores. Shared state,

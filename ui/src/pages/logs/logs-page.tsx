@@ -60,6 +60,7 @@ export function LogsPage() {
   });
   const [forceFollow, setForceFollow] = createSignal(0);
   let cursor: number | null = null;
+  let cursorBootId: string | undefined;
   let request: AbortController | null = null;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
@@ -88,6 +89,7 @@ export function LogsPage() {
     getGateway: () => context.gateway,
     onIdentityChange: () => {
       cursor = null;
+      cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
       setEntries([]);
@@ -119,7 +121,9 @@ export function LogsPage() {
     request = current;
     setRequestState(options.quiet ? "quiet" : "visible");
     setStatus((previous) => beginPanelRefresh(previous, { clearError: !options.quiet }));
-    const previousCursor = options.reset ? null : cursor;
+    const bootId = gateway.snapshot?.hello?.server?.bootId;
+    const resetCursor = options.reset || bootId !== cursorBootId;
+    const previousCursor = resetCursor ? null : cursor;
     const previousFile = untrack(file);
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
@@ -134,9 +138,9 @@ export function LogsPage() {
       if (!isCurrent()) {
         return false;
       }
-      // Cursors belong to one file. Finish the reset before publishing a new source.
+      // Cursors belong to one server boot and file. Finish the reset before publishing a new source.
       const sourceChanged =
-        !options.reset &&
+        !resetCursor &&
         previousFile !== null &&
         payload.file !== undefined &&
         payload.file !== previousFile;
@@ -149,12 +153,13 @@ export function LogsPage() {
       const nextEntries = Array.isArray(payload.lines)
         ? payload.lines.filter((line): line is string => typeof line === "string").map(parseLogLine)
         : [];
-      const reset = options.reset || sourceChanged || payload.reset || previousCursor === null;
+      const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
       setEntries((previous) =>
         reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
       );
       if (typeof payload.cursor === "number") {
         cursor = payload.cursor;
+        cursorBootId = bootId;
       }
       if (typeof payload.file === "string") {
         setFile(payload.file);

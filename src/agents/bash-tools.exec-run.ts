@@ -68,7 +68,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -406,7 +406,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
-          logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+          logInfo("exec: elevated command");
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {

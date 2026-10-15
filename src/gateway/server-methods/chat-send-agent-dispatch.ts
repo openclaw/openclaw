@@ -328,7 +328,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               emitSessionsChanged(
                 context,
                 { sessionKey, agentId, reason: "agent.run.started" },
-                { accessChanged: false },
+                { accessChanged: false, rowScope: "runtime" },
               );
             }
             // A bound runtime can start on a different transcript than the source chat.

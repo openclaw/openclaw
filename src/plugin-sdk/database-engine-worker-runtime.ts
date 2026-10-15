@@ -11,3 +11,4 @@ export type {
   DatabaseEngineAdapter,
 } from "../infra/database-engine/contract.js";
 export type { DatabaseEngineInput } from "../infra/database-engine/config.js";
+export { jsonPathValue } from "../infra/database-engine/json-values.js";

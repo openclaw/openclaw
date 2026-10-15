@@ -1,7 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   emitAgentActivityEvent,
   projectAgentToolActivity,
@@ -99,19 +97,6 @@ function traceToolExecutionStart(params: {
     ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
     ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
   });
-}
-
-const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-
-function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
-  if (rawArgsPreview == null) {
-    return undefined;
-  }
-  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
-  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
-  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  return wasTruncated && preview ? `${preview}…` : preview;
 }
 
 type ToolStartRecord = {
@@ -387,8 +372,6 @@ export function handleToolExecutionStart(
       const filePath = filePathValue.trim();
       if (!filePath) {
         const argsType = typeof args;
-        const rawArgsPreview = readStringValue(args);
-        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
@@ -408,13 +391,8 @@ export function handleToolExecutionStart(
         if (safeAgentId) {
           consoleMessageParts.push(`agentId=${safeAgentId}`);
         }
-        if (argsPreview) {
-          consoleMessageParts.push(`argsPreview=${argsPreview}`);
-        }
         const consoleMessage = consoleMessageParts.join(" ");
-        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
-          argsPreview ? ` argsPreview=${argsPreview}` : ""
-        }`;
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}`;
         ctx.log.warn(message, {
           event: "embedded_read_tool_start_warning",
           tags: ["tool_start", "read", "embedded", "validation"],
@@ -424,7 +402,6 @@ export function handleToolExecutionStart(
           ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
           ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
           ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
-          ...(argsPreview ? { argsPreview } : {}),
           consoleMessage,
         });
       }

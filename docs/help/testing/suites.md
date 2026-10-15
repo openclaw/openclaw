@@ -206,6 +206,8 @@ Native dependency policy:
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
+      The shared preload registers the jsdom adapter without importing its DOM
+      bindings; those initialize when a jsdom environment starts.
     - Provider plugin shards reuse workers with the shared cleanup runner.
       Track global replacements with `vi.stubGlobal` so cleanup can restore them
       before the next file.
@@ -272,6 +274,10 @@ Native dependency policy:
     - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on
       supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path`
       for one explicit cache location for direct profiling.
+    - Bun test processes with an isolated HOME keep their transpiler cache in
+      the checkout's `.cache/bun-transpiler` directory across runs. Set
+      `BUN_RUNTIME_TRANSPILER_CACHE_PATH` to use another location, or `0` to
+      disable it. Explicit values, including an empty value, are preserved.
     - Local Node runs also reuse compiled runtime-worker outputs from
       `.artifacts/vitest-worker-cache`. The runner reserves an exclusive
       checkout-local output slot and transfers verified artifacts into that slot.

@@ -16,8 +16,10 @@ export type DiagnosticRuntimeMeasurementFields =
   | {
       type: "diagnostic.gc";
       durationMs: number;
-      /** Optional for existing SDK event producers; native observers always supply both. */
+      /** Optional for existing SDK event producers; native observers always supply attribution. */
       kind?: GcSample["kind"];
+      /** Bounded Node GC callback flags; absent or unrecognized values become other. */
+      reason?: GcSample["reason"];
       /** main or an allowlisted worker script basename (other for unknown scripts). */
       thread?: string;
       /** Reusable Code Mode isolate slot (1–64), owned until native worker exit. */

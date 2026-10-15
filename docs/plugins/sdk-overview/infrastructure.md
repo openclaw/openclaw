@@ -178,6 +178,9 @@ side of the host/worker boundary:
   for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
   envelope using the kernel's transaction callback; SQLite executes the operation
   directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
 
 The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
 `DatabaseEngineAdapter` types; it does not export a PostgreSQL connection

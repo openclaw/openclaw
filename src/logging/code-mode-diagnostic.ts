@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -75,4 +76,14 @@ export function logCodeModeDiagnostic(
     }),
   );
   log.info(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`);
+}
+
+/** Prepare only correlation metadata; never send the session key into a guest worker. */
+export function codeModeGcAttribution(runId: string, sessionKey?: string) {
+  return {
+    runId,
+    sessionKeyHash: sessionKey
+      ? createHash("sha256").update(sessionKey).digest("hex").slice(0, 16)
+      : undefined,
+  };
 }
