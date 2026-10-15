@@ -36,6 +36,100 @@ function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
 }
 
 describePosix("prior-CI forward main admission", () => {
+  it.each(["initial", "qualified"] as const)(
+    "uses projection hints between full REST snapshots during %s settlement",
+    (stage) => {
+      const f = preExistingCandidate();
+      const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+      const ready = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+      const state = f.state();
+      state.graphqlMergeProjection = unknown;
+      state.projectionSettlement = { seconds: stage === "initial" ? 22 : 24, pr: ready };
+      if (stage === "initial") {
+        state.observations = [{ pr: unknown }];
+      } else {
+        state.restObservations = [{}, {}, {}, { advanceMain: true, pr: unknown }];
+      }
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.error, result.output).toBeUndefined();
+      expect(result.status, result.output).toBe(0);
+      const settled = f.state();
+      expect(settled.settlementSleeps.slice(-4)).toEqual([2, 4, 8, 8]);
+      const offsets = settled.settlementCallOffsets.slice(-4);
+      const polling = settled.calls.slice(offsets[0], offsets.at(-1));
+      expect(
+        polling.filter((call) =>
+          call.some((arg) =>
+            /\/(check-runs|check-suites|status|rules\/branches|protection)(\?|$)/.test(arg),
+          ),
+        ),
+      ).toEqual([]);
+      expect(polling.filter((call) => call.includes("repos/fixture/repo/pulls/123"))).toHaveLength(
+        3,
+      );
+      expect(settled.mutations).toBe(1);
+      expect(f.record()).toMatchObject({ phase: "complete", head: f.head, transport: "rest" });
+    },
+  );
+
+  it("does not admit a known hint when the complete snapshot is still UNKNOWN", () => {
+    const f = preExistingCandidate();
+    const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+    f.save({
+      ...f.state(),
+      graphqlMergeProjection: unknown,
+      observations: [{ pr: unknown }],
+      projectionSettlement: {
+        seconds: 2,
+        pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+      },
+      restObservations: [{ pr: unknown }],
+    });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("60s settle limit");
+    expect(f.state().settlementSleeps.reduce((total, seconds) => total + seconds, 0)).toBe(60);
+    expectNoDispatch(f);
+  });
+
+  it.each(["head", "main", "policy"] as const)(
+    "rechecks %s after a known projection hint before admitting the complete snapshot",
+    (fault) => {
+      const f = preExistingCandidate();
+      const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+      const ready = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+      const changed =
+        fault === "head"
+          ? { pr: { ...ready, headRefOid: f.base } }
+          : fault === "main"
+            ? { pr: ready, main: f.commit(f.tree("conflicting\n", "stable\n"), [f.base]) }
+            : { pr: ready, priorCi: { reviewCount: 2 } };
+      f.save({
+        ...f.state(),
+        graphqlMergeProjection: unknown,
+        projectionSettlement: { seconds: 4, pr: ready },
+        restObservations: [{}, { advanceMain: true, pr: unknown }, changed],
+      });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.error, result.output).toBeUndefined();
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "main"
+          ? "main must advance from both observed and verified main"
+          : "PR or main changed during observation",
+      );
+      expect(f.state().projectionSettlement).toBeNull();
+      expectNoDispatch(f);
+    },
+  );
+
   it("preserves the UNKNOWN budget while rematerializing a cold main before authority", () => {
     const f = preExistingCandidate();
     const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
@@ -89,6 +183,10 @@ describePosix("prior-CI forward main admission", () => {
       state.mainProofDelayMain = main;
       if (transport === "rest") {
         state.graphqlMergeProjection = { mergeStateStatus: "UNKNOWN" };
+        state.projectionSettlement = {
+          seconds: 4,
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+        };
         state.restObservations = [{}, {}, {}, ...observations];
       } else {
         state.observations = [{}, ...observations];
@@ -276,6 +374,7 @@ describePosix("prior-CI forward main admission", () => {
               ]
             : [{}, {}, {}, {}, { main }];
       if (stage === "settlement") {
+        state.projectionSettlement = { seconds: 2, pr: settled };
         state.restObservation = { main, pr: settled };
       }
     }

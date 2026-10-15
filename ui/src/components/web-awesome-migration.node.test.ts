@@ -40,7 +40,6 @@ describe("shared control ownership", () => {
         "components/menu-surface.ts",
         "components/web-awesome.ts",
         "components/panel-tab-strip-solid.ts",
-        "components/hub-tabs.ts",
         "components/solid/menu.ts",
         "components/solid/tabs.ts",
       ]),

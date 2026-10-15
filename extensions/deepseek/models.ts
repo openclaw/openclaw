@@ -20,8 +20,6 @@ export function isDeepSeekV4ModelId(modelId: string): boolean {
   return DEEPSEEK_V4_MODEL_IDS.has(modelId.toLowerCase());
 }
 
-export function isDeepSeekV4ModelRef(model: { provider?: string; id?: unknown }): boolean {
-  return (
-    model.provider === "deepseek" && typeof model.id === "string" && isDeepSeekV4ModelId(model.id)
-  );
+export function isDeepSeekV4ModelRef(model: { provider?: string; id: string }): boolean {
+  return model.provider === "deepseek" && isDeepSeekV4ModelId(model.id);
 }

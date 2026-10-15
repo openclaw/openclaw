@@ -10,7 +10,6 @@ import {
   type ModelPickerParams,
 } from "./solid/model-picker.tsx";
 import { SettingsRow } from "./solid/settings-ui.tsx";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";

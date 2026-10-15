@@ -534,6 +534,20 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     const settled = vi.fn();
     void binding.then(settled, settled);
     const completed = completedNotification(route.threadId, "turn-current");
+    const expectedNotifications = [
+      {
+        ...started,
+        threadId: "thread-closed-paused",
+        turnId: "turn-current",
+        completedTurn: undefined,
+      },
+      {
+        ...completed,
+        threadId: "thread-closed-paused",
+        turnId: "turn-current",
+        completedTurn: { id: "turn-current", status: "completed", items: [], itemsView: "full" },
+      },
+    ];
     try {
       harness.send(completed);
       harness.process.emit("exit", 0, null);
@@ -542,19 +556,17 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
 
       expect(route.completed).toBe(true);
       expect(route.signal.aborted).toBe(true);
-      expect(receipts.mock.calls.map(([notification]) => notification)).toEqual([
-        started,
-        completed,
-      ]);
+      expect(receipts.mock.calls.map(([notification]) => notification)).toEqual(
+        expectedNotifications,
+      );
       expect(notifications).not.toHaveBeenCalled();
       expect(settled).not.toHaveBeenCalled();
 
       beforeNotifications.resolve();
       await binding;
-      expect(notifications.mock.calls.map(([notification]) => notification)).toEqual([
-        started,
-        completed,
-      ]);
+      expect(notifications.mock.calls.map(([notification]) => notification)).toEqual(
+        expectedNotifications,
+      );
       expect(receipts).toHaveBeenCalledTimes(2);
     } finally {
       beforeNotifications.resolve();
@@ -632,9 +644,10 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         };
         harness.send(siblingNotification);
         await vi.waitFor(() =>
-          expect(siblingNotifications).toHaveBeenCalledWith(siblingNotification, {
-            threadId: "thread-sibling",
-          }),
+          expect(siblingNotifications).toHaveBeenCalledWith(
+            { ...siblingNotification, threadId: "thread-sibling", completedTurn: undefined },
+            { threadId: "thread-sibling" },
+          ),
         );
         expect(() =>
           router.reserveThread({ threadId: route.threadId, onNotification: vi.fn() }),

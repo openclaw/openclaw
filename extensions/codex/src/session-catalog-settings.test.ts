@@ -1,4 +1,3 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -141,7 +140,6 @@ async function fixture(overflow = false, evicted = false) {
         await (overflow ? b.client : a.client).request("thread/list", params, {
           catalogPreview: true,
         }),
-        { sanitize: sanitizeTerminalText },
       ),
     assertCurrent: () => {},
   });

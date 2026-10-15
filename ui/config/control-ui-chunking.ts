@@ -117,7 +117,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
   ) {
     // These directives have only deferred consumers. Keep
     // their implementation and helpers with those consumers, outside startup.
-    return /\/directives\/(?:cache|guard|unsafe-html|until|private-async-helpers)\.js$/u.test(
+    return /\/directives\/(?:cache|guard|unsafe-html|unsafe-svg|until|private-async-helpers)\.js$/u.test(
       normalized,
     )
       ? undefined

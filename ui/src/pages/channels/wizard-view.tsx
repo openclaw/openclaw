@@ -1,9 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import type { ChannelWizardState } from "./wizard-controller.ts";
@@ -205,12 +204,11 @@ function WizardDialog(props: {
         <div class="channels-wizard__header">
           <Show when={props.wizard.channel}>
             {(channel) => (
-              <LitContent
-                render={() =>
-                  renderChannelIcon(channel(), label(), "tile", {
-                    pluginIconUrl: props.controls.channelIconUrl?.(channel()),
-                  })
-                }
+              <ChannelIcon
+                channelId={channel()}
+                label={label()}
+                variant="tile"
+                pluginIconUrl={props.controls.channelIconUrl?.(channel())}
               />
             )}
           </Show>

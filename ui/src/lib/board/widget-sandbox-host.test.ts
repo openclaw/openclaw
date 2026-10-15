@@ -794,7 +794,13 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=renewed-ticket",
     });
     await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(
+      fetchMock,
+      JSON.stringify({
+        requests: fetchMock.mock.calls,
+        frameUrls: vi.mocked(baseOptions.onFrameUrl).mock.calls,
+      }),
+    ).toHaveBeenCalledOnce();
 
     host.update({
       ...baseOptions,
