@@ -412,7 +412,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
       timestamp: 400,
       __openclaw: { id: "earlier-answer", seq: 400, runId: "earlier-run" },
     },
-    { ...user, timestamp: 1_000, __openclaw: { ...user.__openclaw, seq: 1_000 } },
+    { ...user, timestamp: 1_000, __openclaw: { ...user["__openclaw"], seq: 1_000 } },
   ];
   const state = createState(history);
   state.sessionKey = sessionKey;
@@ -474,14 +474,19 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
       {
         phase: "persisted",
         itemId: `thought-${index}`,
-        messageId: message.__openclaw.id,
+        messageId: message["__openclaw"].id,
         messageRunId: runId,
       },
       1_400 + index,
     );
     applySessionMessagePayload(
       state,
-      { sessionKey, message, messageId: message.__openclaw.id, messageSeq: message.__openclaw.seq },
+      {
+        sessionKey,
+        message,
+        messageId: message["__openclaw"].id,
+        messageSeq: message["__openclaw"].seq,
+      },
       true,
       { kind: "live", activeRunId: runId },
     );
