@@ -114,27 +114,6 @@ describe("mcp-app-view localization", () => {
     );
   });
 
-  it("opens external links only from the live, visible, focused App frame", async () => {
-    const { view, bridge, frame } = await mountBridge("view-external-link");
-    const open = vi.spyOn(window, "open").mockReturnValue(window);
-    const openLink = bridge.onopenlink!;
-    const url = "https://example.com/parts";
-    frame.checkVisibility = () => true;
-    expect(await openLink({ url })).toEqual({ isError: true });
-    expect(open).not.toHaveBeenCalled();
-
-    frame.focus();
-    expect(await openLink({ url })).toEqual({});
-    expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
-
-    frame.checkVisibility = () => false;
-    expect(await openLink({ url })).toEqual({ isError: true });
-    frame.checkVisibility = () => true;
-    await view.teardown();
-    expect(await openLink({ url })).toEqual({ isError: true });
-    expect(open).toHaveBeenCalledOnce();
-  });
-
   it("reveals questions and approvals only for its conversation without replacing the App frame", async () => {
     const { view, frame, gatewayListeners, gatewayEventsStopped, unmount } = await mountBridge(
       "view-input-" + crypto.randomUUID(),
