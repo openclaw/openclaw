@@ -3585,6 +3585,8 @@ export const en: TranslationMap & {
       loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
+      loadingDetail: "Loading sharper image…",
+      detailFailed: "Preview shown. Sharper image could not load.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",

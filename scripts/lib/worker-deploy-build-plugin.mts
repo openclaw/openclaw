@@ -7,11 +7,11 @@ import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
 
-const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__dirname, "..");
-    packageJSON = require(import_path9.default.join(packageRoot, "package.json"));
-    binPath = import_path9.default.join(packageRoot, "bin");`;
+const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path8.default.join(__dirname, "..");
+    packageJSON = require(import_path8.default.join(packageRoot, "package.json"));
+    binPath = import_path8.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
-  '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
+  '    registry = new Registry(require(import_path19.default.join(packageRoot, "browsers.json")));';
 // Keep Browser and Playwright initialization behind the admitted Browser factory.
 const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
   async createAttachedBrowserToolRuntime(params) {

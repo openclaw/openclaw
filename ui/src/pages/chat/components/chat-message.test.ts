@@ -1963,10 +1963,12 @@ describe("grouped chat rendering", () => {
       "https://example.com/photo.png",
     );
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
-    expect(onOpenImage).toHaveBeenCalledWith({
-      src: "https://example.com/photo.png",
-      title: "photo.png",
-    });
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        src: "https://example.com/photo.png",
+        title: "photo.png",
+      }),
+    );
     const audioPlayer = expectElement(
       container,
       "openclaw-chat-audio-player",
@@ -2517,7 +2519,7 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=3`;
+    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(view, ".chat-message-image-button", HTMLButtonElement).click();
@@ -2596,7 +2598,7 @@ describe("grouped chat rendering", () => {
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
     const ticketedUrl = `${source}?mediaTicket=ticket`;
-    const thumbnailUrl = `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=3`;
+    const thumbnailUrl = `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
     stubObjectUrls(() => objectUrls.shift() ?? "blob:extra");
@@ -2670,7 +2672,7 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = requireFetchCallForUrl(
       fetchMock,
-      `${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=3`,
+      `${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`,
     );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
@@ -2698,7 +2700,10 @@ describe("grouped chat rendering", () => {
       | undefined;
     const response = { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
     const fetchMock = vi.fn((url: string) => {
-      if (deferEvictedRefetch && url === `${imageUrls[1]?.replace(/\/full$/u, "/thumbnail")}?v=3`) {
+      if (
+        deferEvictedRefetch &&
+        url === `${imageUrls[1]?.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`
+      ) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;
         });
@@ -2868,10 +2873,12 @@ describe("grouped chat rendering", () => {
     let image = view.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image).toBeInstanceOf(HTMLImageElement);
     image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onOpenImage).toHaveBeenCalledWith({
-      src: "https://example.com/cat.png",
-      title: "Image",
-    });
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        src: "https://example.com/cat.png",
+        title: "Image",
+      }),
+    );
 
     onOpenImage.mockClear();
     renderAssistantImage("javascript:alert(1)");
