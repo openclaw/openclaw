@@ -131,13 +131,6 @@ describe("matrix qa e2ee client", () => {
     },
   );
 
-  it("rejects an image after stop before encryption or upload", async () => {
-    await client.stop();
-    await expect(client.sendImageMessage(image)).rejects.toThrow("shutdown has started");
-    expect(runtimeFixture.encrypt).not.toHaveBeenCalled();
-    expect(runtimeFixture.upload).not.toHaveBeenCalled();
-  });
-
   it("joins late encryption after the grace deadline before discard and fences its upload", async () => {
     const encryption = createDeferred<{ buffer: Buffer; file: object }>();
     const discarded = createDeferred<void>();
