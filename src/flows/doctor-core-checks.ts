@@ -1,4 +1,4 @@
-import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   maybeRepairOwnedChromeExtensionNativeHosts,
@@ -28,8 +28,6 @@ import type { CronListPageResult } from "../cron/service/list-page-types.js";
 import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
@@ -39,6 +37,7 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { skillWorkshopToolPolicyCheck } from "./doctor-skill-workshop-check.js";
 import {
   collectRuntimeToolSchemaFindingsWithRuntime,
   createRuntimeToolSchemaCheck,
@@ -55,7 +54,6 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
-const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 async function listGatewayCronJobsWithRuntime(
   ctx: HealthCheckContext,
@@ -176,34 +174,6 @@ const commandOwnerCheck: CoreHealthCheck = {
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
       },
     ];
-  },
-};
-
-const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
-  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-  description: "Autonomous Skill Workshop capture has a callable review tool.",
-  async detect(ctx) {
-    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
-    const listedAgentIds = listAgentIds(ctx.cfg);
-    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
-      (agentId) => {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: ctx.cfg,
-          workshopEnabled,
-          ...(agentId ? { agentId } : {}),
-        });
-        return diagnostic ? [diagnostic] : [];
-      },
-    );
-    return diagnostics.map((diagnostic) => ({
-      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-      severity: "warning",
-      message: diagnostic.detail,
-      path: diagnostic.source,
-      target: diagnostic.agentId,
-      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-      fixHint: diagnostic.fix,
-    }));
   },
 };
 

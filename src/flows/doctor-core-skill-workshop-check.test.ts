@@ -147,4 +147,72 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it.each([
+    { pin: "anthropic:claude-cli", order: ["anthropic:api", "anthropic:claude-cli"], warns: true },
+    { pin: "anthropic:api", order: ["anthropic:claude-cli", "anthropic:api"], warns: false },
+  ])("follows the configured auth-profile pin to the runtime (pin=$pin)", async (testCase) => {
+    const cfg = {
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+      auth: {
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+        order: { anthropic: testCase.order },
+      },
+      agents: {
+        ownership: "explicit",
+        entries: { main: { model: { primary: `anthropic/claude-sonnet-5@${testCase.pin}` } } },
+      },
+    } as OpenClawConfig;
+
+    const findings = await getSkillWorkshopCheck().detect({ mode: "doctor", runtime, cfg });
+
+    expect(findings).toEqual(
+      testCase.warns
+        ? [
+            expect.objectContaining({
+              target: "main",
+              path: "agents.entries.main.model",
+              message: expect.stringContaining('CLI runtime "claude-cli"'),
+            }),
+          ]
+        : [],
+    );
+  });
+
+  it.each(["skill_workshop", "group:agents"])(
+    "skips the runtime warning for a CLI agent that denies %s",
+    async (deny) => {
+      const result = await runDoctorLintChecks(
+        {
+          mode: "lint",
+          runtime,
+          cfg: {
+            skills: { workshop: { autonomous: { mode: "auto" } } },
+            agents: {
+              ownership: "explicit",
+              entries: {
+                "opted-out": {
+                  model: { primary: "claude-cli/claude-sonnet-5" },
+                  tools: { deny: [deny] },
+                },
+                control: { model: { primary: "claude-cli/claude-sonnet-5" } },
+              },
+            },
+          },
+        },
+        { checks: [getSkillWorkshopCheck()] },
+      );
+
+      expect(result.findings).toEqual([
+        expect.objectContaining({
+          target: "control",
+          path: "agents.entries.control.model",
+          message: expect.stringContaining('CLI runtime "claude-cli"'),
+        }),
+      ]);
+    },
+  );
 });
