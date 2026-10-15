@@ -275,7 +275,7 @@ describe("chat composer queue reordering", () => {
     });
 
     const rows = [...container.querySelectorAll(".chat-queue__item")];
-    expect(rows.map((row) => row.querySelector("wa-dropdown") !== null)).toEqual([
+    expect(rows.map((row) => row.querySelector(".chat-queue__overflow") !== null)).toEqual([
       true,
       false,
       true,
@@ -291,7 +291,6 @@ describe("chat composer queue reordering", () => {
 
     const disabled = (selector: string) =>
       rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
-    expect(disabled("wa-dropdown-item")).toEqual([true, false, true]);
     expect(disabled(".chat-queue__more")).toEqual([true, false, true]);
     expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
 

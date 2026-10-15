@@ -152,10 +152,6 @@ function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number 
   return bounds.max !== undefined && parsed > bounds.max ? null : parsed;
 }
 
-function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
-  return <DreamingField settings={props} spec={spec} />;
-}
-
 function DreamingField(props: { settings: DreamingSettingsProps; spec: DreamingFieldSpec }) {
   const field = () => fieldAtPath(props.settings.dreaming, props.spec.path);
   const defaultValue = () => {
@@ -388,14 +384,17 @@ function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
               />
             }
           />
-          {renderField(props, {
-            kind: "toggle",
-            path: ["storage", "separateReports"],
-            labelKey: "memoryPage.dreaming.storage.separateReportsLabel",
-            helpKey: "memoryPage.dreaming.storage.separateReportsHelp",
-            // DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS
-            fallback: false,
-          })}
+          <DreamingField
+            settings={props}
+            spec={{
+              kind: "toggle",
+              path: ["storage", "separateReports"],
+              labelKey: "memoryPage.dreaming.storage.separateReportsLabel",
+              helpKey: "memoryPage.dreaming.storage.separateReportsHelp",
+              // DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS
+              fallback: false,
+            }}
+          />
         </>
       </SettingsSection>
       <For each={Object.entries(DREAMING_PHASE_NUMBERS)} keyed={(entry) => entry[0]}>
