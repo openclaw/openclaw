@@ -27,6 +27,8 @@ vi.mock("../../gateway/model-auth-refresh.js", () => ({
 
 const { handleLoginCommand } = await import("./commands-login.js");
 const { handleCommands } = await import("./commands-core.js");
+// Cold handler imports are setup work, not part of the login authorization deadline.
+await import("./commands-handlers.runtime.js");
 
 function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
