@@ -61,6 +61,13 @@ export function createAgentCommandLifecycle(params: {
       "Auto-compaction failed. Try again or run /compact."
     );
   };
+  const shouldReplaceLifecycleErrorObservation = (runResult: AgentAttemptResult) => {
+    const compactionRecoveryError = resolveCompactionRecoveryError(runResult);
+    return (
+      compactionRecoveryError !== undefined &&
+      !isContextOverflowErrorFromTables(compactionRecoveryError)
+    );
+  };
   const resolveResultError = (runResult: AgentAttemptResult, includeErrorPayload: boolean) =>
     resolveCompactionRecoveryError(runResult) ??
     params.state.lifecycleError ??
@@ -186,7 +193,12 @@ export function createAgentCommandLifecycle(params: {
       }
       params.state.lifecycleEnded = true;
       const error = resolveTerminalError(runResult, fallbackExhausted, terminal);
-      emitTerminalPhase("error", terminal, error, !resolveCompactionRecoveryError(runResult));
+      emitTerminalPhase(
+        "error",
+        terminal,
+        error,
+        !shouldReplaceLifecycleErrorObservation(runResult),
+      );
     },
     emitPostTurnError(error: unknown, terminal: EmbeddedAgentRunEntryTerminal) {
       if (params.state.lifecycleEnded) {
