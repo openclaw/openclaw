@@ -125,6 +125,8 @@ export const QuestionRecordSchema = closedObject({
 });
 
 export const QuestionRequestParamsSchema = closedObject({
+  /** Trusted ordinary ask_user handoff; secret and harness questions stay transient. */
+  durable: Type.Optional(withSince("2026.10", Type.Boolean())),
   id: Type.Optional(NonEmptyString),
   questions: Type.Array(QuestionRequestQuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
@@ -136,6 +138,8 @@ export const QuestionRequestParamsSchema = closedObject({
 export const QuestionRequestResultSchema = closedObject({
   id: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
+  durable: Type.Optional(withSince("2026.10", Type.Boolean())),
+  status: Type.Optional(withSince("2026.10", QuestionStatusSchema)),
 });
 
 export const QuestionWaitAnswerParamsSchema = closedObject({
@@ -177,11 +181,34 @@ export const QuestionResolveResultSchema = Type.Union([
   closedObject({ status: Type.Literal("cancelled") }),
 ]);
 
-export const QuestionGetParamsSchema = closedObject({ id: NonEmptyString });
-export const QuestionGetResultSchema = closedObject({ question: QuestionRecordSchema });
-export const QuestionListParamsSchema = closedObject({});
+export const QuestionContinuationReceiptSchema = withSince(
+  "2026.10",
+  closedObject({
+    questionId: NonEmptyString,
+    status: Type.Union(
+      ["pending", "owed", "claimed", "settled", "blocked", "interrupted"].map((status) =>
+        Type.Literal(status),
+      ),
+    ),
+    runId: Type.Optional(NonEmptyString),
+    reason: Type.Optional(NonEmptyString),
+    nextAction: Type.Optional(NonEmptyString),
+  }),
+);
+export const QuestionGetParamsSchema = closedObject({
+  id: NonEmptyString,
+  includeContinuation: Type.Optional(withSince("2026.10", Type.Boolean())),
+});
+export const QuestionGetResultSchema = closedObject({
+  question: QuestionRecordSchema,
+  continuation: Type.Optional(QuestionContinuationReceiptSchema),
+});
+export const QuestionListParamsSchema = closedObject({
+  includeContinuation: Type.Optional(withSince("2026.10", Type.Boolean())),
+});
 export const QuestionListResultSchema = closedObject({
   questions: Type.Array(QuestionRecordSchema),
+  continuations: Type.Optional(Type.Array(QuestionContinuationReceiptSchema)),
 });
 
 // Native codegen intentionally reuses QuestionRecord for this event instead of

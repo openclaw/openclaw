@@ -632,6 +632,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readReactions: SessionHistoryReader<"session-reactions", "reactions">;
     readMembershipFacts: SessionHistoryReader<"session-membership-facts">;
     readProgressCard: SessionHistoryReader<"session-progress-card", "card">;
+    readQuestions: SessionHistoryReader<"session-question-read", "result">;
     readConversationDelivery: SessionHistoryReader<"conversation-delivery", "record">;
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;
     readPendingInputSource: PendingInputSourceWorker.Reader;

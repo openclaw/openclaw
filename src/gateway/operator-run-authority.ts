@@ -162,6 +162,7 @@ function prepareRunModelPolicy(params: {
 
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
+  channelRecoveryReference?: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
   profileId: string;
   assignedRole: string | null;
   githubLogin?: string | null;
@@ -192,6 +193,7 @@ export function captureChannelOperatorRunAuthority(input: {
   });
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
+    channelRecoveryReference: params.channelRecoveryReference,
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,

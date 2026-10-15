@@ -89,6 +89,7 @@ describe("export name collision guard", () => {
       name: "bindSqliteWorkerBackend",
       paths: [
         "src/config/sessions/goals-operations.worker.ts",
+        "src/config/sessions/session-questions.worker.ts",
         "src/config/sessions/session-sharing-store.worker.ts",
       ],
     },
