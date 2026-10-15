@@ -18,11 +18,3 @@ export async function openDetails(details: HTMLDetailsElement): Promise<void> {
   details.dispatchEvent(new Event("toggle"));
   await settleWebAwesome(details);
 }
-
-export async function openDropdownSubmenu(item: WaDropdownItem): Promise<void> {
-  const parent = item.parentElement?.closest<WaDropdownItem>("wa-dropdown-item");
-  if (parent) {
-    await openDropdownSubmenu(parent);
-  }
-  await item.openSubmenu();
-}

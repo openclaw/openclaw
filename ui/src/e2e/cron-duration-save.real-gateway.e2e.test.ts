@@ -568,7 +568,6 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page, servedDocumentSha256, servedAssets } = evidence;
-        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
         await page.locator("details.cron-advanced > summary").click();
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");

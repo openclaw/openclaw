@@ -14,10 +14,21 @@ Node-worker process E2Es have an explicit owner map in
 node hosts, worker processes, node RPCs, and their launch/transport inputs select
 the complete group on PRs, even when packaged subprocesses hide import edges.
 Docs-only changes do not select it. Hourly main and ordinary manual/release CI
-also run the group in one serial row with a shared private-QA build, reserved
-inside the existing Node matrix cap. PR chunks target 150 test seconds, with
-indivisible slow files kept intact. The hourly row trades a longer test run for
-fewer registrations and repeated builds; it retains the existing job deadline.
+also balance the group across two serial rows on the existing 8-class runners.
+Both rows reserve capacity inside the existing Node matrix cap and retain their
+private-QA build, worker limits, and deadline. PR chunks target 150 test seconds,
+with indivisible slow files kept intact.
+
+Hourly run `38752392982` measured 45m30s for the former single row: 41m15s in
+fourteen serial file commands and 4m15s in shared preparation and cleanup. Its
+8-class runner reported two CPUs. The existing weighted bin-packer uses these
+file observations to project about 25–26 minutes per row, including duplicated
+preparation, for about five additional 8-class job-minutes per full run. This
+removes the worker lane from that run's critical path without a larger runner;
+with the same admission delays, the next 35m54s iOS job would limit main to
+about 43 minutes instead of 52m54s. These are projections from one run, including
+one failed file command, not measured post-change savings. The next natural
+hourly run owns that measurement; no validation dispatch or rerun is needed.
 The Docker-opt-in `node-worker-container-wire` proof remains separate, as do
 the ACP cancellation and ordinary local-session compatibility proofs.
 

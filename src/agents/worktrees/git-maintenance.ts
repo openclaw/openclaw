@@ -163,6 +163,7 @@ async function maintainWorktreePacks(
     operation,
     signal: params.signal,
     beforeRun: assertCurrent,
+    timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
     killProcessTree: true,
     lowerPriority: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
@@ -313,48 +314,37 @@ async function consolidatePacks(
         },
       );
     }
-    await requireGit(
-      repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${selected.at(-1)!}`],
-      {
-        ...options,
-        input: `${selected.map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
-      },
-    );
-    await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
-    const presentAfterExpiry = new Set(await fs.readdir(directory));
-    const remainingBatch = selected.filter((name) => presentAfterExpiry.has(name));
+    let preferred = selected.at(-1)!;
     // The rewrite threshold applies to the inventory, not the byte-limited batch.
-    const remainingCount = candidates.length - selected.length + remainingBatch.length;
-    if (remainingCount < 16 || remainingBatch.length < 2) {
-      continue;
+    if (candidates.length >= 16) {
+      // A static Git alias streams between native children without buffering packs in the Gateway.
+      // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
+      const alias =
+        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+        (promisor ? " --promisor" : "");
+      const result = await requireGit(
+        repoRoot,
+        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
+        {
+          ...options,
+          timeoutMs: PACK_BATCH_TIMEOUT_MS,
+          input: `${selected.join("\n")}\n`,
+        },
+      );
+      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+      if (!hash) {
+        throw new Error("Git pack consolidation returned an invalid pack identity");
+      }
+      preferred = `pack-${hash}.pack`;
     }
-    // A static Git alias streams between native children without buffering packs in the Gateway.
-    // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
-    const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
-      (promisor ? " --promisor" : "");
-    const result = await requireGit(
-      repoRoot,
-      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-      {
-        ...options,
-        timeoutMs: PACK_BATCH_TIMEOUT_MS,
-        input: `${remainingBatch.join("\n")}\n`,
-      },
-    );
-    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-    if (!hash) {
-      throw new Error("Git pack consolidation returned an invalid pack identity");
-    }
-    const replacement = `pack-${hash}.pack`;
     // Expire only this homogeneous batch: a full MIDX could retire an unrelated promisor pack.
+    // Expiry rebuilds the full index after deleting packs, so do it only once per group.
     await requireGit(
       repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${replacement}`],
+      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${preferred}`],
       {
         ...options,
-        input: `${[...new Set([...remainingBatch, replacement])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        input: `${[...new Set([...selected, preferred])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
       },
     );
     await requireGit(repoRoot, ["multi-pack-index", "expire"], options);

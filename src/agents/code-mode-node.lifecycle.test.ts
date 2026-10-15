@@ -245,10 +245,12 @@ describe("Node Code Mode worker custody", () => {
           pool.isClosed = true;
         });
       }
-      await vi.advanceTimersByTimeAsync(70_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(previous.isClosed).toBe(true);
+      expect(reused.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(40_000);
       expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
-      expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect(previous.isClosed).toBe(true);
       expect(reused.isClosed).toBe(false);
@@ -260,6 +262,44 @@ describe("Node Code Mode worker custody", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([90_000, 360_000])(
+    "keeps the completion deadline when the first idle wake is delayed to %i ms",
+    async (wakeMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const completedAt = Date.now();
+        const pool = fixture.pools.at(-1)!;
+        vi.setSystemTime(completedAt + wakeMs - 30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+        if (wakeMs < 5 * 60_000) {
+          expect(pool.isClosed).toBe(false);
+          await vi.advanceTimersByTimeAsync(5 * 60_000 - wakeMs);
+        }
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([0, 60_000])(
+    "keeps elapsed idle expiry when the wall clock moves backward after %i ms",
+    async (elapsedMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const pool = fixture.pools.at(-1)!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        vi.setSystemTime(Date.now() - 60 * 60_000);
+        await vi.advanceTimersByTimeAsync(5 * 60_000 - elapsedMs);
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("bounds the warm set and retires every idle pool on memory pressure", async () => {
     const results = await Promise.all(Array.from({ length: 6 }, run));

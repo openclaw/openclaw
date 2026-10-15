@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/selection-annotations.css";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 
 export type AttachmentChipRemoval = {
   label: string;
@@ -77,28 +76,4 @@ export function AttachmentPreviewChip(props: {
       </Show>
     </span>
   );
-}
-
-function LegacyAttachmentChip(props: {
-  label: string;
-  icon: unknown;
-  onClick?: () => void;
-  onReveal?: () => void;
-  removal?: AttachmentChipRemoval;
-  elementRef?: (element: Element | undefined) => void;
-}) {
-  return (
-    <AttachmentPreviewChip
-      label={props.label}
-      icon={<LitContent value={props.icon} />}
-      onClick={props.onClick}
-      onReveal={props.onReveal}
-      removal={props.removal}
-      elementRef={props.elementRef}
-    />
-  );
-}
-
-export function renderAttachmentChip(options: Parameters<typeof LegacyAttachmentChip>[0]) {
-  return solidContent(LegacyAttachmentChip, options);
 }
