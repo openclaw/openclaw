@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SelectPicker } from "../select-picker.ts";
 import { DecisionModelPicker, type DecisionModelPickerParams } from "./decision-model-picker.tsx";
@@ -67,6 +67,7 @@ describe("Solid model picker interop", () => {
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const input = view.container.querySelector<HTMLInputElement>(".model-picker__custom")!;
+    await openPicker(picker);
     const custom = [...picker.querySelectorAll<HTMLElement>('[role="option"]')].find(
       (row) => row.textContent?.trim() === "Custom model",
     )!;

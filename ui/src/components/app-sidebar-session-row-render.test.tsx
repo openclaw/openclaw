@@ -247,6 +247,78 @@ it("keeps the unread badge on an idle child with an icon", () => {
   expect(container.querySelector('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
 
+it.each(["owner", "icon"] as const)(
+  "retains %s artwork and actions when live rows republish unchanged presentation",
+  async (kind) => {
+    const { host, container } = createHost("chip");
+    const session = projectSidebarSession({
+      key: "agent:main:thread",
+      label: "Research",
+      color: "blue",
+      unread: true,
+      icon: kind === "icon" ? "book" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
+    });
+    const [current, setCurrent] = createSignal(session);
+    mountSolid(
+      () =>
+        renderRecentSession({
+          host,
+          get session() {
+            return current();
+          },
+        }),
+      { container },
+    );
+    const chip = container.querySelector("openclaw-session-owner-chip");
+    await chip?.updateComplete;
+    const content = container.querySelector(".session-glyph__content")!;
+    const artwork = content.firstElementChild;
+    const graphic = content.querySelector("svg");
+    const initialGraphic = graphic?.innerHTML;
+    const archive = container.querySelector("[data-sidebar-session-archive]")!;
+    const archiveIcon = archive.querySelector("svg");
+    const row = container.querySelector(".sidebar-recent-session")!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(content, { childList: true });
+    observer.observe(container.querySelector(".session-row-actions")!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    observer.observe(row, { attributes: true, attributeFilter: ["style"] });
+    onTestFinished(() => observer.disconnect());
+
+    setCurrent({ ...session, updatedAt: 2, owner: { ...session.owner! } });
+    flush();
+    expect(observer.takeRecords()).toHaveLength(0);
+    expect(container.querySelector(".session-glyph__content")).toBe(content);
+    expect(content.firstElementChild).toBe(artwork);
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+
+    setCurrent({
+      ...current(),
+      archived: true,
+      icon: kind === "icon" ? "bot" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
+    });
+    flush();
+    await chip?.updateComplete;
+    expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+    if (kind === "owner") {
+      expect(content.firstElementChild).toBe(artwork);
+      expect(chip?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(
+        "Ada renamed",
+      );
+    } else {
+      expect(content.firstElementChild).toBe(artwork);
+      expect(content.querySelector("svg")).toBe(graphic);
+      expect(content.querySelector("svg")?.innerHTML).not.toBe(initialGraphic);
+    }
+  },
+);
+
 it("materializes the archive hint on hover without changing the action name", () => {
   vi.useFakeTimers();
   onTestFinished(installTitleTooltips(document));

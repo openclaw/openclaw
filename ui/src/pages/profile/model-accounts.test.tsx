@@ -16,7 +16,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { i18n, t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
@@ -182,6 +182,10 @@ async function mountAccounts(
     request,
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
+      await waitForSolid(() =>
+        expect(accounts.querySelector(".profile-auth-provider")).not.toBeNull(),
+      );
+      await openPicker(accounts.querySelector<HTMLElement>(".profile-auth-provider")!);
       await waitForSolid(() =>
         expect(
           accounts.querySelector(

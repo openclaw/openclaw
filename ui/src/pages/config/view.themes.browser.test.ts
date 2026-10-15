@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
 import { renderAppearance, renderConfigView } from "./config-view.test-support.tsx";
 
@@ -102,7 +102,8 @@ it.each(["profile", "device-local"] as const)(
     for (const slot of ["ui", "chat"]) {
       const picker = container
         .querySelector(`#settings-font-${slot}`)
-        ?.closest("openclaw-select-picker");
+        ?.closest<HTMLElement>("openclaw-select-picker")!;
+      await openPicker(picker);
       expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
         "Claw · Instrument Sans",
       );

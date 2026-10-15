@@ -1,7 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../test-helpers/select-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
 import { ModelPicker } from "./solid/model-picker.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
@@ -72,6 +72,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
     const rows = Array.from(container.querySelectorAll('[role="option"][data-value]'));
     expect(rows).toHaveLength(300);
     expect(rows.slice(0, 3).map((row) => row.getAttribute("data-value"))).toEqual([
@@ -100,6 +101,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     expect(
       container.querySelector('[role="option"][data-value=""] .picker-select__leading'),
@@ -128,6 +130,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     const customOption = Array.from(container.querySelectorAll('[role="option"]')).find(
       (option) => option.textContent?.trim() === "Custom model…",

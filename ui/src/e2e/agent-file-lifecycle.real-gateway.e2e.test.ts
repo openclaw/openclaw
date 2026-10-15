@@ -248,6 +248,7 @@ catalogSuite.define(() => {
           const picker = editor.locator(
             'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
           );
+          await picker.locator(".picker-select__trigger").click();
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
@@ -281,6 +282,7 @@ catalogSuite.define(() => {
           }
 
           await publish("published");
+          await picker.locator(".picker-select__trigger").click();
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
