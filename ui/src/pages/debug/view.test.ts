@@ -561,6 +561,7 @@ describe("DebugPage", () => {
   it.each(["models.list", "health"] as const)(
     "preserves snapshots and independent Manual RPC errors through %s failure and recovery",
     async (failedMethod) => {
+      vi.useFakeTimers();
       let failure: typeof failedMethod | null = null;
       let marker = "initial";
       const request = vi.fn(async (method: string) => {
@@ -573,32 +574,37 @@ describe("DebugPage", () => {
         return diagnosticResponse(method, marker);
       });
       const page = await mountDebugPage(request);
-      expectSnapshots(page, "initial");
-      callMethod(page, "manual.latest");
-      await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
-      expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
+      try {
+        expectSnapshots(page, "initial");
+        callMethod(page, "manual.latest");
+        await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
+        expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
 
-      marker = "uncommitted";
-      failure = failedMethod;
-      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
-      await waitForSolid(() => expect(page.textContent).toContain(`${failedMethod} unavailable`));
+        marker = "uncommitted";
+        failure = failedMethod;
+        page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
+        await waitForSolid(() => expect(page.textContent).toContain(`${failedMethod} unavailable`));
 
-      expect(page.textContent).toContain("manual request failed");
-      expectSnapshots(page, "initial");
-      const alert = page.querySelector<HTMLElement>('.settings-section [role="alert"]');
-      expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-        "Snapshots",
-      );
-      expect(alert?.classList).toContain("settings-row");
-      expect(page.querySelector(".callout")).toBeNull();
+        expect(page.textContent).toContain("manual request failed");
+        expectSnapshots(page, "initial");
+        const alert = page.querySelector<HTMLElement>('.settings-section [role="alert"]');
+        expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
+          "Snapshots",
+        );
+        expect(alert?.classList).toContain("settings-row");
+        expect(page.querySelector(".callout")).toBeNull();
 
-      marker = "recovered";
-      failure = null;
-      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
-      await waitForSolid(() => expectSnapshots(page, "recovered"));
+        marker = "recovered";
+        failure = null;
+        page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
+        await waitForSolid(() => expectSnapshots(page, "recovered"));
 
-      expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
-      expect(page.textContent).toContain("manual request failed");
+        expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
+        expect(page.textContent).toContain("manual request failed");
+      } finally {
+        unmountDebugHost(page);
+        vi.useRealTimers();
+      }
     },
   );
 });

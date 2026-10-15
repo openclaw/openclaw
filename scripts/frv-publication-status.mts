@@ -106,7 +106,8 @@ const runSchema = z.object({
   head_branch: ref,
   path: z.string().max(500),
   display_title: z.string().max(500).optional(),
-  event: z.literal("workflow_dispatch"),
+  created_at: z.iso.datetime().optional(),
+  event: z.enum(["workflow_dispatch", "workflow_run"]),
   status: runState,
   conclusion: conclusion.nullable(),
   actor: actor.optional(),
@@ -114,12 +115,18 @@ const runSchema = z.object({
 });
 export type PublicationRun = z.infer<typeof runSchema>;
 
-export function parsePublicationRun(value: unknown, repo: string, runId: string): PublicationRun {
+export function parsePublicationRun(
+  value: unknown,
+  repo: string,
+  runId: string,
+  event: PublicationRun["event"] = "workflow_dispatch",
+): PublicationRun {
   const parsed = runSchema.safeParse(value);
   requirePublication(parsed.success);
   const run = parsed.data;
   requirePublication(
     String(run.id) === runId &&
+      run.event === event &&
       run.repository.full_name === repo &&
       (!run.head_repository || run.head_repository.full_name === repo),
   );
@@ -162,6 +169,7 @@ export function assertPublicationRunUnchanged(before: PublicationRun, after: Pub
     run.head_branch,
     run.path.split("@")[0],
     run.event,
+    run.created_at ?? null,
   ];
   // Lifecycle, display and actor-login observations can change without a new identity.
   requirePublication(isDeepStrictEqual(identity(before), identity(after)));
@@ -322,6 +330,7 @@ const surfaces = [
   "activation",
   "vcr",
   "nativeWindows",
+  "nativeLinux",
   "nativeAndroid",
   "nativeMac",
   "npmTelegram",
@@ -366,7 +375,7 @@ export type PublicationObservation = {
   binding: Phase;
   assets: Phase;
   dispatches: {
-    scope: "normal-clawhub" | "windows";
+    scope: "normal-clawhub" | "windows" | "linux";
     state: "acknowledged" | "not-dispatched" | "unknown";
     runId: string;
     runAttempt: number;
@@ -410,9 +419,14 @@ export function newPublicationObservation(
           verification: phase(),
           registryObservation: phase(),
           terminalMarker: phase(),
-          advisory: ["vcr", "nativeWindows", "nativeAndroid", "nativeMac", "npmTelegram"].includes(
-            name,
-          ),
+          advisory: [
+            "vcr",
+            "nativeWindows",
+            "nativeLinux",
+            "nativeAndroid",
+            "nativeMac",
+            "npmTelegram",
+          ].includes(name),
           jobs: [],
           children: [],
           verificationError: null,
@@ -671,6 +685,83 @@ export function observePublicationChild(
     conclusion: run.conclusion,
     relation,
   });
+}
+
+export function parseLinuxDispatch(value: unknown, sourceSha: string) {
+  const parsed = z
+    .object({
+      tag: z
+        .string()
+        .max(81)
+        .regex(/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?$/u),
+      sourceSha: sha.optional(),
+      state: z.enum([
+        "request-dispatched",
+        "request-reused",
+        "published-assets-reused",
+        "dispatch-unconfirmed",
+      ]),
+      requestRunId: decimal.optional(),
+      requestRunAttempt: decimal.optional(),
+      workflowSha: sha.optional(),
+    })
+    .safeParse(value);
+  requirePublication(parsed.success, "malformed-evidence");
+  requirePublication(!parsed.data.sourceSha || parsed.data.sourceSha === sourceSha);
+  if (["request-dispatched", "request-reused"].includes(parsed.data.state)) {
+    requirePublication(parsed.data.requestRunId && parsed.data.workflowSha);
+  }
+  return parsed.data;
+}
+
+export function observeLinuxAdmission(
+  observation: PublicationObservation,
+  value: unknown,
+  request: PublicationRun,
+  builder: PublicationRun,
+  tag: string,
+  sourceSha: string,
+  artifactId: number,
+) {
+  const parsed = z
+    .object({
+      schemaVersion: z.literal(1),
+      repository,
+      request: z.object({ runId: decimal, runAttempt: decimal, headSha: sha }),
+      builder: z.object({ runId: decimal, runAttempt: decimal, toolingSha: sha }),
+      tag: z.string().nullable(),
+      sourceSha: sha.nullable(),
+      admission: z.enum(["admitted", "rejected"]),
+    })
+    .safeParse(value);
+  requirePublication(parsed.success, "malformed-evidence");
+  const record = parsed.data;
+  requirePublication(
+    record.repository === request.repository.full_name &&
+      record.request.runId === String(request.id) &&
+      record.request.runAttempt === String(request.run_attempt) &&
+      record.request.headSha === request.head_sha &&
+      record.builder.runId === String(builder.id) &&
+      record.builder.runAttempt === String(builder.run_attempt) &&
+      record.builder.toolingSha === builder.head_sha,
+  );
+  requirePublication(
+    record.admission !== "admitted" ||
+      (record.tag === tag &&
+        record.sourceSha === sourceSha &&
+        record.builder.toolingSha === request.head_sha),
+  );
+  observation.surfaces.nativeLinux.terminalMarker = {
+    state: record.admission,
+    evidence: [
+      {
+        kind: "terminal-marker",
+        runId: String(builder.id),
+        runAttempt: builder.run_attempt,
+        artifactId,
+      },
+    ],
+  };
 }
 
 export function parseWindowsDispatch(value: unknown) {

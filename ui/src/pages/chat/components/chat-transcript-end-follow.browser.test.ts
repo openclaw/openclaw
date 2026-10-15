@@ -110,6 +110,39 @@ async function commitTask(host: EndFollowFixture, change: () => void) {
   });
 }
 
+// A measured extent can commit before its corrective scroll is delivered. Wait
+// for that native event and the observer's receipt-retirement frame, not a fixed
+// number of frames counted from the earlier DOM commit.
+async function commitScrollTask(
+  host: EndFollowFixture,
+  thread: HTMLElement,
+  target: number,
+  change: () => void,
+) {
+  const listener = new AbortController();
+  let frame: number | undefined;
+  const scrolled = new Promise<void>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (thread.scrollTop === target) {
+          frame = requestAnimationFrame(() => resolve());
+        }
+      },
+      { signal: listener.signal },
+    );
+  });
+  try {
+    await commitTask(host, change);
+    await scrolled;
+  } finally {
+    listener.abort();
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+    }
+  }
+}
+
 it("paints a saved reader only after its measured range and offset commit together", async () => {
   const visible: Array<{ top: number; height: number }> = [];
   let frame = 0;
@@ -177,7 +210,7 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
 
     const previousMax = thread.scrollHeight - thread.clientHeight;
     const growth = acquisition === "smooth no-op" ? 35 : 48;
-    await commitTask(host, () => {
+    await commitScrollTask(host, thread, previousMax + growth, () => {
       // Reconciliation precedes the observer's measured-extent commit.
       if (acquisition === "requested") {
         host.transcript.scrollToEnd({ behavior: "auto" });
@@ -185,7 +218,6 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       host.lastRowHeight += growth;
     });
     await expect.poll(() => extent.offsetHeight).toBe(1300 + growth);
-    await settleFrames();
     expect(distance()).toBe(0);
     if (acquisition !== "smooth no-op") {
       expect(host.transcript.isProgrammaticScroll).toBe(false);

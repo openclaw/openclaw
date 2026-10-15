@@ -2,7 +2,9 @@
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
+import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
+  bindChatPickerOverlay,
   installChatComposerPickerDismissal,
   handleChatComposerDetailsToggle,
   handleChatComposerDropdownShow,
@@ -79,6 +81,57 @@ describe("chat picker overlay", () => {
       expect(dismissInvocations).toHaveBeenCalledOnce();
       expect(document.activeElement).toBe(trigger);
     }
+  });
+
+  it("lets the native owner clear search before closing and returning focus", () => {
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__input";
+    const picker = document.createElement("details");
+    picker.className = "chat-controls__inline-select";
+    picker.innerHTML =
+      '<summary>Model</summary><div data-anchored-overlay popover="manual"><input data-chat-model-search></div>';
+    composer.append(picker);
+    document.body.append(composer);
+    const dismissLegacyDetails = (event: KeyboardEvent) => {
+      if (
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        event.keyCode !== 229 &&
+        event.key === "Escape" &&
+        closeChatPaneDetails(composer)
+      ) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", dismissLegacyDetails, true);
+    onTestFinished(() => document.removeEventListener("keydown", dismissLegacyDetails, true));
+    onTestFinished(installChatComposerPickerDismissal(document));
+    onTestFinished(bindChatPickerOverlay(picker));
+    const trigger = picker.querySelector("summary")!;
+    const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger.getAttribute("aria-controls")).toBe(surface.id);
+    expect(document.getElementById(surface.getAttribute("aria-labelledby")!)).toBe(trigger);
+    expect(surface.getAttribute("role")).toBe("dialog");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    const search = picker.querySelector("input")!;
+    search.value = "beta";
+    search.focus();
+    const escape = () =>
+      search.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    escape();
+    expect(search.value).toBe("");
+    expect(picker.open).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(search);
+    escape();
+    expect(picker.open).toBe(false);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("shares dismissal until the final owner releases it and can reconnect", () => {

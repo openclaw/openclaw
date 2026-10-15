@@ -179,6 +179,36 @@ describe("progressive image viewer geometry", () => {
     },
   );
 
+  it.each([320, 390, 1440])(
+    "places Open original after media without covering zoom chrome at %ipx",
+    async (width) => {
+      await page.viewport(width, 1000);
+      const { viewer, image } = await mountImage({
+        src: imageSource(320, 200, "#264060"),
+        originalSrc: "https://example.invalid/original.png",
+        title: "Footer placement",
+      });
+      const original = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
+      await expect.element(original).toBeVisible();
+      const footer = original.closest<HTMLElement>("openclaw-modal-actions")!;
+      expect(footer.parentElement?.lastElementChild).toBe(footer);
+      expect(viewer.querySelector(".header .open-original")).toBeNull();
+      const bounds = original.getBoundingClientRect();
+      const zoom = viewer.querySelector<HTMLElement>(".zoom-controls")!.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(image.getBoundingClientRect().bottom);
+      expect(bounds.left).toBeGreaterThanOrEqual(zoom.right);
+      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      const close = viewer.querySelector<HTMLButtonElement>(".close")!;
+      close.focus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(original);
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(close);
+    },
+  );
+
   it("uses a neighbor's intrinsic size when its dimensions are absent", async () => {
     const neighbor = { src: imageSource(320, 200, "#264060"), title: "Small neighbor" };
     const { viewer, image } = await mountImage({

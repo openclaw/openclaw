@@ -166,6 +166,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "formatErrorStackWithMessage",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",

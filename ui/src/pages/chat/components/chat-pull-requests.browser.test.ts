@@ -29,7 +29,7 @@ it.each(["props", "owner", "parked"])(
     let painted = false;
     let part: ReturnType<typeof render>;
     const binding = { owner, isPresented: () => isPresented };
-    const draw = (presented: boolean) => {
+    const draw = (presented: boolean, dismissed = false) => {
       isPresented = presented;
       if (mode !== "props" && painted) {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
@@ -59,6 +59,7 @@ it.each(["props", "owner", "parked"])(
               ],
               status: "ready",
               presented: mode === "props" ? presented : binding,
+              dismissed,
               onDismiss: () => {},
             })}
           </section>
@@ -87,6 +88,16 @@ it.each(["props", "owner", "parked"])(
     summary.focus();
     await userEvent.keyboard(" ");
     await expect.element(menu).not.toBeVisible();
+    if (mode === "props") {
+      await page.elementLocator(summary).click();
+      await expect.element(menu).toBeVisible();
+      draw(false, true);
+      await expect.element(menu).not.toBeVisible();
+      expect(disclosure.open).toBe(false);
+      draw(true);
+      await expect.element(menu).not.toBeVisible();
+      expect(disclosure.open).toBe(false);
+    }
   },
 );
 

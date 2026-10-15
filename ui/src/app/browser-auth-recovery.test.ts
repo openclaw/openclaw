@@ -126,7 +126,9 @@ describe("browser sign-in recovery", () => {
         await waitForSolid(() => expect(button("Check again").disabled).toBe(false));
         expect(button("Sign in")).toBe(signIn);
         button("Check again").click();
-        await expect.poll(() => document.body.textContent).toContain("Sign-in is still required");
+        await waitForSolid(() => {
+          expect(document.body.textContent).toContain("Sign-in is still required");
+        });
       }
       expect(restored).not.toHaveBeenCalled();
 
@@ -202,7 +204,10 @@ describe("browser sign-in recovery", () => {
         fetchControlUiResource("/nested/__openclaw__/assistant-media"),
       ).rejects.toThrow();
       await finishRenewal();
-      await getRenderedModalDialog(document.body);
+      const { dialog: pendingDialog } = await getRenderedModalDialog(document.body);
+      await waitForSolid(() =>
+        expect(pendingDialog.querySelector('[role="status"]')?.textContent).toBe(""),
+      );
       signedIn = true;
       window.dispatchEvent(new Event("focus"));
       try {
@@ -270,12 +275,14 @@ describe("browser sign-in recovery", () => {
     onTestFinished(subscribeBrowserAuthRestored(restored));
     await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
     await finishRenewal();
-    await getRenderedModalDialog(document.body);
+    const { dialog } = await getRenderedModalDialog(document.body);
+    await waitForSolid(() => expect(dialog.querySelector('[role="status"]')?.textContent).toBe(""));
     button("Sign in").click();
     window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(probes).toBe(3));
     token = "replacement-token";
     probe.resolve(success());
-    await expect.poll(() => button("Check again").disabled).toBe(false);
+    await waitForSolid(() => expect(button("Check again").disabled).toBe(false));
     expect(restored).not.toHaveBeenCalled();
     expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
     button("Check again").click();

@@ -364,11 +364,6 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (cliExecution && !params.job.runtimeAuthority && !binding) {
-          throw new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-        }
         if (binding && (providerOverride !== binding.provider || cliExecution)) {
           throw new Error(
             "Automation candidate is incompatible with its recorded inference account and route.",
@@ -508,6 +503,11 @@ export function createCronPromptExecutor(
                         : undefined,
                     })
                   : undefined;
+                if (!binding && authProfileId) {
+                  throw new Error(
+                    "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+                  );
+                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -529,6 +529,7 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  nativeAuthOnly: binding ? undefined : true,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
