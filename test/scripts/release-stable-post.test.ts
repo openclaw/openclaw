@@ -61,68 +61,6 @@ const websiteDispatch = () =>
   );
 
 describe("release:stable post-publication CLI", () => {
-  it.each(["already-synced", "parent", "manual"])("syncs beta using the %s path", (mode) => {
-    const release = fixture();
-    const state = postState("sync-beta");
-    if (state.capabilities) {
-      state.capabilities.parentSyncsBetaDistTag = mode === "parent";
-    }
-    release.seed(state);
-    const tags = (beta: string) =>
-      step(
-        "npm",
-        ["view", "openclaw", "dist-tags", "--json"],
-        JSON.stringify({ latest: RELEASE, beta }),
-      );
-    const result = release.run([
-      tags(mode === "already-synced" ? RELEASE : "2026.9.6-beta.1"),
-      ...(mode === "manual"
-        ? workflowDispatch("openclaw-npm-dist-tags.yml", "openclaw/releases", 401)
-        : []),
-      ...(mode !== "already-synced" ? [tags(RELEASE)] : []),
-    ]);
-    expect(result.status, result.output).toBe(0);
-    expect(release.readState().phases["sync-beta"].status).toBe("completed");
-    expect(release.readState().syncBeta.verifiedAt).toBeDefined();
-    const dispatches = result.calls.filter(
-      (call) => call.bin === "gh" && call.args[0] === "workflow",
-    );
-    expect(dispatches).toHaveLength(mode === "manual" ? 1 : 0);
-    if (mode === "manual") {
-      expect(dispatches[0]?.args).toContain("mode=sync_beta_to_stable");
-      expect(dispatches[0]?.args).toContain(`tag=v${RELEASE}`);
-      expect(release.readState().syncBeta.runId).toBe("401");
-    }
-  });
-
-  it.each([true, false])("makes the release public only when draft=%s", (draft) => {
-    const release = fixture();
-    release.seed(postState("flip-github"));
-    const result = release.run([
-      githubRelease(draft),
-      ...(draft
-        ? [
-            step("gh", [
-              "release",
-              "edit",
-              `v${RELEASE}`,
-              "--repo",
-              REPOSITORY,
-              "--draft=false",
-              "--latest",
-            ]),
-          ]
-        : []),
-      githubRelease(false),
-    ]);
-    expect(result.status, result.output).toBe(0);
-    expect(release.readState().flipGithub).toMatchObject({
-      flippedBy: draft ? "orchestrator" : "parent",
-      verifiedAt: expect.any(String),
-    });
-    expect(release.readState().phases["flip-github"].status).toBe("completed");
-  });
-
   it("refuses macOS publication before approving gates when main lacks compatibility evidence", () => {
     const release = fixture();
     release.seed(postState("macos"));

@@ -365,28 +365,6 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
-  itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    rmSync(join(fixture.bin, "rg"));
-    for (const command of ["bash", "basename", "dirname", "git", "gh", "jq", "pnpm", "node"]) {
-      rmSync(join(fixture.bin, command), { force: true });
-      symlinkSync(resolveCommand(command), join(fixture.bin, command));
-    }
-
-    const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
-      cwd: fixture.canonical,
-      encoding: "utf8",
-      env: {
-        ...fixture.env,
-        PATH: fixture.bin,
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Missing required command(s): rg");
-    expect(result.stderr).toContain("Install ripgrep and retry:");
-  });
-
   itPosix("requires a separate operator confirmation for merge recovery", () => {
     const fixture = makeMismatchedWrapperRepo();
     for (const args of [

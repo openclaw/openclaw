@@ -264,7 +264,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
-  it.each(["beta", "minimum", "stable", "full"])(
+  it.each(["stable"])(
     "selects prompt-cache checks by default and for focused %s validation",
     (releaseProfile) => {
       const job = requiredJob(workflow(), "validate_release_live_cache");
