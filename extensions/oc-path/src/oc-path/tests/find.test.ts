@@ -255,6 +255,36 @@ describe("findOcPaths — JSONL", () => {
     '{"event":"start","userId":"u1"}\n{"event":"action","userId":"u1"}\n{"event":"end","userId":"u1"}\n',
   ).ast;
 
+  it.each([64, 65, 128])("round-trips JSONL value paths at depth %i", (depth) => {
+    const keys = Array.from({ length: depth }, (_, index) => (index === 63 ? "a.b" : "k"));
+    const value = keys.reduceRight<unknown>((child, key) => ({ [key]: child }), 1);
+    const lineAst = parseJsonl(JSON.stringify(value) + "\n").ast;
+    const out = findOcPaths(lineAst, parseOcPath("oc://events.jsonl/L1/**/**?session=deep"));
+    expect(out).toHaveLength(depth + 1);
+    expect(leafValues(out.filter(({ match }) => match.kind === "leaf"))).toEqual(["1"]);
+    for (const { path, match } of out) {
+      expect(path.section).toBe("L1");
+      expect(path.session).toBe("deep");
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it("preserves an already valid JSONL value partition", () => {
+    let value: unknown = { end: 1 };
+    for (let level = 0; level < 63; level++) {
+      value = { k: value };
+    }
+    const lineAst = parseJsonl(JSON.stringify({ start: value }) + "\n").ast;
+    const out = findOcPaths(lineAst, parseOcPath("oc://events.jsonl/L1/start/**.end"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://events.jsonl/L1/start/" + Array(63).fill("k").join(".") + ".end",
+    ]);
+    expect(leafValues(out)).toEqual(["1"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(lineAst, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
   it.each([
     { pattern: "*/**/**", prefix: ["oc://session/L1"], nextLine: ["oc://session/L3"] },
     {
