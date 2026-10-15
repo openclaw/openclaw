@@ -147,7 +147,7 @@ export function createSessionsCreateTool(
     return null;
   }
   return {
-    label: "Create Session",
+    label: "New session",
     name: "sessions_create",
     description:
       "Use only when the user explicitly requests a new independent session or task. Ordinary helper delegation and unrequested follow-ups do not authorize independent creation. Create a normal independent persistent visible session, optionally starting work with message. Omit message for an idle session. Uses destination defaults, not a supervised child or transcript fork. Returns sessionKey, sessionId, and runStarted, plus runId or runError when available. Creation and initial-run acceptance are separate; a startup failure leaves the session available. No child completion event or yield expectation.",

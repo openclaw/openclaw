@@ -201,7 +201,11 @@ export async function prepareSessionModelAccountAccess(
             creation.actor.source !== "profile" ||
             creation.actor.id !== operatorAuthority.profileId ||
             ![operatorAuthority.scopes, client.connect.scopes ?? []].every((allowedScopes) =>
-              roleScopesAllow({ role: "operator", requestedScopes: [requiredScope], allowedScopes }),
+              roleScopesAllow({
+                role: "operator",
+                requestedScopes: [requiredScope],
+                allowedScopes,
+              }),
             )
           ) {
             throw new ModelAccountConnectAuthorityError();

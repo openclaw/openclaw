@@ -346,13 +346,13 @@ export async function handleChatSendWithStorage(
       inputAdmissionAttempted = true;
       using stagePhase = diagnostics.scope("detail.persist.stage");
       const pendingAdmission = createChatSendPendingInputAdmission({
-          runId: clientRunId,
-          expectedProfileId: req.expectedProfileId,
-          sessionMutationAuthorization,
-          sessionMutationCommitGuard,
-          assertCustodyLifetimeCurrent,
-          assertClientUploadAllowed: admission.assertClientUploadAllowed,
-        });
+        runId: clientRunId,
+        expectedProfileId: req.expectedProfileId,
+        sessionMutationAuthorization,
+        sessionMutationCommitGuard,
+        assertCustodyLifetimeCurrent,
+        assertClientUploadAllowed: admission.assertClientUploadAllowed,
+      });
       const staged = await userTurnRecorder.stageApproved?.(pendingAdmission);
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {

@@ -71,7 +71,11 @@ export async function handleTrustedInternalChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   inputOptions?: Pick<
     ChatSendInternalOptions,
-    "transcript" | "toolsAllow" | "prepareAssistantTranscriptMessage" | "beforeDispatch" | "stageCreatedInput"
+    | "transcript"
+    | "toolsAllow"
+    | "prepareAssistantTranscriptMessage"
+    | "beforeDispatch"
+    | "stageCreatedInput"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {

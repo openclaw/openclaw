@@ -18,6 +18,7 @@ import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.j
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -27,7 +28,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { dispatchInboundMessageMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
 export async function runIndependentCreationInputCase(
@@ -172,9 +173,9 @@ export async function runIndependentCreationInputCase(
       });
       cleanup.push(() => executionSpy.mockRestore());
     }
-    const stage = sessionAccessor.stageSessionPendingInput;
+    const stage = pendingInputs.stageSessionPendingInput;
     const stageSpy = vi
-      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementationOnce(async (...args) => {
         if (slow) {
           // The real creation owner has committed its row before staging the opening input.
@@ -270,7 +271,7 @@ export async function runIndependentCreationInputCase(
       runId?: string;
       runError?: unknown;
     };
-    const target = loadSessionEntry(receipt.sessionKey, { agentId: "main" });
+    const target = await loadSessionEntryAsync(receipt.sessionKey, { agentId: "main" });
     const scope = {
       agentId: "main",
       sessionKey: receipt.sessionKey,
@@ -354,7 +355,10 @@ export async function runIndependentCreationInputCase(
       });
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } else if (boundary === "target replacement") {
-      const replacement = expectDefined(loadSessionEntry(receipt.sessionKey).entry, "replacement");
+      const replacement = expectDefined(
+        (await loadSessionEntryAsync(receipt.sessionKey)).entry,
+        "replacement",
+      );
       expect(replacement.sessionId).not.toBe(receipt.sessionId);
       const replacementScope = { ...scope, sessionId: replacement.sessionId };
       const originalTranscript = sessionAccessor.loadTranscriptEventsSync(scope);
@@ -363,7 +367,9 @@ export async function runIndependentCreationInputCase(
       // exception. Neither the old nor replacement conversation may gain input.
       await expect(persist()).resolves.toBeUndefined();
       expect(recorder.getAdmissionReceipt?.()).toBeUndefined();
-      expect(loadSessionEntry(receipt.sessionKey).entry?.sessionId).toBe(replacement.sessionId);
+      expect((await loadSessionEntryAsync(receipt.sessionKey)).entry?.sessionId).toBe(
+        replacement.sessionId,
+      );
       expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(originalTranscript);
       expect(sessionAccessor.loadTranscriptEventsSync(replacementScope)).toEqual(
         replacementTranscript,

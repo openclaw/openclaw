@@ -129,7 +129,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     "routes explicit task creation from the native %s tool surface in default suggest mode",
     (surface) => {
       const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
-      const prompt = buildEmbeddedSystemPrompt({
+      const prompt = buildConfiguredAgentSystemPrompt({
         ...basicPromptInputs(),
         tools: surface === "absent" ? [] : [sessions],
       });

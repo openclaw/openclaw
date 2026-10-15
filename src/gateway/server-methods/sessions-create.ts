@@ -684,7 +684,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         await runWithoutOwnedSessionTranscriptWrites(async () => {
           if (agentCreated) {
             const { handleTrustedInternalChatSend } = await loadChatSendInternalEntry();
-            await handleTrustedInternalChatSend(sendOptions, undefined, { stageCreatedInput: true });
+            await handleTrustedInternalChatSend(sendOptions, undefined, {
+              stageCreatedInput: true,
+            });
           } else {
             const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
             await handleDirectExternalChatSend(sendOptions);

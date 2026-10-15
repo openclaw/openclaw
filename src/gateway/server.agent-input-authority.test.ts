@@ -980,7 +980,8 @@ describe("accepted input Gateway instance retirement", () => {
       const createdScope = {
         agentId: "main",
         ...createdReceipt,
-        storePath: loadSessionEntry(createdReceipt.sessionKey, { agentId: "main" }).storePath,
+        storePath: (await loadSessionEntryAsync(createdReceipt.sessionKey, { agentId: "main" }))
+          .storePath,
       };
       const createdRecorder = await withinTest(createdInputEntered.promise, signal);
       createdWorkReleased = getSessionWorkAdmissionRelease({
